@@ -64,6 +64,7 @@ function findLatestSessionFile(sessionDir: string): string | null {
 		files.sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
 		return files[0] ?? null;
 	} catch {
+		// Session lookup is optional metadata.
 		return null;
 	}
 }
@@ -89,10 +90,13 @@ function parseSessionTokens(sessionDir: string): TokenUsage | null {
 					input += entry.usage.inputTokens ?? entry.usage.input ?? 0;
 					output += entry.usage.outputTokens ?? entry.usage.output ?? 0;
 				}
-			} catch {}
+			} catch {
+				// Ignore malformed lines while scanning usage entries.
+			}
 		}
 		return { input, output, total: input + output };
 	} catch {
+		// Usage extraction should not fail the run.
 		return null;
 	}
 }
@@ -143,7 +147,9 @@ function resolvePiPackageRootFallback(): string {
 		try {
 			const pkg = JSON.parse(fs.readFileSync(pkgJsonPath, "utf-8"));
 			if (pkg.name === "@mariozechner/pi-coding-agent") return dir;
-		} catch {}
+		} catch {
+			// Keep walking up until a readable package.json is found.
+		}
 		dir = path.dirname(dir);
 	}
 	throw new Error("Could not resolve @mariozechner/pi-coding-agent package root");
@@ -277,11 +283,14 @@ async function runSingleStep(
 ): Promise<{ agent: string; output: string; exitCode: number | null; artifactPaths?: ArtifactPaths }> {
 	const placeholderRegex = new RegExp(ctx.placeholder.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g");
 	const task = step.task.replace(placeholderRegex, () => ctx.previousOutput);
+	const sessionEnabled = Boolean(step.sessionFile) || ctx.sessionEnabled;
+	const sessionDir = step.sessionFile ? undefined : ctx.sessionDir;
 	const { args, env, tempDir } = buildPiArgs({
 		baseArgs: ["-p"],
 		task,
-		sessionEnabled: ctx.sessionEnabled,
-		sessionDir: ctx.sessionDir,
+		sessionEnabled,
+		sessionDir,
+		sessionFile: step.sessionFile,
 		model: step.model,
 		tools: step.tools,
 		extensions: step.extensions,
@@ -349,15 +358,18 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 	const results: StepResult[] = [];
 	const overallStartTime = Date.now();
 	const shareEnabled = config.share === true;
-	const sessionEnabled = Boolean(config.sessionDir) || shareEnabled;
 	const asyncDir = config.asyncDir;
 	const statusPath = path.join(asyncDir, "status.json");
 	const eventsPath = path.join(asyncDir, "events.jsonl");
 	const logPath = path.join(asyncDir, `subagent-log-${id}.md`);
 	let previousCumulativeTokens: TokenUsage = { input: 0, output: 0, total: 0 };
+	let latestSessionFile: string | undefined;
 
 	// Flatten steps for status tracking (parallel groups expand to individual entries)
 	const flatSteps = flattenSteps(steps);
+	const sessionEnabled = Boolean(config.sessionDir)
+		|| shareEnabled
+		|| flatSteps.some((step) => Boolean(step.sessionFile));
 	const statusPayload: {
 		runId: string;
 		mode: "single" | "chain";
@@ -480,6 +492,9 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 						outputFile: path.join(asyncDir, `output-${fi}.log`),
 						piPackageRoot: config.piPackageRoot,
 					});
+					if (task.sessionFile) {
+						latestSessionFile = task.sessionFile;
+					}
 
 					const taskEndTime = Date.now();
 					const taskDuration = taskEndTime - taskStartTime;
@@ -580,6 +595,9 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 				outputFile: path.join(asyncDir, `output-${flatIndex}.log`),
 				piPackageRoot: config.piPackageRoot,
 			});
+			if (seqStep.sessionFile) {
+				latestSessionFile = seqStep.sessionFile;
+			}
 
 			previousOutput = singleResult.output;
 			results.push({
@@ -652,11 +670,17 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 	let gistUrl: string | undefined;
 	let shareError: string | undefined;
 
-	if (shareEnabled && config.sessionDir) {
-		sessionFile = findLatestSessionFile(config.sessionDir) ?? undefined;
+	if (shareEnabled) {
+		sessionFile = config.sessionDir
+			? (findLatestSessionFile(config.sessionDir) ?? undefined)
+			: undefined;
+		if (!sessionFile && latestSessionFile) {
+			sessionFile = latestSessionFile;
+		}
 		if (sessionFile) {
 			try {
-				const htmlPath = await exportSessionHtml(sessionFile, config.sessionDir, config.piPackageRoot);
+				const exportDir = config.sessionDir ?? path.dirname(sessionFile);
+				const htmlPath = await exportSessionHtml(sessionFile, exportDir, config.piPackageRoot);
 				const share = createShareLink(htmlPath);
 				if ("error" in share) shareError = share.error;
 				else {
@@ -671,11 +695,12 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 		}
 	}
 
+	const effectiveSessionFile = sessionFile ?? latestSessionFile;
 	const runEndedAt = Date.now();
 	statusPayload.state = results.every((r) => r.success) ? "complete" : "failed";
 	statusPayload.endedAt = runEndedAt;
 	statusPayload.lastUpdate = runEndedAt;
-	statusPayload.sessionFile = sessionFile;
+	statusPayload.sessionFile = effectiveSessionFile;
 	statusPayload.shareUrl = shareUrl;
 	statusPayload.gistUrl = gistUrl;
 	statusPayload.shareError = shareError;
@@ -710,7 +735,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 		summary,
 		truncated,
 		artifactsDir,
-		sessionFile,
+		sessionFile: effectiveSessionFile,
 		shareUrl,
 		shareError,
 	});
@@ -740,7 +765,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 				cwd,
 				asyncDir,
 				sessionId: config.sessionId,
-				sessionFile,
+				sessionFile: effectiveSessionFile,
 				shareUrl,
 				gistUrl,
 				shareError,
@@ -760,7 +785,9 @@ if (configArg) {
 		const config = JSON.parse(configJson) as SubagentRunConfig;
 		try {
 			fs.unlinkSync(configArg);
-		} catch {}
+		} catch {
+			// Temp config cleanup is best effort.
+		}
 		runSubagent(config).catch((runErr) => {
 			console.error("Subagent runner error:", runErr);
 			process.exit(1);

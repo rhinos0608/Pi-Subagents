@@ -59,7 +59,9 @@ function loadConfig(): ExtensionConfig {
 		if (fs.existsSync(configPath)) {
 			return JSON.parse(fs.readFileSync(configPath, "utf-8")) as ExtensionConfig;
 		}
-	} catch {}
+	} catch (error) {
+		console.error(`Failed to load subagent config from '${configPath}':`, error);
+	}
 	return {};
 }
 
@@ -81,7 +83,9 @@ function ensureAccessibleDir(dirPath: string): void {
 	} catch {
 		try {
 			fs.rmSync(dirPath, { recursive: true, force: true });
-		} catch {}
+		} catch {
+			// Best effort: retry mkdir/access even if cleanup fails.
+		}
 		fs.mkdirSync(dirPath, { recursive: true });
 		fs.accessSync(dirPath, fs.constants.R_OK | fs.constants.W_OK);
 	}
@@ -143,6 +147,7 @@ EXECUTION (use exactly ONE mode):
 • SINGLE: { agent, task } - one task
 • CHAIN: { chain: [{agent:"scout"}, {agent:"planner"}] } - sequential pipeline
 • PARALLEL: { tasks: [{agent,task}, ...] } - concurrent execution
+• Optional context: { context: "fresh" | "fork" } (default: "fresh")
 
 CHAIN TEMPLATE VARIABLES (use in task strings):
 • {task} - The original task/request from the user
@@ -179,20 +184,21 @@ MANAGEMENT (use action field — omit agent/task/chain/tasks):
 			}
 			const isParallel = (args.tasks?.length ?? 0) > 0;
 			const asyncLabel = args.async === true && !isParallel ? theme.fg("warning", " [async]") : "";
+			const contextLabel = args.context === "fork" ? theme.fg("warning", " [fork]") : "";
 			if (args.chain?.length)
 				return new Text(
-					`${theme.fg("toolTitle", theme.bold("subagent "))}chain (${args.chain.length})${asyncLabel}`,
+					`${theme.fg("toolTitle", theme.bold("subagent "))}chain (${args.chain.length})${asyncLabel}${contextLabel}`,
 					0,
 					0,
 				);
 			if (isParallel)
 				return new Text(
-					`${theme.fg("toolTitle", theme.bold("subagent "))}parallel (${args.tasks!.length})`,
+					`${theme.fg("toolTitle", theme.bold("subagent "))}parallel (${args.tasks!.length})${contextLabel}`,
 					0,
 					0,
 				);
 			return new Text(
-				`${theme.fg("toolTitle", theme.bold("subagent "))}${theme.fg("accent", args.agent || "?")}${asyncLabel}`,
+				`${theme.fg("toolTitle", theme.bold("subagent "))}${theme.fg("accent", args.agent || "?")}${asyncLabel}${contextLabel}`,
 				0,
 				0,
 			);
@@ -277,7 +283,14 @@ MANAGEMENT (use action field — omit agent/task/chain/tasks):
 					const lines = [`Run: ${data.id ?? params.id}`, `State: ${status}`, `Result: ${resultPath}`];
 					if (data.summary) lines.push("", data.summary);
 					return { content: [{ type: "text", text: lines.join("\n") }], details: { mode: "single", results: [] } };
-				} catch {}
+				} catch (error) {
+					const message = error instanceof Error ? error.message : String(error);
+					return {
+						content: [{ type: "text", text: `Failed to read async result file: ${message}` }],
+						isError: true,
+						details: { mode: "single" as const, results: [] },
+					};
+				}
 			}
 
 			return {
@@ -311,7 +324,9 @@ MANAGEMENT (use action field — omit agent/task/chain/tasks):
 			if (sessionFile) {
 				cleanupOldArtifacts(getArtifactsDir(sessionFile), DEFAULT_ARTIFACT_CONFIG.cleanupDays);
 			}
-		} catch {}
+		} catch {
+			// Cleanup failures should not block session lifecycle events.
+		}
 	};
 
 	const resetSessionState = (ctx: ExtensionContext) => {

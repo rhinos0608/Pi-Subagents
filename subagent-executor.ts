@@ -21,6 +21,7 @@ import {
 } from "./settings.js";
 import { discoverAvailableSkills, normalizeSkillInput } from "./skills.js";
 import { executeAsyncChain, executeAsyncSingle, isAsyncAvailable } from "./async-execution.js";
+import { createForkContextResolver } from "./fork-context.js";
 import { finalizeSingleOutput, injectSingleOutputInstruction, resolveSingleOutputPath } from "./single-output.js";
 import { getFinalOutput, mapConcurrent } from "./utils.js";
 import {
@@ -55,6 +56,7 @@ interface SubagentParamsLike {
 	task?: string;
 	chain?: ChainStep[];
 	tasks?: TaskParam[];
+	context?: "fresh" | "fork";
 	async?: boolean;
 	clarify?: boolean;
 	share?: boolean;
@@ -91,6 +93,7 @@ interface ExecutionContextData {
 	shareEnabled: boolean;
 	sessionRoot: string;
 	sessionDirForIndex: (idx?: number) => string;
+	sessionFileForIndex: (idx?: number) => string | undefined;
 	artifactConfig: ArtifactConfig;
 	artifactsDir: string;
 	parallelDowngraded: boolean;
@@ -167,8 +170,71 @@ function validateExecutionInput(
 	return null;
 }
 
+function getRequestedModeLabel(params: SubagentParamsLike): Details["mode"] {
+	if ((params.chain?.length ?? 0) > 0) return "chain";
+	if ((params.tasks?.length ?? 0) > 0) return "parallel";
+	if (params.agent && params.task) return "single";
+	return "single";
+}
+
+function withForkContext(
+	result: AgentToolResult<Details>,
+	context: SubagentParamsLike["context"],
+): AgentToolResult<Details> {
+	if (context !== "fork" || !result.details) return result;
+	return {
+		...result,
+		details: {
+			...result.details,
+			context: "fork",
+		},
+	};
+}
+
+function toExecutionErrorResult(params: SubagentParamsLike, error: unknown): AgentToolResult<Details> {
+	const message = error instanceof Error ? error.message : String(error);
+	return withForkContext(
+		{
+			content: [{ type: "text", text: message }],
+			isError: true,
+			details: { mode: getRequestedModeLabel(params), results: [] },
+		},
+		params.context,
+	);
+}
+
+function collectChainSessionFiles(
+	chain: ChainStep[],
+	sessionFileForIndex: (idx?: number) => string | undefined,
+): (string | undefined)[] {
+	const sessionFiles: (string | undefined)[] = [];
+	let flatIndex = 0;
+	for (const step of chain) {
+		if (isParallelStep(step)) {
+			for (let i = 0; i < step.parallel.length; i++) {
+				sessionFiles.push(sessionFileForIndex(flatIndex));
+				flatIndex++;
+			}
+			continue;
+		}
+		sessionFiles.push(sessionFileForIndex(flatIndex));
+		flatIndex++;
+	}
+	return sessionFiles;
+}
+
 function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentToolResult<Details> | null {
-	const { params, agents, ctx, shareEnabled, sessionRoot, artifactConfig, artifactsDir, effectiveAsync } = data;
+	const {
+		params,
+		agents,
+		ctx,
+		shareEnabled,
+		sessionRoot,
+		sessionFileForIndex,
+		artifactConfig,
+		artifactsDir,
+		effectiveAsync,
+	} = data;
 	const hasChain = (params.chain?.length ?? 0) > 0;
 	const hasSingle = Boolean(params.agent && params.task);
 	if (!effectiveAsync) return null;
@@ -197,6 +263,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 			shareEnabled,
 			sessionRoot,
 			chainSkills,
+			sessionFilesByFlatIndex: collectChainSessionFiles(params.chain as ChainStep[], sessionFileForIndex),
 		});
 	}
 
@@ -204,13 +271,15 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 		const a = agents.find((x) => x.name === params.agent);
 		if (!a) {
 			return {
-				content: [{ type: "text", text: `Unknown: ${params.agent}` }],
+				content: [{ type: "text", text: `Unknown agent: ${params.agent}` }],
 				isError: true,
 				details: { mode: "single" as const, results: [] },
 			};
 		}
 		const rawOutput = params.output !== undefined ? params.output : a.output;
 		const effectiveOutput: string | false | undefined = rawOutput === true ? a.output : (rawOutput as string | false | undefined);
+		const normalizedSkills = normalizeSkillInput(params.skill);
+		const skills = normalizedSkills === false ? [] : normalizedSkills;
 		return executeAsyncSingle(id, {
 			agent: params.agent!,
 			task: params.task!,
@@ -222,12 +291,8 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 			artifactConfig,
 			shareEnabled,
 			sessionRoot,
-			skills: (() => {
-				const normalized = normalizeSkillInput(params.skill);
-				if (normalized === false) return [];
-				if (normalized === undefined) return undefined;
-				return normalized;
-			})(),
+			sessionFile: sessionFileForIndex(0),
+			skills,
 			output: effectiveOutput,
 		});
 	}
@@ -236,7 +301,20 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 }
 
 async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Promise<AgentToolResult<Details>> {
-	const { params, agents, ctx, signal, runId, shareEnabled, sessionDirForIndex, artifactsDir, artifactConfig, onUpdate, sessionRoot } = data;
+	const {
+		params,
+		agents,
+		ctx,
+		signal,
+		runId,
+		shareEnabled,
+		sessionDirForIndex,
+		sessionFileForIndex,
+		artifactsDir,
+		artifactConfig,
+		onUpdate,
+		sessionRoot,
+	} = data;
 	const normalized = normalizeSkillInput(params.skill);
 	const chainSkills = normalized === false ? [] : (normalized ?? []);
 	const chainResult = await executeChain({
@@ -249,6 +327,7 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 		cwd: params.cwd,
 		shareEnabled,
 		sessionDirForIndex,
+		sessionFileForIndex,
 		artifactsDir,
 		artifactConfig,
 		includeProgress: params.includeProgress,
@@ -279,6 +358,7 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 			shareEnabled,
 			sessionRoot,
 			chainSkills: chainResult.requestedAsync.chainSkills,
+			sessionFilesByFlatIndex: collectChainSessionFiles(chainResult.requestedAsync.chain, sessionFileForIndex),
 		});
 	}
 
@@ -286,7 +366,21 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 }
 
 async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): Promise<AgentToolResult<Details>> {
-	const { params, agents, ctx, signal, runId, sessionDirForIndex, shareEnabled, artifactConfig, artifactsDir, parallelDowngraded, onUpdate, sessionRoot } = data;
+	const {
+		params,
+		agents,
+		ctx,
+		signal,
+		runId,
+		sessionDirForIndex,
+		sessionFileForIndex,
+		shareEnabled,
+		artifactConfig,
+		artifactsDir,
+		parallelDowngraded,
+		onUpdate,
+		sessionRoot,
+	} = data;
 	const allProgress: AgentProgress[] = [];
 	const allArtifactPaths: ArtifactPaths[] = [];
 	const tasks = params.tasks!;
@@ -385,6 +479,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 				shareEnabled,
 				sessionRoot,
 				chainSkills: [],
+				sessionFilesByFlatIndex: tasks.map((_, index) => sessionFileForIndex(index)),
 			});
 		}
 	}
@@ -401,6 +496,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 			runId,
 			index: i,
 			sessionDir: sessionDirForIndex(i),
+			sessionFile: sessionFileForIndex(i),
 			share: shareEnabled,
 			artifactsDir: artifactConfig.enabled ? artifactsDir : undefined,
 			artifactConfig,
@@ -465,7 +561,20 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 }
 
 async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Promise<AgentToolResult<Details>> {
-	const { params, agents, ctx, signal, runId, sessionDirForIndex, shareEnabled, artifactConfig, artifactsDir, onUpdate, sessionRoot } = data;
+	const {
+		params,
+		agents,
+		ctx,
+		signal,
+		runId,
+		sessionDirForIndex,
+		sessionFileForIndex,
+		shareEnabled,
+		artifactConfig,
+		artifactsDir,
+		onUpdate,
+		sessionRoot,
+	} = data;
 	const allProgress: AgentProgress[] = [];
 	const allArtifactPaths: ArtifactPaths[] = [];
 	const agentConfig = agents.find((a) => a.name === params.agent);
@@ -541,6 +650,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 				artifactConfig,
 				shareEnabled,
 				sessionRoot,
+				sessionFile: sessionFileForIndex(0),
 				skills: skillOverride === false ? [] : skillOverride,
 				output: effectiveOutput,
 			});
@@ -551,17 +661,19 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 	const outputPath = resolveSingleOutputPath(effectiveOutput, ctx.cwd, params.cwd);
 	task = injectSingleOutputInstruction(task, outputPath);
 
-	const effectiveSkills = skillOverride === false
-		? []
-		: skillOverride === undefined
-			? undefined
-			: skillOverride;
+	let effectiveSkills: string[] | undefined;
+	if (skillOverride === false) {
+		effectiveSkills = [];
+	} else {
+		effectiveSkills = skillOverride;
+	}
 
 	const r = await runSync(ctx.cwd, agents, params.agent!, task, {
 		cwd: params.cwd,
 		signal,
 		runId,
 		sessionDir: sessionDirForIndex(0),
+		sessionFile: sessionFileForIndex(0),
 		share: shareEnabled,
 		artifactsDir: artifactConfig.enabled ? artifactsDir : undefined,
 		artifactConfig,
@@ -659,31 +771,26 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		const agents = deps.discoverAgents(ctx.cwd, scope).agents;
 		const runId = randomUUID().slice(0, 8);
 		const shareEnabled = params.share === true;
-		const sessionRoot = params.sessionDir
-			? path.resolve(deps.expandTilde(params.sessionDir))
-			: path.join(
-				deps.config.defaultSessionDir
-					? path.resolve(deps.expandTilde(deps.config.defaultSessionDir))
-					: deps.getSubagentSessionRoot(parentSessionFile),
-				runId,
-			);
-		try {
-			fs.mkdirSync(sessionRoot, { recursive: true });
-		} catch {}
-		const sessionDirForIndex = (idx?: number) =>
-			path.join(sessionRoot, `run-${idx ?? 0}`);
-
 		const hasChain = (params.chain?.length ?? 0) > 0;
 		const hasTasks = (params.tasks?.length ?? 0) > 0;
 		const hasSingle = Boolean(params.agent && params.task);
 
+		const validationError = validateExecutionInput(params, agents, hasChain, hasTasks, hasSingle);
+		if (validationError) return validationError;
+
+		let sessionFileForIndex: (idx?: number) => string | undefined = () => undefined;
+		try {
+			sessionFileForIndex = createForkContextResolver(ctx.sessionManager, params.context).sessionFileForIndex;
+		} catch (error) {
+			return toExecutionErrorResult(params, error);
+		}
+
 		const requestedAsync = params.async ?? deps.asyncByDefault;
 		const parallelDowngraded = hasTasks && requestedAsync;
-		const effectiveAsync = requestedAsync && !hasTasks && (
-			hasChain
-				? params.clarify === false
-				: params.clarify !== true
-		);
+		let effectiveAsync = false;
+		if (requestedAsync && !hasTasks) {
+			effectiveAsync = hasChain ? params.clarify === false : params.clarify !== true;
+		}
 
 		const artifactConfig: ArtifactConfig = {
 			...DEFAULT_ARTIFACT_CONFIG,
@@ -691,45 +798,72 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		};
 		const artifactsDir = effectiveAsync ? deps.tempArtifactsDir : getArtifactsDir(parentSessionFile);
 
-		const validationError = validateExecutionInput(params, agents, hasChain, hasTasks, hasSingle);
-		if (validationError) return validationError;
+		let sessionRoot: string;
+		if (params.sessionDir) {
+			sessionRoot = path.resolve(deps.expandTilde(params.sessionDir));
+		} else {
+			const baseSessionRoot = deps.config.defaultSessionDir
+				? path.resolve(deps.expandTilde(deps.config.defaultSessionDir))
+				: deps.getSubagentSessionRoot(parentSessionFile);
+			sessionRoot = path.join(baseSessionRoot, runId);
+		}
+		try {
+			fs.mkdirSync(sessionRoot, { recursive: true });
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			return toExecutionErrorResult(
+				params,
+				new Error(`Failed to create session directory '${sessionRoot}': ${message}`),
+			);
+		}
+		const sessionDirForIndex = (idx?: number) =>
+			path.join(sessionRoot, `run-${idx ?? 0}`);
+
+		const onUpdateWithContext = onUpdate
+			? (r: AgentToolResult<Details>) => onUpdate(withForkContext(r, params.context))
+			: undefined;
 
 		const execData: ExecutionContextData = {
 			params,
 			ctx,
 			signal,
-			onUpdate,
+			onUpdate: onUpdateWithContext,
 			agents,
 			runId,
 			shareEnabled,
 			sessionRoot,
 			sessionDirForIndex,
+			sessionFileForIndex,
 			artifactConfig,
 			artifactsDir,
 			parallelDowngraded,
 			effectiveAsync,
 		};
 
-		const asyncResult = runAsyncPath(execData, deps);
-		if (asyncResult) return asyncResult;
+		try {
+			const asyncResult = runAsyncPath(execData, deps);
+			if (asyncResult) return withForkContext(asyncResult, params.context);
 
-		if (hasChain && params.chain) {
-			return runChainPath(execData, deps);
+			if (hasChain && params.chain) {
+				return withForkContext(await runChainPath(execData, deps), params.context);
+			}
+
+			if (hasTasks && params.tasks) {
+				return withForkContext(await runParallelPath(execData, deps), params.context);
+			}
+
+			if (hasSingle) {
+				return withForkContext(await runSinglePath(execData, deps), params.context);
+			}
+		} catch (error) {
+			return toExecutionErrorResult(params, error);
 		}
 
-		if (hasTasks && params.tasks) {
-			return runParallelPath(execData, deps);
-		}
-
-		if (hasSingle) {
-			return runSinglePath(execData, deps);
-		}
-
-		return {
+		return withForkContext({
 			content: [{ type: "text", text: "Invalid params" }],
 			isError: true,
 			details: { mode: "single" as const, results: [] },
-		};
+		}, params.context);
 	};
 
 	return { execute };

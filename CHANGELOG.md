@@ -2,6 +2,28 @@
 
 ## [Unreleased]
 
+## [0.11.4] - 2026-03-19
+
+### Added
+- Added explicit execution context mode for tool calls: `context: "fresh" | "fork"` (default: `fresh`).
+- Added true forked-context execution for single, parallel, and chain runs. In `fork` mode each child run now starts from a real branched session file created from the parent session's current leaf.
+- Added `--fork` slash-command flag for `/run`, `/chain`, and `/parallel` to forward `context: "fork"`.
+- Added regression coverage for fork execution/session wiring and fork badge rendering, including slash command forwarding tests.
+
+### Changed
+- Session argument wiring now supports `--session <file>` in addition to `--session-dir`, enabling exact leaf-preserving forks without summary injection.
+- Async runner step payloads now carry per-step session files so background single/chain/parallel executions can also honor `context: "fork"`.
+- Clarified docs for foreground vs background semantics so `--bg` behavior is explicit.
+
+### Fixed
+- `context: "fork"` now fails fast with explicit errors when parent session state is unavailable (missing persisted session, missing current leaf, or failed branch extraction), with no silent fallback to `fresh`.
+- Fork-session creation errors are now surfaced as tool errors instead of bubbling as uncaught exceptions during execution.
+- Session directory preparation now fails loudly with actionable errors (instead of silently swallowing mkdir failures).
+- Async launch now fails with explicit errors when the async run directory cannot be created.
+- Share logs now correctly include forked session files even when no session directory exists.
+- Tool-call and result rendering now explicitly show `[fork]` when `context: "fork"` is used, including empty-result responses.
+- `subagent_status` now surfaces async result-file read failures instead of returning a misleading missing-status message.
+
 ## [0.11.3] - 2026-03-17
 
 ### Changed

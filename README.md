@@ -172,7 +172,24 @@ Add `--bg` at the end of any slash command to run in the background:
 /parallel scout "scan frontend" -> scout "scan backend" -> scout "scan infra" --bg
 ```
 
-Background tasks run asynchronously and notify you when complete. Check status with `subagent_status`.
+Without `--bg`, the run is foreground: the tool call stays active and streams progress until completion. With `--bg`, the run is launched asynchronously: control returns immediately, and completion arrives later via notification. In both cases subagents run as separate processes. Check status with `subagent_status`.
+
+### Forked Context Execution
+
+Add `--fork` at the end of `/run`, `/chain`, or `/parallel` to run with `context: "fork"`:
+
+```
+/run reviewer "review this diff" --fork
+/chain scout "analyze this branch" -> planner "plan next steps" --fork
+/parallel scout "audit frontend" -> reviewer "audit backend" --fork
+```
+
+You can combine `--fork` and `--bg` in any order:
+
+```
+/run reviewer "review this diff" --fork --bg
+/run reviewer "review this diff" --bg --fork
+```
 
 ## Agents Manager
 
@@ -285,7 +302,9 @@ Chains can be created from the Agents Manager template picker ("Blank Chain"), o
 | Chain | Yes | `{ chain: [{agent, task}...] }` with `{task}`, `{previous}`, `{chain_dir}` variables |
 | Parallel | Yes | `{ tasks: [{agent, task}...] }` - via TUI toggle or converted to chain for async |
 
-All modes support background/async execution. For programmatic async, use `clarify: false, async: true`. For interactive async, use `clarify: true` and press `b` in the TUI to toggle background mode before running. Chains with parallel steps (`{ parallel: [...] }`) run concurrently with configurable `concurrency` and `failFast` options.
+Execution context defaults to `context: "fresh"`, which starts each child run from a clean session. Set `context: "fork"` to start each child from a real branched session created from the parent's current leaf.
+
+All modes support foreground and background execution. Foreground is the default (the call waits and streams progress). For programmatic background launch, use `clarify: false, async: true`. For interactive background launch, use `clarify: true` and press `b` in the TUI before running. Chains with parallel steps (`{ parallel: [...] }`) run concurrently with configurable `concurrency` and `failFast` options.
 
 **Clarify TUI for single/parallel:**
 
@@ -397,8 +416,14 @@ Skills are specialized instructions loaded from SKILL.md files and injected into
 { agent: "scout", task: "find todos", maxOutput: { lines: 1000 } }
 { agent: "scout", task: "investigate", output: false }  // disable file output
 
-// Parallel (sync only)
+// Single agent from parent-session fork (real branched session at current leaf)
+{ agent: "worker", task: "continue this thread", context: "fork" }
+
+// Parallel
 { tasks: [{ agent: "scout", task: "a" }, { agent: "scout", task: "b" }] }
+
+// Parallel with forked context (each task gets its own isolated fork)
+{ tasks: [{ agent: "scout", task: "audit frontend" }, { agent: "reviewer", task: "audit backend" }], context: "fork" }
 
 // Chain with TUI clarification (default)
 { chain: [
@@ -407,6 +432,12 @@ Skills are specialized instructions loaded from SKILL.md files and injected into
   { agent: "worker" },   // uses agent defaults for reads/progress
   { agent: "reviewer" }
 ]}
+
+// Chain with forked context (each step gets its own isolated fork of the same parent leaf)
+{ chain: [
+  { agent: "scout", task: "Analyze current branch decisions" },
+  { agent: "planner", task: "Plan from {previous}" }
+], context: "fork" }
 
 // Chain without TUI (enables async)
 { chain: [...], clarify: false, async: true }
@@ -529,6 +560,7 @@ Notes:
 | `model` | string | agent default | Override model for single agent |
 | `tasks` | `{agent, task, cwd?, skill?}[]` | - | Parallel tasks (sync only) |
 | `chain` | ChainItem[] | - | Sequential steps with behavior overrides (see below) |
+| `context` | `"fresh" \| "fork"` | `fresh` | Execution context mode. `fork` uses a real branched session from the parent's current leaf for each child run |
 | `chainDir` | string | `<tmpdir>/pi-chain-runs/` | Persistent directory for chain artifacts (default auto-cleaned after 24h) |
 | `clarify` | boolean | true (chains) | Show TUI to preview/edit chain; implies sync mode |
 | `agentScope` | `"user" \| "project" \| "both"` | `both` | Agent discovery scope (project wins on name collisions) |
@@ -539,6 +571,8 @@ Notes:
 | `includeProgress` | boolean | false | Include full progress in result |
 | `share` | boolean | false | Upload session to GitHub Gist (see [Session Sharing](#session-sharing)) |
 | `sessionDir` | string | - | Override session log directory (takes precedence over `defaultSessionDir` and parent-session-derived path) |
+
+`context: "fork"` fails fast when the parent session is not persisted, the current leaf is missing, or a branched child session cannot be created. It never silently downgrades to `fresh`.
 
 **ChainItem** can be either a sequential step or a parallel step:
 
@@ -650,6 +684,8 @@ Files per task:
 ## Session Logs
 
 Session files (JSONL) are stored under a per-run session directory. Directory selection follows the same precedence as session root resolution: explicit `sessionDir` > `config.defaultSessionDir` > parent-session-derived path. The session file path is shown in output.
+
+When `context: "fork"` is used, each child run starts with `--session <branched-session-file>` produced from the parent's current leaf. This is a real session fork, not injected summary text.
 
 ## Session Sharing
 

@@ -56,7 +56,7 @@ export async function runSync(
 	}
 
 	const shareEnabled = options.share === true;
-	const sessionEnabled = Boolean(options.sessionDir) || shareEnabled;
+	const sessionEnabled = Boolean(options.sessionFile || options.sessionDir) || shareEnabled;
 	const effectiveModel = modelOverride ?? agent.model;
 	const modelArg = applyThinkingSuffix(effectiveModel, agent.thinking);
 
@@ -74,6 +74,7 @@ export async function runSync(
 		task,
 		sessionEnabled,
 		sessionDir: options.sessionDir,
+		sessionFile: options.sessionFile,
 		model: effectiveModel,
 		thinking: agent.thinking,
 		tools: agent.tools,
@@ -263,7 +264,9 @@ export async function runSync(
 					}
 					scheduleUpdate();
 				}
-			} catch {}
+			} catch {
+				// Non-JSON stdout lines are expected; only structured events are parsed.
+			}
 		};
 
 		let stderrBuf = "";
@@ -307,7 +310,9 @@ export async function runSync(
 	if (closeJsonlWriter) {
 		try {
 			await closeJsonlWriter();
-		} catch {}
+		} catch {
+			// JSONL artifact flush is best effort.
+		}
 	}
 
 	cleanupTempDir(tempDir);
@@ -379,8 +384,9 @@ export async function runSync(
 		}
 	}
 
-	if (shareEnabled && options.sessionDir) {
-		const sessionFile = findLatestSessionFile(options.sessionDir);
+	if (shareEnabled) {
+		const sessionFile = options.sessionFile
+			?? (options.sessionDir ? findLatestSessionFile(options.sessionDir) : null);
 		if (sessionFile) {
 			result.sessionFile = sessionFile;
 			// HTML export disabled - module resolution issues with global pi installation

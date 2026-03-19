@@ -76,6 +76,10 @@ export const SubagentParams = Type.Object({
 	})),
 	tasks: Type.Optional(Type.Array(TaskItem, { description: "PARALLEL mode: [{agent, task}, ...]" })),
 	chain: Type.Optional(Type.Array(ChainItem, { description: "CHAIN mode: sequential pipeline where each step's response becomes {previous} for the next. Use {task}, {previous}, {chain_dir} in task templates." })),
+	context: Type.Optional(Type.String({
+		enum: ["fresh", "fork"],
+		description: "Execution context mode: 'fresh' (default) starts clean, 'fork' starts from a real fork of the parent session leaf",
+	})),
 	chainDir: Type.Optional(Type.String({ description: "Persistent directory for chain artifacts. Default: <tmpdir>/pi-chain-runs/ (auto-cleaned after 24h)" })),
 	async: Type.Optional(Type.Boolean({ description: "Run in background (default: false, or per config)" })),
 	agentScope: Type.Optional(Type.String({ description: "Agent discovery scope: 'user', 'project', or 'both' (default: 'both'; project wins on name collisions)" })),

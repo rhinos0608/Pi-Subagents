@@ -10,6 +10,7 @@ export interface BuildPiArgsInput {
 	task: string;
 	sessionEnabled: boolean;
 	sessionDir?: string;
+	sessionFile?: string;
 	model?: string;
 	thinking?: string;
 	tools?: string[];
@@ -36,14 +37,16 @@ export function applyThinkingSuffix(model: string | undefined, thinking: string 
 export function buildPiArgs(input: BuildPiArgsInput): BuildPiArgsResult {
 	const args = [...input.baseArgs];
 
-	if (!input.sessionEnabled) {
-		args.push("--no-session");
-	}
-	if (input.sessionDir) {
-		try {
+	if (input.sessionFile) {
+		args.push("--session", input.sessionFile);
+	} else {
+		if (!input.sessionEnabled) {
+			args.push("--no-session");
+		}
+		if (input.sessionDir) {
 			fs.mkdirSync(input.sessionDir, { recursive: true });
-		} catch {}
-		args.push("--session-dir", input.sessionDir);
+			args.push("--session-dir", input.sessionDir);
+		}
 	}
 
 	const modelArg = applyThinkingSuffix(input.model, input.thinking);
@@ -118,5 +121,7 @@ export function cleanupTempDir(tempDir: string | null | undefined): void {
 	if (!tempDir) return;
 	try {
 		fs.rmSync(tempDir, { recursive: true, force: true });
-	} catch {}
+	} catch {
+		// Temp cleanup is best effort.
+	}
 }

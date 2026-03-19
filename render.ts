@@ -184,7 +184,8 @@ export function renderSubagentResult(
 	if (!d || !d.results.length) {
 		const t = result.content[0];
 		const text = t?.type === "text" ? t.text : "(no output)";
-		return new Text(truncLine(text, getTermWidth() - 4), 0, 0);
+		const contextPrefix = d?.context === "fork" ? `${theme.fg("warning", "[fork]")} ` : "";
+		return new Text(truncLine(`${contextPrefix}${text}`, getTermWidth() - 4), 0, 0);
 	}
 
 	const mdTheme = getMarkdownTheme();
@@ -197,6 +198,7 @@ export function renderSubagentResult(
 			: r.exitCode === 0
 				? theme.fg("success", "ok")
 				: theme.fg("error", "X");
+		const contextBadge = d.context === "fork" ? theme.fg("warning", " [fork]") : "";
 		const output = r.truncation?.text || getFinalOutput(r.messages);
 
 		const progressInfo = isRunning && r.progress
@@ -207,7 +209,7 @@ export function renderSubagentResult(
 
 		const w = getTermWidth() - 4;
 		const c = new Container();
-		c.addChild(new Text(truncLine(`${icon} ${theme.fg("toolTitle", theme.bold(r.agent))}${progressInfo}`, w), 0, 0));
+		c.addChild(new Text(truncLine(`${icon} ${theme.fg("toolTitle", theme.bold(r.agent))}${contextBadge}${progressInfo}`, w), 0, 0));
 		c.addChild(new Spacer(1));
 		const taskMaxLen = Math.max(20, w - 8);
 		const taskPreview = r.task.length > taskMaxLen
@@ -285,6 +287,7 @@ export function renderSubagentResult(
 			: "";
 
 	const modeLabel = d.mode;
+	const contextBadge = d.context === "fork" ? theme.fg("warning", " [fork]") : "";
 	// For parallel-in-chain, show task count (results) for consistency with step display
 	// For sequential chains, show logical step count
 	const hasParallelInChain = d.chainAgents?.some((a) => a.startsWith("["));
@@ -324,7 +327,7 @@ export function renderSubagentResult(
 	const c = new Container();
 	c.addChild(
 		new Text(
-			truncLine(`${icon} ${theme.fg("toolTitle", theme.bold(modeLabel))}${stepInfo}${summaryStr}`, w),
+			truncLine(`${icon} ${theme.fg("toolTitle", theme.bold(modeLabel))}${contextBadge}${stepInfo}${summaryStr}`, w),
 			0,
 			0,
 		),

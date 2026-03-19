@@ -49,11 +49,26 @@ const parseAgentToken = (token: string): { name: string; config: InlineConfig } 
 	return { name: token.slice(0, bracket), config: parseInlineConfig(token.slice(bracket + 1, end !== -1 ? end : undefined)) };
 };
 
-const extractBgFlag = (args: string): { args: string; bg: boolean } => {
-	if (args.endsWith(" --bg") || args === "--bg") {
-		return { args: args.slice(0, args.length - (args === "--bg" ? 4 : 5)).trim(), bg: true };
+const extractExecutionFlags = (rawArgs: string): { args: string; bg: boolean; fork: boolean } => {
+	let args = rawArgs.trim();
+	let bg = false;
+	let fork = false;
+
+	while (true) {
+		if (args.endsWith(" --bg") || args === "--bg") {
+			bg = true;
+			args = args === "--bg" ? "" : args.slice(0, -5).trim();
+			continue;
+		}
+		if (args.endsWith(" --fork") || args === "--fork") {
+			fork = true;
+			args = args === "--fork" ? "" : args.slice(0, -7).trim();
+			continue;
+		}
+		break;
 	}
-	return { args, bg: false };
+
+	return { args, bg, fork };
 };
 
 function setupDirectRun(ctx: ExtensionContext, getSubagentSessionRoot: (parentSessionFile: string | null) => string) {
@@ -62,7 +77,10 @@ function setupDirectRun(ctx: ExtensionContext, getSubagentSessionRoot: (parentSe
 	const sessionRoot = path.join(getSubagentSessionRoot(parentSessionFile), runId);
 	try {
 		fs.mkdirSync(sessionRoot, { recursive: true });
-	} catch {}
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		throw new Error(`Failed to create session directory '${sessionRoot}': ${message}`);
+	}
 	return {
 		runId,
 		shareEnabled: false,
@@ -130,7 +148,7 @@ async function openAgentManager(
 					const id = randomUUID();
 					const asyncCtx = { pi, cwd: ctx.cwd, currentSessionId: ctx.sessionManager.getSessionId() ?? id };
 					const asyncSessionRoot = getSubagentSessionRoot(ctx.sessionManager.getSessionFile() ?? null);
-					try { fs.mkdirSync(asyncSessionRoot, { recursive: true }); } catch {}
+					fs.mkdirSync(asyncSessionRoot, { recursive: true });
 					executeAsyncChain(id, {
 						chain: r.requestedAsync.chain,
 						agents,
@@ -268,16 +286,16 @@ export function registerSlashCommands(
 	});
 
 	pi.registerCommand("run", {
-		description: "Run a subagent directly: /run agent[output=file] task [--bg]",
+		description: "Run a subagent directly: /run agent[output=file] task [--bg] [--fork]",
 		getArgumentCompletions: makeAgentCompletions(state, false),
 		handler: async (args, ctx) => {
-			const { args: cleanedArgs, bg } = extractBgFlag(args);
+			const { args: cleanedArgs, bg, fork } = extractExecutionFlags(args);
 			const input = cleanedArgs.trim();
 			const firstSpace = input.indexOf(" ");
-			if (firstSpace === -1) { ctx.ui.notify("Usage: /run <agent> <task> [--bg]", "error"); return; }
+			if (firstSpace === -1) { ctx.ui.notify("Usage: /run <agent> <task> [--bg] [--fork]", "error"); return; }
 			const { name: agentName, config: inline } = parseAgentToken(input.slice(0, firstSpace));
 			const task = input.slice(firstSpace + 1).trim();
-			if (!task) { ctx.ui.notify("Usage: /run <agent> <task> [--bg]", "error"); return; }
+			if (!task) { ctx.ui.notify("Usage: /run <agent> <task> [--bg] [--fork]", "error"); return; }
 
 			const agents = discoverAgents(state.baseCwd, "both").agents;
 			if (!agents.find((a) => a.name === agentName)) { ctx.ui.notify(`Unknown agent: ${agentName}`, "error"); return; }
@@ -291,15 +309,16 @@ export function registerSlashCommands(
 			if (inline.skill !== undefined) params.skill = inline.skill;
 			if (inline.model) params.model = inline.model;
 			if (bg) params.async = true;
+			if (fork) params.context = "fork";
 			pi.sendUserMessage(`Call the subagent tool with these exact parameters: ${JSON.stringify({ ...params, agentScope: "both" })}`);
 		},
 	});
 
 	pi.registerCommand("chain", {
-		description: "Run agents in sequence: /chain scout \"task\" -> planner [--bg]",
+		description: "Run agents in sequence: /chain scout \"task\" -> planner [--bg] [--fork]",
 		getArgumentCompletions: makeAgentCompletions(state, true),
 		handler: async (args, ctx) => {
-			const { args: cleanedArgs, bg } = extractBgFlag(args);
+			const { args: cleanedArgs, bg, fork } = extractExecutionFlags(args);
 			const parsed = parseAgentArgs(state, cleanedArgs, "chain", ctx);
 			if (!parsed) return;
 			const chain = parsed.steps.map(({ name, config, task: stepTask }, i) => ({
@@ -313,15 +332,16 @@ export function registerSlashCommands(
 			}));
 			const params: Record<string, unknown> = { chain, task: parsed.task, clarify: false, agentScope: "both" };
 			if (bg) params.async = true;
+			if (fork) params.context = "fork";
 			pi.sendUserMessage(`Call the subagent tool with these exact parameters: ${JSON.stringify(params)}`);
 		},
 	});
 
 	pi.registerCommand("parallel", {
-		description: "Run agents in parallel: /parallel scout \"task1\" -> reviewer \"task2\" [--bg]",
+		description: "Run agents in parallel: /parallel scout \"task1\" -> reviewer \"task2\" [--bg] [--fork]",
 		getArgumentCompletions: makeAgentCompletions(state, true),
 		handler: async (args, ctx) => {
-			const { args: cleanedArgs, bg } = extractBgFlag(args);
+			const { args: cleanedArgs, bg, fork } = extractExecutionFlags(args);
 			const parsed = parseAgentArgs(state, cleanedArgs, "parallel", ctx);
 			if (!parsed) return;
 			if (parsed.steps.length > MAX_PARALLEL) { ctx.ui.notify(`Max ${MAX_PARALLEL} parallel tasks`, "error"); return; }
@@ -336,6 +356,7 @@ export function registerSlashCommands(
 			}));
 			const params: Record<string, unknown> = { chain: [{ parallel: tasks }], task: parsed.task, clarify: false, agentScope: "both" };
 			if (bg) params.async = true;
+			if (fork) params.context = "fork";
 			pi.sendUserMessage(`Call the subagent tool with these exact parameters: ${JSON.stringify(params)}`);
 		},
 	});

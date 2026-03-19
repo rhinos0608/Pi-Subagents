@@ -101,6 +101,7 @@ export interface SingleResult {
 
 export interface Details {
 	mode: "single" | "parallel" | "chain" | "management";
+	context?: "fresh" | "fork";
 	results: SingleResult[];
 	asyncId?: string;
 	asyncDir?: string;
@@ -226,6 +227,7 @@ export interface RunSyncOptions {
 	runId: string;
 	index?: number;
 	sessionDir?: string;
+	sessionFile?: string;
 	share?: boolean;
 	/** Override the agent's default model (format: "provider/id" or just "id") */
 	modelOverride?: string;
