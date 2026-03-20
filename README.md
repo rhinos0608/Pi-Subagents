@@ -20,6 +20,22 @@ To remove:
 npx pi-subagents --remove
 ```
 
+If you use [pi-prompt-template-model](https://github.com/nicobailon/pi-prompt-template-model), you can wrap subagent delegation in a slash command:
+
+```markdown
+---
+description: Take a screenshot
+model: claude-sonnet-4-20250514
+subagent: browser-screenshoter
+cwd: /tmp/screenshots
+---
+Use url in the prompt to take screenshot: $@
+```
+
+Then `/take-screenshot https://example.com` switches to Sonnet, delegates to the `browser-screenshoter` agent with `/tmp/screenshots` as the working directory, and restores your model when done. Runtime overrides like `--cwd=<path>` and `--subagent=<name>` work too.
+
+pi-prompt-template-model is entirely optional — pi-subagents works standalone through the `subagent` tool and slash commands.
+
 ## Agents
 
 Agents are markdown files with YAML frontmatter that define specialized subagent configurations.

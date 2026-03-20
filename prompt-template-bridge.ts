@@ -146,17 +146,6 @@ export function registerPromptTemplateDelegationBridge<Ctx extends { cwd?: strin
 			return;
 		}
 
-		if (typeof ctx.cwd === "string" && ctx.cwd !== request.cwd) {
-			const response: PromptTemplateDelegationResponse = {
-				...request,
-				messages: [],
-				isError: true,
-				errorText: `Delegated request cwd mismatch: active context is '${ctx.cwd}' but request asked for '${request.cwd}'. Retry from the target session/cwd.`,
-			};
-			options.events.emit(PROMPT_TEMPLATE_SUBAGENT_RESPONSE_EVENT, response);
-			return;
-		}
-
 		const controller = new AbortController();
 		controllers.set(request.requestId, controller);
 

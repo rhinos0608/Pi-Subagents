@@ -116,12 +116,16 @@ describe("prompt-template delegation bridge", () => {
 		bridge.dispose();
 	});
 
-	it("rejects cwd mismatch", async () => {
+	it("accepts requests when delegated cwd differs from active context", async () => {
 		const events = new FakeEvents();
+		let executeCwd: string | undefined;
 		const bridge = registerPromptTemplateDelegationBridge({
 			events,
 			getContext: () => ({ cwd: "/actual" }),
-			execute: async () => ({ details: { results: [{ messages: [] }] } }),
+			execute: async (_requestId, request) => {
+				executeCwd = request.cwd;
+				return { details: { results: [{ messages: [] }] } };
+			},
 		});
 
 		const responsePromise = once(events, PROMPT_TEMPLATE_SUBAGENT_RESPONSE_EVENT);
@@ -135,8 +139,8 @@ describe("prompt-template delegation bridge", () => {
 		});
 
 		const response = await responsePromise as { isError: boolean; errorText?: string };
-		assert.equal(response.isError, true);
-		assert.match(response.errorText ?? "", /cwd mismatch/);
+		assert.equal(response.isError, false);
+		assert.equal(executeCwd, "/repo");
 
 		bridge.dispose();
 	});

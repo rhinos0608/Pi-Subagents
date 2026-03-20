@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [0.11.7] - 2026-03-20
+
+### Changed
+- Removed the cwd mismatch guard from the prompt-template delegation bridge, allowing delegated requests to specify a working directory different from the active session's cwd.
+
 ## [0.11.6] - 2026-03-20
 
 ### Added
