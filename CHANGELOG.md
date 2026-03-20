@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [0.11.6] - 2026-03-20
+
+### Added
+- Added `delegate` builtin agent — a lightweight subagent with no model, output, or default reads. Inherits the parent session's model, making it the natural target for prompt-template delegated execution.
+
 ## [0.11.5] - 2026-03-20
 
 ### Added
