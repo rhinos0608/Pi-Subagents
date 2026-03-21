@@ -251,20 +251,15 @@ CHAIN TEMPLATE VARIABLES (use in task strings):
 • {previous} - Text response from the previous step (empty for first step)
 • {chain_dir} - Shared directory for chain files (e.g., <tmpdir>/pi-chain-runs/abc123/)
 
-CHAIN DATA FLOW:
-1. Each step's text response automatically becomes {previous} for the next step
-2. Steps can also write files to {chain_dir} (via agent's "output" config)
-3. Later steps can read those files (via agent's "reads" config)
-
 Example: { chain: [{agent:"scout", task:"Analyze {task}"}, {agent:"planner", task:"Plan based on {previous}"}] }
 
-MANAGEMENT (use action field — omit agent/task/chain/tasks):
-• { action: "list" } - discover available agents and chains
-• { action: "get", agent: "name" } - full agent detail with system prompt
-• { action: "create", config: { name, description, systemPrompt, ... } } - create agent/chain
-• { action: "update", agent: "name", config: { ... } } - modify fields (merge)
-• { action: "delete", agent: "name" } - remove definition
-• Use chainName instead of agent for chain operations`,
+MANAGEMENT (use action field, omit agent/task/chain/tasks):
+• { action: "list" } - discover agents/chains
+• { action: "get", agent: "name" } - full agent detail
+• { action: "create", config: { name, systemPrompt, ... } }
+• { action: "update", agent: "name", config: { ... } } - merge
+• { action: "delete", agent: "name" }
+• Use chainName for chain operations`,
 		parameters: SubagentParams,
 
 		execute(id, params, signal, onUpdate, ctx) {

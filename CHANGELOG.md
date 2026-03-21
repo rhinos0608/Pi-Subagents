@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [0.11.10] - 2026-03-21
+
+### Changed
+- Trimmed tool schema and description to reduce per-turn token cost by ~166 tokens (13%). Removed `maxOutput` from the LLM-facing schema (still accepted internally), shortened `context` and `output` descriptions, removed redundant CHAIN DATA FLOW section from tool description, condensed MANAGEMENT bullet points.
+
 ## [0.11.9] - 2026-03-21
 
 ### Fixed
