@@ -97,9 +97,11 @@ Semantics:
 
 When `extensions` is present, it takes precedence over extension paths implied by `tools` entries.
 
-**MCP Tools**
+**MCP Tools (optional)**
 
-Agents can use MCP server tools directly (requires the [pi-mcp-adapter](https://github.com/nicobailon/pi-mcp-adapter) extension). Add `mcp:` prefixed entries to the `tools` field:
+If you have the [pi-mcp-adapter](https://github.com/nicobailon/pi-mcp-adapter) extension installed, subagents can use MCP server tools directly. Without that extension, everything below is ignored — MCP integration is entirely optional.
+
+Add `mcp:` prefixed entries to the `tools` field in agent frontmatter:
 
 ```yaml
 # All tools from a server
@@ -118,7 +120,7 @@ The `mcp:` items are additive — they don't affect which builtins the agent get
 
 Subagents only get direct MCP tools when `mcp:` items are explicitly listed. Even if your `mcp.json` has `directTools: true` globally, a subagent without `mcp:` in its frontmatter won't get any direct tools — keeping it lean. The `mcp` proxy tool is still available for discovery if needed.
 
-The MCP adapter's metadata cache must be populated for direct tools to work. On the first session with a new MCP server, tools will only be available through the `mcp` proxy. Restart Pi after the first session and direct tools become available.
+> **First-run caveat:** The MCP adapter caches tool metadata at startup. The first time you connect to a new MCP server, that cache is empty, so tools are only available through the generic `mcp` proxy. After that first session, restart pi and direct tools become available.
 
 **Resolution priority:** step override > agent frontmatter > disabled
 
@@ -425,7 +427,9 @@ Skills are specialized instructions loaded from SKILL.md files and injected into
 
 ## Usage
 
-**subagent tool:**
+These are the parameters the **LLM agent** passes when it calls the `subagent` tool — not something you type directly. The agent decides to use these based on your conversation. For user-facing commands, see [Quick Commands](#quick-commands) above.
+
+**subagent tool parameters:**
 ```typescript
 // Single agent
 { agent: "worker", task: "refactor auth" }

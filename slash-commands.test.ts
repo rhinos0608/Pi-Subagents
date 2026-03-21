@@ -1,12 +1,26 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
+const SLASH_RESULT_TYPE = "subagent-slash-result";
+const SLASH_SUBAGENT_REQUEST_EVENT = "subagent:slash:request";
+const SLASH_SUBAGENT_STARTED_EVENT = "subagent:slash:started";
+const SLASH_SUBAGENT_RESPONSE_EVENT = "subagent:slash:response";
+
+interface EventBus {
+	on(event: string, handler: (data: unknown) => void): () => void;
+	emit(event: string, data: unknown): void;
+}
+
 interface RegisterSlashCommandsModule {
 	registerSlashCommands?: (
 		pi: {
-			registerCommand(name: string, spec: { handler(args: string, ctx: unknown): Promise<void> }): void;
+			events: EventBus;
+			registerCommand(
+				name: string,
+				spec: { handler(args: string, ctx: unknown): Promise<void>; getArgumentCompletions?: (prefix: string) => unknown },
+			): void;
 			registerShortcut(key: string, spec: { handler(ctx: unknown): Promise<void> }): void;
-			sendUserMessage(message: string): void;
+			sendMessage(message: unknown): void;
 		},
 		state: {
 			baseCwd: string;
@@ -20,7 +34,6 @@ interface RegisterSlashCommandsModule {
 			watcherRestartTimer: ReturnType<typeof setTimeout> | null;
 			resultFileCoalescer: { schedule(file: string, delayMs?: number): boolean; clear(): void };
 		},
-		getSubagentSessionRoot: (parentSessionFile: string | null) => string,
 	) => void;
 }
 
@@ -32,10 +45,24 @@ try {
 	available = false;
 }
 
-function parseToolCallMessage(message: string): Record<string, unknown> {
-	const prefix = "Call the subagent tool with these exact parameters: ";
-	assert.ok(message.startsWith(prefix), "expected tool call prefix");
-	return JSON.parse(message.slice(prefix.length)) as Record<string, unknown>;
+function createEventBus(): EventBus {
+	const handlers = new Map<string, Array<(data: unknown) => void>>();
+	return {
+		on(event, handler) {
+			const existing = handlers.get(event) ?? [];
+			existing.push(handler);
+			handlers.set(event, existing);
+			return () => {
+				const current = handlers.get(event) ?? [];
+				handlers.set(event, current.filter((entry) => entry !== handler));
+			};
+		},
+		emit(event, data) {
+			for (const handler of handlers.get(event) ?? []) {
+				handler(data);
+			}
+		},
+	};
 }
 
 function createState(cwd: string) {
@@ -56,74 +83,101 @@ function createState(cwd: string) {
 	};
 }
 
-describe("slash command --fork flag", { skip: !available ? "slash-commands.ts not importable" : undefined }, () => {
-	it("/run forwards context=fork and async for both flag orders", async () => {
-		const sent: string[] = [];
+function createCommandContext() {
+	return {
+		cwd: process.cwd(),
+		hasUI: false,
+		ui: {
+			notify: (_message: string) => {},
+			setStatus: (_key: string, _text: string | undefined) => {},
+			onTerminalInput: () => () => {},
+			custom: async () => undefined,
+		},
+		modelRegistry: { getAvailable: () => [] },
+	};
+}
+
+describe("slash command custom message delivery", { skip: !available ? "slash-commands.ts not importable" : undefined }, () => {
+	it("/run sends an inline slash result message after a successful bridge response", async () => {
+		const sent: unknown[] = [];
 		const commands = new Map<string, { handler(args: string, ctx: unknown): Promise<void> }>();
+		const events = createEventBus();
+		events.on(SLASH_SUBAGENT_REQUEST_EVENT, (data) => {
+			const requestId = (data as { requestId: string }).requestId;
+			events.emit(SLASH_SUBAGENT_STARTED_EVENT, { requestId });
+			events.emit(SLASH_SUBAGENT_RESPONSE_EVENT, {
+				requestId,
+				result: {
+					content: [{ type: "text", text: "Scout finished" }],
+					details: { mode: "single", results: [] },
+				},
+				isError: false,
+			});
+		});
+
 		const pi = {
+			events,
 			registerCommand(name: string, spec: { handler(args: string, ctx: unknown): Promise<void> }) {
 				commands.set(name, spec);
 			},
 			registerShortcut() {},
-			sendUserMessage(message: string) {
+			sendMessage(message: unknown) {
 				sent.push(message);
 			},
 		};
 
-		registerSlashCommands!(pi, createState(process.cwd()), () => "/tmp/subagent-session");
+		registerSlashCommands!(pi, createState(process.cwd()));
+		await commands.get("run")!.handler("scout inspect this", createCommandContext());
 
-		const ctx = {
-			cwd: process.cwd(),
-			ui: { notify: (_msg: string) => {} },
-			sessionManager: { getSessionFile: () => undefined, getSessionId: () => "sid" },
-			modelRegistry: { getAvailable: () => [] },
-			hasUI: false,
-		};
-
-		await commands.get("run")!.handler("scout review --fork --bg", ctx);
-		await commands.get("run")!.handler("scout review --bg --fork", ctx);
-
-		const first = parseToolCallMessage(sent[0]!);
-		assert.equal(first.context, "fork");
-		assert.equal(first.async, true);
-
-		const second = parseToolCallMessage(sent[1]!);
-		assert.equal(second.context, "fork");
-		assert.equal(second.async, true);
+		assert.deepEqual(sent, [
+			{
+				customType: SLASH_RESULT_TYPE,
+				content: "Scout finished",
+				display: true,
+				details: { mode: "single", results: [] },
+			},
+		]);
 	});
 
-	it("/chain and /parallel forward context=fork", async () => {
-		const sent: string[] = [];
+	it("/run still sends an inline slash result message when the bridge returns an error", async () => {
+		const sent: unknown[] = [];
 		const commands = new Map<string, { handler(args: string, ctx: unknown): Promise<void> }>();
+		const events = createEventBus();
+		events.on(SLASH_SUBAGENT_REQUEST_EVENT, (data) => {
+			const requestId = (data as { requestId: string }).requestId;
+			events.emit(SLASH_SUBAGENT_STARTED_EVENT, { requestId });
+			events.emit(SLASH_SUBAGENT_RESPONSE_EVENT, {
+				requestId,
+				result: {
+					content: [{ type: "text", text: "Subagent failed" }],
+					details: { mode: "single", results: [] },
+				},
+				isError: true,
+				errorText: "Subagent failed",
+			});
+		});
+
 		const pi = {
+			events,
 			registerCommand(name: string, spec: { handler(args: string, ctx: unknown): Promise<void> }) {
 				commands.set(name, spec);
 			},
 			registerShortcut() {},
-			sendUserMessage(message: string) {
+			sendMessage(message: unknown) {
 				sent.push(message);
 			},
 		};
 
-		registerSlashCommands!(pi, createState(process.cwd()), () => "/tmp/subagent-session");
+		registerSlashCommands!(pi, createState(process.cwd()));
+		await commands.get("run")!.handler("scout inspect this", createCommandContext());
 
-		const ctx = {
-			cwd: process.cwd(),
-			ui: { notify: (_msg: string) => {} },
-			sessionManager: { getSessionFile: () => undefined, getSessionId: () => "sid" },
-			modelRegistry: { getAvailable: () => [] },
-			hasUI: false,
-		};
-
-		await commands.get("chain")!.handler("scout \"a\" -> planner --bg --fork", ctx);
-		await commands.get("parallel")!.handler("scout \"a\" -> reviewer \"b\" --fork", ctx);
-
-		const chainParams = parseToolCallMessage(sent[0]!);
-		assert.equal(chainParams.context, "fork");
-		assert.equal(chainParams.async, true);
-
-		const parallelParams = parseToolCallMessage(sent[1]!);
-		assert.equal(parallelParams.context, "fork");
-		assert.equal(parallelParams.async, undefined);
+		assert.deepEqual(sent, [
+			{
+				customType: SLASH_RESULT_TYPE,
+				content: "Subagent failed",
+				display: true,
+				details: { mode: "single", results: [] },
+			},
+		]);
 	});
 });

@@ -15,8 +15,9 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { type ExtensionAPI, type ExtensionContext, type ToolDefinition } from "@mariozechner/pi-coding-agent";
-import { Text } from "@mariozechner/pi-tui";
+import { Box, Container, Spacer, Text } from "@mariozechner/pi-tui";
 import { discoverAgents } from "./agents.js";
 import { cleanupAllArtifactDirs, cleanupOldArtifacts, getArtifactsDir } from "./artifacts.js";
 import { cleanupOldChainDirs } from "./settings.js";
@@ -28,6 +29,8 @@ import { createAsyncJobTracker } from "./async-job-tracker.js";
 import { createResultWatcher } from "./result-watcher.js";
 import { registerSlashCommands } from "./slash-commands.js";
 import { registerPromptTemplateDelegationBridge } from "./prompt-template-bridge.js";
+import { registerSlashSubagentBridge } from "./slash-bridge.js";
+import { clearSlashSnapshots, getSlashRenderableSnapshot, resolveSlashMessageDetails, restoreSlashFinalSnapshots, type SlashMessageDetails } from "./slash-live-state.js";
 import {
 	type Details,
 	type ExtensionConfig,
@@ -35,6 +38,7 @@ import {
 	ASYNC_DIR,
 	DEFAULT_ARTIFACT_CONFIG,
 	RESULTS_DIR,
+	SLASH_RESULT_TYPE,
 	WIDGET_KEY,
 } from "./types.js";
 
@@ -92,6 +96,48 @@ function ensureAccessibleDir(dirPath: string): void {
 	}
 }
 
+function isSlashResultRunning(result: { details?: Details }): boolean {
+	return result.details?.progress?.some((entry) => entry.status === "running")
+		|| result.details?.results.some((entry) => entry.progress?.status === "running")
+		|| false;
+}
+
+function isSlashResultError(result: { details?: Details }): boolean {
+	return result.details?.results.some((entry) => entry.exitCode !== 0 && entry.progress?.status !== "running") || false;
+}
+
+function rebuildSlashResultContainer(
+	container: Container,
+	result: AgentToolResult<Details>,
+	options: { expanded: boolean },
+	theme: ExtensionContext["ui"]["theme"],
+): void {
+	container.clear();
+	container.addChild(new Spacer(1));
+	const boxTheme = isSlashResultRunning(result) ? "toolPendingBg" : isSlashResultError(result) ? "toolErrorBg" : "toolSuccessBg";
+	const box = new Box(1, 1, (text: string) => theme.bg(boxTheme, text));
+	box.addChild(renderSubagentResult(result, options, theme));
+	container.addChild(box);
+}
+
+function createSlashResultComponent(
+	details: SlashMessageDetails,
+	options: { expanded: boolean },
+	theme: ExtensionContext["ui"]["theme"],
+): Container {
+	const container = new Container();
+	let lastVersion = -1;
+	container.render = (width: number): string[] => {
+		const snapshot = getSlashRenderableSnapshot(details);
+		if (snapshot.version !== lastVersion) {
+			lastVersion = snapshot.version;
+			rebuildSlashResultContainer(container, snapshot.result, options, theme);
+		}
+		return Container.prototype.render.call(container, width);
+	};
+	return container;
+}
+
 export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	ensureAccessibleDir(RESULTS_DIR);
 	ensureAccessibleDir(ASYNC_DIR);
@@ -137,6 +183,19 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		getSubagentSessionRoot,
 		expandTilde,
 		discoverAgents,
+	});
+
+	pi.registerMessageRenderer<SlashMessageDetails>(SLASH_RESULT_TYPE, (message, options, theme) => {
+		const details = resolveSlashMessageDetails(message.details);
+		if (!details) return undefined;
+		return createSlashResultComponent(details, options, theme);
+	});
+
+	const slashBridge = registerSlashSubagentBridge({
+		events: pi.events,
+		getContext: () => state.lastUiContext,
+		execute: (id, params, signal, onUpdate, ctx) =>
+			executor.execute(id, params, signal, onUpdate, ctx),
 	});
 
 	const promptTemplateBridge = registerPromptTemplateDelegationBridge({
@@ -340,7 +399,7 @@ MANAGEMENT (use action field — omit agent/task/chain/tasks):
 
 	pi.registerTool(tool);
 	pi.registerTool(statusTool);
-	registerSlashCommands(pi, state, getSubagentSessionRoot);
+	registerSlashCommands(pi, state);
 
 	pi.events.on("subagent:started", handleStarted);
 	pi.events.on("subagent:complete", handleComplete);
@@ -372,6 +431,7 @@ MANAGEMENT (use action field — omit agent/task/chain/tasks):
 		state.lastUiContext = ctx;
 		cleanupSessionArtifacts(ctx);
 		resetJobs(ctx);
+		restoreSlashFinalSnapshots(ctx.sessionManager.getEntries());
 	};
 
 	pi.on("session_start", (_event, ctx) => {
@@ -392,6 +452,9 @@ MANAGEMENT (use action field — omit agent/task/chain/tasks):
 		}
 		state.cleanupTimers.clear();
 		state.asyncJobs.clear();
+		clearSlashSnapshots();
+		slashBridge.cancelAll();
+		slashBridge.dispose();
 		promptTemplateBridge.cancelAll();
 		promptTemplateBridge.dispose();
 		if (state.lastUiContext?.hasUI) {

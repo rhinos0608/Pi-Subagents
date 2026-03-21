@@ -51,7 +51,7 @@ interface TaskParam {
 	progress?: boolean;
 }
 
-interface SubagentParamsLike {
+export interface SubagentParamsLike {
 	action?: string;
 	agent?: string;
 	task?: string;
@@ -107,6 +107,7 @@ function validateExecutionInput(
 	hasChain: boolean,
 	hasTasks: boolean,
 	hasSingle: boolean,
+	allowClarifyTaskPrompt: boolean,
 ): AgentToolResult<Details> | null {
 	if (Number(hasChain) + Number(hasTasks) + Number(hasSingle) !== 1) {
 		return {
@@ -139,7 +140,7 @@ function validateExecutionInput(
 					details: { mode: "chain" as const, results: [] },
 				};
 			}
-		} else if (!(firstStep as SequentialStep).task && !params.task) {
+		} else if (!(firstStep as SequentialStep).task && !params.task && !allowClarifyTaskPrompt) {
 			return {
 				content: [{ type: "text", text: "First step in chain must have a task" }],
 				isError: true,
@@ -806,8 +807,19 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		const hasChain = (params.chain?.length ?? 0) > 0;
 		const hasTasks = (params.tasks?.length ?? 0) > 0;
 		const hasSingle = Boolean(params.agent && params.task);
+		const allowClarifyTaskPrompt = hasChain
+			&& params.clarify === true
+			&& ctx.hasUI
+			&& !(params.chain?.some(isParallelStep) ?? false);
 
-		const validationError = validateExecutionInput(params, agents, hasChain, hasTasks, hasSingle);
+		const validationError = validateExecutionInput(
+			params,
+			agents,
+			hasChain,
+			hasTasks,
+			hasSingle,
+			allowClarifyTaskPrompt,
+		);
 		if (validationError) return validationError;
 
 		let sessionFileForIndex: (idx?: number) => string | undefined = () => undefined;

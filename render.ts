@@ -220,6 +220,36 @@ export function renderSubagentResult(
 		);
 		c.addChild(new Spacer(1));
 
+		if (isRunning && r.progress) {
+			if (r.progress.currentTool) {
+				const maxToolArgsLen = Math.max(50, w - 20);
+				const toolArgsPreview = r.progress.currentToolArgs
+					? (r.progress.currentToolArgs.length > maxToolArgsLen
+						? `${r.progress.currentToolArgs.slice(0, maxToolArgsLen)}...`
+						: r.progress.currentToolArgs)
+					: "";
+				const toolLine = toolArgsPreview
+					? `${r.progress.currentTool}: ${toolArgsPreview}`
+					: r.progress.currentTool;
+				c.addChild(new Text(truncLine(theme.fg("warning", `> ${toolLine}`), w), 0, 0));
+			}
+			if (r.progress.recentTools?.length) {
+				for (const t of r.progress.recentTools.slice(-3)) {
+					const maxArgsLen = Math.max(40, w - 24);
+					const argsPreview = t.args.length > maxArgsLen
+						? `${t.args.slice(0, maxArgsLen)}...`
+						: t.args;
+					c.addChild(new Text(truncLine(theme.fg("dim", `${t.tool}: ${argsPreview}`), w), 0, 0));
+				}
+			}
+			for (const line of (r.progress.recentOutput ?? []).slice(-5)) {
+				c.addChild(new Text(truncLine(theme.fg("dim", `  ${line}`), w), 0, 0));
+			}
+			if (r.progress.currentTool || r.progress.recentTools?.length || r.progress.recentOutput?.length) {
+				c.addChild(new Spacer(1));
+			}
+		}
+
 		const items = getDisplayItems(r.messages);
 		for (const item of items) {
 			if (item.type === "tool")
