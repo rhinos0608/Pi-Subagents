@@ -50,7 +50,18 @@ describe("prompt-template delegation bridge", () => {
 				executeCalls++;
 				onUpdate({
 					details: {
-						progress: [{ currentTool: "read", currentToolArgs: "index.ts", recentOutput: ["line 1"], toolCount: 1, durationMs: 10, tokens: 42 }],
+						results: [{ agent: "worker", model: "openai/gpt-5-mini" }],
+						progress: [{
+							index: 0,
+							agent: "worker",
+							currentTool: "read",
+							currentToolArgs: "index.ts",
+							recentOutput: ["line 1"],
+							recentTools: [{ tool: "read", args: '{"path":"index.ts"}' }],
+							toolCount: 1,
+							durationMs: 10,
+							tokens: 42,
+						}],
 					},
 				});
 				return {
@@ -77,10 +88,22 @@ describe("prompt-template delegation bridge", () => {
 		const started = await startedPromise as { requestId: string };
 		assert.equal(started.requestId, "r1");
 
-		const update = await updatePromise as { requestId: string; currentTool?: string; toolCount?: number };
+		const update = await updatePromise as {
+			requestId: string;
+			currentTool?: string;
+			toolCount?: number;
+			recentOutputLines?: string[];
+			recentTools?: Array<{ tool: string; args: string }>;
+			model?: string;
+			taskProgress?: Array<{ model?: string }>;
+		};
 		assert.equal(update.requestId, "r1");
 		assert.equal(update.currentTool, "read");
 		assert.equal(update.toolCount, 1);
+		assert.deepEqual(update.recentOutputLines, ["line 1"]);
+		assert.deepEqual(update.recentTools, [{ tool: "read", args: '{"path":"index.ts"}' }]);
+		assert.equal(update.model, "openai/gpt-5-mini");
+		assert.equal(update.taskProgress?.[0]?.model, "openai/gpt-5-mini");
 
 		const response = await responsePromise as { requestId: string; isError: boolean; messages: unknown[] };
 		assert.equal(response.requestId, "r1");
@@ -88,6 +111,51 @@ describe("prompt-template delegation bridge", () => {
 		assert.equal(Array.isArray(response.messages), true);
 		assert.equal(executeCalls, 1);
 
+		bridge.dispose();
+	});
+
+	it("filters malformed recent output entries in updates", async () => {
+		const events = new FakeEvents();
+		const bridge = registerPromptTemplateDelegationBridge({
+			events,
+			getContext: () => ({ cwd: "/repo" }),
+			execute: async (_requestId, _request, _signal, _ctx, onUpdate) => {
+				onUpdate({
+					details: {
+						results: [{ agent: "worker", model: "openai/gpt-5-mini" }],
+						progress: [{
+							index: 0,
+							agent: "worker",
+							recentOutput: ["line 1", 123 as unknown as string],
+						}],
+					},
+				});
+				return { details: { results: [{ messages: [] }] } };
+			},
+		});
+
+		const updatePromise = once(events, PROMPT_TEMPLATE_SUBAGENT_UPDATE_EVENT);
+		const responsePromise = once(events, PROMPT_TEMPLATE_SUBAGENT_RESPONSE_EVENT);
+		events.emit(PROMPT_TEMPLATE_SUBAGENT_REQUEST_EVENT, {
+			requestId: "r-malformed-output",
+			agent: "worker",
+			task: "do work",
+			context: "fresh",
+			model: "openai/gpt-5",
+			cwd: "/repo",
+		});
+
+		const update = await updatePromise as {
+			recentOutput?: string;
+			recentOutputLines?: string[];
+			taskProgress?: Array<{ recentOutput?: string; recentOutputLines?: string[] }>;
+		};
+		assert.equal(update.recentOutput, undefined);
+		assert.deepEqual(update.recentOutputLines, ["line 1"]);
+		assert.equal(update.taskProgress?.[0]?.recentOutput, undefined);
+		assert.deepEqual(update.taskProgress?.[0]?.recentOutputLines, ["line 1"]);
+
+		await responsePromise;
 		bridge.dispose();
 	});
 

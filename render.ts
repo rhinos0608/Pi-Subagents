@@ -447,7 +447,7 @@ export function renderSubagentResult(
 			}
 			// Recent tools
 			if (rProg.recentTools?.length) {
-				for (const t of rProg.recentTools.slice(0, 3)) {
+				for (const t of rProg.recentTools.slice(-3)) {
 					const maxArgsLen = Math.max(40, w - 30);
 					const argsPreview = t.args.length > maxArgsLen
 						? `${t.args.slice(0, maxArgsLen)}...`

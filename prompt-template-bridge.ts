@@ -41,6 +41,9 @@ export interface PromptTemplateDelegationTaskProgress {
 	currentTool?: string;
 	currentToolArgs?: string;
 	recentOutput?: string;
+	recentOutputLines?: string[];
+	recentTools?: Array<{ tool: string; args: string }>;
+	model?: string;
 	toolCount?: number;
 	durationMs?: number;
 	tokens?: number;
@@ -51,6 +54,9 @@ export interface PromptTemplateDelegationUpdate {
 	currentTool?: string;
 	currentToolArgs?: string;
 	recentOutput?: string;
+	recentOutputLines?: string[];
+	recentTools?: Array<{ tool: string; args: string }>;
+	model?: string;
 	toolCount?: number;
 	durationMs?: number;
 	tokens?: number;
@@ -71,6 +77,7 @@ interface PromptTemplateBridgeResult {
 			messages?: unknown[];
 			exitCode?: number;
 			error?: string;
+			model?: string;
 		}>;
 		progress?: Array<{
 			index?: number;
@@ -79,6 +86,7 @@ interface PromptTemplateBridgeResult {
 			currentTool?: string;
 			currentToolArgs?: string;
 			recentOutput?: string[];
+			recentTools?: Array<{ tool?: string; args?: string }>;
 			toolCount?: number;
 			durationMs?: number;
 			tokens?: number;
@@ -154,17 +162,62 @@ export function firstTextContent(content: unknown): string | undefined {
 	return undefined;
 }
 
+function filterRecentOutput(lines: string[] | undefined): string[] | undefined {
+	if (!lines || lines.length === 0) return undefined;
+	const filtered = lines.filter((line) => typeof line === "string" && line.trim() && line.trim() !== "(running...)");
+	if (filtered.length === 0) return undefined;
+	return filtered;
+}
+
+function sanitizeRecentTools(
+	tools: Array<{ tool?: string; args?: string }> | undefined,
+): Array<{ tool: string; args: string }> | undefined {
+	if (!tools || tools.length === 0) return undefined;
+	const sanitized = tools
+		.filter((entry) => typeof entry.tool === "string" && entry.tool.trim().length > 0)
+		.map((entry) => ({
+			tool: entry.tool as string,
+			args: typeof entry.args === "string" ? entry.args : String(entry.args ?? ""),
+		}));
+	return sanitized.length > 0 ? sanitized : undefined;
+}
+
+function resolveProgressModel(
+	update: PromptTemplateBridgeResult,
+	entry: { index?: number; agent?: string },
+): string | undefined {
+	const results = update.details?.results;
+	if (!results || results.length === 0) return undefined;
+	if (typeof entry.index === "number" && entry.index >= 0) {
+		const byIndex = results[entry.index];
+		if (typeof byIndex?.model === "string") return byIndex.model;
+	}
+	if (entry.agent) {
+		const byAgent = results.find((result) => result.agent === entry.agent && typeof result.model === "string");
+		if (byAgent?.model) return byAgent.model;
+	}
+	const firstWithModel = results.find((result) => typeof result.model === "string");
+	return firstWithModel?.model;
+}
+
 function toDelegationUpdate(requestId: string, update: PromptTemplateBridgeResult): PromptTemplateDelegationUpdate | undefined {
 	const progress = update.details?.progress?.[0];
 	const taskProgress = update.details?.progress?.map((entry) => {
 		const lastOutput = entry.recentOutput?.[entry.recentOutput.length - 1];
+		const safeLastOutput =
+			typeof lastOutput === "string" && lastOutput.trim() && lastOutput !== "(running...)"
+				? lastOutput
+				: undefined;
 		return {
 			index: entry.index,
 			agent: entry.agent ?? "delegate",
 			status: entry.status,
 			currentTool: entry.currentTool,
 			currentToolArgs: entry.currentToolArgs,
-			recentOutput: lastOutput && lastOutput !== "(running...)" ? lastOutput : undefined,
+			recentOutput: safeLastOutput,
+			recentOutputLines: filterRecentOutput(entry.recentOutput),
+			recentTools: sanitizeRecentTools(entry.recentTools),
+			model: resolveProgressModel(update, entry),
 			toolCount: entry.toolCount,
 			durationMs: entry.durationMs,
 			tokens: entry.tokens,
@@ -172,11 +225,18 @@ function toDelegationUpdate(requestId: string, update: PromptTemplateBridgeResul
 	});
 	if (!progress && (!taskProgress || taskProgress.length === 0)) return undefined;
 	const lastOutput = progress?.recentOutput?.[progress.recentOutput.length - 1];
+	const safeLastOutput =
+		typeof lastOutput === "string" && lastOutput.trim() && lastOutput !== "(running...)"
+			? lastOutput
+			: undefined;
 	return {
 		requestId,
 		currentTool: progress?.currentTool,
 		currentToolArgs: progress?.currentToolArgs,
-		recentOutput: lastOutput && lastOutput !== "(running...)" ? lastOutput : undefined,
+		recentOutput: safeLastOutput,
+		recentOutputLines: filterRecentOutput(progress?.recentOutput),
+		recentTools: sanitizeRecentTools(progress?.recentTools),
+		model: progress ? resolveProgressModel(update, progress) : undefined,
 		toolCount: progress?.toolCount,
 		durationMs: progress?.durationMs,
 		tokens: progress?.tokens,
