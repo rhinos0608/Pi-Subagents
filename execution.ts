@@ -4,13 +4,13 @@
 
 import { spawn } from "node:child_process";
 import type { Message } from "@mariozechner/pi-ai";
-import type { AgentConfig } from "./agents.js";
+import type { AgentConfig } from "./agents.ts";
 import {
 	ensureArtifactsDir,
 	getArtifactPaths,
 	writeArtifact,
 	writeMetadata,
-} from "./artifacts.js";
+} from "./artifacts.ts";
 import {
 	type AgentProgress,
 	type ArtifactPaths,
@@ -19,18 +19,18 @@ import {
 	DEFAULT_MAX_OUTPUT,
 	truncateOutput,
 	getSubagentDepthEnv,
-} from "./types.js";
+} from "./types.ts";
 import {
 	getFinalOutput,
 	findLatestSessionFile,
 	detectSubagentError,
 	extractToolArgsPreview,
 	extractTextFromContent,
-} from "./utils.js";
-import { buildSkillInjection, resolveSkills } from "./skills.js";
-import { getPiSpawnCommand } from "./pi-spawn.js";
-import { createJsonlWriter } from "./jsonl-writer.js";
-import { applyThinkingSuffix, buildPiArgs, cleanupTempDir } from "./pi-args.js";
+} from "./utils.ts";
+import { buildSkillInjection, resolveSkills } from "./skills.ts";
+import { getPiSpawnCommand } from "./pi-spawn.ts";
+import { createJsonlWriter } from "./jsonl-writer.ts";
+import { applyThinkingSuffix, buildPiArgs, cleanupTempDir } from "./pi-args.ts";
 
 /**
  * Run a subagent synchronously (blocking until complete)

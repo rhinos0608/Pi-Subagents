@@ -3,9 +3,9 @@ import * as fs from "node:fs";
 import { createRequire } from "node:module";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
-import { appendJsonl, getArtifactPaths } from "./artifacts.js";
-import { getPiSpawnCommand } from "./pi-spawn.js";
-import { persistSingleOutput } from "./single-output.js";
+import { appendJsonl, getArtifactPaths } from "./artifacts.ts";
+import { getPiSpawnCommand } from "./pi-spawn.ts";
+import { persistSingleOutput } from "./single-output.ts";
 import {
 	type ArtifactConfig,
 	type ArtifactPaths,
@@ -13,7 +13,7 @@ import {
 	type MaxOutputConfig,
 	truncateOutput,
 	getSubagentDepthEnv,
-} from "./types.js";
+} from "./types.ts";
 import {
 	type RunnerSubagentStep as SubagentStep,
 	type RunnerStep,
@@ -22,8 +22,8 @@ import {
 	mapConcurrent,
 	aggregateParallelOutputs,
 	MAX_PARALLEL_CONCURRENCY,
-} from "./parallel-utils.js";
-import { buildPiArgs, cleanupTempDir } from "./pi-args.js";
+} from "./parallel-utils.ts";
+import { buildPiArgs, cleanupTempDir } from "./pi-args.ts";
 import {
 	cleanupWorktrees,
 	createWorktrees,
@@ -32,7 +32,7 @@ import {
 	formatWorktreeDiffSummary,
 	formatWorktreeTaskCwdConflict,
 	type WorktreeSetup,
-} from "./worktree.js";
+} from "./worktree.ts";
 
 interface SubagentRunConfig {
 	id: string;
