@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { beforeEach, describe, it } from "node:test";
 
 const SLASH_RESULT_TYPE = "subagent-slash-result";
 const SLASH_SUBAGENT_REQUEST_EVENT = "subagent:slash:request";
@@ -37,10 +37,20 @@ interface RegisterSlashCommandsModule {
 	) => void;
 }
 
+interface SlashLiveStateModule {
+	clearSlashSnapshots?: typeof import("./slash-live-state.ts").clearSlashSnapshots;
+	getSlashRenderableSnapshot?: typeof import("./slash-live-state.ts").getSlashRenderableSnapshot;
+	resolveSlashMessageDetails?: typeof import("./slash-live-state.ts").resolveSlashMessageDetails;
+}
+
 let registerSlashCommands: RegisterSlashCommandsModule["registerSlashCommands"];
+let clearSlashSnapshots: SlashLiveStateModule["clearSlashSnapshots"];
+let getSlashRenderableSnapshot: SlashLiveStateModule["getSlashRenderableSnapshot"];
+let resolveSlashMessageDetails: SlashLiveStateModule["resolveSlashMessageDetails"];
 let available = true;
 try {
 	({ registerSlashCommands } = await import("./slash-commands.ts") as RegisterSlashCommandsModule);
+	({ clearSlashSnapshots, getSlashRenderableSnapshot, resolveSlashMessageDetails } = await import("./slash-live-state.ts") as SlashLiveStateModule);
 } catch {
 	available = false;
 }
@@ -98,6 +108,10 @@ function createCommandContext() {
 }
 
 describe("slash command custom message delivery", { skip: !available ? "slash-commands.ts not importable" : undefined }, () => {
+	beforeEach(() => {
+		clearSlashSnapshots?.();
+	});
+
 	it("/run sends an inline slash result message after a successful bridge response", async () => {
 		const sent: unknown[] = [];
 		const commands = new Map<string, { handler(args: string, ctx: unknown): Promise<void> }>();
@@ -129,14 +143,18 @@ describe("slash command custom message delivery", { skip: !available ? "slash-co
 		registerSlashCommands!(pi, createState(process.cwd()));
 		await commands.get("run")!.handler("scout inspect this", createCommandContext());
 
-		assert.deepEqual(sent, [
-			{
-				customType: SLASH_RESULT_TYPE,
-				content: "Scout finished",
-				display: true,
-				details: { mode: "single", results: [] },
-			},
-		]);
+		assert.equal(sent.length, 2);
+		assert.equal((sent[0] as { customType?: string; display?: boolean }).customType, SLASH_RESULT_TYPE);
+		assert.equal((sent[0] as { display?: boolean }).display, true);
+		assert.equal((sent[0] as { content?: string }).content, "inspect this");
+		assert.equal((sent[1] as { customType?: string; display?: boolean }).customType, SLASH_RESULT_TYPE);
+		assert.equal((sent[1] as { display?: boolean }).display, false);
+		assert.equal((sent[1] as { content?: string }).content, "Scout finished");
+
+		const visibleDetails = resolveSlashMessageDetails!((sent[0] as { details?: unknown }).details);
+		assert.ok(visibleDetails);
+		const visibleSnapshot = getSlashRenderableSnapshot!(visibleDetails!);
+		assert.equal((visibleSnapshot.result.content[0] as { text?: string }).text, "Scout finished");
 	});
 
 	it("/run still sends an inline slash result message when the bridge returns an error", async () => {
@@ -171,13 +189,17 @@ describe("slash command custom message delivery", { skip: !available ? "slash-co
 		registerSlashCommands!(pi, createState(process.cwd()));
 		await commands.get("run")!.handler("scout inspect this", createCommandContext());
 
-		assert.deepEqual(sent, [
-			{
-				customType: SLASH_RESULT_TYPE,
-				content: "Subagent failed",
-				display: true,
-				details: { mode: "single", results: [] },
-			},
-		]);
+		assert.equal(sent.length, 2);
+		assert.equal((sent[0] as { customType?: string; display?: boolean }).customType, SLASH_RESULT_TYPE);
+		assert.equal((sent[0] as { display?: boolean }).display, true);
+		assert.equal((sent[0] as { content?: string }).content, "inspect this");
+		assert.equal((sent[1] as { customType?: string; display?: boolean }).customType, SLASH_RESULT_TYPE);
+		assert.equal((sent[1] as { display?: boolean }).display, false);
+		assert.equal((sent[1] as { content?: string }).content, "Subagent failed");
+
+		const visibleDetails = resolveSlashMessageDetails!((sent[0] as { details?: unknown }).details);
+		assert.ok(visibleDetails);
+		const visibleSnapshot = getSlashRenderableSnapshot!(visibleDetails!);
+		assert.equal((visibleSnapshot.result.content[0] as { text?: string }).text, "Subagent failed");
 	});
 });
