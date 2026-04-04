@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-## [0.12.3] - 2026-04-04
+## [0.12.4] - 2026-04-04
 
 ### Added
 - Added configurable subagent recursion depth controls with global `maxSubagentDepth` config and per-agent `maxSubagentDepth` frontmatter overrides. Child delegation now honors stricter inherited limits while still allowing per-agent tightening.
