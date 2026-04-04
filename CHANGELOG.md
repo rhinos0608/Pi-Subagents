@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+- Switched internal source imports from `.js` to `.ts` so the extension can be loaded directly from TypeScript sources under the strip-types/transform-types runtime path.
+- Declared pi runtime packages and `@sinclair/typebox` as peer dependencies so direct source-loading environments fail less often from missing package resolution.
+
 ## [0.12.2] - 2026-04-04
 
 ### Changed
