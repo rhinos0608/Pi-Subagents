@@ -383,6 +383,8 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 			chainSkills,
 			sessionFilesByFlatIndex: collectChainSessionFiles(chain, sessionFileForIndex),
 			maxSubagentDepth: currentMaxSubagentDepth,
+			worktreeSetupHook: deps.config.worktreeSetupHook,
+			worktreeSetupHookTimeoutMs: deps.config.worktreeSetupHookTimeoutMs,
 		});
 	}
 
@@ -415,6 +417,8 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 			skills,
 			output: effectiveOutput,
 			maxSubagentDepth,
+			worktreeSetupHook: deps.config.worktreeSetupHook,
+			worktreeSetupHookTimeoutMs: deps.config.worktreeSetupHookTimeoutMs,
 		});
 	}
 
@@ -459,6 +463,8 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 		chainSkills,
 		chainDir: params.chainDir,
 		maxSubagentDepth: currentMaxSubagentDepth,
+		worktreeSetupHook: deps.config.worktreeSetupHook,
+		worktreeSetupHookTimeoutMs: deps.config.worktreeSetupHookTimeoutMs,
 	});
 
 	if (chainResult.requestedAsync) {
@@ -485,6 +491,8 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 			chainSkills: chainResult.requestedAsync.chainSkills,
 			sessionFilesByFlatIndex: collectChainSessionFiles(asyncChain, sessionFileForIndex),
 			maxSubagentDepth: currentMaxSubagentDepth,
+			worktreeSetupHook: deps.config.worktreeSetupHook,
+			worktreeSetupHookTimeoutMs: deps.config.worktreeSetupHookTimeoutMs,
 		});
 	}
 
@@ -527,11 +535,20 @@ function createParallelWorktreeSetup(
 	enabled: boolean | undefined,
 	cwd: string,
 	runId: string,
-	taskCount: number,
+	tasks: TaskParam[],
+	setupHook: ExtensionConfig["worktreeSetupHook"],
+	setupHookTimeoutMs: ExtensionConfig["worktreeSetupHookTimeoutMs"],
 ): { setup?: WorktreeSetup; errorResult?: AgentToolResult<Details> } {
 	if (!enabled) return {};
 	try {
-		return { setup: createWorktrees(cwd, runId, taskCount) };
+		return {
+			setup: createWorktrees(cwd, runId, tasks.length, {
+				agents: tasks.map((task) => task.agent),
+				setupHook: setupHook
+					? { hookPath: setupHook, timeoutMs: setupHookTimeoutMs }
+					: undefined,
+			}),
+		};
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		return { errorResult: buildParallelModeError(message) };
@@ -750,6 +767,8 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 				chainSkills: [],
 				sessionFilesByFlatIndex: tasks.map((_, index) => sessionFileForIndex(index)),
 				maxSubagentDepth: currentMaxSubagentDepth,
+				worktreeSetupHook: deps.config.worktreeSetupHook,
+				worktreeSetupHookTimeoutMs: deps.config.worktreeSetupHookTimeoutMs,
 			});
 		}
 	}
@@ -761,7 +780,9 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 		params.worktree,
 		effectiveCwd,
 		runId,
-		tasks.length,
+		tasks,
+		deps.config.worktreeSetupHook,
+		deps.config.worktreeSetupHookTimeoutMs,
 	);
 	if (errorResult) return errorResult;
 
@@ -933,6 +954,8 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 				skills: skillOverride === false ? [] : skillOverride,
 				output: effectiveOutput,
 				maxSubagentDepth,
+				worktreeSetupHook: deps.config.worktreeSetupHook,
+				worktreeSetupHookTimeoutMs: deps.config.worktreeSetupHookTimeoutMs,
 			});
 		}
 	}

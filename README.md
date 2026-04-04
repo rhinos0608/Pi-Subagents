@@ -696,14 +696,17 @@ After the parallel step completes, per-agent diff stats are appended to the outp
 - Working tree must be clean (no uncommitted changes) — commit or stash first
 - `node_modules/` is symlinked into each worktree to avoid reinstalling
 - Worktree runs use the shared parallel/step `cwd`. Task-level `cwd` overrides must be omitted or match that shared `cwd`; if you need different working directories, disable `worktree` or split the run.
+- If `worktreeSetupHook` is configured, it must return valid JSON and complete before timeout
 
 **What happens under the hood:**
 
 1. `git worktree add` creates a temporary worktree per agent in `<tmpdir>/pi-worktree-*`
-2. Each agent runs in its worktree's cwd (preserving subdirectory context)
-3. After execution, `git add -A && git diff --cached` captures all changes (committed, modified, and new files)
-4. Diff stats appear in the aggregated output; full `.patch` files are written to the artifacts directory
-5. Worktrees and temp branches are cleaned up in a `finally` block
+2. Optional `worktreeSetupHook` runs once per worktree (JSON in on stdin, JSON out on stdout)
+3. Each agent runs in its worktree's cwd (preserving subdirectory context)
+4. Before diff capture, declared synthetic helper paths (for example `.venv` or copied local config files) are removed
+5. After execution, `git add -A && git diff --cached` captures all real changes (committed, modified, and new files)
+6. Diff stats appear in the aggregated output; full `.patch` files are written to the artifacts directory
+7. Worktrees and temp branches are cleaned up in a `finally` block
 
 If you use [pi-prompt-template-model](https://github.com/nicobailon/pi-prompt-template-model), worktree isolation is also available via `worktree: true` in chain template frontmatter or the `--worktree` CLI flag on `chain-prompts`. `pi-prompt-template-model` compare-style prompts can route through the same worktree machinery too; see the `pi-prompt-template-model` README and `examples/` directory for the installable prompt templates.
 
@@ -761,6 +764,42 @@ Sessions are always enabled — every subagent run gets a session directory for 
 ```
 
 Per-agent `maxSubagentDepth` can tighten that limit further for child runs, but it does not relax an already inherited stricter limit.
+
+### `worktreeSetupHook`
+
+`worktreeSetupHook` configures an optional setup hook for worktree-isolated parallel runs. The hook runs once per created worktree, after `git worktree add` succeeds and before the agent starts.
+
+```json
+{
+  "worktreeSetupHook": "./scripts/setup-worktree.mjs"
+}
+```
+
+Path rules:
+- Must be an absolute path or a repo-relative path
+- Bare command names from `PATH` are rejected
+- `~/...` is supported for home-directory hooks
+
+Hook I/O contract (JSON only):
+- stdin: one JSON object with `repoRoot`, `worktreePath`, `agentCwd`, `branch`, `index`, `runId`, and `baseCommit`
+- stdout: one JSON object, e.g. `{ "syntheticPaths": [".venv", ".env.local"] }`
+
+`syntheticPaths` must be relative to the worktree root. These paths are removed before diff capture so helper files/symlinks do not pollute generated patches.
+
+Tracked-file edits are never excluded. If the hook tries to mark tracked paths as synthetic, setup fails.
+
+### `worktreeSetupHookTimeoutMs`
+
+Optional timeout (milliseconds) for each worktree hook invocation.
+
+```json
+{
+  "worktreeSetupHook": "./scripts/setup-worktree.mjs",
+  "worktreeSetupHookTimeoutMs": 45000
+}
+```
+
+Default: `30000` ms.
 
 ## Chain Directory
 Each chain run creates `<tmpdir>/pi-chain-runs/{runId}/` containing:

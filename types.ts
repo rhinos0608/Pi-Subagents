@@ -245,6 +245,8 @@ export interface ExtensionConfig {
 	asyncByDefault?: boolean;
 	defaultSessionDir?: string;
 	maxSubagentDepth?: number;
+	worktreeSetupHook?: string;
+	worktreeSetupHookTimeoutMs?: number;
 }
 
 // ============================================================================

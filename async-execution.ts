@@ -67,6 +67,8 @@ export interface AsyncChainParams {
 	chainSkills?: string[];
 	sessionFilesByFlatIndex?: (string | undefined)[];
 	maxSubagentDepth: number;
+	worktreeSetupHook?: string;
+	worktreeSetupHookTimeoutMs?: number;
 }
 
 export interface AsyncSingleParams {
@@ -84,6 +86,8 @@ export interface AsyncSingleParams {
 	skills?: string[];
 	output?: string | false;
 	maxSubagentDepth: number;
+	worktreeSetupHook?: string;
+	worktreeSetupHookTimeoutMs?: number;
 }
 
 export interface AsyncExecutionResult {
@@ -138,6 +142,8 @@ export function executeAsyncChain(
 		sessionRoot,
 		sessionFilesByFlatIndex,
 		maxSubagentDepth,
+		worktreeSetupHook,
+		worktreeSetupHookTimeoutMs,
 	} = params;
 	const chainSkills = params.chainSkills ?? [];
 
@@ -249,6 +255,8 @@ export function executeAsyncChain(
 			asyncDir,
 			sessionId: ctx.currentSessionId,
 			piPackageRoot,
+			worktreeSetupHook,
+			worktreeSetupHookTimeoutMs,
 		},
 		id,
 		runnerCwd,
@@ -307,6 +315,8 @@ export function executeAsyncSingle(
 		sessionRoot,
 		sessionFile,
 		maxSubagentDepth,
+		worktreeSetupHook,
+		worktreeSetupHookTimeoutMs,
 	} = params;
 	const skillNames = params.skills ?? agentConfig.skills ?? [];
 	const { resolved: resolvedSkills } = resolveSkills(skillNames, ctx.cwd);
@@ -361,6 +371,8 @@ export function executeAsyncSingle(
 			asyncDir,
 			sessionId: ctx.currentSessionId,
 			piPackageRoot,
+			worktreeSetupHook,
+			worktreeSetupHookTimeoutMs,
 		},
 		id,
 		runnerCwd,

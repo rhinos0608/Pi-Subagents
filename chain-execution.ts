@@ -266,6 +266,8 @@ export interface ChainExecutionParams {
 	chainSkills?: string[];
 	chainDir?: string;
 	maxSubagentDepth: number;
+	worktreeSetupHook?: string;
+	worktreeSetupHookTimeoutMs?: number;
 }
 
 export interface ChainExecutionResult {
@@ -468,7 +470,12 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 					);
 				}
 				try {
-					worktreeSetup = createWorktrees(parallelCwd, `${runId}-s${stepIndex}`, step.parallel.length);
+					worktreeSetup = createWorktrees(parallelCwd, `${runId}-s${stepIndex}`, step.parallel.length, {
+						agents: step.parallel.map((task) => task.agent),
+						setupHook: params.worktreeSetupHook
+							? { hookPath: params.worktreeSetupHook, timeoutMs: params.worktreeSetupHookTimeoutMs }
+							: undefined,
+					});
 				} catch (error) {
 					const message = error instanceof Error ? error.message : String(error);
 					return buildChainExecutionErrorResult(message, {

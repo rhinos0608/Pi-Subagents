@@ -50,6 +50,8 @@ interface SubagentRunConfig {
 	asyncDir: string;
 	sessionId?: string | null;
 	piPackageRoot?: string;
+	worktreeSetupHook?: string;
+	worktreeSetupHookTimeoutMs?: number;
 }
 
 interface StepResult {
@@ -583,7 +585,12 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 					break;
 				}
 				try {
-					worktreeSetup = createWorktrees(cwd, `${id}-s${stepIndex}`, group.parallel.length);
+					worktreeSetup = createWorktrees(cwd, `${id}-s${stepIndex}`, group.parallel.length, {
+						agents: group.parallel.map((task) => task.agent),
+						setupHook: config.worktreeSetupHook
+							? { hookPath: config.worktreeSetupHook, timeoutMs: config.worktreeSetupHookTimeoutMs }
+							: undefined,
+					});
 				} catch (error) {
 					const setupError = error instanceof Error ? error.message : String(error);
 					const failedAt = Date.now();
