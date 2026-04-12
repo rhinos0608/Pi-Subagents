@@ -48,23 +48,7 @@ import {
 	MAX_CONCURRENCY,
 	resolveChildMaxSubagentDepth,
 } from "./types.ts";
-
-/** Resolve a model name to its full provider/model format */
-function resolveModelFullId(modelName: string | undefined, availableModels: ModelInfo[]): string | undefined {
-	if (!modelName) return undefined;
-	if (modelName.includes("/")) return modelName;
-
-	const colonIdx = modelName.lastIndexOf(":");
-	const baseModel = colonIdx !== -1 ? modelName.substring(0, colonIdx) : modelName;
-	const thinkingSuffix = colonIdx !== -1 ? modelName.substring(colonIdx) : "";
-
-	const match = availableModels.find((m) => m.id === baseModel);
-	if (match) {
-		return thinkingSuffix ? `${match.fullId}${thinkingSuffix}` : match.fullId;
-	}
-
-	return modelName;
-}
+import { resolveModelCandidate } from "./model-fallback.ts";
 
 interface ChainExecutionDetailsInput {
 	results: SingleResult[];
@@ -191,8 +175,8 @@ async function runParallelChainTasks(input: ParallelChainRunInput): Promise<Sing
 
 			const taskAgentConfig = input.agents.find((agent) => agent.name === task.agent);
 			const effectiveModel =
-				(task.model ? resolveModelFullId(task.model, input.availableModels) : null)
-				?? resolveModelFullId(taskAgentConfig?.model, input.availableModels);
+				(task.model ? resolveModelCandidate(task.model, input.availableModels) : null)
+				?? resolveModelCandidate(taskAgentConfig?.model, input.availableModels);
 			const maxSubagentDepth = resolveChildMaxSubagentDepth(input.maxSubagentDepth, taskAgentConfig?.maxSubagentDepth);
 
 			const taskCwd = input.worktreeSetup
@@ -216,6 +200,7 @@ async function runParallelChainTasks(input: ParallelChainRunInput): Promise<Sing
 				outputPath,
 				maxSubagentDepth,
 				modelOverride: effectiveModel,
+				availableModels: input.availableModels,
 				skills: behavior.skills === false ? [] : behavior.skills,
 				onUpdate: input.onUpdate
 					? (progressUpdate) => {
@@ -643,8 +628,8 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 			// Resolve model: TUI override (already full format) or agent's model resolved to full format
 			const effectiveModel =
 				tuiOverride?.model
-				?? (seqStep.model ? resolveModelFullId(seqStep.model, availableModels) : null)
-				?? resolveModelFullId(agentConfig.model, availableModels);
+				?? (seqStep.model ? resolveModelCandidate(seqStep.model, availableModels) : null)
+				?? resolveModelCandidate(agentConfig.model, availableModels);
 
 			// Run step
 			const outputPath = typeof behavior.output === "string"
@@ -665,6 +650,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 				outputPath,
 				maxSubagentDepth,
 				modelOverride: effectiveModel,
+				availableModels,
 				skills: behavior.skills === false ? [] : behavior.skills,
 				onUpdate: onUpdate
 					? (p) => {

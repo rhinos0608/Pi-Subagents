@@ -82,6 +82,14 @@ export interface ProgressSummary {
 // Results
 // ============================================================================
 
+export interface ModelAttempt {
+	model: string;
+	success: boolean;
+	exitCode?: number | null;
+	error?: string;
+	usage?: Usage;
+}
+
 export interface SingleResult {
 	agent: string;
 	task: string;
@@ -89,6 +97,8 @@ export interface SingleResult {
 	messages: Message[];
 	usage: Usage;
 	model?: string;
+	attemptedModels?: string[];
+	modelAttempts?: ModelAttempt[];
 	error?: string;
 	sessionFile?: string;
 	skills?: string[];
@@ -159,7 +169,17 @@ export interface AsyncStatus {
 	lastUpdate?: number;
 	cwd?: string;
 	currentStep?: number;
-	steps?: Array<{ agent: string; status: string; durationMs?: number; tokens?: TokenUsage; skills?: string[] }>;
+	steps?: Array<{
+		agent: string;
+		status: string;
+		durationMs?: number;
+		tokens?: TokenUsage;
+		skills?: string[];
+		model?: string;
+		attemptedModels?: string[];
+		modelAttempts?: ModelAttempt[];
+		error?: string;
+	}>;
 	sessionDir?: string;
 	outputFile?: string;
 	totalTokens?: TokenUsage;
@@ -237,6 +257,8 @@ export interface RunSyncOptions {
 	maxSubagentDepth?: number;
 	/** Override the agent's default model (format: "provider/id" or just "id") */
 	modelOverride?: string;
+	/** Registry models available for heuristic bare-model resolution */
+	availableModels?: Array<{ provider: string; id: string; fullId: string }>;
 	/** Skills to inject (overrides agent default if provided) */
 	skills?: string[];
 }

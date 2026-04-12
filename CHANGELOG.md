@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-04-11
+
+### Added
+- Added native agent `fallbackModels` support. Agents can now declare ordered backup models, and single, chain, parallel, and async/background runs retry on provider/model-style failures such as quota, auth, timeout, or provider/model unavailability.
+
+### Fixed
+- Fallback attempts now preserve observability across sync and async execution: results, artifact metadata, async status, and run logs record attempted models and per-attempt outcomes instead of only the final pass.
+- Child subagent runs now pass model selections through `--model` instead of `--models`, so live execution pins the intended model correctly and end-to-end fallback behavior matches the validated test path.
+
 ## [0.12.5] - 2026-04-09
 
 ### Fixed

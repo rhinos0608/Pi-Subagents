@@ -265,6 +265,9 @@ export function renderSubagentResult(
 		if (r.skillsWarning) {
 			c.addChild(new Text(truncLine(theme.fg("warning", `⚠️ ${r.skillsWarning}`), w), 0, 0));
 		}
+		if (r.attemptedModels && r.attemptedModels.length > 1) {
+			c.addChild(new Text(truncLine(theme.fg("dim", `Fallbacks: ${r.attemptedModels.join(" → ")}`), w), 0, 0));
+		}
 		c.addChild(new Text(truncLine(theme.fg("dim", formatUsage(r.usage, r.model)), w), 0, 0));
 		if (r.sessionFile) {
 			c.addChild(new Text(truncLine(theme.fg("dim", `Session: ${shortenPath(r.sessionFile)}`), w), 0, 0));
@@ -426,6 +429,9 @@ export function renderSubagentResult(
 		}
 		if (r.skillsWarning) {
 			c.addChild(new Text(truncLine(theme.fg("warning", `    ⚠️ ${r.skillsWarning}`), w), 0, 0));
+		}
+		if (r.attemptedModels && r.attemptedModels.length > 1) {
+			c.addChild(new Text(truncLine(theme.fg("dim", `    fallbacks: ${r.attemptedModels.join(" → ")}`), w), 0, 0));
 		}
 
 		if (rRunning && rProg) {

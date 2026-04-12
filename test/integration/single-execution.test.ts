@@ -134,6 +134,59 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		assert.equal(result.usage.output, 50); // from mock
 	});
 
+	it("retries with fallback models on retryable provider failures", async () => {
+		mockPi.onCall({
+			jsonl: [{
+				type: "message_end",
+				message: {
+					role: "assistant",
+					content: [{ type: "text", text: "temporary provider failure" }],
+					model: "openai/gpt-5-mini",
+					errorMessage: "rate limit exceeded",
+					usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, cost: { total: 0.01 } },
+				},
+			}],
+			exitCode: 1,
+		});
+		mockPi.onCall({ output: "Recovered on fallback" });
+		const agents = [makeAgent("echo", {
+			model: "openai/gpt-5-mini",
+			fallbackModels: ["anthropic/claude-sonnet-4"],
+		})];
+
+		const result = await runSync(tempDir, agents, "echo", "Task", {
+			runId: "fallback-sync",
+		});
+
+		assert.equal(result.exitCode, 0);
+		assert.equal(result.model, "anthropic/claude-sonnet-4");
+		assert.deepEqual(result.attemptedModels, ["openai/gpt-5-mini", "anthropic/claude-sonnet-4"]);
+		assert.equal(result.modelAttempts?.length, 2);
+		assert.equal(result.modelAttempts?.[0]?.success, false);
+		assert.equal(result.modelAttempts?.[1]?.success, true);
+		assert.equal(result.usage.turns, 2);
+		assert.equal(mockPi.callCount(), 2);
+	});
+
+	it("does not retry on ordinary task/tool failures", async () => {
+		mockPi.onCall({
+			jsonl: [events.toolResult("bash", "process exited with code 127")],
+			exitCode: 0,
+		});
+		const agents = [makeAgent("echo", {
+			model: "openai/gpt-5-mini",
+			fallbackModels: ["anthropic/claude-sonnet-4"],
+		})];
+
+		const result = await runSync(tempDir, agents, "echo", "Task", {
+			runId: "no-fallback-task-failure",
+		});
+
+		assert.equal(result.exitCode, 127);
+		assert.equal(result.modelAttempts?.length, 1);
+		assert.equal(mockPi.callCount(), 1);
+	});
+
 	it("tracks progress during execution", async () => {
 		mockPi.onCall({ output: "Done" });
 		const agents = makeAgentConfigs(["echo"]);

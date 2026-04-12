@@ -63,6 +63,7 @@ interface AgentConfig {
 	description?: string;
 	systemPrompt?: string;
 	model?: string;
+	fallbackModels?: string[];
 	tools?: string[];
 	extensions?: string[];
 	skills?: string[];
