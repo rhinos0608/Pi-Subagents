@@ -3,27 +3,28 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { type AgentConfig, type AgentScope } from "./agents.js";
-import { getArtifactsDir } from "./artifacts.js";
-import { ChainClarifyComponent, type ChainClarifyResult, type ModelInfo } from "./chain-clarify.js";
-import { executeChain } from "./chain-execution.js";
-import { resolveExecutionAgentScope } from "./agent-scope.js";
-import { handleManagementAction } from "./agent-management.js";
-import { runSync } from "./execution.js";
-import { aggregateParallelOutputs } from "./parallel-utils.js";
-import { recordRun } from "./run-history.js";
+import { type AgentConfig, type AgentScope } from "./agents.ts";
+import { getArtifactsDir } from "./artifacts.ts";
+import { ChainClarifyComponent, type ChainClarifyResult, type ModelInfo } from "./chain-clarify.ts";
+import { executeChain } from "./chain-execution.ts";
+import { resolveExecutionAgentScope } from "./agent-scope.ts";
+import { handleManagementAction } from "./agent-management.ts";
+import { runSync } from "./execution.ts";
+import { aggregateParallelOutputs } from "./parallel-utils.ts";
+import { recordRun } from "./run-history.ts";
 import {
 	getStepAgents,
 	isParallelStep,
 	resolveStepBehavior,
 	type ChainStep,
 	type SequentialStep,
-} from "./settings.js";
-import { discoverAvailableSkills, normalizeSkillInput } from "./skills.js";
-import { executeAsyncChain, executeAsyncSingle, isAsyncAvailable } from "./async-execution.js";
-import { createForkContextResolver } from "./fork-context.js";
-import { finalizeSingleOutput, injectSingleOutputInstruction, resolveSingleOutputPath } from "./single-output.js";
-import { getSingleResultOutput, mapConcurrent } from "./utils.js";
+} from "./settings.ts";
+import { discoverAvailableSkills, normalizeSkillInput } from "./skills.ts";
+import { executeAsyncChain, executeAsyncSingle, isAsyncAvailable } from "./async-execution.ts";
+import { createForkContextResolver } from "./fork-context.ts";
+import { applyIntercomBridgeToAgent, resolveIntercomBridge } from "./intercom-bridge.ts";
+import { finalizeSingleOutput, injectSingleOutputInstruction, resolveSingleOutputPath } from "./single-output.ts";
+import { getSingleResultOutput, mapConcurrent } from "./utils.ts";
 import {
 	cleanupWorktrees,
 	createWorktrees,
@@ -32,7 +33,7 @@ import {
 	formatWorktreeDiffSummary,
 	formatWorktreeTaskCwdConflict,
 	type WorktreeSetup,
-} from "./worktree.js";
+} from "./worktree.ts";
 import {
 	type AgentProgress,
 	type ArtifactConfig,
@@ -49,7 +50,7 @@ import {
 	resolveChildMaxSubagentDepth,
 	resolveCurrentMaxSubagentDepth,
 	wrapForkTask,
-} from "./types.js";
+} from "./types.ts";
 
 interface TaskParam {
 	agent: string;
@@ -1100,7 +1101,17 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		const scope: AgentScope = resolveExecutionAgentScope(normalizedParams.agentScope);
 		const parentSessionFile = ctx.sessionManager.getSessionFile() ?? null;
 		deps.state.currentSessionId = parentSessionFile ?? `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-		const agents = deps.discoverAgents(ctx.cwd, scope).agents;
+		const discoveredAgents = deps.discoverAgents(ctx.cwd, scope).agents;
+		const piWithSessionName = deps.pi as ExtensionAPI & { getSessionName?: () => string | undefined };
+		const orchestratorTarget = piWithSessionName.getSessionName?.();
+		const intercomBridge = resolveIntercomBridge({
+			mode: deps.config.intercomBridge,
+			context: normalizedParams.context,
+			orchestratorTarget,
+		});
+		const agents = intercomBridge.active
+			? discoveredAgents.map((agent) => applyIntercomBridgeToAgent(agent, intercomBridge))
+			: discoveredAgents;
 		const runId = randomUUID().slice(0, 8);
 		const shareEnabled = normalizedParams.share === true;
 		const hasChain = (normalizedParams.chain?.length ?? 0) > 0;

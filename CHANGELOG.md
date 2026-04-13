@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+## [0.13.1] - 2026-04-13
+
+### Added
+- Added optional intercom orchestration bridge for delegated runs. When enabled via `intercomBridge` (default `fork-only`) and `pi-intercom` is available, child subagents get runtime coordination instructions for contacting the orchestrator session via `intercom`, and `intercom` is auto-added to the child tool allowlist when needed.
+- Added unit coverage for intercom bridge activation, config handling, and extension allowlist behavior.
+
+### Changed
+- Normalized `subagent-executor.ts` relative imports to `.ts` specifiers to match direct TypeScript runtime loading.
+- Documented `pi-intercom` installation and activation requirements in README.
+
+### Fixed
+- Tightened intercom extension allowlist matching to avoid false positives from similarly named extension paths.
+
 ## [0.13.0] - 2026-04-11
 
 ### Added

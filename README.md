@@ -331,6 +331,9 @@ Chains can be created from the Agents Manager template picker ("Blank Chain"), o
 | Parallel | Yes | `{ tasks: [{agent, task}...] }` - via TUI toggle or converted to chain for async |
 
 Execution context defaults to `context: "fresh"`, which starts each child run from a clean session. Set `context: "fork"` to start each child from a real branched session created from the parent's current leaf.
+When `intercomBridge` is enabled (default: `fork-only`) and `pi-intercom` is installed/enabled, forked children get runtime instructions for contacting the orchestrator session via `intercom({ action: "ask"|"send", ... })`.
+
+> **Note:** Intercom bridging requires the [pi-intercom](https://github.com/nicobailon/pi-intercom) extension. Install it with `pi install npm:pi-intercom`.
 
 All modes support foreground and background execution. Foreground is the default (the call waits and streams progress). For programmatic background launch, use `clarify: false, async: true`. For interactive background launch, use `clarify: true` and press `b` in the TUI before running. Chains with parallel steps (`{ parallel: [...] }`) run concurrently with configurable `concurrency` and `failFast` options.
 
@@ -777,6 +780,27 @@ Sessions are always enabled — every subagent run gets a session directory for 
 ```
 
 Per-agent `maxSubagentDepth` can tighten that limit further for child runs, but it does not relax an already inherited stricter limit.
+
+### `intercomBridge`
+
+Controls whether subagents receive runtime intercom coordination instructions (and `intercom` is auto-added to their tool allowlist when needed).
+
+```json
+{
+  "intercomBridge": "fork-only"
+}
+```
+
+Values:
+- `"fork-only"` (default): inject intercom bridge only when `context: "fork"`
+- `"always"`: inject bridge in both `fresh` and `fork`
+- `"off"`: disable bridge entirely
+
+Bridge activation also requires all of the following:
+- [pi-intercom](https://github.com/nicobailon/pi-intercom) is installed (`pi install npm:pi-intercom`)
+- `~/.pi/agent/intercom/config.json` is not set to `"enabled": false`
+- the current session has a name to target as orchestrator
+- if agent `extensions` is an explicit allowlist, it must include `pi-intercom`
 
 ### `worktreeSetupHook`
 

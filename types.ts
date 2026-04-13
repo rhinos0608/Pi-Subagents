@@ -269,6 +269,7 @@ export interface ExtensionConfig {
 	maxSubagentDepth?: number;
 	worktreeSetupHook?: string;
 	worktreeSetupHookTimeoutMs?: number;
+	intercomBridge?: "off" | "fork-only" | "always";
 }
 
 // ============================================================================
