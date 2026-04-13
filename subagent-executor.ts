@@ -995,6 +995,8 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 	const r = await runSync(ctx.cwd, agents, params.agent!, task, {
 		cwd: params.cwd,
 		signal,
+		allowIntercomDetach: agentConfig.systemPrompt?.includes("Intercom orchestration channel:") === true,
+		intercomEvents: deps.pi.events,
 		runId,
 		sessionDir: sessionDirForIndex(0),
 		sessionFile: sessionFileForIndex(0),
@@ -1023,6 +1025,19 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 		savedPath: r.savedOutputPath,
 		saveError: r.outputSaveError,
 	});
+
+	if (r.detached) {
+		return {
+			content: [{ type: "text", text: `Detached for intercom coordination: ${params.agent}` }],
+			details: {
+				mode: "single",
+				results: [r],
+				progress: params.includeProgress ? allProgress : undefined,
+				artifacts: allArtifactPaths.length ? { dir: artifactsDir, files: allArtifactPaths } : undefined,
+				truncation: r.truncation,
+			},
+		};
+	}
 
 	if (r.exitCode !== 0)
 		return {
@@ -1102,12 +1117,15 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		const parentSessionFile = ctx.sessionManager.getSessionFile() ?? null;
 		deps.state.currentSessionId = parentSessionFile ?? `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 		const discoveredAgents = deps.discoverAgents(ctx.cwd, scope).agents;
-		const piWithSessionName = deps.pi as ExtensionAPI & { getSessionName?: () => string | undefined };
-		const orchestratorTarget = piWithSessionName.getSessionName?.();
+		let sessionName = deps.pi.getSessionName()?.trim();
+		if (!sessionName) {
+			sessionName = `session-${ctx.sessionManager.getSessionId().slice(0, 8)}`;
+			deps.pi.setSessionName(sessionName);
+		}
 		const intercomBridge = resolveIntercomBridge({
-			mode: deps.config.intercomBridge,
+			config: deps.config.intercomBridge,
 			context: normalizedParams.context,
-			orchestratorTarget,
+			orchestratorTarget: sessionName,
 		});
 		const agents = intercomBridge.active
 			? discoveredAgents.map((agent) => applyIntercomBridgeToAgent(agent, intercomBridge))

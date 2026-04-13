@@ -195,9 +195,11 @@ export function renderSubagentResult(
 		const isRunning = r.progress?.status === "running";
 		const icon = isRunning
 			? theme.fg("warning", "...")
-			: r.exitCode === 0
-				? theme.fg("success", "ok")
-				: theme.fg("error", "X");
+			: r.detached
+				? theme.fg("warning", "↗")
+				: r.exitCode === 0
+					? theme.fg("success", "ok")
+					: theme.fg("error", "X");
 		const contextBadge = d.context === "fork" ? theme.fg("warning", " [fork]") : "";
 		const output = r.truncation?.text || getSingleResultOutput(r);
 

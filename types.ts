@@ -58,7 +58,7 @@ export interface ResolvedSkill {
 export interface AgentProgress {
 	index: number;
 	agent: string;
-	status: "pending" | "running" | "completed" | "failed";
+	status: "pending" | "running" | "completed" | "failed" | "detached";
 	task: string;
 	skills?: string[];
 	currentTool?: string;
@@ -94,6 +94,8 @@ export interface SingleResult {
 	agent: string;
 	task: string;
 	exitCode: number;
+	detached?: boolean;
+	detachedReason?: string;
 	messages: Message[];
 	usage: Usage;
 	model?: string;
@@ -237,6 +239,14 @@ export interface ErrorInfo {
 	details?: string;
 }
 
+export interface IntercomEventBus {
+	on(channel: string, handler: (data: unknown) => void): () => void;
+	emit(channel: string, data: unknown): void;
+}
+
+export const INTERCOM_DETACH_REQUEST_EVENT = "pi-intercom:detach-request";
+export const INTERCOM_DETACH_RESPONSE_EVENT = "pi-intercom:detach-response";
+
 // ============================================================================
 // Execution Options
 // ============================================================================
@@ -244,6 +254,8 @@ export interface ErrorInfo {
 export interface RunSyncOptions {
 	cwd?: string;
 	signal?: AbortSignal;
+	allowIntercomDetach?: boolean;
+	intercomEvents?: IntercomEventBus;
 	onUpdate?: (r: import("@mariozechner/pi-agent-core").AgentToolResult<Details>) => void;
 	maxOutput?: MaxOutputConfig;
 	artifactsDir?: string;
@@ -263,13 +275,20 @@ export interface RunSyncOptions {
 	skills?: string[];
 }
 
+export type IntercomBridgeMode = "off" | "fork-only" | "always";
+
+export interface IntercomBridgeConfig {
+	mode?: IntercomBridgeMode;
+	instructionFile?: string;
+}
+
 export interface ExtensionConfig {
 	asyncByDefault?: boolean;
 	defaultSessionDir?: string;
 	maxSubagentDepth?: number;
 	worktreeSetupHook?: string;
 	worktreeSetupHookTimeoutMs?: number;
-	intercomBridge?: "off" | "fork-only" | "always";
+	intercomBridge?: IntercomBridgeConfig;
 }
 
 // ============================================================================

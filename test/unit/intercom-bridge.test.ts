@@ -44,7 +44,7 @@ describe("resolveIntercomBridge", () => {
 		fs.writeFileSync(configPath, JSON.stringify({ enabled: true }));
 		try {
 			const bridge = resolveIntercomBridge({
-				mode: "fork-only",
+				config: { mode: "fork-only" },
 				context: "fork",
 				orchestratorTarget: "main",
 				extensionDir,
@@ -65,7 +65,7 @@ describe("resolveIntercomBridge", () => {
 		fs.writeFileSync(configPath, JSON.stringify({ enabled: false }));
 		try {
 			const bridge = resolveIntercomBridge({
-				mode: "always",
+				config: { mode: "always" },
 				context: "fresh",
 				orchestratorTarget: "main",
 				extensionDir,
@@ -87,7 +87,7 @@ describe("resolveIntercomBridge", () => {
 		console.warn = () => {};
 		try {
 			const bridge = resolveIntercomBridge({
-				mode: "always",
+				config: { mode: "always" },
 				context: "fresh",
 				orchestratorTarget: "main",
 				extensionDir,
@@ -102,12 +102,32 @@ describe("resolveIntercomBridge", () => {
 
 	it("stays inactive for fresh context when mode is fork-only", () => {
 		const bridge = resolveIntercomBridge({
-			mode: "fork-only",
+			config: { mode: "fork-only" },
 			context: "fresh",
 			orchestratorTarget: "main",
 			extensionDir: "/path/that/does/not/matter",
 		});
 		assert.equal(bridge.active, false);
+	});
+
+	it("loads custom instructions from instructionFile", () => {
+		const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-intercom-bridge-test-"));
+		const extensionDir = path.join(tempDir, "pi-intercom");
+		const instructionFile = path.join(tempDir, "bridge.md");
+		fs.mkdirSync(extensionDir, { recursive: true });
+		fs.writeFileSync(instructionFile, "Custom bridge for {orchestratorTarget}\nUse ask then send.");
+		try {
+			const bridge = resolveIntercomBridge({
+				config: { mode: "always", instructionFile },
+				context: "fresh",
+				orchestratorTarget: "main",
+				extensionDir,
+			});
+			assert.equal(bridge.active, true);
+			assert.match(bridge.instruction, /Custom bridge for main/);
+		} finally {
+			fs.rmSync(tempDir, { recursive: true, force: true });
+		}
 	});
 });
 
@@ -117,6 +137,7 @@ describe("applyIntercomBridgeToAgent", () => {
 		mode: "always",
 		orchestratorTarget: "main",
 		extensionDir: "/Users/test/.pi/agent/extensions/pi-intercom",
+		instruction: "Intercom orchestration channel:\n- Need a decision or blocked: intercom({ action: \"ask\", to: \"main\", message: \"<question>\" })\n- Completion/update: intercom({ action: \"send\", to: \"main\", message: \"DONE: <summary>\" })",
 	};
 
 	it("injects intercom tool and prompt instructions", () => {

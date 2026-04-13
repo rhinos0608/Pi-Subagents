@@ -19,6 +19,8 @@ import {
 	type SingleResult,
 	type Usage,
 	DEFAULT_MAX_OUTPUT,
+	INTERCOM_DETACH_REQUEST_EVENT,
+	INTERCOM_DETACH_RESPONSE_EVENT,
 	truncateOutput,
 	getSubagentDepthEnv,
 } from "./types.ts";
@@ -123,7 +125,6 @@ async function runSingleAttempt(
 	const startTime = Date.now();
 	const spawnEnv = { ...process.env, ...sharedEnv, ...getSubagentDepthEnv(options.maxSubagentDepth) };
 
-	let closeJsonlWriter: (() => Promise<void>) | undefined;
 	const exitCode = await new Promise<number>((resolve) => {
 		const spawnSpec = getPiSpawnCommand(args);
 		const proc = spawn(spawnSpec.command, spawnSpec.args, {
@@ -132,9 +133,46 @@ async function runSingleAttempt(
 			stdio: ["ignore", "pipe", "pipe"],
 		});
 		const jsonlWriter = createJsonlWriter(shared.jsonlPath, proc.stdout);
-		closeJsonlWriter = () => jsonlWriter.close();
 		let buf = "";
 		let processClosed = false;
+		let settled = false;
+		let detached = false;
+		let intercomStarted = false;
+		let removeAbortListener: (() => void) | undefined;
+
+		const detachForIntercom = () => {
+			detached = true;
+			processClosed = true;
+			result.detached = true;
+			result.detachedReason = "intercom coordination";
+			progress.status = "detached";
+			progress.durationMs = Date.now() - startTime;
+			result.progressSummary = {
+				toolCount: progress.toolCount,
+				tokens: progress.tokens,
+				durationMs: progress.durationMs,
+			};
+			finish(-2);
+		};
+
+		const unsubscribeIntercomDetach = options.intercomEvents?.on(INTERCOM_DETACH_REQUEST_EVENT, (payload) => {
+			if (!options.allowIntercomDetach || detached || processClosed) return;
+			if (!payload || typeof payload !== "object") return;
+			const requestId = (payload as { requestId?: unknown }).requestId;
+			if (typeof requestId !== "string" || requestId.length === 0) return;
+			const accepted = intercomStarted;
+			options.intercomEvents?.emit(INTERCOM_DETACH_RESPONSE_EVENT, { requestId, accepted });
+			if (!accepted) return;
+			detachForIntercom();
+		});
+
+		const finish = (code: number) => {
+			if (settled) return;
+			settled = true;
+			unsubscribeIntercomDetach?.();
+			removeAbortListener?.();
+			resolve(code);
+		};
 
 		const fireUpdate = () => {
 			if (!options.onUpdate || processClosed) return;
@@ -154,6 +192,9 @@ async function runSingleAttempt(
 				progress.durationMs = now - startTime;
 
 				if (evt.type === "tool_execution_start") {
+					if (options.allowIntercomDetach && evt.toolName === "intercom") {
+						intercomStarted = true;
+					}
 					progress.toolCount++;
 					progress.currentTool = evt.toolName;
 					progress.currentToolArgs = extractToolArgsPreview((evt.args || {}) as Record<string, unknown>);
@@ -215,35 +256,55 @@ async function runSingleAttempt(
 			stderrBuf += d.toString();
 		});
 		proc.on("close", (code) => {
+			void jsonlWriter.close().catch(() => {
+				// JSONL artifact flush is best effort.
+			});
+			cleanupTempDir(tempDir);
+			if (detached) {
+				finish(-2);
+				return;
+			}
 			processClosed = true;
 			if (buf.trim()) processLine(buf);
 			if (code !== 0 && stderrBuf.trim() && !result.error) {
 				result.error = stderrBuf.trim();
 			}
-			resolve(code ?? 0);
+			finish(code ?? 0);
 		});
-		proc.on("error", () => resolve(1));
+		proc.on("error", (error) => {
+			void jsonlWriter.close().catch(() => {
+				// JSONL artifact flush is best effort.
+			});
+			cleanupTempDir(tempDir);
+			if (!result.error) {
+				result.error = error instanceof Error ? error.message : String(error);
+			}
+			finish(1);
+		});
 
 		if (options.signal) {
 			const kill = () => {
+				if (processClosed || detached) return;
+				if (options.allowIntercomDetach && intercomStarted && !detached) {
+					detachForIntercom();
+					return;
+				}
 				proc.kill("SIGTERM");
 				setTimeout(() => !proc.killed && proc.kill("SIGKILL"), 3000);
 			};
 			if (options.signal.aborted) kill();
-			else options.signal.addEventListener("abort", kill, { once: true });
+			else {
+				options.signal.addEventListener("abort", kill, { once: true });
+				removeAbortListener = () => options.signal?.removeEventListener("abort", kill);
+			}
 		}
 	});
-
-	if (closeJsonlWriter) {
-		try {
-			await closeJsonlWriter();
-		} catch {
-			// JSONL artifact flush is best effort.
-		}
-	}
-
-	cleanupTempDir(tempDir);
 	result.exitCode = exitCode;
+	if (result.detached) {
+		result.exitCode = 0;
+		result.finalOutput = "Detached for intercom coordination.";
+		return result;
+	}
 
 	if (exitCode === 0 && !result.error) {
 		const errInfo = detectSubagentError(result.messages);

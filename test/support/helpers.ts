@@ -112,6 +112,7 @@ export function makeMinimalCtx(cwd: string): any {
 		hasUI: false,
 		ui: {},
 		sessionManager: {
+			getSessionId: () => "session-123",
 			getSessionFile: () => null,
 		},
 		modelRegistry: {

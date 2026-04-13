@@ -781,19 +781,34 @@ Controls whether subagents receive runtime intercom coordination instructions (a
 
 ```json
 {
-  "intercomBridge": "always"
+	"intercomBridge": {
+		"mode": "always",
+		"instructionFile": "./intercom-bridge.md"
+	}
 }
 ```
 
-Values:
-- `"always"` (default): inject bridge in both `fresh` and `fork`
-- `"fork-only"`: inject bridge only when `context: "fork"`
-- `"off"`: disable bridge entirely
+Fields:
+- `"mode"` (default: `"always"`): inject bridge in both `fresh` and `fork`, only in `fork`, or disable it entirely
+- `"instructionFile"` (optional): path to a Markdown template that replaces the default injected subagent intercom instructions. Supports `{orchestratorTarget}` placeholder interpolation. Relative paths resolve from `~/.pi/agent/extensions/subagent/`.
+
+Example `instructionFile`:
+
+```md
+Intercom orchestration channel:
+
+Use `intercom` only to coordinate with the orchestrator session `{orchestratorTarget}`.
+
+- Need a decision or you're blocked: `intercom({ action: "ask", to: "{orchestratorTarget}", message: "<question>" })`
+- Need to report progress or completion: `intercom({ action: "send", to: "{orchestratorTarget}", message: "DONE: <summary>" })`
+
+If intercom is unavailable in this run, continue the task normally.
+```
 
 Bridge activation also requires all of the following:
 - [pi-intercom](https://github.com/nicobailon/pi-intercom) is installed (`pi install npm:pi-intercom`)
 - `~/.pi/agent/intercom/config.json` is not set to `"enabled": false`
-- the current session has a name to target as orchestrator
+- the current session has a target name (existing `/name`, or auto-assigned `session-<id>` when unnamed)
 - if agent `extensions` is an explicit allowlist, it must include `pi-intercom`
 
 ### `worktreeSetupHook`

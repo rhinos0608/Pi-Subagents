@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [0.13.3] - 2026-04-13
+
+### Added
+- Added `intercomBridge.instructionFile` so subagent intercom guidance can be overridden from a Markdown template with `{orchestratorTarget}` interpolation.
+
+### Fixed
+- Intercom-enabled delegated runs now detach only after the child actually starts the `intercom` tool, preserving clean sync behavior until coordination is needed.
+- Graceful intercom coordination no longer leaves detached child runs vulnerable to later parent abort listeners, and reply confirmation follow-ups avoid unnecessary orchestrator aborts.
+- Child process spawn failures now preserve the original error message instead of collapsing to a generic failure.
+
 ## [0.13.2] - 2026-04-13
 
 ### Changed
