@@ -106,9 +106,11 @@ function resolveRepoState(cwd: string): RepoState {
 	}
 
 	const toplevel = runGitChecked(cwd, ["rev-parse", "--show-toplevel"]).trim();
-	const realCwd = fs.realpathSync(cwd);
-	const realToplevel = fs.realpathSync(toplevel);
-	const cwdRelative = path.relative(realToplevel, realCwd);
+	const rawPrefix = runGitChecked(cwd, ["rev-parse", "--show-prefix"]).trim();
+	const normalizedPrefix = rawPrefix
+		? path.normalize(rawPrefix.replace(/[\\/]+$/, ""))
+		: "";
+	const cwdRelative = normalizedPrefix === "." ? "" : normalizedPrefix;
 
 	const status = runGitChecked(toplevel, ["status", "--porcelain"]);
 	if (status.trim().length > 0) {
@@ -124,6 +126,7 @@ function normalizeComparableCwd(cwd: string): string {
 	try {
 		return fs.realpathSync(resolved);
 	} catch {
+		// Use the unresolved absolute path when realpath resolution is unavailable.
 		return resolved;
 	}
 }
@@ -169,6 +172,7 @@ function linkNodeModulesIfPresent(toplevel: string, worktreePath: string): boole
 		fs.symlinkSync(nodeModulesPath, nodeModulesLinkPath);
 		return true;
 	} catch {
+		// Symlink creation is optional (e.g., unsupported filesystems on CI runners).
 		return false;
 	}
 }
@@ -344,8 +348,12 @@ function createSingleWorktree(
 			syntheticPaths,
 		};
 	} catch (error) {
-		try { runGitChecked(toplevel, ["worktree", "remove", "--force", worktreePath]); } catch {}
-		try { runGitChecked(toplevel, ["branch", "-D", branch]); } catch {}
+		try { runGitChecked(toplevel, ["worktree", "remove", "--force", worktreePath]); } catch {
+			// Best-effort rollback; preserve the original setup failure.
+		}
+		try { runGitChecked(toplevel, ["branch", "-D", branch]); } catch {
+			// Best-effort rollback; preserve the original setup failure.
+		}
 		throw error;
 	}
 }
@@ -453,12 +461,18 @@ function captureWorktreeDiff(
 function writeEmptyPatch(patchPath: string): void {
 	try {
 		fs.writeFileSync(patchPath, "", "utf-8");
-	} catch {}
+	} catch {
+		// Diff artifact writing is best-effort in error paths.
+	}
 }
 
 function cleanupSingleWorktree(repoCwd: string, worktree: WorktreeInfo): void {
-	try { runGitChecked(repoCwd, ["worktree", "remove", "--force", worktree.path]); } catch {}
-	try { runGitChecked(repoCwd, ["branch", "-D", worktree.branch]); } catch {}
+	try { runGitChecked(repoCwd, ["worktree", "remove", "--force", worktree.path]); } catch {
+		// Cleanup is best-effort to avoid masking caller errors.
+	}
+	try { runGitChecked(repoCwd, ["branch", "-D", worktree.branch]); } catch {
+		// Cleanup is best-effort to avoid masking caller errors.
+	}
 }
 
 function hasWorktreeChanges(diff: WorktreeDiff): boolean {
@@ -502,6 +516,7 @@ export function diffWorktrees(setup: WorktreeSetup, agents: string[], diffsDir: 
 	try {
 		fs.mkdirSync(diffsDir, { recursive: true });
 	} catch {
+		// Returning no diffs is safer than failing the whole command on artifact-dir issues.
 		return [];
 	}
 
@@ -513,6 +528,7 @@ export function diffWorktrees(setup: WorktreeSetup, agents: string[], diffsDir: 
 		try {
 			diffs.push(captureWorktreeDiff(setup, worktree, agent, patchPath));
 		} catch {
+			// Preserve execution flow; failed diff capture maps to an empty per-task patch.
 			writeEmptyPatch(patchPath);
 			diffs.push(emptyDiff(index, agent, worktree.branch, patchPath));
 		}
@@ -525,7 +541,9 @@ export function cleanupWorktrees(setup: WorktreeSetup): void {
 	for (let index = setup.worktrees.length - 1; index >= 0; index--) {
 		cleanupSingleWorktree(setup.cwd, setup.worktrees[index]!);
 	}
-	try { runGitChecked(setup.cwd, ["worktree", "prune"]); } catch {}
+	try { runGitChecked(setup.cwd, ["worktree", "prune"]); } catch {
+		// Pruning is best-effort cleanup.
+	}
 }
 
 export function formatWorktreeDiffSummary(diffs: WorktreeDiff[]): string {

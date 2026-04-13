@@ -155,7 +155,7 @@ async function runSingleAttempt(
 			finish(-2);
 		};
 
-		const unsubscribeIntercomDetach = options.intercomEvents?.on(INTERCOM_DETACH_REQUEST_EVENT, (payload) => {
+		const unsubscribeIntercomDetach = options.intercomEvents?.on?.(INTERCOM_DETACH_REQUEST_EVENT, (payload) => {
 			if (!options.allowIntercomDetach || detached || processClosed) return;
 			if (!payload || typeof payload !== "object") return;
 			const requestId = (payload as { requestId?: unknown }).requestId;

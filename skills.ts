@@ -6,7 +6,6 @@ import { execSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { loadSkills, type Skill } from "@mariozechner/pi-coding-agent";
 
 export type SkillSource =
 	| "project"
@@ -86,6 +85,7 @@ function getPackageSkillPaths(packageRoot: string): string[] {
 			.filter((s: unknown) => typeof s === "string")
 			.map((s: string) => path.resolve(packageRoot, s));
 	} catch {
+		// Package scanning is opportunistic; ignore malformed/missing package metadata.
 		return [];
 	}
 }
@@ -98,6 +98,7 @@ function getGlobalNpmRoot(): string | null {
 		cachedGlobalNpmRoot = execSync("npm root -g", { encoding: "utf-8", timeout: 5000 }).trim();
 		return cachedGlobalNpmRoot;
 	} catch {
+		// Global npm root is optional in constrained environments.
 		cachedGlobalNpmRoot = ""; // Empty string means "tried but failed"
 		return null;
 	}
@@ -123,6 +124,7 @@ function collectPackageSkillPaths(cwd: string): string[] {
 		try {
 			entries = fs.readdirSync(dir, { withFileTypes: true });
 		} catch {
+			// Ignore unreadable package roots and continue scanning other roots.
 			continue;
 		}
 
@@ -136,6 +138,7 @@ function collectPackageSkillPaths(cwd: string): string[] {
 				try {
 					scopeEntries = fs.readdirSync(scopeDir, { withFileTypes: true });
 				} catch {
+					// Ignore unreadable scoped package directories and continue.
 					continue;
 				}
 				for (const scopeEntry of scopeEntries) {
@@ -178,7 +181,9 @@ function collectSettingsSkillPaths(cwd: string): string[] {
 				}
 				results.push(resolved);
 			}
-		} catch {}
+		} catch {
+			// Settings-provided skills are optional; ignore malformed or missing settings files.
+		}
 	}
 
 	return results;
@@ -196,21 +201,22 @@ function buildSkillPaths(cwd: string): string[] {
 	return [...new Set([...defaultSkillPaths, ...packagePaths, ...settingsPaths])];
 }
 
-function inferSkillSource(sourceInfo: { source: string; scope: string }, filePath: string, cwd: string): SkillSource {
-	const { scope, source } = sourceInfo;
+function inferSkillSource(filePath: string, cwd: string): SkillSource {
+	const projectConfigRoot = path.resolve(cwd, CONFIG_DIR);
+	const projectSkillsRoot = path.resolve(cwd, CONFIG_DIR, "skills");
+	const projectPackagesRoot = path.resolve(cwd, CONFIG_DIR, "npm", "node_modules");
+	const projectAgentsRoot = path.resolve(cwd, ".agents");
+	const userSkillsRoot = path.resolve(AGENT_DIR, "skills");
+	const userPackagesRoot = path.resolve(AGENT_DIR, "npm", "node_modules");
+	const userAgentsRoot = path.resolve(os.homedir(), ".agents");
 
-	if (scope === "project" && source === "local") return "project";
-	if (scope === "user" && source === "local") return "user";
+	if (isWithinPath(filePath, projectPackagesRoot)) return "project-package";
+	if (isWithinPath(filePath, projectSkillsRoot) || isWithinPath(filePath, projectAgentsRoot)) return "project";
+	if (isWithinPath(filePath, projectConfigRoot)) return "project-settings";
 
-	// Fallback: infer from file path when sourceInfo isn't specific enough
-	// (e.g. scope === "temporary" for skills loaded via explicit skillPaths)
-	const projectRoot = path.resolve(cwd, CONFIG_DIR);
-	const altProjectRoot = path.resolve(cwd, ".agents");
-	const isProjectScoped = isWithinPath(filePath, projectRoot) || isWithinPath(filePath, altProjectRoot);
-	if (isProjectScoped) return "project";
-
-	const isUserScoped = isWithinPath(filePath, AGENT_DIR) || isWithinPath(filePath, path.join(os.homedir(), ".agents"));
-	if (isUserScoped) return "user";
+	if (isWithinPath(filePath, userPackagesRoot)) return "user-package";
+	if (isWithinPath(filePath, userSkillsRoot) || isWithinPath(filePath, userAgentsRoot)) return "user";
+	if (isWithinPath(filePath, AGENT_DIR)) return "user-settings";
 
 	const globalRoot = getGlobalNpmRoot();
 	if (globalRoot && isWithinPath(filePath, globalRoot)) return "user-package";
@@ -227,6 +233,99 @@ function chooseHigherPrioritySkill(existing: CachedSkillEntry | undefined, candi
 	return candidate.order < existing.order ? candidate : existing;
 }
 
+function maybeReadSkillDescription(filePath: string): string | undefined {
+	try {
+		const content = fs.readFileSync(filePath, "utf-8");
+		const normalized = content.replace(/\r\n/g, "\n");
+		if (!normalized.startsWith("---")) return undefined;
+
+		const endIndex = normalized.indexOf("\n---", 3);
+		if (endIndex === -1) return undefined;
+
+		const frontmatter = normalized.slice(3, endIndex).trim();
+		const match = frontmatter.match(/^description:\s*(.+)$/m);
+		if (!match) return undefined;
+		return match[1]?.trim().replace(/^['\"]|['\"]$/g, "");
+	} catch {
+		// Description parsing is best-effort metadata extraction.
+		return undefined;
+	}
+}
+
+function collectFilesystemSkills(cwd: string, skillPaths: string[]): CachedSkillEntry[] {
+	const entries: CachedSkillEntry[] = [];
+	const seen = new Set<string>();
+	let order = 0;
+
+	const pushEntry = (name: string, filePath: string) => {
+		const resolvedFile = path.resolve(filePath);
+		if (seen.has(resolvedFile)) return;
+		if (!fs.existsSync(resolvedFile)) return;
+		seen.add(resolvedFile);
+		entries.push({
+			name,
+			filePath: resolvedFile,
+			source: inferSkillSource(resolvedFile, cwd),
+			description: maybeReadSkillDescription(resolvedFile),
+			order: order++,
+		});
+	};
+
+	for (const skillPath of skillPaths) {
+		if (!fs.existsSync(skillPath)) continue;
+
+		let stat: fs.Stats;
+		try {
+			stat = fs.statSync(skillPath);
+		} catch {
+			// Ignore paths that disappear or become unreadable during discovery.
+			continue;
+		}
+
+		if (stat.isFile()) {
+			const fileName = path.basename(skillPath);
+			if (!fileName.toLowerCase().endsWith(".md")) continue;
+			const skillName = fileName.toLowerCase() === "skill.md"
+				? path.basename(path.dirname(skillPath))
+				: path.basename(fileName, path.extname(fileName));
+			pushEntry(skillName, skillPath);
+			continue;
+		}
+
+		if (!stat.isDirectory()) continue;
+
+		const rootSkillFile = path.join(skillPath, "SKILL.md");
+		if (fs.existsSync(rootSkillFile)) {
+			pushEntry(path.basename(skillPath), rootSkillFile);
+		}
+
+		let childEntries: fs.Dirent[];
+		try {
+			childEntries = fs.readdirSync(skillPath, { withFileTypes: true });
+		} catch {
+			// Ignore unreadable skill directories and continue scanning.
+			continue;
+		}
+
+		for (const child of childEntries) {
+			if (child.name.startsWith(".")) continue;
+			const childPath = path.join(skillPath, child.name);
+			if (child.isDirectory() || child.isSymbolicLink()) {
+				const nestedSkillPath = path.join(childPath, "SKILL.md");
+				if (fs.existsSync(nestedSkillPath)) {
+					pushEntry(child.name, nestedSkillPath);
+				}
+				continue;
+			}
+			if (child.isFile() && child.name.toLowerCase().endsWith(".md")) {
+				pushEntry(path.basename(child.name, path.extname(child.name)), childPath);
+			}
+		}
+	}
+
+	return entries;
+}
+
 function getCachedSkills(cwd: string): CachedSkillEntry[] {
 	const now = Date.now();
 	if (loadSkillsCache && loadSkillsCache.cwd === cwd && now - loadSkillsCache.timestamp < LOAD_SKILLS_CACHE_TTL_MS) {
@@ -234,18 +333,10 @@ function getCachedSkills(cwd: string): CachedSkillEntry[] {
 	}
 
 	const skillPaths = buildSkillPaths(cwd);
-	const loaded = loadSkills({ cwd, skillPaths, includeDefaults: false });
+	const loaded = collectFilesystemSkills(cwd, skillPaths);
 	const dedupedByName = new Map<string, CachedSkillEntry>();
 
-	for (let i = 0; i < loaded.skills.length; i++) {
-		const skill = loaded.skills[i] as Skill;
-		const entry: CachedSkillEntry = {
-			name: skill.name,
-			filePath: skill.filePath,
-			source: inferSkillSource(skill.sourceInfo, skill.filePath, cwd),
-			description: skill.description,
-			order: i,
-		};
+	for (const entry of loaded) {
 		const current = dedupedByName.get(entry.name);
 		dedupedByName.set(entry.name, chooseHigherPrioritySkill(current, entry));
 	}
@@ -294,6 +385,7 @@ export function readSkill(
 
 		return skill;
 	} catch {
+		// Treat unreadable skill files as unresolved so callers can surface as missing.
 		return undefined;
 	}
 }

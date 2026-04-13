@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Fixed
+- Worktree cwd mapping now derives repo-relative prefixes from `git rev-parse --show-prefix` instead of `path.relative(realpath, realpath)`, fixing Windows 8.3/canonical-path mismatches that could map `agentCwd` back to the source repo instead of the created worktree.
+- Intercom detach listeners now guard optional event-bus subscriptions with optional-call semantics, so delegated runs no longer fail when host event buses expose `emit` without `on`.
+- Skill discovery no longer depends on runtime imports from `@mariozechner/pi-coding-agent`; it now resolves skills directly from configured filesystem paths, preventing `ERR_MODULE_NOT_FOUND` crashes in local/integration test environments.
+
 ## [0.13.3] - 2026-04-13
 
 ### Added
