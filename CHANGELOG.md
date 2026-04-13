@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [0.13.2] - 2026-04-13
+
+### Changed
+- `intercomBridge` now defaults to `always` so intercom coordination instructions are injected for both `fresh` and `fork` delegated runs when `pi-intercom` is available.
+
 ## [0.13.1] - 2026-04-13
 
 ### Added

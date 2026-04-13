@@ -27,7 +27,7 @@ interface ResolveIntercomBridgeInput {
 
 export function resolveIntercomBridgeMode(value: unknown): IntercomBridgeMode {
 	if (value === "off" || value === "always" || value === "fork-only") return value;
-	return "fork-only";
+	return "always";
 }
 
 function intercomEnabled(configPath: string): boolean {
@@ -43,12 +43,17 @@ function intercomEnabled(configPath: string): boolean {
 
 function extensionSandboxAllowsIntercom(extensions: string[] | undefined, extensionDir: string): boolean {
 	if (extensions === undefined) return true;
-	const lowerExtensionDir = extensionDir.toLowerCase();
-	return extensions.some((entry) => {
-		const normalized = entry.toLowerCase();
-		if (normalized.includes(lowerExtensionDir)) return true;
-		return /(^|[\\/])pi-intercom([\\/]|$)/i.test(normalized);
-	});
+
+	const intercomDir = path.resolve(extensionDir).replaceAll("\\", "/").toLowerCase();
+	for (const entry of extensions) {
+		const normalized = entry.trim().replaceAll("\\", "/").toLowerCase();
+		if (normalized === "pi-intercom") return true;
+		if (normalized === intercomDir) return true;
+		if (normalized.startsWith(`${intercomDir}/`)) return true;
+		if (normalized.endsWith("/pi-intercom")) return true;
+		if (normalized.includes("/pi-intercom/")) return true;
+	}
+	return false;
 }
 
 function buildIntercomBridgeInstruction(orchestratorTarget: string): string {

@@ -331,7 +331,7 @@ Chains can be created from the Agents Manager template picker ("Blank Chain"), o
 | Parallel | Yes | `{ tasks: [{agent, task}...] }` - via TUI toggle or converted to chain for async |
 
 Execution context defaults to `context: "fresh"`, which starts each child run from a clean session. Set `context: "fork"` to start each child from a real branched session created from the parent's current leaf.
-When `intercomBridge` is enabled (default: `fork-only`) and `pi-intercom` is installed/enabled, forked children get runtime instructions for contacting the orchestrator session via `intercom({ action: "ask"|"send", ... })`.
+When `intercomBridge` is enabled (default: `always`) and `pi-intercom` is installed/enabled, delegated children get runtime instructions for contacting the orchestrator session via `intercom({ action: "ask"|"send", ... })`.
 
 > **Note:** Intercom bridging requires the [pi-intercom](https://github.com/nicobailon/pi-intercom) extension. Install it with `pi install npm:pi-intercom`.
 
@@ -787,13 +787,13 @@ Controls whether subagents receive runtime intercom coordination instructions (a
 
 ```json
 {
-  "intercomBridge": "fork-only"
+  "intercomBridge": "always"
 }
 ```
 
 Values:
-- `"fork-only"` (default): inject intercom bridge only when `context: "fork"`
-- `"always"`: inject bridge in both `fresh` and `fork`
+- `"always"` (default): inject bridge in both `fresh` and `fork`
+- `"fork-only"`: inject bridge only when `context: "fork"`
 - `"off"`: disable bridge entirely
 
 Bridge activation also requires all of the following:

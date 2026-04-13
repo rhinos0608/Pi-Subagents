@@ -23,9 +23,9 @@ function makeAgent(overrides: Partial<AgentConfig> = {}): AgentConfig {
 }
 
 describe("resolveIntercomBridgeMode", () => {
-	it("defaults unknown values to fork-only", () => {
-		assert.equal(resolveIntercomBridgeMode(undefined), "fork-only");
-		assert.equal(resolveIntercomBridgeMode("nope"), "fork-only");
+	it("defaults unknown values to always", () => {
+		assert.equal(resolveIntercomBridgeMode(undefined), "always");
+		assert.equal(resolveIntercomBridgeMode("nope"), "always");
 	});
 
 	it("accepts explicit modes", () => {
