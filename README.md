@@ -412,9 +412,12 @@ Skills are specialized instructions loaded from SKILL.md files and injected into
 **Skill locations (project-first precedence):**
 - Project: `.pi/skills/{name}/SKILL.md`
 - Project packages: `.pi/npm/node_modules/*` via `package.json -> pi.skills`
+- Project settings packages: local package roots from `.pi/settings.json -> packages`, then `package.json -> pi.skills`
+- Current task cwd package: `<cwd>/package.json -> pi.skills`
 - Project settings: `.pi/settings.json -> skills`
 - User: `~/.pi/agent/skills/{name}/SKILL.md`
 - User packages: `~/.pi/agent/npm/node_modules/*` via `package.json -> pi.skills`
+- User settings packages: local package roots from `~/.pi/agent/settings.json -> packages`, then `package.json -> pi.skills`
 - User settings: `~/.pi/agent/settings.json -> skills`
 
 **Usage:**

@@ -224,15 +224,12 @@ export function getDisplayItems(messages: Message[]): DisplayItem[] {
  * Detect errors in subagent execution from messages (only errors with no subsequent success)
  */
 export function detectSubagentError(messages: Message[]): ErrorInfo {
-	// Step 1: Find the last assistant message with text content.
-	// If the agent produced a text response after encountering errors,
-	// it had a chance to recover — only errors AFTER this point matter.
 	let lastAssistantTextIndex = -1;
 	for (let i = messages.length - 1; i >= 0; i--) {
 		const msg = messages[i];
 		if (msg.role === "assistant") {
 			const hasText = Array.isArray(msg.content) && msg.content.some(
-				(c) => c.type === "text" && "text" in c && (c.text as string).trim().length > 0,
+				(c) => c.type === "text" && "text" in c && typeof c.text === "string" && c.text.trim().length > 0,
 			);
 			if (hasText) {
 				lastAssistantTextIndex = i;
@@ -241,28 +238,26 @@ export function detectSubagentError(messages: Message[]): ErrorInfo {
 		}
 	}
 
-	// Step 2: Only scan tool results AFTER the last assistant text message.
-	// Errors before the agent's final response are implicitly recovered.
 	const scanStart = lastAssistantTextIndex >= 0 ? lastAssistantTextIndex + 1 : 0;
 
-	// Step 3: Check tool results in the post-response window
 	for (let i = messages.length - 1; i >= scanStart; i--) {
 		const msg = messages[i];
 		if (msg.role !== "toolResult") continue;
+		const toolName = "toolName" in msg && typeof msg.toolName === "string" ? msg.toolName : undefined;
+		const isError = "isError" in msg && msg.isError === true;
 
-		if ((msg as any).isError) {
+		if (isError) {
 			const text = msg.content.find((c) => c.type === "text");
 			const details = text && "text" in text ? text.text : undefined;
 			const exitMatch = details?.match(/exit(?:ed)?\s*(?:with\s*)?(?:code|status)?\s*[:\s]?\s*(\d+)/i);
 			return {
 				hasError: true,
 				exitCode: exitMatch ? parseInt(exitMatch[1], 10) : 1,
-				errorType: (msg as any).toolName || "tool",
+				errorType: toolName || "tool",
 				details: details?.slice(0, 200),
 			};
 		}
 
-		const toolName = (msg as any).toolName;
 		if (toolName !== "bash") continue;
 
 		const text = msg.content.find((c) => c.type === "text");

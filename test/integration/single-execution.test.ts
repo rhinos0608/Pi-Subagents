@@ -46,6 +46,8 @@ interface RunSyncResult {
 	messages: unknown[];
 	error?: string;
 	model?: string;
+	skills?: string[];
+	skillsWarning?: string;
 	attemptedModels?: string[];
 	modelAttempts?: ModelAttempt[];
 	usage: { turns: number; input: number; output: number };
@@ -105,6 +107,21 @@ function createEventBus() {
 			}
 		},
 	};
+}
+
+function writePackageSkill(packageRoot: string, skillName: string): void {
+	const skillDir = path.join(packageRoot, "skills", skillName);
+	fs.mkdirSync(skillDir, { recursive: true });
+	fs.writeFileSync(
+		path.join(packageRoot, "package.json"),
+		JSON.stringify({ name: `${skillName}-pkg`, version: "1.0.0", pi: { skills: [`./skills/${skillName}`] } }, null, 2),
+		"utf-8",
+	);
+	fs.writeFileSync(
+		path.join(skillDir, "SKILL.md"),
+		`---\nname: ${skillName}\ndescription: test skill\n---\nbody\n`,
+		"utf-8",
+	);
 }
 
 describe("single sync execution", { skip: !available ? "pi packages not available" : undefined }, () => {
@@ -318,6 +335,37 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		const output = getFinalOutput(result.messages);
 		assert.ok(output.includes("file1.txt"), "should capture assistant text");
 		assert.equal(result.progress.toolCount, 1, "should count tool calls");
+	});
+
+	it("resolves skills from the effective task cwd", async () => {
+		const taskCwd = createTempDir("pi-subagent-task-cwd-");
+		try {
+			writePackageSkill(taskCwd, "task-cwd-skill");
+			mockPi.onCall({ output: "Done" });
+			const agents = [makeAgent("echo", { skills: ["task-cwd-skill"] })];
+
+			const result = await runSync(tempDir, agents, "echo", "Task", { cwd: taskCwd });
+
+			assert.equal(result.exitCode, 0);
+			assert.deepEqual(result.skills, ["task-cwd-skill"]);
+			assert.equal(result.skillsWarning, undefined);
+		} finally {
+			removeTempDir(taskCwd);
+		}
+	});
+
+	it("falls back to the runtime cwd when the task cwd lacks a skill", async () => {
+		const taskCwd = path.join(tempDir, "nested");
+		fs.mkdirSync(taskCwd, { recursive: true });
+		writePackageSkill(tempDir, "runtime-fallback-skill");
+		mockPi.onCall({ output: "Done" });
+		const agents = [makeAgent("echo", { skills: ["runtime-fallback-skill"] })];
+
+		const result = await runSync(tempDir, agents, "echo", "Task", { cwd: taskCwd });
+
+		assert.equal(result.exitCode, 0);
+		assert.deepEqual(result.skills, ["runtime-fallback-skill"]);
+		assert.equal(result.skillsWarning, undefined);
 	});
 
 	it("writes artifacts when configured", async () => {

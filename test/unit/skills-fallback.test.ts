@@ -2,11 +2,13 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import {
 	clearSkillCache,
 	discoverAvailableSkills,
 	resolveSkills,
+	resolveSkillsWithFallback,
 } from "../../skills.ts";
 
 let tempDir = "";
@@ -23,6 +25,10 @@ function makeProjectSkill(cwd: string, name: string, body: string): void {
 
 function makeProjectPackageSkill(cwd: string, packageName: string, name: string, body: string): void {
 	const packageRoot = path.join(cwd, ".pi", "npm", "node_modules", packageName);
+	makePackageSkill(packageRoot, name, body, packageName);
+}
+
+function makePackageSkill(packageRoot: string, name: string, body: string, packageName = `${name}-pkg`): void {
 	const skillDir = path.join(packageRoot, "skills", name);
 	fs.mkdirSync(skillDir, { recursive: true });
 	fs.writeFileSync(
@@ -31,6 +37,13 @@ function makeProjectPackageSkill(cwd: string, packageName: string, name: string,
 		"utf-8",
 	);
 	fs.writeFileSync(path.join(skillDir, "SKILL.md"), `${body}\n`, "utf-8");
+}
+
+async function importSkillsFresh() {
+	const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+	const modulePath = path.resolve(projectRoot, "skills.ts");
+	const bust = `${Date.now()}-${Math.random()}`;
+	return await import(`${pathToFileURL(modulePath).href}?bust=${bust}`) as typeof import("../../skills.ts");
 }
 
 describe("skills filesystem fallback", () => {
@@ -83,5 +96,100 @@ describe("skills filesystem fallback", () => {
 		assert.equal(resolved.length, 1);
 		assert.equal(resolved[0]?.source, "project");
 		assert.match(resolved[0]?.content ?? "", /Project version/);
+	});
+
+	it("discovers skills from project settings packages", () => {
+		const packageRoot = path.join(tempDir, ".pi", "packages", "local-skill-pkg");
+		makePackageSkill(packageRoot, "settings-package-skill", "Settings package skill.");
+		fs.mkdirSync(path.join(tempDir, ".pi"), { recursive: true });
+		fs.writeFileSync(
+			path.join(tempDir, ".pi", "settings.json"),
+			JSON.stringify({ packages: ["./packages/local-skill-pkg"] }, null, 2),
+			"utf-8",
+		);
+
+		const { resolved, missing } = resolveSkills(["settings-package-skill"], tempDir);
+		assert.deepEqual(missing, []);
+		assert.equal(resolved.length, 1);
+		assert.equal(resolved[0]?.source, "project-package");
+	});
+
+	it("discovers skills from the current cwd package", () => {
+		makePackageSkill(tempDir, "cwd-package-skill", "Cwd package skill.");
+
+		const { resolved, missing } = resolveSkills(["cwd-package-skill"], tempDir);
+		assert.deepEqual(missing, []);
+		assert.equal(resolved.length, 1);
+		assert.equal(resolved[0]?.source, "project-package");
+	});
+
+	it("falls back to the runtime cwd when the execution cwd lacks the skill", () => {
+		const nestedDir = path.join(tempDir, "nested");
+		fs.mkdirSync(nestedDir, { recursive: true });
+		makePackageSkill(tempDir, "runtime-fallback-skill", "Runtime fallback skill.");
+
+		const { resolved, missing } = resolveSkillsWithFallback(["runtime-fallback-skill"], nestedDir, tempDir);
+		assert.deepEqual(missing, []);
+		assert.equal(resolved.length, 1);
+		assert.equal(resolved[0]?.source, "project-package");
+	});
+
+	it("discovers skills from user settings packages", async () => {
+		const fakeHome = path.join(tempDir, "fake-home");
+		const userAgentDir = path.join(fakeHome, ".pi", "agent");
+		const userPackageRoot = path.join(userAgentDir, "user-pkg");
+		const previousHome = process.env.HOME;
+		const previousUserProfile = process.env.USERPROFILE;
+
+		try {
+			process.env.HOME = fakeHome;
+			process.env.USERPROFILE = fakeHome;
+			makePackageSkill(userPackageRoot, "user-settings-package-skill", "User settings package skill.");
+			fs.mkdirSync(userAgentDir, { recursive: true });
+			fs.writeFileSync(
+				path.join(userAgentDir, "settings.json"),
+				JSON.stringify({ packages: [{ source: "./user-pkg" }] }, null, 2),
+				"utf-8",
+			);
+
+			const fresh = await importSkillsFresh();
+			fresh.clearSkillCache();
+			const discovered = fresh.discoverAvailableSkills(tempDir);
+			const skill = discovered.find((entry) => entry.name === "user-settings-package-skill");
+			assert.ok(skill);
+			assert.equal(skill?.source, "user-package");
+		} finally {
+			if (previousHome === undefined) delete process.env.HOME;
+			else process.env.HOME = previousHome;
+			if (previousUserProfile === undefined) delete process.env.USERPROFILE;
+			else process.env.USERPROFILE = previousUserProfile;
+		}
+	});
+
+	it("surfaces malformed project settings files instead of silently ignoring them", () => {
+		fs.mkdirSync(path.join(tempDir, ".pi"), { recursive: true });
+		fs.writeFileSync(path.join(tempDir, ".pi", "settings.json"), "{bad-json", "utf-8");
+
+		assert.throws(
+			() => resolveSkills(["missing-skill"], tempDir),
+			/Failed to read skills settings file .+\.pi[\\/]settings\.json/,
+		);
+	});
+
+	it("surfaces malformed explicit settings package manifests instead of silently ignoring them", () => {
+		const packageRoot = path.join(tempDir, ".pi", "packages", "broken-package");
+		fs.mkdirSync(packageRoot, { recursive: true });
+		fs.writeFileSync(path.join(packageRoot, "package.json"), "{bad-json", "utf-8");
+		fs.mkdirSync(path.join(tempDir, ".pi"), { recursive: true });
+		fs.writeFileSync(
+			path.join(tempDir, ".pi", "settings.json"),
+			JSON.stringify({ packages: ["./packages/broken-package"] }, null, 2),
+			"utf-8",
+		);
+
+		assert.throws(
+			() => discoverAvailableSkills(tempDir),
+			/Failed to read package manifest .+broken-package[\\/]package\.json/,
+		);
 	});
 });

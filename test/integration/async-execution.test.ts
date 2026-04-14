@@ -20,6 +20,17 @@ interface AsyncExecutionResult {
 	details: { asyncId?: string };
 }
 
+interface AsyncResultPayload {
+	success: boolean;
+	results: Array<unknown>;
+}
+
+interface AsyncStatusPayload {
+	steps?: Array<{
+		skills?: string[];
+	}>;
+}
+
 interface AsyncExecutionModule {
 	isAsyncAvailable(): boolean;
 	executeAsyncSingle(id: string, params: Record<string, unknown>): AsyncExecutionResult;
@@ -48,6 +59,21 @@ const readStatus = utils?.readStatus;
 const ASYNC_DIR = typesMod?.ASYNC_DIR;
 const RESULTS_DIR = typesMod?.RESULTS_DIR;
 const TEMP_ROOT_DIR = typesMod?.TEMP_ROOT_DIR;
+
+function writePackageSkill(packageRoot: string, skillName: string): void {
+	const skillDir = path.join(packageRoot, "skills", skillName);
+	fs.mkdirSync(skillDir, { recursive: true });
+	fs.writeFileSync(
+		path.join(packageRoot, "package.json"),
+		JSON.stringify({ name: `${skillName}-pkg`, version: "1.0.0", pi: { skills: [`./skills/${skillName}`] } }, null, 2),
+		"utf-8",
+	);
+	fs.writeFileSync(
+		path.join(skillDir, "SKILL.md"),
+		`---\nname: ${skillName}\ndescription: test skill\n---\nbody\n`,
+		"utf-8",
+	);
+}
 
 describe("async execution utilities", { skip: !available ? "pi packages not available" : undefined }, () => {
 	let tempDir: string;
@@ -284,6 +310,52 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		assert.equal(payload.success, true);
 		assert.equal(payload.results[0].model, "github-copilot/gpt-5-mini");
 		assert.deepEqual(payload.results[0].attemptedModels, ["github-copilot/gpt-5-mini"]);
+	});
+
+	it("background runs resolve skills from the effective task cwd", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
+		mockPi.onCall({ output: "Done asynchronously" });
+		const taskCwd = createTempDir("pi-subagent-async-task-cwd-");
+		const id = `async-skill-cwd-${Date.now().toString(36)}`;
+		const asyncDir = path.join(ASYNC_DIR, id);
+		const resultPath = path.join(RESULTS_DIR, `${id}.json`);
+		const statusPath = path.join(asyncDir, "status.json");
+
+		try {
+			writePackageSkill(taskCwd, "async-task-cwd-skill");
+			executeAsyncSingle(id, {
+				agent: "worker",
+				task: "Do work",
+				agentConfig: makeAgent("worker", { skills: ["async-task-cwd-skill"] }),
+				ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
+				cwd: taskCwd,
+				artifactConfig: {
+					enabled: false,
+					includeInput: false,
+					includeOutput: false,
+					includeJsonl: false,
+					includeMetadata: false,
+					cleanupDays: 7,
+				},
+				shareEnabled: false,
+				sessionRoot: path.join(tempDir, "sessions"),
+				maxSubagentDepth: 2,
+			});
+
+			const deadline = Date.now() + 10_000;
+			while (!fs.existsSync(resultPath)) {
+				if (Date.now() > deadline) {
+					assert.fail(`Timed out waiting for async result file: ${resultPath}`);
+				}
+				await new Promise((resolve) => setTimeout(resolve, 100));
+			}
+
+			const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8")) as AsyncResultPayload;
+			const status = JSON.parse(fs.readFileSync(statusPath, "utf-8")) as AsyncStatusPayload;
+			assert.equal(payload.success, true);
+			assert.deepEqual(status.steps?.[0]?.skills, ["async-task-cwd-skill"]);
+		} finally {
+			removeTempDir(taskCwd);
+		}
 	});
 
 	it("returns a tool error when the detached runner config cannot be written", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, () => {

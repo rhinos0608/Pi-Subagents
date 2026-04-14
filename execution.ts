@@ -31,7 +31,7 @@ import {
 	extractToolArgsPreview,
 	extractTextFromContent,
 } from "./utils.ts";
-import { buildSkillInjection, resolveSkills } from "./skills.ts";
+import { buildSkillInjection, resolveSkillsWithFallback } from "./skills.ts";
 import { getPiSpawnCommand } from "./pi-spawn.ts";
 import { createJsonlWriter } from "./jsonl-writer.ts";
 import { applyThinkingSuffix, buildPiArgs, cleanupTempDir } from "./pi-args.ts";
@@ -371,7 +371,8 @@ export async function runSync(
 	const sessionEnabled = Boolean(options.sessionFile || options.sessionDir) || shareEnabled;
 	const outputSnapshot = captureSingleOutputSnapshot(options.outputPath);
 	const skillNames = options.skills ?? agent.skills ?? [];
-	const { resolved: resolvedSkills, missing: missingSkills } = resolveSkills(skillNames, runtimeCwd);
+	const skillCwd = options.cwd ?? runtimeCwd;
+	const { resolved: resolvedSkills, missing: missingSkills } = resolveSkillsWithFallback(skillNames, skillCwd, runtimeCwd);
 	let systemPrompt = agent.systemPrompt?.trim() || "";
 	if (resolvedSkills.length > 0) {
 		const skillInjection = buildSkillInjection(resolvedSkills);

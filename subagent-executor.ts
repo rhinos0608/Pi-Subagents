@@ -738,7 +738,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 		const behaviors = agentConfigs.map((c, i) =>
 			resolveStepBehavior(c, { skills: skillOverrides[i] }),
 		);
-		const availableSkills = discoverAvailableSkills(ctx.cwd);
+		const availableSkills = discoverAvailableSkills(params.cwd ?? ctx.cwd);
 
 		const result = await ctx.ui.custom<ChainClarifyResult>(
 			(tui, theme, _kb, done) =>
@@ -943,7 +943,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 
 	if (params.clarify === true && ctx.hasUI) {
 		const behavior = resolveStepBehavior(agentConfig, { output: effectiveOutput, skills: skillOverride });
-		const availableSkills = discoverAvailableSkills(ctx.cwd);
+		const availableSkills = discoverAvailableSkills(params.cwd ?? ctx.cwd);
 
 		const result = await ctx.ui.custom<ChainClarifyResult>(
 			(tui, theme, _kb, done) =>
