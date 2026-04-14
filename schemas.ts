@@ -83,7 +83,7 @@ export const SubagentParams = Type.Object({
 		enum: ["fresh", "fork"],
 		description: "'fresh' (default) or 'fork' to branch from parent session",
 	})),
-	chainDir: Type.Optional(Type.String({ description: "Persistent directory for chain artifacts. Default: <tmpdir>/pi-chain-runs/ (auto-cleaned after 24h)" })),
+	chainDir: Type.Optional(Type.String({ description: "Persistent directory for chain artifacts. Default: a user-scoped temp directory under <tmpdir>/ (auto-cleaned after 24h)" })),
 	async: Type.Optional(Type.Boolean({ description: "Run in background (default: false, or per config)" })),
 	agentScope: Type.Optional(Type.String({ description: "Agent discovery scope: 'user', 'project', or 'both' (default: 'both'; project wins on name collisions)" })),
 	cwd: Type.Optional(Type.String()),

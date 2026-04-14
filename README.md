@@ -306,7 +306,7 @@ Chains can be created from the Agents Manager template picker ("Blank Chain"), o
 - **Worktree Isolation**: `worktree: true` gives each parallel agent its own git worktree, preventing filesystem conflicts during concurrent execution
 - **Chain Clarification TUI**: Interactive preview/edit of chain templates and behaviors before execution
 - **Agent Frontmatter Extensions**: Agents declare default chain behavior (`output`, `defaultReads`, `defaultProgress`, `skill`) plus optional recursion limits via `maxSubagentDepth`
-- **Chain Artifacts**: Shared directory at `<tmpdir>/pi-chain-runs/{runId}/` for inter-step files
+- **Chain Artifacts**: Shared directory at a user-scoped temp path like `<tmpdir>/pi-subagents-<scope>/chain-runs/{runId}/` for inter-step files
 - **Solo Agent Output**: Agents with `output` write to temp dir and return path to caller
 - **Live Progress Display**: Real-time visibility during sync execution showing current tool, recent output, tokens, and duration
 - **Output Truncation**: Configurable byte/line limits via `maxOutput`
@@ -529,7 +529,7 @@ These are the parameters the **LLM agent** passes when it calls the `subagent` t
 ```typescript
 { action: "list" }                    // active async runs only
 { id: "a53ebe46" }                    // inspect one run
-{ dir: "<tmpdir>/pi-async-subagent-runs/a53ebe46-..." }
+{ dir: "<tmpdir>/pi-subagents-<scope>/async-subagent-runs/a53ebe46-..." }
 ```
 
 **/subagents-status slash command:**
@@ -615,7 +615,7 @@ Notes:
 | `worktree` | boolean | false | Create isolated git worktrees for each parallel task. Requires clean git state. Per-worktree diffs included in output. |
 | `chain` | ChainItem[] | - | Sequential steps with behavior overrides (see below) |
 | `context` | `"fresh" \| "fork"` | `fresh` | Execution context mode. `fork` uses a real branched session from the parent's current leaf for each child run |
-| `chainDir` | string | `<tmpdir>/pi-chain-runs/` | Persistent directory for chain artifacts (default auto-cleaned after 24h) |
+| `chainDir` | string | user-scoped temp dir like `<tmpdir>/pi-subagents-<scope>/chain-runs/` | Persistent directory for chain artifacts (default auto-cleaned after 24h) |
 | `clarify` | boolean | true (chains) | Show TUI to preview/edit chain; implies sync mode |
 | `agentScope` | `"user" \| "project" \| "both"` | `both` | Agent discovery scope (project wins on name collisions) |
 | `async` | boolean | false | Background execution (requires `clarify: false` for chains) |
@@ -850,7 +850,7 @@ Optional timeout (milliseconds) for each worktree hook invocation.
 Default: `30000` ms.
 
 ## Chain Directory
-Each chain run creates `<tmpdir>/pi-chain-runs/{runId}/` containing:
+Each chain run creates a user-scoped temp directory like `<tmpdir>/pi-subagents-<scope>/chain-runs/{runId}/` containing:
 - `context.md` - Scout/context-builder output
 - `plan.md` - Planner output
 - `progress.md` - Worker/reviewer shared progress
@@ -863,7 +863,7 @@ Directories older than 24 hours are cleaned up on extension startup.
 
 ## Artifacts
 
-Location: `{sessionDir}/subagent-artifacts/` or `<tmpdir>/pi-subagent-artifacts/`
+Location: `{sessionDir}/subagent-artifacts/` or a user-scoped temp directory like `<tmpdir>/pi-subagents-<scope>/artifacts/`
 
 Files per task:
 - `{runId}_{agent}_input.md` - Task prompt
@@ -946,7 +946,7 @@ export PI_SUBAGENT_MAX_DEPTH=0   # disable the subagent tool entirely
 Async runs write a dedicated observability folder:
 
 ```
-<tmpdir>/pi-async-subagent-runs/<id>/
+<tmpdir>/pi-subagents-<scope>/async-subagent-runs/<id>/
   status.json
   events.jsonl
   subagent-log-<id>.md
@@ -961,7 +961,7 @@ For programmatic access:
 ```typescript
 subagent_status({ action: "list" })
 subagent_status({ id: "<id>" })
-subagent_status({ dir: "<tmpdir>/pi-async-subagent-runs/<id>" })
+subagent_status({ dir: "<tmpdir>/pi-subagents-<scope>/async-subagent-runs/<id>" })
 ```
 
 For an interactive overview, run the `/subagents-status` slash command to open the overlay listing active runs and recent completed/failed runs. The overlay auto-refreshes every 2 seconds while it is open.

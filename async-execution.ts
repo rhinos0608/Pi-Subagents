@@ -23,6 +23,8 @@ import {
 	type MaxOutputConfig,
 	ASYNC_DIR,
 	RESULTS_DIR,
+	TEMP_ROOT_DIR,
+	getAsyncConfigPath,
 	resolveChildMaxSubagentDepth,
 } from "./types.ts";
 
@@ -113,7 +115,8 @@ export function isAsyncAvailable(): boolean {
 function spawnRunner(cfg: object, suffix: string, cwd: string): number | undefined {
 	if (!jitiCliPath) return undefined;
 	
-	const cfgPath = path.join(os.tmpdir(), `pi-async-cfg-${suffix}.json`);
+	fs.mkdirSync(TEMP_ROOT_DIR, { recursive: true });
+	const cfgPath = getAsyncConfigPath(suffix);
 	fs.writeFileSync(cfgPath, JSON.stringify(cfg));
 	const runner = path.join(path.dirname(fileURLToPath(import.meta.url)), "subagent-runner.ts");
 	

@@ -3,12 +3,10 @@
  */
 
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentConfig } from "./agents.ts";
 import { normalizeSkillInput } from "./skills.ts";
-
-const CHAIN_RUNS_DIR = path.join(os.tmpdir(), "pi-chain-runs");
+import { CHAIN_RUNS_DIR } from "./types.ts";
 const CHAIN_DIR_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 // =============================================================================
@@ -100,7 +98,9 @@ export function createChainDir(runId: string, baseDir?: string): string {
 export function removeChainDir(chainDir: string): void {
 	try {
 		fs.rmSync(chainDir, { recursive: true });
-	} catch {}
+	} catch {
+		// Chain cleanup is best-effort. Runs can already have cleaned their temp dir.
+	}
 }
 
 export function cleanupOldChainDirs(): void {
@@ -110,6 +110,8 @@ export function cleanupOldChainDirs(): void {
 	try {
 		dirs = fs.readdirSync(CHAIN_RUNS_DIR);
 	} catch {
+		// Startup cleanup is best-effort. If the scoped temp root is unreadable,
+		// skip cleanup instead of failing extension startup.
 		return;
 	}
 

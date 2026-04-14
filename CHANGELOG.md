@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- Shared temp paths are now scoped under a user-specific temp root across async result storage, async run state, chain directories, artifact fallback storage, and detached async config files, avoiding cross-user collisions on shared machines while still handling arbitrary-UID/container environments where `os.userInfo()` can throw.
+
 ## [0.13.4] - 2026-04-13
 
 ### Fixed
