@@ -61,6 +61,10 @@ function buildDetailLines(
 	const maxSubagentDepth = agent.maxSubagentDepth !== undefined ? String(agent.maxSubagentDepth) : "(default)";
 
 	lines.push(renderFieldLine("Model:", agent.model ?? "default", contentWidth, theme));
+	if (agent.override) {
+		const overrideLabel = `${agent.override.scope} · ${formatPath(agent.override.path)}`;
+		lines.push(renderFieldLine("Override:", overrideLabel, contentWidth, theme));
+	}
 	lines.push(renderFieldLine("Thinking:", agent.thinking ?? "off", contentWidth, theme));
 	lines.push(renderFieldLine("Tools:", tools, contentWidth, theme));
 	lines.push(renderFieldLine("MCP:", mcp, contentWidth, theme));
@@ -131,7 +135,11 @@ export function renderDetail(
 	theme: Theme,
 ): string[] {
 	const lines: string[] = [];
-	const scopeBadge = agent.source === "builtin" ? "[builtin]" : agent.source === "project" ? "[proj]" : "[user]";
+	const scopeBadge = agent.source === "builtin"
+		? (agent.override ? `[builtin+${agent.override.scope}]` : "[builtin]")
+		: agent.source === "project"
+			? "[proj]"
+			: "[user]";
 	const headerText = ` ${agent.name} ${scopeBadge} ${formatPath(agent.filePath)} `;
 	lines.push(renderHeader(headerText, width, theme));
 	lines.push(row("", width, theme));
@@ -152,7 +160,9 @@ export function renderDetail(
 	lines.push(row(scrollInfo ? ` ${theme.fg("dim", scrollInfo)}` : "", width, theme));
 
 	const footer = agent.source === "builtin"
-		? " [l]aunch  [v] raw/resolved  [↑↓] scroll  [esc] back "
+		? agent.override
+			? " [l]aunch  [e]dit override  [v] raw/resolved  [↑↓] scroll  [esc] back "
+			: " [l]aunch  [e]create override  [v] raw/resolved  [↑↓] scroll  [esc] back "
 		: " [l]aunch  [e]dit  [v] raw/resolved  [↑↓] scroll  [esc] back ";
 	lines.push(renderFooter(footer, width, theme));
 	return lines;

@@ -3,7 +3,15 @@ import * as path from "node:path";
 import type { Theme } from "@mariozechner/pi-coding-agent";
 import type { Component, TUI } from "@mariozechner/pi-tui";
 import { matchesKey, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
-import type { AgentConfig, ChainConfig } from "./agents.ts";
+import {
+	buildBuiltinOverrideConfig,
+	discoverAgentsAll,
+	removeBuiltinAgentOverride,
+	saveBuiltinAgentOverride,
+	type AgentConfig,
+	type BuiltinAgentOverrideBase,
+	type ChainConfig,
+} from "./agents.ts";
 import { serializeAgent } from "./agent-serializer.ts";
 import { TEMPLATE_ITEMS, type AgentTemplate, type TemplateItem } from "./agent-templates.ts";
 import { parseChain, serializeChain } from "./chain-serializer.ts";
@@ -11,7 +19,7 @@ import { renderList, handleListInput, type ListAgent, type ListState, type ListA
 import { createParallelState, handleParallelInput, renderParallel, formatParallelTitle, type ParallelState, type AgentOption } from "./agent-manager-parallel.ts";
 import { renderDetail, handleDetailInput, renderTaskInput, type DetailState, type DetailAction } from "./agent-manager-detail.ts";
 import { renderChainDetail, handleChainDetailInput, type ChainDetailAction, type ChainDetailState } from "./agent-manager-chain-detail.ts";
-import { createEditState, handleEditInput, renderEdit, type EditScreen, type EditState, type ModelInfo, type SkillInfo } from "./agent-manager-edit.ts";
+import { createEditState, handleEditInput, renderEdit, type EditField, type EditScreen, type EditState, type ModelInfo, type SkillInfo } from "./agent-manager-edit.ts";
 import { createEditorState, ensureCursorVisible, getCursorDisplayPos, handleEditorInput, renderEditor, wrapText } from "./text-editor.ts";
 import type { TextEditorState } from "./text-editor.ts";
 import { loadRunsForAgent } from "./run-history.ts";
@@ -24,14 +32,39 @@ export type ManagerResult =
 	| { action: "launch-chain"; chain: ChainConfig; task: string; skipClarify?: boolean }
 	| undefined;
 
-export interface AgentData { builtin: AgentConfig[]; user: AgentConfig[]; project: AgentConfig[]; chains: ChainConfig[]; userDir: string; projectDir: string | null; cwd: string; }
-type ManagerScreen = "list" | "detail" | "chain-detail" | "edit" | "edit-field" | "edit-prompt" | "task-input" | "confirm-delete" | "name-input" | "chain-edit" | "template-select" | "parallel-builder";
+export interface AgentData { builtin: AgentConfig[]; user: AgentConfig[]; project: AgentConfig[]; chains: ChainConfig[]; userDir: string; projectDir: string | null; userSettingsPath: string; projectSettingsPath: string | null; cwd: string; }
+type ManagerScreen = "list" | "detail" | "chain-detail" | "edit" | "edit-field" | "edit-prompt" | "task-input" | "confirm-delete" | "name-input" | "chain-edit" | "template-select" | "parallel-builder" | "override-scope";
 interface AgentEntry { id: string; kind: "agent"; config: AgentConfig; isNew: boolean; }
 interface ChainEntry { id: string; kind: "chain"; config: ChainConfig; }
 interface NameInputState { mode: "new-agent" | "clone-agent" | "clone-chain" | "new-chain"; editor: TextEditorState; scope: "user" | "project"; allowProject: boolean; sourceId?: string; template?: AgentTemplate; error?: string; }
 interface StatusMessage { text: string; type: "error" | "info"; }
+interface OverrideScopeState { selectedScope: "user" | "project"; allowProject: boolean; }
 
-function cloneConfig(config: AgentConfig): AgentConfig { return { ...config, tools: config.tools ? [...config.tools] : undefined, mcpDirectTools: config.mcpDirectTools ? [...config.mcpDirectTools] : undefined, skills: config.skills ? [...config.skills] : undefined, defaultReads: config.defaultReads ? [...config.defaultReads] : undefined, extraFields: config.extraFields ? { ...config.extraFields } : undefined }; }
+const BUILTIN_OVERRIDE_FIELDS: EditField[] = ["model", "fallbackModels", "thinking", "tools", "skills", "prompt"];
+
+function cloneConfig(config: AgentConfig): AgentConfig {
+	return {
+		...config,
+		tools: config.tools ? [...config.tools] : undefined,
+		mcpDirectTools: config.mcpDirectTools ? [...config.mcpDirectTools] : undefined,
+		skills: config.skills ? [...config.skills] : undefined,
+		fallbackModels: config.fallbackModels ? [...config.fallbackModels] : undefined,
+		defaultReads: config.defaultReads ? [...config.defaultReads] : undefined,
+		extraFields: config.extraFields ? { ...config.extraFields } : undefined,
+		override: config.override
+			? {
+				...config.override,
+				base: {
+					...config.override.base,
+					fallbackModels: config.override.base.fallbackModels ? [...config.override.base.fallbackModels] : undefined,
+					skills: config.override.base.skills ? [...config.override.base.skills] : undefined,
+					tools: config.override.base.tools ? [...config.override.base.tools] : undefined,
+					mcpDirectTools: config.override.base.mcpDirectTools ? [...config.override.base.mcpDirectTools] : undefined,
+				},
+			}
+			: undefined,
+	};
+}
 function cloneChainConfig(config: ChainConfig): ChainConfig { return { ...config, steps: config.steps.map((step) => ({ ...step, reads: Array.isArray(step.reads) ? [...step.reads] : step.reads, skills: Array.isArray(step.skills) ? [...step.skills] : step.skills })), extraFields: config.extraFields ? { ...config.extraFields } : undefined }; }
 function slugTemplateName(name: string): string { return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, ""); }
 function nextSelectableIndex(items: TemplateItem[], current: number, direction: 1 | -1): number { let next = current + direction; while (next >= 0 && next < items.length && items[next]!.type === "separator") next += direction; if (next < 0 || next >= items.length) return current; return next; }
@@ -60,6 +93,8 @@ export class AgentManagerComponent implements Component {
 	private taskBackScreen: ManagerScreen = "list";
 	private templateCursor = 0;
 	private statusMessage?: StatusMessage;
+	private overrideScopeState: OverrideScopeState | null = null;
+	private builtinOverrideScope: "user" | "project" | null = null;
 	private nextId = 1;
 	private tui: TUI;
 	private theme: Theme;
@@ -86,15 +121,57 @@ export class AgentManagerComponent implements Component {
 
 	private getAgentEntry(id: string | null): AgentEntry | undefined { if (!id) return undefined; return this.agents.find((entry) => entry.id === id); }
 	private getChainEntry(id: string | null): ChainEntry | undefined { if (!id) return undefined; return this.chains.find((entry) => entry.id === id); }
-	private listAgents(): ListAgent[] { const a = this.agents.map((entry) => ({ id: entry.id, name: entry.config.name, description: entry.config.description, model: entry.config.model, source: entry.config.source, kind: "agent" as const })); const c = this.chains.map((entry) => ({ id: entry.id, name: entry.config.name, description: entry.config.description, source: entry.config.source, kind: "chain" as const, stepCount: entry.config.steps.length })); return [...a, ...c]; }
+	private listAgents(): ListAgent[] { const a = this.agents.map((entry) => ({ id: entry.id, name: entry.config.name, description: entry.config.description, model: entry.config.model, source: entry.config.source, overrideScope: entry.config.override?.scope, kind: "agent" as const })); const c = this.chains.map((entry) => ({ id: entry.id, name: entry.config.name, description: entry.config.description, source: entry.config.source, kind: "chain" as const, stepCount: entry.config.steps.length })); return [...a, ...c]; }
 	private clearStatus(): void { this.statusMessage = undefined; }
+
+	private resolveBuiltinOverrideBase(entry: AgentEntry): BuiltinAgentOverrideBase {
+		if (entry.config.override) return entry.config.override.base;
+		return {
+			model: entry.config.model,
+			fallbackModels: entry.config.fallbackModels ? [...entry.config.fallbackModels] : undefined,
+			thinking: entry.config.thinking,
+			systemPrompt: entry.config.systemPrompt,
+			skills: entry.config.skills ? [...entry.config.skills] : undefined,
+			tools: entry.config.tools ? [...entry.config.tools] : undefined,
+			mcpDirectTools: entry.config.mcpDirectTools ? [...entry.config.mcpDirectTools] : undefined,
+		};
+	}
+
+	private refreshAgentData(agentName?: string, chainName?: string): void {
+		this.agentData = { ...discoverAgentsAll(this.agentData.cwd), cwd: this.agentData.cwd };
+		this.nextId = 1;
+		this.loadEntries();
+		if (agentName) {
+			const entry = this.agents.find((candidate) => candidate.config.name === agentName);
+			this.currentAgentId = entry?.id ?? null;
+		}
+		if (chainName) {
+			const entry = this.chains.find((candidate) => candidate.config.name === chainName);
+			this.currentChainId = entry?.id ?? null;
+		}
+	}
 
 	private removeAgentEntry(entry: AgentEntry): void { this.agents = this.agents.filter((e) => e.id !== entry.id); this.listState.selected = this.listState.selected.filter((id) => id !== entry.id); }
 	private removeChainEntry(entry: ChainEntry): void { this.chains = this.chains.filter((e) => e.id !== entry.id); }
 
 	private enterDetail(entry: AgentEntry): void { this.currentAgentId = entry.id; this.detailState = { resolved: true, scrollOffset: 0, recentRuns: loadRunsForAgent(entry.config.name).slice(0, 5) }; this.screen = "detail"; }
 	private enterChainDetail(entry: ChainEntry): void { this.currentChainId = entry.id; this.chainDetailState = { scrollOffset: 0 }; this.screen = "chain-detail"; }
-	private enterEdit(entry: AgentEntry): void { this.currentAgentId = entry.id; this.editState = createEditState(entry.config, entry.isNew, this.models, this.skills); this.screen = "edit"; }
+	private enterEdit(entry: AgentEntry): void { this.currentAgentId = entry.id; this.builtinOverrideScope = null; this.editState = createEditState(entry.config, entry.isNew, this.models, this.skills); this.screen = "edit"; }
+	private enterBuiltinOverrideScope(entry: AgentEntry): void {
+		this.currentAgentId = entry.id;
+		this.overrideScopeState = { selectedScope: this.agentData.projectSettingsPath ? "project" : "user", allowProject: Boolean(this.agentData.projectSettingsPath) };
+		this.screen = "override-scope";
+	}
+	private enterBuiltinOverrideEdit(entry: AgentEntry, scope: "user" | "project"): void {
+		this.currentAgentId = entry.id;
+		this.builtinOverrideScope = scope;
+		this.editState = createEditState(entry.config, false, this.models, this.skills, {
+			fields: BUILTIN_OVERRIDE_FIELDS,
+			title: `Builtin Override: ${entry.config.name} [${scope}]`,
+			overrideBase: this.resolveBuiltinOverrideBase(entry),
+		});
+		this.screen = "edit";
+	}
 	private enterParallelBuilder(ids: string[]): void {
 		const names = ids.map((id) => this.getAgentEntry(id)?.config.name).filter((n): n is string => Boolean(n));
 		if (names.length === 0) return;
@@ -127,6 +204,27 @@ export class AgentManagerComponent implements Component {
 
 	private saveEdit(): boolean {
 		const edit = this.editState; if (!edit) return false; const entry = this.getAgentEntry(this.currentAgentId); if (!entry) return false;
+		if (entry.config.source === "builtin") {
+			const scope = entry.config.override?.scope ?? this.builtinOverrideScope;
+			if (!scope) { edit.error = "Choose where to store the override first."; return false; }
+			try {
+				const override = buildBuiltinOverrideConfig(this.resolveBuiltinOverrideBase(entry), edit.draft);
+				if (override) {
+					saveBuiltinAgentOverride(this.agentData.cwd, entry.config.name, scope, override);
+				} else {
+					removeBuiltinAgentOverride(this.agentData.cwd, entry.config.name, scope);
+				}
+				this.refreshAgentData(entry.config.name);
+				this.builtinOverrideScope = null;
+				this.editState = null;
+				const refreshed = this.getAgentEntry(this.currentAgentId);
+				if (refreshed) this.enterDetail(refreshed);
+				return true;
+			} catch (err) {
+				edit.error = err instanceof Error ? err.message : "Failed to save builtin override.";
+				return false;
+			}
+		}
 		if (!edit.draft.name || !edit.draft.description) { edit.error = "Name and description are required."; return false; }
 		let filePath = entry.config.filePath;
 		if (entry.isNew) {
@@ -138,6 +236,24 @@ export class AgentManagerComponent implements Component {
 		}
 		try { const toSave: AgentConfig = { ...edit.draft, filePath }; fs.writeFileSync(filePath, serializeAgent(toSave), "utf-8"); entry.config = cloneConfig(toSave); entry.isNew = false; edit.error = undefined; return true; }
 		catch (err) { edit.error = err instanceof Error ? err.message : "Failed to save agent."; return false; }
+	}
+
+	private removeBuiltinOverride(): boolean {
+		const edit = this.editState; if (!edit) return false; const entry = this.getAgentEntry(this.currentAgentId); if (!entry || entry.config.source !== "builtin") return false;
+		const scope = entry.config.override?.scope ?? this.builtinOverrideScope;
+		if (!scope) { edit.error = "No builtin override to remove."; return false; }
+		try {
+			removeBuiltinAgentOverride(this.agentData.cwd, entry.config.name, scope);
+			this.refreshAgentData(entry.config.name);
+			this.builtinOverrideScope = null;
+			this.editState = null;
+			const refreshed = this.getAgentEntry(this.currentAgentId);
+			if (refreshed) this.enterDetail(refreshed);
+			return true;
+		} catch (err) {
+			edit.error = err instanceof Error ? err.message : "Failed to remove builtin override.";
+			return false;
+		}
 	}
 
 	private saveChainEdit(): boolean {
@@ -157,6 +273,46 @@ export class AgentManagerComponent implements Component {
 			else if (item.type === "chain") this.enterNameInput("new-chain");
 			this.tui.requestRender();
 		}
+	}
+
+	private handleOverrideScopeInput(data: string): void {
+		const state = this.overrideScopeState;
+		const entry = this.getAgentEntry(this.currentAgentId);
+		if (!state || !entry) {
+			this.screen = "detail";
+			this.tui.requestRender();
+			return;
+		}
+
+		if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) {
+			this.overrideScopeState = null;
+			this.enterDetail(entry);
+			this.tui.requestRender();
+			return;
+		}
+
+		if (matchesKey(data, "tab") || matchesKey(data, "up") || matchesKey(data, "down")) {
+			if (state.allowProject) state.selectedScope = state.selectedScope === "user" ? "project" : "user";
+			this.tui.requestRender();
+			return;
+		}
+
+		if (data === "u") {
+			state.selectedScope = "user";
+			this.tui.requestRender();
+			return;
+		}
+
+		if (data === "p" && state.allowProject) {
+			state.selectedScope = "project";
+			this.tui.requestRender();
+			return;
+		}
+
+		if (!matchesKey(data, "return")) return;
+		this.overrideScopeState = null;
+		this.enterBuiltinOverrideEdit(entry, state.selectedScope);
+		this.tui.requestRender();
 	}
 
 	private handleNameInput(data: string): void {
@@ -219,6 +375,27 @@ export class AgentManagerComponent implements Component {
 		lines.push(renderFooter(" [enter] continue  [esc] cancel ", w, this.theme)); return lines;
 	}
 
+	private renderOverrideScope(w: number): string[] {
+		const state = this.overrideScopeState;
+		const entry = this.getAgentEntry(this.currentAgentId);
+		if (!state || !entry) return [];
+		const lines: string[] = [];
+		lines.push(renderHeader(` Create Override: ${entry.config.name} `, w, this.theme));
+		lines.push(row("", w, this.theme));
+		lines.push(row(` ${this.theme.fg("dim", "Where should this builtin override live?")}`, w, this.theme));
+		lines.push(row("", w, this.theme));
+		const userLine = state.selectedScope === "user" ? this.theme.fg("accent", "▸ user") : "  user";
+		lines.push(row(` ${userLine}${this.theme.fg("dim", `  ${this.agentData.userSettingsPath}`)}`, w, this.theme));
+		if (state.allowProject) {
+			const projectPath = this.agentData.projectSettingsPath ?? ".pi/settings.json";
+			const projectLine = state.selectedScope === "project" ? this.theme.fg("accent", "▸ project") : "  project";
+			lines.push(row(` ${projectLine}${this.theme.fg("dim", `  ${projectPath}`)}`, w, this.theme));
+		}
+		while (lines.length < 8) lines.push(row("", w, this.theme));
+		lines.push(renderFooter(" [enter] continue  [↑↓/tab] choose  [esc] cancel ", w, this.theme));
+		return lines;
+	}
+
 	private renderTemplateSelect(w: number): string[] {
 		const lines: string[] = []; lines.push(renderHeader(" Select Template ", w, this.theme)); lines.push(row("", w, this.theme));
 		const innerW = w - 2; const viewport = 12; const start = Math.max(0, Math.min(this.templateCursor - Math.floor(viewport / 2), Math.max(0, TEMPLATE_ITEMS.length - viewport))); const visible = TEMPLATE_ITEMS.slice(start, start + viewport);
@@ -261,6 +438,7 @@ export class AgentManagerComponent implements Component {
 		switch (this.screen) {
 			case "list": { const action = handleListInput(this.listState, this.listAgents(), data); if (action) this.handleListAction(action); this.tui.requestRender(); return; }
 			case "template-select": this.handleTemplateSelectInput(data); return;
+			case "override-scope": this.handleOverrideScopeInput(data); return;
 			case "detail": {
 				const entry = this.getAgentEntry(this.currentAgentId); if (!entry) { this.screen = "list"; this.tui.requestRender(); return; }
 				const action = handleDetailInput(this.detailState, data); if (action) this.handleDetailAction(action, entry); this.tui.requestRender(); return;
@@ -337,6 +515,7 @@ export class AgentManagerComponent implements Component {
 				if (!this.editState) { this.screen = "list"; this.tui.requestRender(); return; }
 				const result = handleEditInput(this.screen as EditScreen, this.editState, data, this.overlayWidth, this.models, this.skills);
 				if (result?.action === "discard") { this.handleEditDiscard(); return; }
+				if (result?.action === "delete") { this.removeBuiltinOverride(); this.tui.requestRender(); return; }
 				if (result?.action === "save") { const ok = this.saveEdit(); if (ok) { const entry = this.getAgentEntry(this.currentAgentId); if (entry) this.enterDetail(entry); } this.tui.requestRender(); return; }
 				if (result?.nextScreen) this.screen = result.nextScreen; this.tui.requestRender(); return;
 			}
@@ -344,9 +523,9 @@ export class AgentManagerComponent implements Component {
 	}
 
 	private handleEditDiscard(): void {
-		const entry = this.getAgentEntry(this.currentAgentId); if (!entry) { this.screen = "list"; this.editState = null; this.tui.requestRender(); return; }
-		if (entry.isNew) { this.removeAgentEntry(entry); this.editState = null; this.screen = "list"; this.tui.requestRender(); return; }
-		this.editState = null; this.enterDetail(entry); this.tui.requestRender();
+		const entry = this.getAgentEntry(this.currentAgentId); if (!entry) { this.screen = "list"; this.editState = null; this.builtinOverrideScope = null; this.tui.requestRender(); return; }
+		if (entry.isNew) { this.removeAgentEntry(entry); this.editState = null; this.builtinOverrideScope = null; this.screen = "list"; this.tui.requestRender(); return; }
+		this.editState = null; this.builtinOverrideScope = null; this.enterDetail(entry); this.tui.requestRender();
 	}
 
 	private isBuiltin(id: string): boolean { const a = this.getAgentEntry(id); return a?.config.source === "builtin"; }
@@ -365,7 +544,15 @@ export class AgentManagerComponent implements Component {
 
 	private handleDetailAction(action: DetailAction, entry: AgentEntry): void {
 		if (action.type === "back") { this.screen = "list"; return; }
-		if (action.type === "edit") { if (entry.config.source === "builtin") { this.statusMessage = { text: "Builtin agents cannot be edited. Clone to user scope to override.", type: "error" }; this.screen = "list"; return; } this.enterEdit(entry); return; }
+		if (action.type === "edit") {
+			if (entry.config.source === "builtin") {
+				if (entry.config.override) this.enterBuiltinOverrideEdit(entry, entry.config.override.scope);
+				else this.enterBuiltinOverrideScope(entry);
+				return;
+			}
+			this.enterEdit(entry);
+			return;
+		}
 		if (action.type === "launch") { this.enterTaskInput([entry.id], "detail"); return; }
 	}
 
@@ -380,6 +567,7 @@ export class AgentManagerComponent implements Component {
 		switch (this.screen) {
 			case "list": return renderList(this.listState, this.listAgents(), w, this.theme, this.statusMessage);
 			case "template-select": return this.renderTemplateSelect(w);
+			case "override-scope": return this.renderOverrideScope(w);
 			case "detail": { const entry = this.getAgentEntry(this.currentAgentId); if (!entry) return renderList(this.listState, this.listAgents(), w, this.theme, this.statusMessage); return renderDetail(this.detailState, entry.config, this.agentData.cwd, w, this.theme); }
 			case "chain-detail": { const entry = this.getChainEntry(this.currentChainId); if (!entry) return renderList(this.listState, this.listAgents(), w, this.theme, this.statusMessage); return renderChainDetail(this.chainDetailState, entry.config, w, this.theme); }
 			case "edit": case "edit-field": case "edit-prompt": return this.editState ? renderEdit(this.screen as EditScreen, this.editState, w, this.theme) : [];

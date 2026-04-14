@@ -15,6 +15,31 @@ export type AgentScope = "user" | "project" | "both";
 
 export type AgentSource = "builtin" | "user" | "project";
 
+export interface BuiltinAgentOverrideBase {
+	model?: string;
+	fallbackModels?: string[];
+	thinking?: string;
+	systemPrompt: string;
+	skills?: string[];
+	tools?: string[];
+	mcpDirectTools?: string[];
+}
+
+export interface BuiltinAgentOverrideConfig {
+	model?: string | false;
+	fallbackModels?: string[] | false;
+	thinking?: string | false;
+	systemPrompt?: string;
+	skills?: string[] | false;
+	tools?: string[] | false;
+}
+
+export interface BuiltinAgentOverrideInfo {
+	scope: "user" | "project";
+	path: string;
+	base: BuiltinAgentOverrideBase;
+}
+
 export interface AgentConfig {
 	name: string;
 	description: string;
@@ -28,13 +53,13 @@ export interface AgentConfig {
 	filePath: string;
 	skills?: string[];
 	extensions?: string[];
-	// Chain behavior fields
 	output?: string;
 	defaultReads?: string[];
 	defaultProgress?: boolean;
 	interactive?: boolean;
 	maxSubagentDepth?: number;
 	extraFields?: Record<string, string>;
+	override?: BuiltinAgentOverrideInfo;
 }
 
 export interface ChainStepConfig {
@@ -59,6 +84,266 @@ export interface ChainConfig {
 export interface AgentDiscoveryResult {
 	agents: AgentConfig[];
 	projectAgentsDir: string | null;
+}
+
+function splitToolList(rawTools: string[] | undefined): { tools?: string[]; mcpDirectTools?: string[] } {
+	const mcpDirectTools: string[] = [];
+	const tools: string[] = [];
+	for (const tool of rawTools ?? []) {
+		if (tool.startsWith("mcp:")) {
+			mcpDirectTools.push(tool.slice(4));
+		} else {
+			tools.push(tool);
+		}
+	}
+	return {
+		...(tools.length > 0 ? { tools } : {}),
+		...(mcpDirectTools.length > 0 ? { mcpDirectTools } : {}),
+	};
+}
+
+function joinToolList(config: Pick<AgentConfig, "tools" | "mcpDirectTools">): string[] | undefined {
+	const joined = [
+		...(config.tools ?? []),
+		...(config.mcpDirectTools ?? []).map((tool) => `mcp:${tool}`),
+	];
+	return joined.length > 0 ? joined : undefined;
+}
+
+function arraysEqual(a: string[] | undefined, b: string[] | undefined): boolean {
+	if (!a && !b) return true;
+	if (!a || !b) return false;
+	if (a.length !== b.length) return false;
+	for (let i = 0; i < a.length; i++) {
+		if (a[i] !== b[i]) return false;
+	}
+	return true;
+}
+
+function cloneOverrideBase(agent: AgentConfig): BuiltinAgentOverrideBase {
+	return {
+		model: agent.model,
+		fallbackModels: agent.fallbackModels ? [...agent.fallbackModels] : undefined,
+		thinking: agent.thinking,
+		systemPrompt: agent.systemPrompt,
+		skills: agent.skills ? [...agent.skills] : undefined,
+		tools: agent.tools ? [...agent.tools] : undefined,
+		mcpDirectTools: agent.mcpDirectTools ? [...agent.mcpDirectTools] : undefined,
+	};
+}
+
+function cloneOverrideValue(override: BuiltinAgentOverrideConfig): BuiltinAgentOverrideConfig {
+	return {
+		...(override.model !== undefined ? { model: override.model } : {}),
+		...(override.fallbackModels !== undefined
+			? { fallbackModels: override.fallbackModels === false ? false : [...override.fallbackModels] }
+			: {}),
+		...(override.thinking !== undefined ? { thinking: override.thinking } : {}),
+		...(override.systemPrompt !== undefined ? { systemPrompt: override.systemPrompt } : {}),
+		...(override.skills !== undefined ? { skills: override.skills === false ? false : [...override.skills] } : {}),
+		...(override.tools !== undefined ? { tools: override.tools === false ? false : [...override.tools] } : {}),
+	};
+}
+
+function findNearestProjectRoot(cwd: string): string | null {
+	let currentDir = cwd;
+	while (true) {
+		if (isDirectory(path.join(currentDir, ".pi")) || isDirectory(path.join(currentDir, ".agents"))) {
+			return currentDir;
+		}
+
+		const parentDir = path.dirname(currentDir);
+		if (parentDir === currentDir) return null;
+		currentDir = parentDir;
+	}
+}
+
+export function getUserAgentSettingsPath(): string {
+	return path.join(os.homedir(), ".pi", "agent", "settings.json");
+}
+
+export function getProjectAgentSettingsPath(cwd: string): string | null {
+	const projectRoot = findNearestProjectRoot(cwd);
+	return projectRoot ? path.join(projectRoot, ".pi", "settings.json") : null;
+}
+
+function readSettingsFileStrict(filePath: string): Record<string, unknown> {
+	if (!fs.existsSync(filePath)) return {};
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		throw new Error(`Failed to parse settings file '${filePath}': ${message}`, { cause: error });
+	}
+	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+		throw new Error(`Settings file '${filePath}' must contain a JSON object.`);
+	}
+	return parsed as Record<string, unknown>;
+}
+
+function writeSettingsFile(filePath: string, settings: Record<string, unknown>): void {
+	fs.mkdirSync(path.dirname(filePath), { recursive: true });
+	fs.writeFileSync(filePath, JSON.stringify(settings, null, 2) + "\n", "utf-8");
+}
+
+function parseStringArrayOrFalse(value: unknown): string[] | false | undefined {
+	if (value === false) return false;
+	if (!Array.isArray(value)) return undefined;
+	const items = value.filter((item): item is string => typeof item === "string").map((item) => item.trim()).filter(Boolean);
+	return items;
+}
+
+function parseBuiltinOverrideEntry(value: unknown): BuiltinAgentOverrideConfig | undefined {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+	const input = value as Record<string, unknown>;
+	const override: BuiltinAgentOverrideConfig = {};
+
+	if (typeof input.model === "string" || input.model === false) override.model = input.model;
+	if (typeof input.thinking === "string" || input.thinking === false) override.thinking = input.thinking;
+	if (typeof input.systemPrompt === "string") override.systemPrompt = input.systemPrompt;
+
+	const fallbackModels = parseStringArrayOrFalse(input.fallbackModels);
+	if (fallbackModels !== undefined) override.fallbackModels = fallbackModels;
+
+	const skills = parseStringArrayOrFalse(input.skills);
+	if (skills !== undefined) override.skills = skills;
+
+	const tools = parseStringArrayOrFalse(input.tools);
+	if (tools !== undefined) override.tools = tools;
+
+	return Object.keys(override).length > 0 ? override : undefined;
+}
+
+function readBuiltinOverrides(filePath: string | null): Record<string, BuiltinAgentOverrideConfig> {
+	if (!filePath || !fs.existsSync(filePath)) return {};
+	const settings = readSettingsFileStrict(filePath);
+	const subagents = settings.subagents;
+	if (!subagents || typeof subagents !== "object" || Array.isArray(subagents)) return {};
+	const agentOverrides = (subagents as Record<string, unknown>).agentOverrides;
+	if (!agentOverrides || typeof agentOverrides !== "object" || Array.isArray(agentOverrides)) return {};
+
+	const parsed: Record<string, BuiltinAgentOverrideConfig> = {};
+	for (const [name, value] of Object.entries(agentOverrides)) {
+		const override = parseBuiltinOverrideEntry(value);
+		if (override) parsed[name] = override;
+	}
+	return parsed;
+}
+
+function applyBuiltinOverride(
+	agent: AgentConfig,
+	override: BuiltinAgentOverrideConfig,
+	meta: { scope: "user" | "project"; path: string },
+): AgentConfig {
+	const next: AgentConfig = {
+		...agent,
+		override: { ...meta, base: cloneOverrideBase(agent) },
+	};
+
+	if (override.model !== undefined) next.model = override.model === false ? undefined : override.model;
+	if (override.fallbackModels !== undefined) {
+		next.fallbackModels = override.fallbackModels === false ? undefined : [...override.fallbackModels];
+	}
+	if (override.thinking !== undefined) next.thinking = override.thinking === false ? undefined : override.thinking;
+	if (override.systemPrompt !== undefined) next.systemPrompt = override.systemPrompt;
+	if (override.skills !== undefined) next.skills = override.skills === false ? undefined : [...override.skills];
+	if (override.tools !== undefined) {
+		const { tools, mcpDirectTools } = splitToolList(override.tools === false ? [] : override.tools);
+		next.tools = tools;
+		next.mcpDirectTools = mcpDirectTools;
+	}
+
+	return next;
+}
+
+function applyBuiltinOverrides(
+	builtinAgents: AgentConfig[],
+	userOverrides: Record<string, BuiltinAgentOverrideConfig>,
+	projectOverrides: Record<string, BuiltinAgentOverrideConfig>,
+	userSettingsPath: string,
+	projectSettingsPath: string | null,
+): AgentConfig[] {
+	return builtinAgents.map((agent) => {
+		const projectOverride = projectOverrides[agent.name];
+		if (projectOverride && projectSettingsPath) {
+			return applyBuiltinOverride(agent, projectOverride, { scope: "project", path: projectSettingsPath });
+		}
+
+		const userOverride = userOverrides[agent.name];
+		if (userOverride) {
+			return applyBuiltinOverride(agent, userOverride, { scope: "user", path: userSettingsPath });
+		}
+
+		return agent;
+	});
+}
+
+export function buildBuiltinOverrideConfig(
+	base: BuiltinAgentOverrideBase,
+	draft: Pick<AgentConfig, "model" | "fallbackModels" | "thinking" | "systemPrompt" | "skills" | "tools" | "mcpDirectTools">,
+): BuiltinAgentOverrideConfig | undefined {
+	const override: BuiltinAgentOverrideConfig = {};
+
+	if (draft.model !== base.model) override.model = draft.model ?? false;
+	if (!arraysEqual(draft.fallbackModels, base.fallbackModels)) override.fallbackModels = draft.fallbackModels ? [...draft.fallbackModels] : false;
+	if (draft.thinking !== base.thinking) override.thinking = draft.thinking ?? false;
+	if (draft.systemPrompt !== base.systemPrompt) override.systemPrompt = draft.systemPrompt;
+	if (!arraysEqual(draft.skills, base.skills)) override.skills = draft.skills ? [...draft.skills] : false;
+
+	const baseTools = joinToolList(base);
+	const draftTools = joinToolList(draft);
+	if (!arraysEqual(draftTools, baseTools)) override.tools = draftTools ? [...draftTools] : false;
+
+	return Object.keys(override).length > 0 ? override : undefined;
+}
+
+export function saveBuiltinAgentOverride(
+	cwd: string,
+	name: string,
+	scope: "user" | "project",
+	override: BuiltinAgentOverrideConfig,
+): string {
+	const filePath = scope === "project" ? getProjectAgentSettingsPath(cwd) : getUserAgentSettingsPath();
+	if (!filePath) throw new Error("Project override is not available here. No project config root was found.");
+
+	const settings = readSettingsFileStrict(filePath);
+	const subagents = settings.subagents && typeof settings.subagents === "object" && !Array.isArray(settings.subagents)
+		? { ...(settings.subagents as Record<string, unknown>) }
+		: {};
+	const agentOverrides = subagents.agentOverrides && typeof subagents.agentOverrides === "object" && !Array.isArray(subagents.agentOverrides)
+		? { ...(subagents.agentOverrides as Record<string, unknown>) }
+		: {};
+
+	agentOverrides[name] = cloneOverrideValue(override);
+	subagents.agentOverrides = agentOverrides;
+	settings.subagents = subagents;
+	writeSettingsFile(filePath, settings);
+	return filePath;
+}
+
+export function removeBuiltinAgentOverride(cwd: string, name: string, scope: "user" | "project"): string {
+	const filePath = scope === "project" ? getProjectAgentSettingsPath(cwd) : getUserAgentSettingsPath();
+	if (!filePath) throw new Error("Project override is not available here. No project config root was found.");
+	if (!fs.existsSync(filePath)) return filePath;
+
+	const settings = readSettingsFileStrict(filePath);
+	const subagents = settings.subagents;
+	if (!subagents || typeof subagents !== "object" || Array.isArray(subagents)) return filePath;
+	const nextSubagents = { ...(subagents as Record<string, unknown>) };
+	const agentOverrides = nextSubagents.agentOverrides;
+	if (!agentOverrides || typeof agentOverrides !== "object" || Array.isArray(agentOverrides)) return filePath;
+
+	const nextOverrides = { ...(agentOverrides as Record<string, unknown>) };
+	delete nextOverrides[name];
+	if (Object.keys(nextOverrides).length > 0) nextSubagents.agentOverrides = nextOverrides;
+	else delete nextSubagents.agentOverrides;
+
+	if (Object.keys(nextSubagents).length > 0) settings.subagents = nextSubagents;
+	else delete settings.subagents;
+
+	writeSettingsFile(filePath, settings);
+	return filePath;
 }
 
 function loadAgentsFromDir(dir: string, source: AgentSource): AgentConfig[] {
@@ -111,7 +396,6 @@ function loadAgentsFromDir(dir: string, source: AgentSource): AgentConfig[] {
 			}
 		}
 
-		// Parse defaultReads as comma-separated list (like tools)
 		const defaultReads = frontmatter.defaultReads
 			?.split(",")
 			.map((f) => f.trim())
@@ -155,7 +439,6 @@ function loadAgentsFromDir(dir: string, source: AgentSource): AgentConfig[] {
 			filePath,
 			skills: skills && skills.length > 0 ? skills : undefined,
 			extensions,
-			// Chain behavior fields
 			output: frontmatter.output,
 			defaultReads: defaultReads && defaultReads.length > 0 ? defaultReads : undefined,
 			defaultProgress: frontmatter.defaultProgress === "true",
@@ -216,18 +499,12 @@ function isDirectory(p: string): boolean {
 }
 
 function findNearestProjectAgentsDir(cwd: string): string | null {
-	let currentDir = cwd;
-	while (true) {
-		const candidateAlt = path.join(currentDir, ".agents");
-		if (isDirectory(candidateAlt)) return candidateAlt;
-
-		const candidate = path.join(currentDir, ".pi", "agents");
-		if (isDirectory(candidate)) return candidate;
-
-		const parentDir = path.dirname(currentDir);
-		if (parentDir === currentDir) return null;
-		currentDir = parentDir;
-	}
+	const projectRoot = findNearestProjectRoot(cwd);
+	if (!projectRoot) return null;
+	const candidateAlt = path.join(projectRoot, ".agents");
+	if (isDirectory(candidateAlt)) return candidateAlt;
+	const candidate = path.join(projectRoot, ".pi", "agents");
+	return isDirectory(candidate) ? candidate : null;
 }
 
 const BUILTIN_AGENTS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "agents");
@@ -236,8 +513,16 @@ export function discoverAgents(cwd: string, scope: AgentScope): AgentDiscoveryRe
 	const userDirOld = path.join(os.homedir(), ".pi", "agent", "agents");
 	const userDirNew = path.join(os.homedir(), ".agents");
 	const projectAgentsDir = findNearestProjectAgentsDir(cwd);
+	const userSettingsPath = getUserAgentSettingsPath();
+	const projectSettingsPath = getProjectAgentSettingsPath(cwd);
 
-	const builtinAgents = loadAgentsFromDir(BUILTIN_AGENTS_DIR, "builtin");
+	const builtinAgents = applyBuiltinOverrides(
+		loadAgentsFromDir(BUILTIN_AGENTS_DIR, "builtin"),
+		scope === "project" ? {} : readBuiltinOverrides(userSettingsPath),
+		scope === "user" ? {} : readBuiltinOverrides(projectSettingsPath),
+		userSettingsPath,
+		projectSettingsPath,
+	);
 	
 	const userAgentsOld = scope === "project" ? [] : loadAgentsFromDir(userDirOld, "user");
 	const userAgentsNew = scope === "project" ? [] : loadAgentsFromDir(userDirNew, "user");
@@ -256,12 +541,22 @@ export function discoverAgentsAll(cwd: string): {
 	chains: ChainConfig[];
 	userDir: string;
 	projectDir: string | null;
+	userSettingsPath: string;
+	projectSettingsPath: string | null;
 } {
 	const userDirOld = path.join(os.homedir(), ".pi", "agent", "agents");
 	const userDirNew = path.join(os.homedir(), ".agents");
 	const projectDir = findNearestProjectAgentsDir(cwd);
+	const userSettingsPath = getUserAgentSettingsPath();
+	const projectSettingsPath = getProjectAgentSettingsPath(cwd);
 
-	const builtin = loadAgentsFromDir(BUILTIN_AGENTS_DIR, "builtin");
+	const builtin = applyBuiltinOverrides(
+		loadAgentsFromDir(BUILTIN_AGENTS_DIR, "builtin"),
+		readBuiltinOverrides(userSettingsPath),
+		readBuiltinOverrides(projectSettingsPath),
+		userSettingsPath,
+		projectSettingsPath,
+	);
 	const user = [
 		...loadAgentsFromDir(userDirOld, "user"),
 		...loadAgentsFromDir(userDirNew, "user"),
@@ -275,5 +570,5 @@ export function discoverAgentsAll(cwd: string): {
 
 	const userDir = fs.existsSync(userDirNew) ? userDirNew : userDirOld;
 
-	return { builtin, user, project, chains, userDir, projectDir };
+	return { builtin, user, project, chains, userDir, projectDir, userSettingsPath, projectSettingsPath };
 }

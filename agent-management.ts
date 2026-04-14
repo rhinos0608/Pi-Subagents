@@ -35,13 +35,18 @@ function parseCsv(value: string): string[] {
 	return [...new Set(value.split(",").map((v) => v.trim()).filter(Boolean))];
 }
 
-function configObject(config: unknown): Record<string, unknown> | undefined {
+function configObject(config: unknown): { value?: Record<string, unknown>; error?: string } {
 	let val = config;
 	if (typeof val === "string") {
-		try { val = JSON.parse(val); } catch { return undefined; }
+		try {
+			val = JSON.parse(val);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			return { error: `config must be valid JSON: ${message}` };
+		}
 	}
-	if (!val || typeof val !== "object" || Array.isArray(val)) return undefined;
-	return val as Record<string, unknown>;
+	if (!val || typeof val !== "object" || Array.isArray(val)) return {};
+	return { value: val as Record<string, unknown> };
 }
 
 function hasKey(obj: Record<string, unknown>, key: string): boolean {
@@ -383,7 +388,9 @@ export function handleGet(params: ManagementParams, ctx: ManagementContext): Age
 }
 
 export function handleCreate(params: ManagementParams, ctx: ManagementContext): AgentToolResult<Details> {
-	const cfg = configObject(params.config);
+	const parsedConfig = configObject(params.config);
+	if (parsedConfig.error) return result(parsedConfig.error, true);
+	const cfg = parsedConfig.value;
 	if (!cfg) return result("config required for create.", true);
 	if (typeof cfg.name !== "string" || !cfg.name.trim()) return result("config.name is required and must be a non-empty string.", true);
 	if (typeof cfg.description !== "string" || !cfg.description.trim()) return result("config.description is required and must be a non-empty string.", true);
@@ -427,7 +434,9 @@ export function handleCreate(params: ManagementParams, ctx: ManagementContext): 
 export function handleUpdate(params: ManagementParams, ctx: ManagementContext): AgentToolResult<Details> {
 	if (!params.agent && !params.chainName) return result("Specify 'agent' or 'chainName' for update.", true);
 	if (params.agent && params.chainName) return result("Specify either 'agent' or 'chainName', not both.", true);
-	const cfg = configObject(params.config);
+	const parsedConfig = configObject(params.config);
+	if (parsedConfig.error) return result(parsedConfig.error, true);
+	const cfg = parsedConfig.value;
 	if (!cfg) return result("config required for update.", true);
 	const warnings: string[] = [];
 	if (params.agent) {

@@ -44,7 +44,14 @@ Agents are markdown files with YAML frontmatter that define specialized subagent
 
 Use `agentScope` parameter to control discovery: `"user"`, `"project"`, or `"both"` (default; project takes priority).
 
-**Builtin agents:** The extension ships with ready-to-use agents — `scout`, `planner`, `worker`, `reviewer`, `context-builder`, `researcher`, and `delegate`. They load at lowest priority so any user or project agent with the same name overrides them. Builtin agents appear with a `[builtin]` badge in listings and cannot be modified through management actions (create a same-named user agent to override instead).
+**Builtin agents:** The extension ships with ready-to-use agents — `scout`, `planner`, `worker`, `reviewer`, `context-builder`, `researcher`, and `delegate`. They load at lowest priority so any user or project agent with the same name overrides them.
+
+You can also override selected builtin fields without copying the whole agent. Builtin overrides are stored in settings under `subagents.agentOverrides`:
+
+- User scope: `~/.pi/agent/settings.json`
+- Project scope: `.pi/settings.json`
+
+Supported builtin override fields are `model`, `fallbackModels`, `thinking`, `skills`, `tools`, and `systemPrompt`. Project overrides beat user overrides. In `/agents`, press `e` on a builtin to create or edit its override. Overridden builtins show badges like `[builtin+user]` or `[builtin+project]`.
 
 > **Note:** The `researcher` agent uses `web_search`, `fetch_content`, and `get_search_content` tools which require the [pi-web-access](https://github.com/nicobailon/pi-web-access) extension. Install it with `pi install npm:pi-web-access`.
 
@@ -221,7 +228,7 @@ Press **Ctrl+Shift+A** or type `/agents` to open the Agents Manager overlay — 
 | Screen | Description |
 |--------|-------------|
 | List | Browse all agents and chains with search/filter, scope badges, chain badges |
-| Detail | View resolved prompt, frontmatter fields, recent run history |
+| Detail | View resolved prompt, frontmatter fields, recent run history, and active builtin override path |
 | Edit | Edit fields with specialized pickers (model, thinking, skills, prompt editor) |
 | Chain Detail | View chain steps with flow visualization and dependency map |
 | Parallel Builder | Build parallel execution slots, add same agent multiple times, per-slot task overrides |
@@ -233,12 +240,14 @@ Press **Ctrl+Shift+A** or type `/agents` to open the Agents Manager overlay — 
 - `Enter` — view detail
 - Type any character — search/filter
 - `Tab` — toggle selection (agents only)
-- `Ctrl+N` — new agent from template
+- `Alt+N` — new agent from template
 - `Ctrl+K` — clone current item
 - `Ctrl+D` or `Del` — delete current item
 - `Ctrl+R` — run selected (1 agent: launch, 2+: sequential chain)
 - `Ctrl+P` — open parallel builder (from selection or cursor agent)
 - `Esc` — clear query, then selection, then close overlay
+
+On a builtin detail screen, `e` opens the builtin override flow instead of cloning the whole agent. If no override exists yet, the manager asks whether to store it in user or project settings first.
 
 **Parallel builder keybindings:**
 - `↑↓` — navigate slots
@@ -251,6 +260,12 @@ Press **Ctrl+Shift+A** or type `/agents` to open the Agents Manager overlay — 
 **Task input keybindings:**
 - `Enter` — launch (or quick run if skip-clarify is on)
 - `Tab` — toggle skip-clarify (defaults to on for all manager launches)
+- `Esc` — back
+
+**Builtin override edit keybindings:**
+- `Ctrl+S` — save override
+- `r` — reset the focused field back to the builtin value
+- `D` — remove the entire override
 - `Esc` — back
 
 **Multi-select workflow:** Select agents with `Tab`, then press `Ctrl+R` for a sequential chain or `Ctrl+P` to open the parallel builder. The parallel builder lets you add the same agent multiple times, set per-slot task overrides, and launch N agents in parallel. Slots without a custom task use the shared task entered on the next screen.
