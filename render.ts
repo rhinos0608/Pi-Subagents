@@ -20,7 +20,6 @@ function getTermWidth(): number {
 	return process.stdout.columns || 120;
 }
 
-// Grapheme segmenter for proper Unicode handling (shared instance)
 const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 /**
@@ -35,42 +34,38 @@ const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 function truncLine(text: string, maxWidth: number): string {
 	if (visibleWidth(text) <= maxWidth) return text;
 
-	const targetWidth = maxWidth - 1; // Room for single ellipsis character
+	const targetWidth = maxWidth - 1;
 	let result = "";
 	let currentWidth = 0;
-	let activeStyles: string[] = []; // Track ALL active styles (not just last)
+	let activeStyles: string[] = [];
 	let i = 0;
 
 	while (i < text.length) {
-		// Check for ANSI escape code
 		const ansiMatch = text.slice(i).match(/^\x1b\[[0-9;]*m/);
 		if (ansiMatch) {
 			const code = ansiMatch[0];
 			result += code;
 
 			if (code === "\x1b[0m" || code === "\x1b[m") {
-				activeStyles = []; // Reset clears all styles
+				activeStyles = [];
 			} else {
-				activeStyles.push(code); // Stack styles (bold + color, etc.)
+				activeStyles.push(code);
 			}
 			i += code.length;
 			continue;
 		}
 
-		// Find end of non-ANSI text segment
 		let end = i;
 		while (end < text.length && !text.slice(end).match(/^\x1b\[[0-9;]*m/)) {
 			end++;
 		}
 
-		// Segment into graphemes for proper Unicode handling
 		const textPortion = text.slice(i, end);
 		for (const seg of segmenter.segment(textPortion)) {
 			const grapheme = seg.segment;
 			const graphemeWidth = visibleWidth(grapheme);
 
 			if (currentWidth + graphemeWidth > targetWidth) {
-				// Re-apply all active styles before ellipsis to preserve background/colors
 				return result + activeStyles.join("") + "…";
 			}
 
@@ -80,16 +75,11 @@ function truncLine(text: string, maxWidth: number): string {
 		i = end;
 	}
 
-	// Reached end without exceeding width (shouldn't happen given initial check)
 	return result + activeStyles.join("") + "…";
 }
 
-// Track last rendered widget state to avoid no-op re-renders
 let lastWidgetHash = "";
 
-/**
- * Compute a simple hash of job states for change detection
- */
 function computeWidgetHash(jobs: AsyncJobState[]): string {
 	return jobs.slice(0, MAX_WIDGET_JOBS).map(job =>
 		`${job.asyncId}:${job.status}:${job.currentStep}:${job.updatedAt}:${job.totalTokens?.total ?? 0}`
@@ -124,13 +114,11 @@ export function renderWidget(ctx: ExtensionContext, jobs: AsyncJobState[]): void
 		return;
 	}
 
-	// Check if anything changed since last render
-	// Always re-render if any displayed job is running (output tail updates constantly)
 	const displayedJobs = jobs.slice(0, MAX_WIDGET_JOBS);
 	const hasRunningJobs = displayedJobs.some(job => job.status === "running");
 	const newHash = computeWidgetHash(jobs);
 	if (!hasRunningJobs && newHash === lastWidgetHash) {
-		return; // Skip re-render, nothing changed
+		return;
 	}
 	lastWidgetHash = newHash;
 
@@ -194,12 +182,12 @@ export function renderSubagentResult(
 		const r = d.results[0];
 		const isRunning = r.progress?.status === "running";
 		const icon = isRunning
-			? theme.fg("warning", "...")
+			? theme.fg("warning", "running")
 			: r.detached
-				? theme.fg("warning", "↗")
+				? theme.fg("warning", "detached")
 				: r.exitCode === 0
 					? theme.fg("success", "ok")
-					: theme.fg("error", "X");
+					: theme.fg("error", "failed");
 		const contextBadge = d.context === "fork" ? theme.fg("warning", " [fork]") : "";
 		const output = r.truncation?.text || getSingleResultOutput(r);
 
@@ -265,7 +253,7 @@ export function renderSubagentResult(
 			c.addChild(new Text(truncLine(theme.fg("dim", `Skills: ${r.skills.join(", ")}`), w), 0, 0));
 		}
 		if (r.skillsWarning) {
-			c.addChild(new Text(truncLine(theme.fg("warning", `⚠️ ${r.skillsWarning}`), w), 0, 0));
+			c.addChild(new Text(truncLine(theme.fg("warning", `Warning: ${r.skillsWarning}`), w), 0, 0));
 		}
 		if (r.attemptedModels && r.attemptedModels.length > 1) {
 			c.addChild(new Text(truncLine(theme.fg("dim", `Fallbacks: ${r.attemptedModels.join(" → ")}`), w), 0, 0));
@@ -291,12 +279,12 @@ export function renderSubagentResult(
 		&& hasEmptyTextOutputWithoutOutputTarget(r.task, getSingleResultOutput(r)),
 	);
 	const icon = hasRunning
-		? theme.fg("warning", "...")
+		? theme.fg("warning", "running")
 		: hasEmptyWithoutTarget
-			? theme.fg("warning", "⚠")
+			? theme.fg("warning", "warning")
 			: ok === d.results.length
 				? theme.fg("success", "ok")
-				: theme.fg("error", "X");
+				: theme.fg("error", "failed");
 
 	const totalSummary =
 		d.progressSummary ||
@@ -323,17 +311,11 @@ export function renderSubagentResult(
 
 	const modeLabel = d.mode;
 	const contextBadge = d.context === "fork" ? theme.fg("warning", " [fork]") : "";
-	// For parallel-in-chain, show task count (results) for consistency with step display
-	// For sequential chains, show logical step count
 	const hasParallelInChain = d.chainAgents?.some((a) => a.startsWith("["));
 	const totalCount = hasParallelInChain ? d.results.length : (d.totalSteps ?? d.results.length);
 	const currentStep = d.currentStepIndex !== undefined ? d.currentStepIndex + 1 : ok + 1;
 	const stepInfo = hasRunning ? ` ${currentStep}/${totalCount}` : ` ${ok}/${totalCount}`;
 	
-	// Build chain visualization: "scout → planner" with status icons
-	// Note: Only works correctly for sequential chains. Chains with parallel steps
-	// (indicated by "[agent1+agent2]" format) have multiple results per step,
-	// breaking the 1:1 mapping between chainAgents and results.
 	const chainVis = d.chainAgents?.length && !hasParallelInChain
 		? d.chainAgents
 				.map((agent, i) => {
@@ -345,14 +327,14 @@ export function renderSubagentResult(
 						&& hasEmptyTextOutputWithoutOutputTarget(result.task, getSingleResultOutput(result));
 					const isCurrent = i === (d.currentStepIndex ?? d.results.length);
 					const stepIcon = isFailed
-						? theme.fg("error", "✗")
+						? theme.fg("error", "failed")
 						: isEmptyWithoutTarget
-							? theme.fg("warning", "⚠")
+							? theme.fg("warning", "warning")
 							: isComplete
-								? theme.fg("success", "✓")
+								? theme.fg("success", "done")
 								: isCurrent && hasRunning
-									? theme.fg("warning", "●")
-									: theme.fg("dim", "○");
+									? theme.fg("warning", "running")
+									: theme.fg("dim", "pending");
 					return `${stepIcon} ${agent}`;
 				})
 				.join(theme.fg("dim", " → "))
@@ -367,15 +349,10 @@ export function renderSubagentResult(
 			0,
 		),
 	);
-	// Show chain visualization
 	if (chainVis) {
 		c.addChild(new Text(truncLine(`  ${chainVis}`, w), 0, 0));
 	}
 
-	// === STATIC STEP LAYOUT (like clarification UI) ===
-	// Each step gets a fixed section with task/output/status
-	// Note: For chains with parallel steps, chainAgents indices don't map 1:1 to results
-	// (parallel steps produce multiple results). Fall back to result-based iteration.
 	const useResultsDirectly = hasParallelInChain || !d.chainAgents?.length;
 	const stepsToShow = useResultsDirectly ? d.results.length : d.chainAgents!.length;
 
@@ -388,9 +365,8 @@ export function renderSubagentResult(
 			: (d.chainAgents![i] || r?.agent || `step-${i + 1}`);
 
 		if (!r) {
-			// Pending step
 			c.addChild(new Text(truncLine(theme.fg("dim", `  Step ${i + 1}: ${agentName}`), w), 0, 0));
-			c.addChild(new Text(theme.fg("dim", `    status: ○ pending`), 0, 0));
+			c.addChild(new Text(theme.fg("dim", `    status: pending`), 0, 0));
 			c.addChild(new Spacer(1));
 			continue;
 		}
@@ -402,12 +378,12 @@ export function renderSubagentResult(
 
 		const resultOutput = getSingleResultOutput(r);
 		const statusIcon = rRunning
-			? theme.fg("warning", "●")
+			? theme.fg("warning", "running")
 			: r.exitCode !== 0
-				? theme.fg("error", "✗")
+				? theme.fg("error", "failed")
 				: hasEmptyTextOutputWithoutOutputTarget(r.task, resultOutput)
-					? theme.fg("warning", "⚠")
-					: theme.fg("success", "✓");
+					? theme.fg("warning", "warning")
+					: theme.fg("success", "done");
 		const stats = rProg ? ` | ${rProg.toolCount} tools, ${formatDuration(rProg.durationMs)}` : "";
 		const modelDisplay = r.model ? theme.fg("dim", ` (${r.model})`) : "";
 		const stepHeader = rRunning
@@ -430,7 +406,7 @@ export function renderSubagentResult(
 			c.addChild(new Text(truncLine(theme.fg("dim", `    skills: ${r.skills.join(", ")}`), w), 0, 0));
 		}
 		if (r.skillsWarning) {
-			c.addChild(new Text(truncLine(theme.fg("warning", `    ⚠️ ${r.skillsWarning}`), w), 0, 0));
+			c.addChild(new Text(truncLine(theme.fg("warning", `    Warning: ${r.skillsWarning}`), w), 0, 0));
 		}
 		if (r.attemptedModels && r.attemptedModels.length > 1) {
 			c.addChild(new Text(truncLine(theme.fg("dim", `    fallbacks: ${r.attemptedModels.join(" → ")}`), w), 0, 0));
@@ -440,7 +416,6 @@ export function renderSubagentResult(
 			if (rProg.skills?.length) {
 				c.addChild(new Text(truncLine(theme.fg("accent", `    skills: ${rProg.skills.join(", ")}`), w), 0, 0));
 			}
-			// Current tool for running step
 			if (rProg.currentTool) {
 				const maxToolArgsLen = Math.max(50, w - 20);
 				const toolArgsPreview = rProg.currentToolArgs
@@ -453,7 +428,6 @@ export function renderSubagentResult(
 					: rProg.currentTool;
 				c.addChild(new Text(truncLine(theme.fg("warning", `    > ${toolLine}`), w), 0, 0));
 			}
-			// Recent tools
 			if (rProg.recentTools?.length) {
 				for (const t of rProg.recentTools.slice(-3)) {
 					const maxArgsLen = Math.max(40, w - 30);
@@ -463,7 +437,6 @@ export function renderSubagentResult(
 					c.addChild(new Text(truncLine(theme.fg("dim", `      ${t.tool}: ${argsPreview}`), w), 0, 0));
 				}
 			}
-			// Recent output - let truncLine handle truncation entirely
 			const recentLines = (rProg.recentOutput ?? []).slice(-5);
 			for (const line of recentLines) {
 				c.addChild(new Text(truncLine(theme.fg("dim", `      ${line}`), w), 0, 0));

@@ -6,13 +6,12 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { Message } from "@mariozechner/pi-ai";
-import type { AsyncStatus, DisplayItem, ErrorInfo, SingleResult } from "./types.ts";
+import type { AgentProgress, AsyncStatus, Details, DisplayItem, ErrorInfo, SingleResult } from "./types.ts";
 
 // ============================================================================
 // File System Utilities
 // ============================================================================
 
-// Cache for status file reads - avoid re-reading unchanged files
 const statusCache = new Map<string, { mtime: number; status: AsyncStatus }>();
 
 function getErrorMessage(error: unknown): string {
@@ -74,7 +73,6 @@ export function readStatus(asyncDir: string): AsyncStatus | null {
 	return status;
 }
 
-// Cache for output tail reads - avoid re-reading unchanged files
 const outputTailCache = new Map<string, { mtime: number; size: number; lines: string[] }>();
 
 /**
@@ -87,7 +85,6 @@ export function getOutputTail(outputFile: string | undefined, maxLines: number =
 		const stat = fs.statSync(outputFile);
 		if (stat.size === 0) return [];
 
-		// Check cache using both mtime and size (size changes more frequently during writes)
 		const cached = outputTailCache.get(outputFile);
 		if (cached && cached.mtime === stat.mtimeMs && cached.size === stat.size) {
 			return cached.lines;
@@ -102,9 +99,7 @@ export function getOutputTail(outputFile: string | undefined, maxLines: number =
 		const allLines = content.split("\n").filter((l) => l.trim());
 		const lines = allLines.slice(-maxLines).map((l) => l.slice(0, 120) + (l.length > 120 ? "..." : ""));
 
-		// Cache the result
 		outputTailCache.set(outputFile, { mtime: stat.mtimeMs, size: stat.size, lines });
-		// Limit cache size
 		if (outputTailCache.size > 20) {
 			const firstKey = outputTailCache.keys().next().value;
 			if (firstKey) outputTailCache.delete(firstKey);
@@ -112,12 +107,15 @@ export function getOutputTail(outputFile: string | undefined, maxLines: number =
 
 		return lines;
 	} catch {
+		// Output tails are UI-only hints; unreadable or missing files should render as no tail.
 		return [];
 	} finally {
 		if (fd !== null) {
 			try {
 				fs.closeSync(fd);
-			} catch {}
+			} catch {
+				// Closing the best-effort tail file handle should not surface over the main status view.
+			}
 		}
 	}
 }
@@ -125,16 +123,16 @@ export function getOutputTail(outputFile: string | undefined, maxLines: number =
 /**
  * Get human-readable last activity time for a file
  */
-export function getLastActivity(outputFile: string | undefined): string {
+	export function getLastActivity(outputFile: string | undefined): string {
 	if (!outputFile) return "";
 	try {
-		// Single stat call - throws if file doesn't exist
 		const stat = fs.statSync(outputFile);
 		const ago = Date.now() - stat.mtimeMs;
 		if (ago < 1000) return "active now";
 		if (ago < 60000) return `active ${Math.floor(ago / 1000)}s ago`;
 		return `active ${Math.floor(ago / 60000)}m ago`;
 	} catch {
+		// Last-activity text is best effort; missing files should simply omit the hint.
 		return "";
 	}
 }
@@ -201,13 +199,14 @@ export function getFinalOutput(messages: Message[]): string {
 }
 
 export function getSingleResultOutput(result: Pick<SingleResult, "finalOutput" | "messages">): string {
-	return result.finalOutput ?? getFinalOutput(result.messages);
+	return result.finalOutput ?? getFinalOutput(result.messages ?? []);
 }
 
 /**
  * Extract display items (text and tool calls) from messages
  */
-export function getDisplayItems(messages: Message[]): DisplayItem[] {
+export function getDisplayItems(messages: Message[] | undefined): DisplayItem[] {
+	if (!messages || messages.length === 0) return [];
 	const items: DisplayItem[] = [];
 	for (const msg of messages) {
 		if (msg.role === "assistant") {
@@ -218,6 +217,43 @@ export function getDisplayItems(messages: Message[]): DisplayItem[] {
 		}
 	}
 	return items;
+}
+
+function compactCompletedProgress(progress: AgentProgress): AgentProgress {
+	if (progress.status === "running") return progress;
+	return {
+		index: progress.index,
+		agent: progress.agent,
+		status: progress.status,
+		task: progress.task,
+		skills: progress.skills,
+		toolCount: progress.toolCount,
+		tokens: progress.tokens,
+		durationMs: progress.durationMs,
+		error: progress.error,
+		failedTool: progress.failedTool,
+		recentTools: [],
+		recentOutput: [],
+	};
+}
+
+export function compactForegroundResult(result: SingleResult): SingleResult {
+	if (result.progress?.status === "running") return result;
+	return {
+		...result,
+		messages: undefined,
+		progress: undefined,
+	};
+}
+
+export function compactForegroundDetails(details: Details): Details {
+	return {
+		...details,
+		results: details.results.map(compactForegroundResult),
+		progress: details.progress
+			? details.progress.map(compactCompletedProgress)
+			: undefined,
+	};
 }
 
 /**

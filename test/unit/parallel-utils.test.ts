@@ -185,21 +185,21 @@ describe("aggregateParallelOutputs", () => {
 		const result = aggregateParallelOutputs([
 			{ agent: "agent-a", output: "partial output", exitCode: 1 },
 		]);
-		assert.ok(result.includes("⚠️ FAILED (exit code 1)"));
+		assert.ok(result.includes("FAILED (exit code 1)"));
 	});
 
 	it("marks empty output", () => {
 		const result = aggregateParallelOutputs([
 			{ agent: "agent-a", output: "", exitCode: 0 },
 		]);
-		assert.ok(result.includes("⚠️ EMPTY OUTPUT"));
+		assert.ok(result.includes("EMPTY OUTPUT"));
 	});
 
 	it("treats whitespace-only output as empty", () => {
 		const result = aggregateParallelOutputs([
 			{ agent: "agent-a", output: "   \n  ", exitCode: 0 },
 		]);
-		assert.ok(result.includes("⚠️ EMPTY OUTPUT"));
+		assert.ok(result.includes("EMPTY OUTPUT"));
 	});
 
 	it("marks skipped tasks (exitCode=-1) distinctly from failed", () => {
@@ -207,7 +207,7 @@ describe("aggregateParallelOutputs", () => {
 			{ agent: "agent-a", output: "done", exitCode: 0 },
 			{ agent: "agent-b", output: "(skipped — fail-fast)", exitCode: -1 },
 		]);
-		assert.ok(result.includes("⏭️ SKIPPED"), "skipped task should show SKIPPED");
+		assert.ok(result.includes("SKIPPED"), "skipped task should show SKIPPED");
 		assert.ok(!result.includes("FAILED"), "skipped task should not show FAILED");
 	});
 });

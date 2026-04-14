@@ -102,15 +102,15 @@ export function aggregateParallelOutputs(
 			const hasOutput = Boolean(r.output?.trim());
 			const status =
 				r.exitCode === -1
-					? "⏭️ SKIPPED"
+					? "SKIPPED"
 					: r.exitCode !== 0 && r.exitCode !== null
-						? `⚠️ FAILED (exit code ${r.exitCode})${r.error ? `: ${r.error}` : ""}`
+						? `FAILED (exit code ${r.exitCode})${r.error ? `: ${r.error}` : ""}`
 						: r.error
-							? `⚠️ WARNING: ${r.error}`
+							? `WARNING: ${r.error}`
 							: !hasOutput && r.outputTargetPath && r.outputTargetExists === false
-								? `⚠️ EMPTY OUTPUT (expected output file missing: ${r.outputTargetPath})`
+								? `EMPTY OUTPUT (expected output file missing: ${r.outputTargetPath})`
 								: !hasOutput && !r.outputTargetPath
-									? "⚠️ EMPTY OUTPUT (no textual response returned)"
+									? "EMPTY OUTPUT (no textual response returned)"
 							: "";
 			const body = status ? (hasOutput ? `${status}\n${r.output}` : status) : r.output;
 			return `${header}\n${body}`;

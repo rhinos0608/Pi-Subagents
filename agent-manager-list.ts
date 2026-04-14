@@ -200,9 +200,9 @@ export function renderList(
 			const count = selectionCount(state.selected, agent.id);
 			const isShadowed = agent.kind === "agent" && agent.source === "project" && userNames.has(agent.name);
 
-			const cursorChar = isCursor ? theme.fg("accent", "▸") : " ";
-			const selectBadge = count > 1 ? theme.fg("accent", `×${count}`.padStart(2)) : count === 1 ? theme.fg("accent", " ✓") : "  ";
-			const shadowMarker = isShadowed ? theme.fg("warning", "●") : " ";
+			const cursorChar = isCursor ? theme.fg("accent", ">") : " ";
+			const selectBadge = count > 0 ? theme.fg("accent", String(count).padStart(2)) : "  ";
+			const shadowMarker = isShadowed ? theme.fg("warning", "!") : " ";
 			const prefix = `${cursorChar}${selectBadge}${shadowMarker} `;
 
 			const modelRaw = agent.kind === "chain" ? `${agent.stepCount ?? 0} steps` : (agent.model ?? "default");

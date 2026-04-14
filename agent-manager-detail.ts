@@ -106,7 +106,7 @@ function buildDetailLines(
 
 	for (const run of recentRuns) {
 		const when = pad(formatRelativeTime(run.ts), 8);
-		const status = run.status === "ok" ? "✓" : "✗";
+		const status = run.status;
 		const task = truncateToWidth(`"${run.task}"`, 34);
 		const tail = run.status === "ok" ? formatDuration(run.duration) : `exit ${run.exit ?? 1}`;
 		lines.push(truncateToWidth(`  ${when} ${status} ${task} ${tail}`, contentWidth));

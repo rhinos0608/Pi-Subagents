@@ -28,7 +28,7 @@ import {
 import { discoverAvailableSkills, normalizeSkillInput } from "./skills.ts";
 import { runSync } from "./execution.ts";
 import { buildChainSummary } from "./formatters.ts";
-import { getSingleResultOutput, mapConcurrent } from "./utils.ts";
+import { compactForegroundDetails, getSingleResultOutput, mapConcurrent } from "./utils.ts";
 import { recordRun } from "./run-history.ts";
 import {
 	cleanupWorktrees,
@@ -91,7 +91,7 @@ interface ParallelChainRunInput {
 }
 
 function buildChainExecutionDetails(input: ChainExecutionDetailsInput): Details {
-	return {
+	return compactForegroundDetails({
 		mode: "chain",
 		results: input.results,
 		progress: input.includeProgress ? input.allProgress : undefined,
@@ -99,7 +99,7 @@ function buildChainExecutionDetails(input: ChainExecutionDetailsInput): Details 
 		chainAgents: input.chainAgents,
 		totalSteps: input.totalSteps,
 		currentStepIndex: input.currentStepIndex,
-	};
+	});
 }
 
 function buildChainExecutionErrorResult(message: string, input: ChainExecutionDetailsInput): ChainExecutionResult {
@@ -670,15 +670,16 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 				});
 				return {
 					content: [{ type: "text", text: summary }],
-					details: {
-						mode: "chain",
+					details: buildChainExecutionDetails({
 						results,
-						progress: includeProgress ? allProgress : undefined,
-						artifacts: allArtifactPaths.length ? { dir: artifactsDir, files: allArtifactPaths } : undefined,
+						includeProgress,
+						allProgress,
+						allArtifactPaths,
+						artifactsDir,
 						chainAgents,
 						totalSteps,
 						currentStepIndex: stepIndex,
-					},
+					}),
 					isError: true,
 				};
 			}
@@ -691,13 +692,14 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 
 	return {
 		content: [{ type: "text", text: summary }],
-		details: {
-			mode: "chain",
+		details: buildChainExecutionDetails({
 			results,
-			progress: includeProgress ? allProgress : undefined,
-			artifacts: allArtifactPaths.length ? { dir: artifactsDir, files: allArtifactPaths } : undefined,
+			includeProgress,
+			allProgress,
+			allArtifactPaths,
+			artifactsDir,
 			chainAgents,
 			totalSteps,
-		},
+		}),
 	};
 }

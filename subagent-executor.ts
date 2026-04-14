@@ -25,7 +25,7 @@ import { executeAsyncChain, executeAsyncSingle, isAsyncAvailable } from "./async
 import { createForkContextResolver } from "./fork-context.ts";
 import { applyIntercomBridgeToAgent, resolveIntercomBridge, resolveIntercomSessionTarget } from "./intercom-bridge.ts";
 import { finalizeSingleOutput, injectSingleOutputInstruction, resolveSingleOutputPath } from "./single-output.ts";
-import { getSingleResultOutput, mapConcurrent } from "./utils.ts";
+import { compactForegroundDetails, getSingleResultOutput, mapConcurrent } from "./utils.ts";
 import {
 	cleanupWorktrees,
 	createWorktrees,
@@ -885,12 +885,12 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 
 		return {
 			content: [{ type: "text", text: fullContent }],
-			details: {
+			details: compactForegroundDetails({
 				mode: "parallel",
 				results,
 				progress: params.includeProgress ? allProgress : undefined,
 				artifacts: allArtifactPaths.length ? { dir: artifactsDir, files: allArtifactPaths } : undefined,
-			},
+			}),
 		};
 	} finally {
 		if (worktreeSetup) cleanupWorktrees(worktreeSetup);
@@ -1063,37 +1063,37 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 	if (r.detached) {
 		return {
 			content: [{ type: "text", text: `Detached for intercom coordination: ${params.agent}` }],
-			details: {
+			details: compactForegroundDetails({
 				mode: "single",
 				results: [r],
 				progress: params.includeProgress ? allProgress : undefined,
 				artifacts: allArtifactPaths.length ? { dir: artifactsDir, files: allArtifactPaths } : undefined,
 				truncation: r.truncation,
-			},
+			}),
 		};
 	}
 
 	if (r.exitCode !== 0)
 		return {
 			content: [{ type: "text", text: r.error || "Failed" }],
-			details: {
+			details: compactForegroundDetails({
 				mode: "single",
 				results: [r],
 				progress: params.includeProgress ? allProgress : undefined,
 				artifacts: allArtifactPaths.length ? { dir: artifactsDir, files: allArtifactPaths } : undefined,
 				truncation: r.truncation,
-			},
+			}),
 			isError: true,
 		};
 	return {
 		content: [{ type: "text", text: finalizedOutput.displayOutput || "(no output)" }],
-		details: {
+		details: compactForegroundDetails({
 			mode: "single",
 			results: [r],
 			progress: params.includeProgress ? allProgress : undefined,
 			artifacts: allArtifactPaths.length ? { dir: artifactsDir, files: allArtifactPaths } : undefined,
 			truncation: r.truncation,
-		},
+		}),
 	};
 }
 

@@ -3,6 +3,9 @@ import { describe, it } from "node:test";
 import { SubagentsStatusComponent } from "../../subagents-status.ts";
 import type { AsyncRunOverlayData } from "../../async-status.ts";
 
+type StatusTui = ConstructorParameters<typeof SubagentsStatusComponent>[0];
+type StatusTheme = ConstructorParameters<typeof SubagentsStatusComponent>[1];
+
 function wait(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -22,10 +25,16 @@ function createRun(id: string, state: "queued" | "running" | "complete" | "faile
 	};
 }
 
-const theme = {
-	fg: (_token: string, text: string) => text,
-	bg: (_token: string, text: string) => text,
-};
+function createTestTui(requestRender: () => void): StatusTui {
+	return { requestRender } as StatusTui;
+}
+
+function createTestTheme(): StatusTheme {
+	return {
+		fg: (_token: string, text: string) => text,
+		bg: (_token: string, text: string) => text,
+	} as StatusTheme;
+}
 
 describe("SubagentsStatusComponent", () => {
 	it("auto-refreshes and keeps the same run selected when it moves to Recent", async () => {
@@ -36,8 +45,8 @@ describe("SubagentsStatusComponent", () => {
 		let callCount = 0;
 		let renderRequests = 0;
 		const component = new SubagentsStatusComponent(
-			{ requestRender: () => { renderRequests++; } } as any,
-			theme as any,
+			createTestTui(() => { renderRequests++; }),
+			createTestTheme(),
 			() => {},
 			{
 				listRunsForOverlay: () => states[Math.min(callCount++, states.length - 1)]!,
@@ -61,8 +70,8 @@ describe("SubagentsStatusComponent", () => {
 	it("stops auto-refreshing after dispose", async () => {
 		let renderRequests = 0;
 		const component = new SubagentsStatusComponent(
-			{ requestRender: () => { renderRequests++; } } as any,
-			theme as any,
+			createTestTui(() => { renderRequests++; }),
+			createTestTheme(),
 			() => {},
 			{
 				listRunsForOverlay: () => ({ active: [createRun("run-a", "running")], recent: [] }),

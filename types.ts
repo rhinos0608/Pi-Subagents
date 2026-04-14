@@ -85,7 +85,7 @@ export interface SingleResult {
 	exitCode: number;
 	detached?: boolean;
 	detachedReason?: string;
-	messages: Message[];
+	messages?: Message[];
 	usage: Usage;
 	model?: string;
 	attemptedModels?: string[];

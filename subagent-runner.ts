@@ -555,12 +555,12 @@ async function runSingleStep(
 	}
 	if (resolvedOutput.savedPath) {
 		outputForSummary = outputForSummary
-			? `${outputForSummary}\n\n📄 Output saved to: ${resolvedOutput.savedPath}`
-			: `📄 Output saved to: ${resolvedOutput.savedPath}`;
+			? `${outputForSummary}\n\nOutput saved to: ${resolvedOutput.savedPath}`
+			: `Output saved to: ${resolvedOutput.savedPath}`;
 	} else if (resolvedOutput.saveError && step.outputPath && finalResult?.exitCode === 0) {
 		outputForSummary = outputForSummary
-			? `${outputForSummary}\n\n⚠️ Failed to save output to: ${step.outputPath}\n${resolvedOutput.saveError}`
-			: `⚠️ Failed to save output to: ${step.outputPath}\n${resolvedOutput.saveError}`;
+			? `${outputForSummary}\n\nFailed to save output to: ${step.outputPath}\n${resolvedOutput.saveError}`
+			: `Failed to save output to: ${step.outputPath}\n${resolvedOutput.saveError}`;
 	}
 
 	if (artifactPaths && ctx.artifactConfig?.enabled !== false) {

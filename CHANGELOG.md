@@ -496,7 +496,7 @@
   - Pre-selects current thinking level if already set
 - **Model selector in chain TUI** - Press `[m]` to select a different model for any step
   - Fuzzy search through all available models
-  - Shows current model with ✓ indicator
+  - Shows the current model with a `current` badge
   - Provider/model format (e.g., `anthropic/claude-haiku-4-5`)
   - Override indicator (✎) when model differs from agent default
 - **Model visibility in chain execution** - Shows which model each step is using
@@ -534,8 +534,8 @@
 
 ### Improved
 - **Per-step progress indicators** - When progress is enabled, each step shows its role:
-  - Step 1: `● creates & updates progress.md`
-  - Step 2+: `↔ reads & updates progress.md`
+  - Step 1: `writes progress.md`
+  - Step 2+: `reads progress.md`
   - Clear visualization of progress.md data flow through the chain
 - **Comprehensive tool descriptions** - Better documentation of chain variables:
   - Tool description now explains `{task}`, `{previous}`, `{chain_dir}` in detail
@@ -591,7 +591,7 @@
 ### Improved
 - **Tool description now explicitly shows the three modes** (SINGLE, CHAIN, PARALLEL) with syntax - helps agents pick the right mode when user says "scout → planner"
 - **Chain execution observability** - Now shows:
-  - Chain visualization with status icons: `✓scout → ●planner` (✓=done, ●=running, ○=pending, ✗=failed) - sequential chains only
+  - Chain visualization with status labels: `done scout → running planner` (`done`, `running`, `pending`, `failed`) - sequential chains only
   - Accurate step counter: "step 1/2" instead of misleading "1/1"
   - Current tool and recent output for running step
 

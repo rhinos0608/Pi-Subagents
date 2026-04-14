@@ -921,8 +921,8 @@ Requirements:
 During sync execution, the collapsed view shows real-time progress for single, chain, and parallel modes.
 
 **Chains:**
-- Header: `... chain 1/2 | 8 tools, 1.4k tok, 38s`
-- Chain visualization with status: `✓scout → ●planner` (✓=done, ●=running, ○=pending, ✗=failed)
+- Header: `running chain 1/2 | 8 tools, 1.4k tok, 38s`
+- Chain visualization with status: `done scout → running planner` (`done`, `running`, `pending`, `failed`)
 - Current tool: `> read: packages/tui/src/...`
 - Recent output lines (last 2-3 lines)
 
@@ -933,7 +933,7 @@ During sync execution, the collapsed view shows real-time progress for single, c
 
 Press **Ctrl+O** to expand the full streaming view with complete output per step.
 
-> **Note:** Chain visualization (the `✓scout → ●planner` line) is only shown for sequential chains. Chains with parallel steps show per-step cards instead.
+> **Note:** Chain visualization (the `done scout → running planner` line) is only shown for sequential chains. Chains with parallel steps show per-step cards instead.
 
 ## Nested subagent recursion guard
 

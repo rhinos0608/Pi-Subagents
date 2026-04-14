@@ -987,7 +987,7 @@ export class ChainClarifyComponent implements Component {
 				const prefix = isSelected ? th.fg("accent", "→ ") : "  ";
 				const modelText = isSelected ? th.fg("accent", model.id) : model.id;
 				const providerBadge = th.fg("dim", ` [${model.provider}]`);
-				const currentBadge = isCurrent ? th.fg("success", " ✓") : "";
+				const currentBadge = isCurrent ? th.fg("success", " current") : "";
 
 				lines.push(this.row(` ${prefix}${modelText}${providerBadge}${currentBadge}`));
 			}
@@ -1269,7 +1269,7 @@ export class ChainClarifyComponent implements Component {
 		lines.push(this.row(` Chain Dir: ${th.fg("dim", chainDirPreview)}`));
 
 		const progressEnabled = this.agentConfigs.some((_, i) => this.getEffectiveBehavior(i).progress);
-		const progressValue = progressEnabled ? th.fg("success", "✓ enabled") : th.fg("dim", "✗ disabled");
+		const progressValue = progressEnabled ? th.fg("success", "enabled") : th.fg("dim", "disabled");
 		lines.push(this.row(` Progress: ${progressValue} ${th.fg("dim", "(press [p] to toggle)")}`));
 		lines.push(this.row(""));
 
@@ -1331,8 +1331,8 @@ export class ChainClarifyComponent implements Component {
 			if (progressEnabled) {
 				const isFirstStep = i === 0;
 				const progressAction = isFirstStep 
-					? th.fg("success", "●") + th.fg("dim", " creates & updates progress.md")
-					: th.fg("accent", "↔") + th.fg("dim", " reads & updates progress.md");
+					? th.fg("success", "writes progress.md")
+					: th.fg("accent", "reads progress.md");
 				const progressLabel = th.fg("dim", "progress: ");
 				lines.push(this.row(`     ${progressLabel}${progressAction}`));
 			}

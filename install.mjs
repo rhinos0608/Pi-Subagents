@@ -38,7 +38,7 @@ if (isRemove) {
 	if (fs.existsSync(EXTENSION_DIR)) {
 		console.log(`Removing ${EXTENSION_DIR}...`);
 		fs.rmSync(EXTENSION_DIR, { recursive: true });
-		console.log("✓ pi-subagents removed");
+		console.log("pi-subagents removed");
 	} else {
 		console.log("pi-subagents is not installed");
 	}
@@ -61,7 +61,7 @@ if (fs.existsSync(EXTENSION_DIR)) {
 		console.log("Updating existing installation...");
 		try {
 			execSync("git pull", { cwd: EXTENSION_DIR, stdio: "inherit" });
-			console.log("\n✓ pi-subagents updated");
+			console.log("\npi-subagents updated");
 		} catch (err) {
 			console.error("Failed to update. Try removing and reinstalling:");
 			console.error("  npx pi-subagents --remove && npx pi-subagents");
@@ -77,7 +77,7 @@ if (fs.existsSync(EXTENSION_DIR)) {
 	console.log(`Cloning to ${EXTENSION_DIR}...`);
 	try {
 		execSync(`git clone ${REPO_URL} "${EXTENSION_DIR}"`, { stdio: "inherit" });
-		console.log("\n✓ pi-subagents installed");
+		console.log("\npi-subagents installed");
 	} catch (err) {
 		console.error("Failed to clone repository");
 		process.exit(1);
