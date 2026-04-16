@@ -255,7 +255,7 @@ Append `[key=value,...]` to any agent name to override its defaults:
 ```
 /chain scout[output=context.md] "scan code" -> planner[reads=context.md] "analyze auth"
 /run scout[model=anthropic/claude-sonnet-4] summarize this codebase
-/parallel scanner[output=scan.md] "find issues" -> reviewer[output=review.md] "check style"
+/parallel scanner[model=anthropic/claude-sonnet-4] "find issues" -> reviewer[skills=code-review+security] "check style"
 ```
 
 | Key | Example | Description |
@@ -545,6 +545,9 @@ These are the parameters the **LLM agent** passes when it calls the `subagent` t
 // Parallel
 { tasks: [{ agent: "scout", task: "a" }, { agent: "scout", task: "b" }] }
 
+// Parallel with top-level concurrency override
+{ tasks: [{ agent: "scout", task: "a" }, { agent: "reviewer", task: "b" }], concurrency: 2 }
+
 // Parallel with count shorthand (run the same task 3 times)
 { tasks: [{ agent: "scout", task: "audit auth", count: 3 }] }
 
@@ -711,6 +714,7 @@ Notes:
 | `model` | string | agent default | Override model for single agent |
 | `fallbackModels` | `string \| string[]` | agent default | Management/config-only field for ordered backup models. Markdown frontmatter uses a comma-separated string. |
 | `tasks` | `{agent, task, cwd?, count?, skill?}[]` | - | Parallel tasks. Foreground runs directly; background requests are converted to an equivalent chain. `count` repeats one task entry N times with the same settings. |
+| `concurrency` | number | `config.parallel.concurrency` or `4` | Top-level `tasks` mode only: max concurrent tasks. |
 | `worktree` | boolean | false | Create isolated git worktrees for each parallel task. Requires clean git state. Per-worktree diffs included in output. |
 | `chain` | ChainItem[] | - | Sequential steps with behavior overrides (see below) |
 | `context` | `"fresh" \| "fork"` | `fresh` | Execution context mode. `fork` uses a real branched session from the parent's current leaf for each child run |
@@ -844,6 +848,25 @@ This aggregated output becomes `{previous}` for the next step.
 ## Extension Configuration
 
 `pi-subagents` reads optional JSON config from `~/.pi/agent/extensions/subagent/config.json`.
+
+### `parallel`
+
+`parallel` controls top-level `tasks` mode defaults and limits.
+
+```json
+{
+  "parallel": {
+    "maxTasks": 12,
+    "concurrency": 6
+  }
+}
+```
+
+Fields:
+- `maxTasks` defaults to `8` when unset or invalid
+- `concurrency` defaults to `4` when unset or invalid
+
+Per-call `concurrency` on the `subagent` tool takes precedence over `config.parallel.concurrency` for top-level `tasks` runs.
 
 ### `defaultSessionDir`
 

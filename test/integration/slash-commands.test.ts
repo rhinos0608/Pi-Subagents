@@ -224,6 +224,45 @@ describe("slash command custom message delivery", { skip: !available ? "slash-co
 		const visibleSnapshot = getSlashRenderableSnapshot!(visibleDetails!);
 		assert.equal((visibleSnapshot.result.content[0] as { text?: string }).text, "Subagent failed");
 	});
+
+	it("/parallel no longer hard-blocks runs above the old 8-task limit before the executor responds", async () => {
+		const sent: unknown[] = [];
+		const commands = new Map<string, { handler(args: string, ctx: unknown): Promise<void> }>();
+		const events = createEventBus();
+		let requestedTasks = 0;
+		events.on(SLASH_SUBAGENT_REQUEST_EVENT, (data) => {
+			const payload = data as { requestId: string; params?: { tasks?: unknown[] } };
+			requestedTasks = payload.params?.tasks?.length ?? 0;
+			events.emit(SLASH_SUBAGENT_STARTED_EVENT, { requestId: payload.requestId });
+			events.emit(SLASH_SUBAGENT_RESPONSE_EVENT, {
+				requestId: payload.requestId,
+				result: {
+					content: [{ type: "text", text: "parallel finished" }],
+					details: { mode: "parallel", results: [] },
+				},
+				isError: false,
+			});
+		});
+
+		const pi = {
+			events,
+			registerCommand(name: string, spec: { handler(args: string, ctx: unknown): Promise<void> }) {
+				commands.set(name, spec);
+			},
+			registerShortcut() {},
+			sendMessage(message: unknown) {
+				sent.push(message);
+			},
+		};
+
+		registerSlashCommands!(pi, createState(process.cwd()));
+		const args = Array.from({ length: 9 }, (_, index) => `scout \"task ${index + 1}\"`).join(" -> ");
+		await commands.get("parallel")!.handler(args, createCommandContext());
+
+		assert.equal(requestedTasks, 9);
+		assert.equal(sent.length, 2);
+		assert.equal((sent[1] as { content?: string }).content, "parallel finished");
+	});
 });
 
 describe("subagents-status slash command", { skip: !available ? "slash-commands.ts not importable" : undefined }, () => {

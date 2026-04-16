@@ -18,6 +18,10 @@ interface SubagentParamsSchema {
 				};
 			};
 		};
+		concurrency?: {
+			minimum?: number;
+			description?: string;
+		};
 	};
 }
 
@@ -50,11 +54,16 @@ describe("SubagentParams schema", { skip: !available ? "typebox not available" :
 		assert.match(String(contextSchema.description ?? ""), /fork/);
 	});
 
-	it("includes count on top-level parallel tasks", () => {
+	it("includes count and concurrency on top-level parallel mode", () => {
 		const taskCountSchema = SubagentParams?.properties?.tasks?.items?.properties?.count;
 		assert.ok(taskCountSchema, "tasks[].count schema should exist");
 		assert.equal(taskCountSchema.minimum, 1);
 		assert.match(String(taskCountSchema.description ?? ""), /repeat/i);
+
+		const concurrencySchema = SubagentParams?.properties?.concurrency;
+		assert.ok(concurrencySchema, "concurrency schema should exist");
+		assert.equal(concurrencySchema.minimum, 1);
+		assert.match(String(concurrencySchema.description ?? ""), /parallel/i);
 	});
 
 	it("includes action on status params for list mode", () => {

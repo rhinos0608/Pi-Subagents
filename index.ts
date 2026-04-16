@@ -253,7 +253,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 EXECUTION (use exactly ONE mode):
 • SINGLE: { agent, task } - one task
 • CHAIN: { chain: [{agent:"scout"}, {parallel:[{agent:"worker",count:3}]}] } - sequential pipeline with optional parallel fan-out
-• PARALLEL: { tasks: [{agent,task,count?}, ...], worktree?: true } - concurrent execution (worktree: isolate each task in a git worktree)
+• PARALLEL: { tasks: [{agent,task,count?}, ...], concurrency?: number, worktree?: true } - concurrent execution (worktree: isolate each task in a git worktree)
 • Optional context: { context: "fresh" | "fork" } (default: "fresh")
 
 CHAIN TEMPLATE VARIABLES (use in task strings):

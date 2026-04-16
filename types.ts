@@ -273,10 +273,16 @@ export interface IntercomBridgeConfig {
 	instructionFile?: string;
 }
 
+export interface TopLevelParallelConfig {
+	maxTasks?: number;
+	concurrency?: number;
+}
+
 export interface ExtensionConfig {
 	asyncByDefault?: boolean;
 	defaultSessionDir?: string;
 	maxSubagentDepth?: number;
+	parallel?: TopLevelParallelConfig;
 	worktreeSetupHook?: string;
 	worktreeSetupHookTimeoutMs?: number;
 	intercomBridge?: IntercomBridgeConfig;
@@ -375,6 +381,25 @@ export const DEFAULT_FORK_PREAMBLE =
 	"You are a delegated subagent with access to the parent session's context for reference. " +
 	"Your sole job is to execute the task below. Do not continue or respond to the prior conversation " +
 	"— focus exclusively on completing this task using your tools.";
+
+function normalizeTopLevelParallelValue(value: unknown): number | undefined {
+	const parsed = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+	if (!Number.isInteger(parsed) || parsed < 1) return undefined;
+	return parsed;
+}
+
+export function resolveTopLevelParallelMaxTasks(value: unknown): number {
+	return normalizeTopLevelParallelValue(value) ?? MAX_PARALLEL;
+}
+
+export function resolveTopLevelParallelConcurrency(
+	override: unknown,
+	configValue: unknown,
+): number {
+	return normalizeTopLevelParallelValue(override)
+		?? normalizeTopLevelParallelValue(configValue)
+		?? MAX_CONCURRENCY;
+}
 
 export function getAsyncConfigPath(suffix: string): string {
 	return path.join(TEMP_ROOT_DIR, `async-cfg-${suffix}.json`);

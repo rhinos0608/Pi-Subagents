@@ -14,7 +14,6 @@ import {
 	finalizeSlashResult,
 } from "./slash-live-state.ts";
 import {
-	MAX_PARALLEL,
 	SLASH_RESULT_TYPE,
 	SLASH_SUBAGENT_CANCEL_EVENT,
 	SLASH_SUBAGENT_REQUEST_EVENT,
@@ -453,22 +452,18 @@ export function registerSlashCommands(
 	pi.registerCommand("parallel", {
 		description: "Run agents in parallel: /parallel scout \"task1\" -> reviewer \"task2\" [--bg] [--fork]",
 		getArgumentCompletions: makeAgentCompletions(state, true),
-		handler: async (args, ctx) => {
-			const { args: cleanedArgs, bg, fork } = extractExecutionFlags(args);
-			const parsed = parseAgentArgs(state, cleanedArgs, "parallel", ctx);
-			if (!parsed) return;
-			if (parsed.steps.length > MAX_PARALLEL) { ctx.ui.notify(`Max ${MAX_PARALLEL} parallel tasks`, "error"); return; }
-			const tasks = parsed.steps.map(({ name, config, task: stepTask }) => ({
-				agent: name,
-				task: stepTask ?? parsed.task,
-				...(config.output !== undefined ? { output: config.output } : {}),
-				...(config.reads !== undefined ? { reads: config.reads } : {}),
-				...(config.model ? { model: config.model } : {}),
-				...(config.skill !== undefined ? { skill: config.skill } : {}),
-				...(config.progress !== undefined ? { progress: config.progress } : {}),
-			}));
-			const params: SubagentParamsLike = { tasks, clarify: false, agentScope: "both" };
-			if (bg) params.async = true;
+			handler: async (args, ctx) => {
+				const { args: cleanedArgs, bg, fork } = extractExecutionFlags(args);
+				const parsed = parseAgentArgs(state, cleanedArgs, "parallel", ctx);
+				if (!parsed) return;
+				const tasks = parsed.steps.map(({ name, config, task: stepTask }) => ({
+					agent: name,
+					task: stepTask ?? parsed.task,
+					...(config.model ? { model: config.model } : {}),
+					...(config.skill !== undefined ? { skill: config.skill } : {}),
+				}));
+				const params: SubagentParamsLike = { tasks, clarify: false, agentScope: "both" };
+				if (bg) params.async = true;
 			if (fork) params.context = "fork";
 			await runSlashSubagent(pi, ctx, params);
 		},

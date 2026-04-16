@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { MockPi } from "../support/helpers.ts";
-import { createMockPi, createTempDir, removeTempDir, tryImport } from "../support/helpers.ts";
+import { createMockPi, createTempDir, events, removeTempDir, tryImport } from "../support/helpers.ts";
 import { discoverAgents } from "../../agents.ts";
 
 interface ExecutorModule {
@@ -24,9 +24,15 @@ interface ExecutorModule {
 	};
 }
 
+interface AsyncExecutionModule {
+	isAsyncAvailable?: () => boolean;
+}
+
 const executorMod = await tryImport<ExecutorModule>("./subagent-executor.ts");
+const asyncExecutionMod = await tryImport<AsyncExecutionModule>("./async-execution.ts");
 const available = !!executorMod;
 const createSubagentExecutor = executorMod?.createSubagentExecutor;
+const asyncAvailable = asyncExecutionMod?.isAsyncAvailable?.() === true;
 const originalHome = process.env.HOME;
 const originalUserProfile = process.env.USERPROFILE;
 
@@ -104,16 +110,20 @@ describe("fork context execution wiring", { skip: !available ? "subagent executo
 	});
 
 	function makeExecutor() {
+		return makeExecutorWithConfig({});
+	}
+
+	function makeExecutorWithConfig(config: Record<string, unknown>) {
 		return makeExecutorWithDiscoverAgents(() => ({
 			agents: [
 				{ name: "echo", description: "Echo test agent" },
 				{ name: "second", description: "Second test agent" },
 			],
 			projectAgentsDir: null,
-		}));
+		}), config);
 	}
 
-	function makeExecutorWithDiscoverAgents(discoverAgentsImpl: typeof discoverAgents) {
+	function makeExecutorWithDiscoverAgents(discoverAgentsImpl: typeof discoverAgents, config: Record<string, unknown> = {}) {
 		let sessionName: string | undefined;
 		return createSubagentExecutor({
 			pi: {
@@ -124,7 +134,7 @@ describe("fork context execution wiring", { skip: !available ? "subagent executo
 				},
 			},
 			state: makeState(tempDir),
-			config: {},
+			config,
 			asyncByDefault: false,
 			tempArtifactsDir: tempDir,
 			getSubagentSessionRoot: () => tempDir,
@@ -344,6 +354,125 @@ describe("fork context execution wiring", { skip: !available ? "subagent executo
 
 		assert.equal(result.isError, true);
 		assert.match(result.content[0]?.text ?? "", /Max 8 tasks/);
+	});
+
+	it("uses top-level parallel config overrides for maxTasks and concurrency", async () => {
+		const { manager } = makeSessionManagerRecorder({ sessionFile: "/tmp/parent.jsonl", leafId: "leaf-max-config" });
+		const maxTasksExecutor = makeExecutorWithConfig({ parallel: { maxTasks: 9 } });
+
+		const maxTasksResult = await maxTasksExecutor.execute(
+			"id",
+			{
+				tasks: [{ agent: "echo", task: "task one", count: 9 }],
+			},
+			new AbortController().signal,
+			undefined,
+			makeCtx(manager),
+		);
+
+		assert.equal(maxTasksResult.isError, undefined);
+		assert.equal(mockPi.callCount(), 9);
+
+		for (const testCase of [
+			{ name: "config", configConcurrency: 2, paramsConcurrency: undefined, expectedMaxRunning: 2 },
+			{ name: "per-call", configConcurrency: 3, paramsConcurrency: 1, expectedMaxRunning: 1 },
+		]) {
+			mockPi.reset();
+			for (let i = 0; i < 3; i++) {
+				mockPi.onCall({
+					steps: [
+						{ jsonl: [events.toolStart("bash", { command: `${testCase.name}-${i}` })] },
+						{ delay: 250 },
+						{ jsonl: [events.toolEnd("bash"), events.assistantMessage(`done-${i}`)] },
+					],
+				});
+			}
+
+			const executor = makeExecutorWithConfig({ parallel: { concurrency: testCase.configConcurrency } });
+			let maxRunning = 0;
+
+			const result = await executor.execute(
+				"id",
+				{
+					tasks: [
+						{ agent: "echo", task: "task one" },
+						{ agent: "second", task: "task two" },
+						{ agent: "echo", task: "task three" },
+					],
+					...(testCase.paramsConcurrency ? { concurrency: testCase.paramsConcurrency } : {}),
+				},
+				new AbortController().signal,
+				(update) => {
+					const progress = (update as { details?: { progress?: Array<{ status?: string }> } }).details?.progress ?? [];
+					const running = progress.filter((entry) => entry.status === "running").length;
+					maxRunning = Math.max(maxRunning, running);
+				},
+				makeCtx(makeSessionManagerRecorder().manager),
+			);
+
+			assert.equal(result.isError, undefined, testCase.name);
+			assert.equal(maxRunning, testCase.expectedMaxRunning, testCase.name);
+		}
+	});
+
+	it("runs top-level parallel async requests in the background", { skip: !asyncAvailable ? "jiti not available" : undefined }, async () => {
+		const executor = makeExecutor();
+
+		const result = await executor.execute(
+			"id",
+			{
+				tasks: [
+					{ agent: "echo", task: "task one" },
+					{ agent: "second", task: "task two" },
+				],
+				async: true,
+				clarify: false,
+			},
+			new AbortController().signal,
+			undefined,
+			makeCtx(makeSessionManagerRecorder().manager),
+		);
+
+		assert.equal(result.isError, undefined);
+		assert.ok(result.details?.asyncId, "expected an asyncId for background top-level parallel runs");
+		assert.match(result.content[0]?.text ?? "", /Async chain:/);
+	});
+
+	it("rejects invalid background top-level parallel requests during executor preflight", async () => {
+		const executor = makeExecutor();
+		for (const testCase of [
+			{
+				name: "max tasks",
+				params: { tasks: [{ agent: "echo", task: "task one", count: 9 }], async: true, clarify: false },
+				patterns: [/Max 8 tasks/],
+			},
+			{
+				name: "worktree cwd conflict",
+				params: {
+					tasks: [
+						{ agent: "echo", task: "task one" },
+						{ agent: "second", task: "task two", cwd: `${tempDir}/other` },
+					],
+					worktree: true,
+					async: true,
+					clarify: false,
+				},
+				patterns: [/worktree isolation uses the shared cwd/i, /task 2 \(second\) sets cwd/i],
+			},
+		]) {
+			const result = await executor.execute(
+				"id",
+				testCase.params,
+				new AbortController().signal,
+				undefined,
+				makeCtx(makeSessionManagerRecorder().manager),
+			);
+
+			assert.equal(result.isError, true, testCase.name);
+			for (const pattern of testCase.patterns) {
+				assert.match(result.content[0]?.text ?? "", pattern, testCase.name);
+			}
+		}
 	});
 
 	it("rejects async chain worktree runs with a conflicting task cwd", async () => {

@@ -45,9 +45,9 @@ import {
 	type SingleResult,
 	type SubagentState,
 	DEFAULT_ARTIFACT_CONFIG,
-	MAX_CONCURRENCY,
-	MAX_PARALLEL,
 	checkSubagentDepth,
+	resolveTopLevelParallelConcurrency,
+	resolveTopLevelParallelMaxTasks,
 	resolveChildMaxSubagentDepth,
 	resolveCurrentMaxSubagentDepth,
 	wrapForkTask,
@@ -60,9 +60,6 @@ interface TaskParam {
 	count?: number;
 	model?: string;
 	skill?: string | string[] | boolean;
-	output?: string | false;
-	reads?: string[] | false;
-	progress?: boolean;
 }
 
 export interface SubagentParamsLike {
@@ -71,6 +68,7 @@ export interface SubagentParamsLike {
 	task?: string;
 	chain?: ChainStep[];
 	tasks?: TaskParam[];
+	concurrency?: number;
 	worktree?: boolean;
 	context?: "fresh" | "fork";
 	async?: boolean;
@@ -113,7 +111,7 @@ interface ExecutionContextData {
 	sessionFileForIndex: (idx?: number) => string | undefined;
 	artifactConfig: ArtifactConfig;
 	artifactsDir: string;
-	parallelDowngraded: boolean;
+	backgroundRequestedWhileClarifying: boolean;
 	effectiveAsync: boolean;
 }
 
@@ -349,6 +347,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 		effectiveAsync,
 	} = data;
 	const hasChain = (params.chain?.length ?? 0) > 0;
+	const hasTasks = (params.tasks?.length ?? 0) > 0;
 	const hasSingle = Boolean(params.agent && params.task);
 	if (!effectiveAsync) return null;
 
@@ -360,6 +359,17 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 				isError: true,
 				details: { mode: "chain" as const, results: [] },
 			};
+		}
+	}
+
+	if (hasTasks && params.tasks) {
+		const maxParallelTasks = resolveTopLevelParallelMaxTasks(deps.config.parallel?.maxTasks);
+		if (params.tasks.length > maxParallelTasks) {
+			return buildParallelModeError(`Max ${maxParallelTasks} tasks`);
+		}
+		if (params.worktree) {
+			const worktreeTaskCwdError = buildParallelWorktreeTaskCwdError(params.tasks, effectiveCwd);
+			if (worktreeTaskCwdError) return buildParallelModeError(worktreeTaskCwdError);
 		}
 	}
 
@@ -383,6 +393,43 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 		fullId: `${m.provider}/${m.id}`,
 	}));
 	const currentMaxSubagentDepth = resolveCurrentMaxSubagentDepth(deps.config.maxSubagentDepth);
+	const currentProvider = ctx.model?.provider;
+
+	if (hasTasks && params.tasks) {
+		const agentConfigs = params.tasks.map((task) => agents.find((agent) => agent.name === task.agent));
+		const modelOverrides = params.tasks.map((task, index) =>
+			resolveModelCandidate(task.model ?? agentConfigs[index]?.model, availableModels, currentProvider),
+		);
+		const skillOverrides = params.tasks.map((task) => normalizeSkillInput(task.skill));
+		const parallelTasks = params.tasks.map((task, index) => ({
+			agent: task.agent,
+			task: params.context === "fork" ? wrapForkTask(task.task) : task.task,
+			cwd: task.cwd,
+			...(modelOverrides[index] ? { model: modelOverrides[index] } : {}),
+			...(skillOverrides[index] !== undefined ? { skill: skillOverrides[index] } : {}),
+		}));
+		return executeAsyncChain(id, {
+			chain: [{
+				parallel: parallelTasks,
+				concurrency: resolveTopLevelParallelConcurrency(params.concurrency, deps.config.parallel?.concurrency),
+				worktree: params.worktree,
+			}],
+			agents,
+			ctx: asyncCtx,
+			availableModels,
+			cwd: effectiveCwd,
+			maxOutput: params.maxOutput,
+			artifactsDir: artifactConfig.enabled ? artifactsDir : undefined,
+			artifactConfig,
+			shareEnabled,
+			sessionRoot,
+			chainSkills: [],
+			sessionFilesByFlatIndex: params.tasks.map((_, index) => sessionFileForIndex(index)),
+			maxSubagentDepth: currentMaxSubagentDepth,
+			worktreeSetupHook: deps.config.worktreeSetupHook,
+			worktreeSetupHookTimeoutMs: deps.config.worktreeSetupHookTimeoutMs,
+		});
+	}
 
 	if (hasChain && params.chain) {
 		const normalized = normalizeSkillInput(params.skill);
@@ -421,7 +468,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 		const normalizedSkills = normalizeSkillInput(params.skill);
 		const skills = normalizedSkills === false ? [] : normalizedSkills;
 		const maxSubagentDepth = resolveChildMaxSubagentDepth(currentMaxSubagentDepth, a.maxSubagentDepth);
-		const modelOverride = resolveModelCandidate((params.model as string | undefined) ?? a.model, availableModels, ctx.model?.provider);
+		const modelOverride = resolveModelCandidate((params.model as string | undefined) ?? a.model, availableModels, currentProvider);
 		return executeAsyncSingle(id, {
 			agent: params.agent!,
 			task: params.context === "fork" ? wrapForkTask(params.task!) : params.task!,
@@ -551,6 +598,7 @@ interface ForegroundParallelRunInput {
 	modelOverrides: (string | undefined)[];
 	skillOverrides: (string[] | false | undefined)[];
 	behaviors: Array<ReturnType<typeof resolveStepBehavior>>;
+	concurrencyLimit: number;
 	liveResults: (SingleResult | undefined)[];
 	liveProgress: (AgentProgress | undefined)[];
 	onUpdate?: (r: AgentToolResult<Details>) => void;
@@ -634,7 +682,7 @@ function buildParallelWorktreeSuffix(
 }
 
 async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Promise<SingleResult[]> {
-	return mapConcurrent(input.tasks, MAX_CONCURRENCY, async (task, index) => {
+	return mapConcurrent(input.tasks, input.concurrencyLimit, async (task, index) => {
 		const overrideSkills = input.skillOverrides[index];
 		const effectiveSkills = overrideSkills === undefined ? input.behaviors[index]?.skills : overrideSkills;
 		const taskCwd = resolveParallelTaskCwd(task, input.paramsCwd, input.worktreeSetup, index);
@@ -690,17 +738,19 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 		shareEnabled,
 		artifactConfig,
 		artifactsDir,
-		parallelDowngraded,
+		backgroundRequestedWhileClarifying,
 		onUpdate,
 		sessionRoot,
 	} = data;
 	const allProgress: AgentProgress[] = [];
 	const allArtifactPaths: ArtifactPaths[] = [];
 	const tasks = params.tasks!;
+	const maxParallelTasks = resolveTopLevelParallelMaxTasks(deps.config.parallel?.maxTasks);
+	const parallelConcurrency = resolveTopLevelParallelConcurrency(params.concurrency, deps.config.parallel?.concurrency);
 
-	if (tasks.length > MAX_PARALLEL)
+	if (tasks.length > maxParallelTasks)
 		return {
-			content: [{ type: "text", text: `Max ${MAX_PARALLEL} tasks` }],
+			content: [{ type: "text", text: `Max ${maxParallelTasks} tasks` }],
 			isError: true,
 			details: { mode: "parallel" as const, results: [] },
 		};
@@ -800,7 +850,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 				...(skillOverrides[i] !== undefined ? { skill: skillOverrides[i] } : {}),
 			}));
 			return executeAsyncChain(id, {
-				chain: [{ parallel: parallelTasks, worktree: params.worktree }],
+				chain: [{ parallel: parallelTasks, concurrency: parallelConcurrency, worktree: params.worktree }],
 				agents,
 				ctx: asyncCtx,
 				availableModels,
@@ -857,6 +907,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 			modelOverrides,
 			skillOverrides,
 			behaviors,
+			concurrencyLimit: parallelConcurrency,
 			maxSubagentDepths,
 			liveResults,
 			liveProgress,
@@ -875,7 +926,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 
 		const worktreeSuffix = buildParallelWorktreeSuffix(worktreeSetup, artifactsDir, tasks);
 		const ok = results.filter((result) => result.exitCode === 0).length;
-		const downgradeNote = parallelDowngraded ? " (async not supported for parallel)" : "";
+		const downgradeNote = backgroundRequestedWhileClarifying ? " (background requested, but clarify kept this run foreground)" : "";
 		const aggregatedOutput = aggregateParallelOutputs(
 			results.map((result) => ({
 				agent: result.agent,
@@ -1200,11 +1251,9 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		}
 
 		const requestedAsync = normalizedParams.async ?? deps.asyncByDefault;
-		const parallelDowngraded = hasTasks && requestedAsync;
-		let effectiveAsync = false;
-		if (requestedAsync && !hasTasks) {
-			effectiveAsync = hasChain ? normalizedParams.clarify === false : normalizedParams.clarify !== true;
-		}
+		const backgroundRequestedWhileClarifying = hasTasks && requestedAsync && normalizedParams.clarify === true;
+		const effectiveAsync = requestedAsync
+			&& (hasChain ? normalizedParams.clarify === false : normalizedParams.clarify !== true);
 
 		const artifactConfig: ArtifactConfig = {
 			...DEFAULT_ARTIFACT_CONFIG,
@@ -1251,7 +1300,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			sessionFileForIndex,
 			artifactConfig,
 			artifactsDir,
-			parallelDowngraded,
+			backgroundRequestedWhileClarifying,
 			effectiveAsync,
 		};
 
