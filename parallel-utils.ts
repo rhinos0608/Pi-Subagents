@@ -46,16 +46,12 @@ export async function mapConcurrent<T, R>(
 	items: T[],
 	limit: number,
 	fn: (item: T, i: number) => Promise<R>,
-	staggerMs = 150,
 ): Promise<R[]> {
 	const safeLimit = Math.max(1, Math.floor(limit) || 1);
 	const results: R[] = new Array(items.length);
 	let next = 0;
 
-	async function worker(workerIndex: number): Promise<void> {
-		if (staggerMs > 0 && workerIndex > 0) {
-			await new Promise((r) => setTimeout(r, workerIndex * staggerMs));
-		}
+	async function worker(_workerIndex: number): Promise<void> {
 		while (next < items.length) {
 			const i = next++;
 			results[i] = await fn(items[i], i);

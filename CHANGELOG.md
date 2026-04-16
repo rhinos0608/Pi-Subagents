@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [0.16.1] - 2026-04-16
+
+### Changed
+- Parallel subagent startup no longer applies any worker-start stagger in `mapConcurrent()`. `pi-subagents` now relies on Pi core's settings/auth lock retry behavior instead of carrying its own startup-delay workaround.
+
 ## [0.16.0] - 2026-04-16
 
 ### Added
