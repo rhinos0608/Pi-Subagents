@@ -606,13 +606,20 @@ function isDirectory(p: string): boolean {
 	}
 }
 
-function findNearestProjectAgentsDir(cwd: string): string | null {
+function resolveNearestProjectAgentDirs(cwd: string): { readDirs: string[]; preferredDir: string | null } {
 	const projectRoot = findNearestProjectRoot(cwd);
-	if (!projectRoot) return null;
-	const candidateAlt = path.join(projectRoot, ".agents");
-	if (isDirectory(candidateAlt)) return candidateAlt;
-	const candidate = path.join(projectRoot, ".pi", "agents");
-	return isDirectory(candidate) ? candidate : null;
+	if (!projectRoot) return { readDirs: [], preferredDir: null };
+
+	const legacyDir = path.join(projectRoot, ".agents");
+	const preferredDir = path.join(projectRoot, ".pi", "agents");
+	const readDirs: string[] = [];
+	if (isDirectory(legacyDir)) readDirs.push(legacyDir);
+	if (isDirectory(preferredDir)) readDirs.push(preferredDir);
+
+	return {
+		readDirs,
+		preferredDir,
+	};
 }
 
 const BUILTIN_AGENTS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "agents");
@@ -620,7 +627,7 @@ const BUILTIN_AGENTS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)
 export function discoverAgents(cwd: string, scope: AgentScope): AgentDiscoveryResult {
 	const userDirOld = path.join(os.homedir(), ".pi", "agent", "agents");
 	const userDirNew = path.join(os.homedir(), ".agents");
-	const projectAgentsDir = findNearestProjectAgentsDir(cwd);
+	const { readDirs: projectAgentDirs, preferredDir: projectAgentsDir } = resolveNearestProjectAgentDirs(cwd);
 	const userSettingsPath = getUserAgentSettingsPath();
 	const projectSettingsPath = getProjectAgentSettingsPath(cwd);
 
@@ -631,12 +638,12 @@ export function discoverAgents(cwd: string, scope: AgentScope): AgentDiscoveryRe
 		userSettingsPath,
 		projectSettingsPath,
 	);
-	
+
 	const userAgentsOld = scope === "project" ? [] : loadAgentsFromDir(userDirOld, "user");
 	const userAgentsNew = scope === "project" ? [] : loadAgentsFromDir(userDirNew, "user");
 	const userAgents = [...userAgentsOld, ...userAgentsNew];
 
-	const projectAgents = scope === "user" || !projectAgentsDir ? [] : loadAgentsFromDir(projectAgentsDir, "project");
+	const projectAgents = scope === "user" ? [] : projectAgentDirs.flatMap((dir) => loadAgentsFromDir(dir, "project"));
 	const agents = mergeAgentsForScope(scope, userAgents, projectAgents, builtinAgents);
 
 	return { agents, projectAgentsDir };
@@ -654,7 +661,7 @@ export function discoverAgentsAll(cwd: string): {
 } {
 	const userDirOld = path.join(os.homedir(), ".pi", "agent", "agents");
 	const userDirNew = path.join(os.homedir(), ".agents");
-	const projectDir = findNearestProjectAgentsDir(cwd);
+	const { readDirs: projectDirs, preferredDir: projectDir } = resolveNearestProjectAgentDirs(cwd);
 	const userSettingsPath = getUserAgentSettingsPath();
 	const projectSettingsPath = getProjectAgentSettingsPath(cwd);
 
@@ -669,11 +676,24 @@ export function discoverAgentsAll(cwd: string): {
 		...loadAgentsFromDir(userDirOld, "user"),
 		...loadAgentsFromDir(userDirNew, "user"),
 	];
-	const project = projectDir ? loadAgentsFromDir(projectDir, "project") : [];
+	const projectMap = new Map<string, AgentConfig>();
+	for (const dir of projectDirs) {
+		for (const agent of loadAgentsFromDir(dir, "project")) {
+			projectMap.set(agent.name, agent);
+		}
+	}
+	const project = Array.from(projectMap.values());
+
+	const chainMap = new Map<string, ChainConfig>();
+	for (const dir of projectDirs) {
+		for (const chain of loadChainsFromDir(dir, "project")) {
+			chainMap.set(chain.name, chain);
+		}
+	}
 	const chains = [
 		...loadChainsFromDir(userDirOld, "user"),
 		...loadChainsFromDir(userDirNew, "user"),
-		...(projectDir ? loadChainsFromDir(projectDir, "project") : []),
+		...Array.from(chainMap.values()),
 	];
 
 	const userDir = fs.existsSync(userDirNew) ? userDirNew : userDirOld;

@@ -42,6 +42,8 @@ Agents are markdown files with YAML frontmatter that define specialized subagent
 | User | `~/.pi/agent/agents/{name}.md` | Medium |
 | Project | `.pi/agents/{name}.md` (searches up directory tree) | Highest |
 
+Project discovery also reads legacy `.agents/{name}.md` files. If both `.agents/` and `.pi/agents/` contain a project agent with the same parsed `name`, `.pi/agents/` wins and the agent manager still writes to `.pi/agents/`.
+
 Use `agentScope` parameter to control discovery: `"user"`, `"project"`, or `"both"` (default; project takes priority).
 
 **Builtin agents:** The extension ships with ready-to-use agents — `scout`, `planner`, `worker`, `reviewer`, `context-builder`, `researcher`, and `delegate`. They load at lowest priority so any user or project agent with the same name overrides them.
@@ -358,6 +360,8 @@ Chains are `.chain.md` files stored alongside agent files. They define reusable 
 |-------|------|
 | User | `~/.pi/agent/agents/{name}.chain.md` |
 | Project | `.pi/agents/{name}.chain.md` |
+
+Project chain discovery also reads legacy `.agents/{name}.chain.md` files. If both locations define the same parsed chain `name`, `.pi/agents/` wins and manager writes stay in `.pi/agents/`.
 
 **Format:**
 

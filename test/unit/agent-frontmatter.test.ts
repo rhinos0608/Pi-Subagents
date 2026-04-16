@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { serializeAgent } from "../../agent-serializer.ts";
-import { discoverAgents, type AgentConfig } from "../../agents.ts";
+import { discoverAgents, discoverAgentsAll, type AgentConfig } from "../../agents.ts";
 
 const tempDirs: string[] = [];
 
@@ -235,5 +235,133 @@ Do work
 		assert.equal(delegate?.systemPromptMode, "append");
 		assert.equal(delegate?.inheritProjectContext, true);
 		assert.equal(delegate?.inheritSkills, false);
+	});
+});
+
+describe("project agent directory discovery", () => {
+	it("discovers project agents from both .agents and .pi/agents", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-project-agent-dirs-"));
+		tempDirs.push(dir);
+		fs.mkdirSync(path.join(dir, ".agents", "skills"), { recursive: true });
+		fs.mkdirSync(path.join(dir, ".pi", "agents"), { recursive: true });
+		fs.writeFileSync(path.join(dir, ".agents", "legacy.md"), `---
+name: legacy
+description: Legacy
+---
+
+Legacy prompt
+`, "utf-8");
+		fs.writeFileSync(path.join(dir, ".pi", "agents", "canonical.md"), `---
+name: canonical
+description: Canonical
+---
+
+Canonical prompt
+`, "utf-8");
+
+		const result = discoverAgents(dir, "project");
+		assert.ok(result.agents.find((agent) => agent.name === "legacy" && agent.filePath === path.join(dir, ".agents", "legacy.md")));
+		assert.ok(result.agents.find((agent) => agent.name === "canonical" && agent.filePath === path.join(dir, ".pi", "agents", "canonical.md")));
+		assert.equal(result.projectAgentsDir, path.join(dir, ".pi", "agents"));
+	});
+
+	it("prefers .pi/agents over .agents on project agent name collisions", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-project-agent-collision-"));
+		tempDirs.push(dir);
+		fs.mkdirSync(path.join(dir, ".agents"), { recursive: true });
+		fs.mkdirSync(path.join(dir, ".pi", "agents"), { recursive: true });
+		fs.writeFileSync(path.join(dir, ".agents", "shared.md"), `---
+name: shared
+description: Legacy shared
+---
+
+Legacy prompt
+`, "utf-8");
+		fs.writeFileSync(path.join(dir, ".pi", "agents", "shared.md"), `---
+name: shared
+description: Canonical shared
+---
+
+Canonical prompt
+`, "utf-8");
+
+		const shared = discoverAgents(dir, "project").agents.find((agent) => agent.name === "shared");
+		assert.ok(shared);
+		assert.equal(shared.filePath, path.join(dir, ".pi", "agents", "shared.md"));
+		assert.equal(shared.description, "Canonical shared");
+		assert.equal(shared.systemPrompt.trim(), "Canonical prompt");
+	});
+
+	it("uses the project root for the canonical project agent dir even when only .agents exists", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-project-agent-root-"));
+		tempDirs.push(dir);
+		const nested = path.join(dir, "packages", "app");
+		fs.mkdirSync(path.join(dir, ".agents", "skills"), { recursive: true });
+		fs.mkdirSync(nested, { recursive: true });
+
+		const result = discoverAgentsAll(nested);
+		assert.equal(result.projectDir, path.join(dir, ".pi", "agents"));
+	});
+
+	it("discovers project chains from both .agents and .pi/agents", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-project-chain-dirs-"));
+		tempDirs.push(dir);
+		fs.mkdirSync(path.join(dir, ".agents", "skills"), { recursive: true });
+		fs.mkdirSync(path.join(dir, ".pi", "agents"), { recursive: true });
+		fs.writeFileSync(path.join(dir, ".agents", "legacy.chain.md"), `---
+name: legacy-chain
+description: Legacy chain
+---
+
+## scout
+
+Inspect legacy
+`, "utf-8");
+		fs.writeFileSync(path.join(dir, ".pi", "agents", "canonical.chain.md"), `---
+name: canonical-chain
+description: Canonical chain
+---
+
+## worker
+
+Inspect canonical
+`, "utf-8");
+
+		const result = discoverAgentsAll(dir);
+		assert.ok(result.chains.find((chain) => chain.name === "legacy-chain" && chain.filePath === path.join(dir, ".agents", "legacy.chain.md")));
+		assert.ok(result.chains.find((chain) => chain.name === "canonical-chain" && chain.filePath === path.join(dir, ".pi", "agents", "canonical.chain.md")));
+		assert.equal(result.projectDir, path.join(dir, ".pi", "agents"));
+	});
+
+	it("prefers .pi/agents over .agents on project chain name collisions", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-project-chain-collision-"));
+		tempDirs.push(dir);
+		fs.mkdirSync(path.join(dir, ".agents"), { recursive: true });
+		fs.mkdirSync(path.join(dir, ".pi", "agents"), { recursive: true });
+		fs.writeFileSync(path.join(dir, ".agents", "shared.chain.md"), `---
+name: shared-chain
+description: Legacy chain
+---
+
+## scout
+
+Inspect legacy
+`, "utf-8");
+		fs.writeFileSync(path.join(dir, ".pi", "agents", "shared.chain.md"), `---
+name: shared-chain
+description: Canonical chain
+---
+
+## worker
+
+Inspect canonical
+`, "utf-8");
+
+		const shared = discoverAgentsAll(dir).chains.find((chain) => chain.name === "shared-chain");
+		assert.ok(shared);
+		assert.equal(shared.filePath, path.join(dir, ".pi", "agents", "shared.chain.md"));
+		assert.equal(shared.description, "Canonical chain");
+		assert.equal(shared.steps[0]?.agent, "worker");
+		assert.equal(shared.steps[0]?.task, "Inspect canonical");
 	});
 });
