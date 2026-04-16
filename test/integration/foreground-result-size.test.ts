@@ -12,6 +12,7 @@ interface SingleResultLike {
 	exitCode?: number;
 	finalOutput?: string;
 	messages?: unknown[];
+	toolCalls?: Array<{ text?: string; expandedText?: string }>;
 	progress?: unknown;
 }
 
@@ -128,6 +129,25 @@ describe("foreground result payload compaction", { skip: !available ? "subagent 
 
 	it("keeps foreground single-run payloads compact after tool-heavy runs", async () => {
 		const jsonl: unknown[] = [];
+		jsonl.push({
+			type: "message_end",
+			message: {
+				role: "assistant",
+				content: [{
+					type: "toolCall",
+					name: "write",
+					arguments: {
+						path: "/tmp/huge-report.md",
+						content: "x".repeat(50_000),
+					},
+				}],
+				model: "mock/test-model",
+				usage: { input: 100, output: 50, cacheRead: 0, cacheWrite: 0, cost: { total: 0.001 } },
+			},
+		});
+		jsonl.push(events.toolStart("write", { path: "/tmp/huge-report.md", content: "x".repeat(50_000) }));
+		jsonl.push(events.toolResult("write", "ok"));
+		jsonl.push(events.toolEnd("write"));
 		for (let step = 0; step < 60; step++) {
 			jsonl.push(events.toolStart("bash", {
 				command: `docker compose run --rm api test-shard-${step} --retry --verbose`,
@@ -158,6 +178,9 @@ describe("foreground result payload compaction", { skip: !available ? "subagent 
 		assert.equal(step?.exitCode, 0);
 		assert.ok(step?.messages === undefined, "completed foreground results should not inline raw messages");
 		assert.ok(step?.progress === undefined, "completed foreground results should not inline full progress objects");
+		assert.ok(step?.toolCalls?.length, "completed foreground results should preserve compact tool-call summaries");
+		assert.equal(step?.toolCalls?.[0]?.text, "write /tmp/huge-report.md");
+		assert.equal(step?.toolCalls?.[0]?.expandedText, "write /tmp/huge-report.md");
 
 		const payloadSize = JSON.stringify(result).length;
 		assert.ok(payloadSize < 80_000, `expected compact foreground payload, got ${payloadSize} bytes`);

@@ -6,7 +6,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { Message } from "@mariozechner/pi-ai";
-import type { AgentProgress, AsyncStatus, Details, DisplayItem, ErrorInfo, SingleResult } from "./types.ts";
+import { formatToolCall } from "./formatters.ts";
+import type { AgentProgress, AsyncStatus, Details, DisplayItem, ErrorInfo, SingleResult, ToolCallSummary } from "./types.ts";
 
 // ============================================================================
 // File System Utilities
@@ -242,12 +243,33 @@ function compactCompletedProgress(progress: AgentProgress): AgentProgress {
 	};
 }
 
+export function extractToolCallSummaries(messages: Message[] | undefined): ToolCallSummary[] {
+	if (!messages?.length) return [];
+	const summaries: ToolCallSummary[] = [];
+	for (const msg of messages) {
+		if (msg.role !== "assistant") continue;
+		for (const part of msg.content) {
+			if (part.type !== "toolCall") continue;
+			const args = typeof part.arguments === "object" && part.arguments !== null && !Array.isArray(part.arguments)
+				? part.arguments
+				: {};
+			summaries.push({
+				text: formatToolCall(part.name, args),
+				expandedText: formatToolCall(part.name, args, true),
+			});
+		}
+	}
+	return summaries;
+}
+
 export function compactForegroundResult(result: SingleResult): SingleResult {
 	if (result.progress?.status === "running") return result;
+	const toolCalls = result.toolCalls?.length ? result.toolCalls : extractToolCallSummaries(result.messages);
 	return {
 		...result,
 		messages: undefined,
 		progress: undefined,
+		toolCalls: toolCalls.length ? toolCalls : undefined,
 	};
 }
 
