@@ -139,7 +139,8 @@ export function findWorktreeTaskCwdConflict(
 	for (let index = 0; index < tasks.length; index++) {
 		const task = tasks[index]!;
 		if (!task.cwd) continue;
-		if (normalizeComparableCwd(task.cwd) === normalizedSharedCwd) continue;
+		const taskCwd = path.isAbsolute(task.cwd) ? task.cwd : path.resolve(sharedCwd, task.cwd);
+		if (normalizeComparableCwd(taskCwd) === normalizedSharedCwd) continue;
 		return { index, agent: task.agent, cwd: task.cwd };
 	}
 	return undefined;

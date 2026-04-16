@@ -16,6 +16,7 @@ import { isParallelStep, resolveStepBehavior, type ChainStep, type SequentialSte
 import type { RunnerStep } from "./parallel-utils.ts";
 import { resolvePiPackageRoot } from "./pi-spawn.ts";
 import { buildSkillInjection, normalizeSkillInput, resolveSkillsWithFallback } from "./skills.ts";
+import { resolveChildCwd } from "./utils.ts";
 import { buildModelCandidates, resolveModelCandidate, type AvailableModelInfo } from "./model-fallback.ts";
 import {
 	type ArtifactConfig,
@@ -163,6 +164,7 @@ export function executeAsyncChain(
 	} = params;
 	const chainSkills = params.chainSkills ?? [];
 	const availableModels = params.availableModels;
+	const runnerCwd = resolveChildCwd(ctx.cwd, cwd);
 
 	for (const s of chain) {
 		const stepAgents = isParallelStep(s)
@@ -193,12 +195,12 @@ export function executeAsyncChain(
 
 	const buildSeqStep = (s: SequentialStep, sessionFile?: string) => {
 		const a = agents.find((x) => x.name === s.agent)!;
+		const stepCwd = resolveChildCwd(runnerCwd, s.cwd);
 		const stepSkillInput = normalizeSkillInput(s.skill);
 		const stepOverrides: StepOverrides = { skills: stepSkillInput };
 		const behavior = resolveStepBehavior(a, stepOverrides, chainSkills);
 		const skillNames = behavior.skills === false ? [] : behavior.skills;
-		const skillCwd = s.cwd ?? cwd ?? ctx.cwd;
-		const { resolved: resolvedSkills } = resolveSkillsWithFallback(skillNames, skillCwd, ctx.cwd);
+		const { resolved: resolvedSkills } = resolveSkillsWithFallback(skillNames, stepCwd, ctx.cwd);
 
 		let systemPrompt = a.systemPrompt?.trim() ?? "";
 		if (resolvedSkills.length > 0) {
@@ -206,14 +208,14 @@ export function executeAsyncChain(
 			systemPrompt = systemPrompt ? `${systemPrompt}\n\n${injection}` : injection;
 		}
 
-		const outputPath = resolveSingleOutputPath(s.output, ctx.cwd, s.cwd ?? cwd);
+		const outputPath = resolveSingleOutputPath(s.output, ctx.cwd, stepCwd);
 		const task = injectSingleOutputInstruction(s.task ?? "{previous}", outputPath);
 
 		const primaryModel = resolveModelCandidate(s.model ?? a.model, availableModels, ctx.currentModelProvider);
 		return {
 			agent: s.agent,
 			task,
-			cwd: s.cwd,
+			cwd: stepCwd,
 			model: applyThinkingSuffix(primaryModel, a.thinking),
 			modelCandidates: buildModelCandidates(s.model ?? a.model, a.fallbackModels, availableModels, ctx.currentModelProvider).map((candidate) =>
 				applyThinkingSuffix(candidate, a.thinking),
@@ -258,7 +260,6 @@ export function executeAsyncChain(
 		return buildSeqStep(s as SequentialStep, nextSessionFile());
 	});
 
-	const runnerCwd = cwd ?? ctx.cwd;
 	let pid: number | undefined;
 	try {
 		pid = spawnRunner(
@@ -343,10 +344,10 @@ export function executeAsyncSingle(
 		worktreeSetupHook,
 		worktreeSetupHookTimeoutMs,
 	} = params;
+	const runnerCwd = resolveChildCwd(ctx.cwd, cwd);
 	const skillNames = params.skills ?? agentConfig.skills ?? [];
 	const availableModels = params.availableModels;
-	const skillCwd = cwd ?? ctx.cwd;
-	const { resolved: resolvedSkills } = resolveSkillsWithFallback(skillNames, skillCwd, ctx.cwd);
+	const { resolved: resolvedSkills } = resolveSkillsWithFallback(skillNames, runnerCwd, ctx.cwd);
 	let systemPrompt = agentConfig.systemPrompt?.trim() ?? "";
 	if (resolvedSkills.length > 0) {
 		const injection = buildSkillInjection(resolvedSkills);
@@ -365,8 +366,7 @@ export function executeAsyncSingle(
 		};
 	}
 
-	const runnerCwd = cwd ?? ctx.cwd;
-	const outputPath = resolveSingleOutputPath(params.output, ctx.cwd, cwd);
+	const outputPath = resolveSingleOutputPath(params.output, ctx.cwd, runnerCwd);
 	const taskWithOutputInstruction = injectSingleOutputInstruction(task, outputPath);
 	let pid: number | undefined;
 	try {
@@ -377,7 +377,7 @@ export function executeAsyncSingle(
 					{
 						agent,
 						task: taskWithOutputInstruction,
-						cwd,
+						cwd: runnerCwd,
 						model: applyThinkingSuffix(resolveModelCandidate(params.modelOverride ?? agentConfig.model, availableModels, ctx.currentModelProvider), agentConfig.thinking),
 						modelCandidates: buildModelCandidates(params.modelOverride ?? agentConfig.model, agentConfig.fallbackModels, availableModels, ctx.currentModelProvider).map((candidate) =>
 							applyThinkingSuffix(candidate, agentConfig.thinking),

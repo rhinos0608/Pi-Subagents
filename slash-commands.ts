@@ -1,18 +1,18 @@
 import { randomUUID } from "node:crypto";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Key, matchesKey } from "@mariozechner/pi-tui";
-import { discoverAgents, discoverAgentsAll } from "./agents.js";
-import { AgentManagerComponent, type ManagerResult } from "./agent-manager.js";
-import { SubagentsStatusComponent } from "./subagents-status.js";
-import { discoverAvailableSkills } from "./skills.js";
-import type { SubagentParamsLike } from "./subagent-executor.js";
-import type { SlashSubagentResponse, SlashSubagentUpdate } from "./slash-bridge.js";
+import { discoverAgents, discoverAgentsAll } from "./agents.ts";
+import { AgentManagerComponent, type ManagerResult } from "./agent-manager.ts";
+import { SubagentsStatusComponent } from "./subagents-status.ts";
+import { discoverAvailableSkills } from "./skills.ts";
+import type { SubagentParamsLike } from "./subagent-executor.ts";
+import type { SlashSubagentResponse, SlashSubagentUpdate } from "./slash-bridge.ts";
 import {
 	applySlashUpdate,
 	buildSlashInitialResult,
 	failSlashResult,
 	finalizeSlashResult,
-} from "./slash-live-state.js";
+} from "./slash-live-state.ts";
 import {
 	MAX_PARALLEL,
 	SLASH_RESULT_TYPE,
@@ -22,7 +22,7 @@ import {
 	SLASH_SUBAGENT_STARTED_EVENT,
 	SLASH_SUBAGENT_UPDATE_EVENT,
 	type SubagentState,
-} from "./types.js";
+} from "./types.ts";
 
 interface InlineConfig {
 	output?: string | false;

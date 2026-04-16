@@ -358,6 +358,51 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		}
 	});
 
+	it("background chains resolve relative step cwd values against the shared cwd", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
+		mockPi.onCall({ output: "Done asynchronously" });
+		const chainCwd = createTempDir("pi-subagent-async-chain-cwd-");
+		const id = `async-chain-skill-cwd-${Date.now().toString(36)}`;
+		const asyncDir = path.join(ASYNC_DIR, id);
+		const resultPath = path.join(RESULTS_DIR, `${id}.json`);
+		const statusPath = path.join(asyncDir, "status.json");
+
+		try {
+			writePackageSkill(path.join(chainCwd, "packages", "app"), "async-chain-step-skill");
+			executeAsyncChain(id, {
+				chain: [{ agent: "worker", task: "Do work", cwd: "packages/app", skill: ["async-chain-step-skill"] }],
+				agents: [makeAgent("worker")],
+				ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
+				cwd: chainCwd,
+				artifactConfig: {
+					enabled: false,
+					includeInput: false,
+					includeOutput: false,
+					includeJsonl: false,
+					includeMetadata: false,
+					cleanupDays: 7,
+				},
+				shareEnabled: false,
+				sessionRoot: path.join(tempDir, "sessions"),
+				maxSubagentDepth: 2,
+			});
+
+			const deadline = Date.now() + 10_000;
+			while (!fs.existsSync(resultPath)) {
+				if (Date.now() > deadline) {
+					assert.fail(`Timed out waiting for async result file: ${resultPath}`);
+				}
+				await new Promise((resolve) => setTimeout(resolve, 100));
+			}
+
+			const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8")) as AsyncResultPayload;
+			const status = JSON.parse(fs.readFileSync(statusPath, "utf-8")) as AsyncStatusPayload;
+			assert.equal(payload.success, true);
+			assert.deepEqual(status.steps?.[0]?.skills, ["async-chain-step-skill"]);
+		} finally {
+			removeTempDir(chainCwd);
+		}
+	});
+
 	it("returns a tool error when the detached runner config cannot be written", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, () => {
 		const id = `async-write-fail-${Date.now().toString(36)}`;
 		assert.ok(TEMP_ROOT_DIR, "TEMP_ROOT_DIR should be available for async tests");

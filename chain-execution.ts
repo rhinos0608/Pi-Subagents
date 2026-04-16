@@ -28,7 +28,7 @@ import {
 import { discoverAvailableSkills, normalizeSkillInput } from "./skills.ts";
 import { runSync } from "./execution.ts";
 import { buildChainSummary } from "./formatters.ts";
-import { compactForegroundDetails, getSingleResultOutput, mapConcurrent } from "./utils.ts";
+import { compactForegroundDetails, getSingleResultOutput, mapConcurrent, resolveChildCwd } from "./utils.ts";
 import { recordRun } from "./run-history.ts";
 import {
 	cleanupWorktrees,
@@ -38,7 +38,7 @@ import {
 	formatWorktreeDiffSummary,
 	formatWorktreeTaskCwdConflict,
 	type WorktreeSetup,
-} from "./worktree.js";
+} from "./worktree.ts";
 import {
 	type AgentProgress,
 	type ArtifactConfig,
@@ -181,7 +181,7 @@ async function runParallelChainTasks(input: ParallelChainRunInput): Promise<Sing
 
 			const taskCwd = input.worktreeSetup
 				? input.worktreeSetup.worktrees[taskIndex]!.agentCwd
-				: (task.cwd ?? input.cwd);
+				: resolveChildCwd(input.cwd ?? input.ctx.cwd, task.cwd);
 
 			const outputPath = typeof behavior.output === "string"
 				? (path.isAbsolute(behavior.output) ? behavior.output : path.join(input.chainDir, behavior.output))
@@ -412,7 +412,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 
 		if (isParallelStep(step)) {
 			const parallelTemplates = stepTemplates as string[];
-			const parallelCwd = step.cwd ?? cwd ?? ctx.cwd;
+			const parallelCwd = resolveChildCwd(cwd ?? ctx.cwd, step.cwd);
 			let worktreeSetup: WorktreeSetup | undefined;
 			if (step.worktree) {
 				const worktreeTaskCwdConflict = findWorktreeTaskCwdConflict(step.parallel, parallelCwd);
@@ -605,7 +605,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 			const maxSubagentDepth = resolveChildMaxSubagentDepth(params.maxSubagentDepth, agentConfig.maxSubagentDepth);
 
 			const r = await runSync(ctx.cwd, agents, seqStep.agent, stepTask, {
-				cwd: seqStep.cwd ?? cwd,
+				cwd: resolveChildCwd(cwd ?? ctx.cwd, seqStep.cwd),
 				signal,
 				runId,
 				index: globalTaskIndex,

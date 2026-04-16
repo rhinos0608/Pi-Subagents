@@ -356,5 +356,5 @@ export function createParallelDirs(
 	}
 }
 
-export type { ParallelTaskResult } from "./parallel-utils.js";
-export { aggregateParallelOutputs } from "./parallel-utils.js";
+export type { ParallelTaskResult } from "./parallel-utils.ts";
+export { aggregateParallelOutputs } from "./parallel-utils.ts";

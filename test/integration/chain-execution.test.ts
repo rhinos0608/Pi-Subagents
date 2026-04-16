@@ -57,6 +57,7 @@ interface ChainResultItem {
 	exitCode: number;
 	finalOutput?: string;
 	attemptedModels?: string[];
+	skills?: string[];
 }
 
 interface ChainExecutionResult {
@@ -118,6 +119,21 @@ describe("chain execution — sequential", { skip: !available ? "pi packages not
 			clarify: false,
 			...overrides,
 		};
+	}
+
+	function writePackageSkill(packageRoot: string, skillName: string): void {
+		const skillDir = path.join(packageRoot, "skills", skillName);
+		fs.mkdirSync(skillDir, { recursive: true });
+		fs.writeFileSync(
+			path.join(packageRoot, "package.json"),
+			JSON.stringify({ name: `${skillName}-pkg`, version: "1.0.0", pi: { skills: [`./skills/${skillName}`] } }, null, 2),
+			"utf-8",
+		);
+		fs.writeFileSync(
+			path.join(skillDir, "SKILL.md"),
+			`---\nname: ${skillName}\ndescription: test skill\n---\nbody\n`,
+			"utf-8",
+		);
 	}
 
 	it("runs a 2-step chain", async () => {
@@ -201,8 +217,6 @@ describe("chain execution — sequential", { skip: !available ? "pi packages not
 	});
 
 	it("passes {previous} between steps (step 2 receives step 1 output)", async () => {
-		// Mock echoes the task by default, so step 2's output will contain step 1's output
-		// if {previous} was properly substituted
 		mockPi.onCall({ output: "Step 1 unique output: MARKER_ABC_123" });
 		const agents = [makeAgent("step1"), makeAgent("step2")];
 
@@ -214,7 +228,6 @@ describe("chain execution — sequential", { skip: !available ? "pi packages not
 		);
 
 		assert.ok(!result.isError);
-		// Step 2's task should contain step 1's output (via {previous})
 		const step2Task = result.details.results[1].task;
 		assert.ok(
 			step2Task.includes("MARKER_ABC_123"),
@@ -307,6 +320,25 @@ describe("chain execution — sequential", { skip: !available ? "pi packages not
 
 		assert.ok(result.isError);
 		assert.ok(result.content[0].text.includes("Unknown agent"));
+	});
+
+	it("resolves relative step cwd values against the chain cwd for skills", async () => {
+		mockPi.onCall({ output: "ok" });
+		const chainCwd = path.join(tempDir, "worktree");
+		const stepPackageDir = path.join(chainCwd, "packages", "app");
+		writePackageSkill(stepPackageDir, "chain-step-skill");
+		const agents = [makeAgent("analyst", { skills: ["chain-step-skill"] })];
+
+		const result = await executeChain(
+			makeChainParams(
+				[{ agent: "analyst", task: "Analyze", cwd: "packages/app" }],
+				agents,
+				{ cwd: chainCwd },
+			),
+		);
+
+		assert.ok(!result.isError, `chain should succeed: ${JSON.stringify(result.content)}`);
+		assert.deepEqual(result.details.results[0]?.skills, ["chain-step-skill"]);
 	});
 
 	it("tracks chain metadata (chainAgents, totalSteps)", async () => {
@@ -438,15 +470,14 @@ describe("chain execution — parallel steps", { skip: !available ? "pi packages
 							{ agent: "reviewer-b", task: "Review performance" },
 						],
 					},
-					{ agent: "synthesizer" }, // Gets aggregated {previous}
+					{ agent: "synthesizer" },
 				],
 				agents,
 			),
 		);
 
 		assert.ok(!result.isError);
-		assert.equal(result.details.results.length, 3); // 2 parallel + 1 sequential
-		// Synthesizer's task should contain both parallel task blocks
+		assert.equal(result.details.results.length, 3);
 		const synthTask = result.details.results[2].task;
 		assert.ok(
 			synthTask.includes("=== Parallel Task 1 (reviewer-a) ==="),
@@ -515,14 +546,14 @@ describe("chain execution — parallel steps", { skip: !available ? "pi packages
 							{ agent: "rev-b", task: "Deep review B" },
 						],
 					},
-					{ agent: "writer" }, // Gets aggregated parallel output
+					{ agent: "writer" },
 				],
 				agents,
 			),
 		);
 
 		assert.ok(!result.isError);
-		assert.equal(result.details.results.length, 4); // 1 + 2 + 1
-		assert.equal(result.details.totalSteps, 3); // 3 chain steps
+		assert.equal(result.details.results.length, 4);
+		assert.equal(result.details.totalSteps, 3);
 	});
 });

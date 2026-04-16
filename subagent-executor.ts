@@ -25,7 +25,7 @@ import { executeAsyncChain, executeAsyncSingle, isAsyncAvailable } from "./async
 import { createForkContextResolver } from "./fork-context.ts";
 import { applyIntercomBridgeToAgent, resolveIntercomBridge, resolveIntercomSessionTarget } from "./intercom-bridge.ts";
 import { finalizeSingleOutput, injectSingleOutputInstruction, resolveSingleOutputPath } from "./single-output.ts";
-import { compactForegroundDetails, getSingleResultOutput, mapConcurrent } from "./utils.ts";
+import { compactForegroundDetails, getSingleResultOutput, mapConcurrent, resolveChildCwd } from "./utils.ts";
 import {
 	cleanupWorktrees,
 	createWorktrees,
@@ -101,6 +101,7 @@ interface ExecutorDeps {
 
 interface ExecutionContextData {
 	params: SubagentParamsLike;
+	effectiveCwd: string;
 	ctx: ExtensionContext;
 	signal: AbortSignal;
 	onUpdate?: (r: AgentToolResult<Details>) => void;
@@ -114,6 +115,10 @@ interface ExecutionContextData {
 	artifactsDir: string;
 	parallelDowngraded: boolean;
 	effectiveAsync: boolean;
+}
+
+function resolveRequestedCwd(runtimeCwd: string, requestedCwd: string | undefined): string {
+	return requestedCwd ? path.resolve(runtimeCwd, requestedCwd) : runtimeCwd;
 }
 
 function validateExecutionInput(
@@ -333,6 +338,7 @@ function wrapChainTasksForFork(chain: ChainStep[], context: SubagentParamsLike["
 function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentToolResult<Details> | null {
 	const {
 		params,
+		effectiveCwd,
 		agents,
 		ctx,
 		shareEnabled,
@@ -347,7 +353,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 	if (!effectiveAsync) return null;
 
 	if (hasChain && params.chain) {
-		const chainWorktreeTaskCwdError = buildChainWorktreeTaskCwdError(params.chain as ChainStep[], params.cwd ?? ctx.cwd);
+		const chainWorktreeTaskCwdError = buildChainWorktreeTaskCwdError(params.chain as ChainStep[], effectiveCwd);
 		if (chainWorktreeTaskCwdError) {
 			return {
 				content: [{ type: "text", text: chainWorktreeTaskCwdError }],
@@ -387,7 +393,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 			agents,
 			ctx: asyncCtx,
 			availableModels,
-			cwd: params.cwd,
+			cwd: effectiveCwd,
 			maxOutput: params.maxOutput,
 			artifactsDir: artifactConfig.enabled ? artifactsDir : undefined,
 			artifactConfig,
@@ -422,7 +428,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 			agentConfig: a,
 			ctx: asyncCtx,
 			availableModels,
-			cwd: params.cwd,
+			cwd: effectiveCwd,
 			maxOutput: params.maxOutput,
 			artifactsDir: artifactConfig.enabled ? artifactsDir : undefined,
 			artifactConfig,
@@ -444,6 +450,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Promise<AgentToolResult<Details>> {
 	const {
 		params,
+		effectiveCwd,
 		agents,
 		ctx,
 		signal,
@@ -467,7 +474,7 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 		ctx,
 		signal,
 		runId,
-		cwd: params.cwd,
+		cwd: effectiveCwd,
 		shareEnabled,
 		sessionDirForIndex,
 		sessionFileForIndex,
@@ -508,7 +515,7 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 				id: m.id,
 				fullId: `${m.provider}/${m.id}`,
 			})),
-			cwd: params.cwd,
+			cwd: effectiveCwd,
 			maxOutput: params.maxOutput,
 			artifactsDir: artifactConfig.enabled ? artifactsDir : undefined,
 			artifactConfig,
@@ -595,7 +602,7 @@ function buildChainWorktreeTaskCwdError(chain: ChainStep[], sharedCwd: string): 
 	for (let stepIndex = 0; stepIndex < chain.length; stepIndex++) {
 		const step = chain[stepIndex]!;
 		if (!isParallelStep(step) || !step.worktree) continue;
-		const stepCwd = step.cwd ?? sharedCwd;
+		const stepCwd = resolveChildCwd(sharedCwd, step.cwd);
 		const conflict = findWorktreeTaskCwdConflict(step.parallel, stepCwd);
 		if (!conflict) continue;
 		const detail = formatWorktreeTaskCwdConflict(conflict, stepCwd);
@@ -611,7 +618,8 @@ function resolveParallelTaskCwd(
 	index: number,
 ): string | undefined {
 	if (worktreeSetup) return worktreeSetup.worktrees[index]!.agentCwd;
-	return task.cwd ?? paramsCwd;
+	if (!paramsCwd) return task.cwd;
+	return resolveChildCwd(paramsCwd, task.cwd);
 }
 
 function buildParallelWorktreeSuffix(
@@ -672,6 +680,7 @@ async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Pr
 async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): Promise<AgentToolResult<Details>> {
 	const {
 		params,
+		effectiveCwd,
 		agents,
 		ctx,
 		signal,
@@ -714,7 +723,6 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 		resolveChildMaxSubagentDepth(currentMaxSubagentDepth, config.maxSubagentDepth),
 	);
 
-	const effectiveCwd = params.cwd ?? ctx.cwd;
 	if (params.worktree) {
 		const worktreeTaskCwdError = buildParallelWorktreeTaskCwdError(tasks, effectiveCwd);
 		if (worktreeTaskCwdError) return buildParallelModeError(worktreeTaskCwdError);
@@ -738,7 +746,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 		const behaviors = agentConfigs.map((c, i) =>
 			resolveStepBehavior(c, { skills: skillOverrides[i] }),
 		);
-		const availableSkills = discoverAvailableSkills(params.cwd ?? ctx.cwd);
+		const availableSkills = discoverAvailableSkills(effectiveCwd);
 
 		const result = await ctx.ui.custom<ChainClarifyResult>(
 			(tui, theme, _kb, done) =>
@@ -796,7 +804,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 				agents,
 				ctx: asyncCtx,
 				availableModels,
-				cwd: params.cwd,
+				cwd: effectiveCwd,
 				maxOutput: params.maxOutput,
 				artifactsDir: artifactConfig.enabled ? artifactsDir : undefined,
 				artifactConfig,
@@ -844,7 +852,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 			artifactConfig,
 			artifactsDir,
 			maxOutput: params.maxOutput,
-			paramsCwd: params.cwd,
+			paramsCwd: effectiveCwd,
 			availableModels,
 			modelOverrides,
 			skillOverrides,
@@ -900,6 +908,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Promise<AgentToolResult<Details>> {
 	const {
 		params,
+		effectiveCwd,
 		agents,
 		ctx,
 		signal,
@@ -943,7 +952,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 
 	if (params.clarify === true && ctx.hasUI) {
 		const behavior = resolveStepBehavior(agentConfig, { output: effectiveOutput, skills: skillOverride });
-		const availableSkills = discoverAvailableSkills(params.cwd ?? ctx.cwd);
+		const availableSkills = discoverAvailableSkills(effectiveCwd);
 
 		const result = await ctx.ui.custom<ChainClarifyResult>(
 			(tui, theme, _kb, done) =>
@@ -994,7 +1003,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 				agentConfig,
 				ctx: asyncCtx,
 				availableModels,
-				cwd: params.cwd,
+				cwd: effectiveCwd,
 				maxOutput: params.maxOutput,
 				artifactsDir: artifactConfig.enabled ? artifactsDir : undefined,
 				artifactConfig,
@@ -1015,7 +1024,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 		task = wrapForkTask(task);
 	}
 	const cleanTask = task;
-	const outputPath = resolveSingleOutputPath(effectiveOutput, ctx.cwd, params.cwd);
+	const outputPath = resolveSingleOutputPath(effectiveOutput, ctx.cwd, effectiveCwd);
 	task = injectSingleOutputInstruction(task, outputPath);
 
 	let effectiveSkills: string[] | undefined;
@@ -1026,7 +1035,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 	}
 
 	const r = await runSync(ctx.cwd, agents, params.agent!, task, {
-		cwd: params.cwd,
+		cwd: effectiveCwd,
 		signal,
 		allowIntercomDetach: agentConfig.systemPrompt?.includes("Intercom orchestration channel:") === true,
 		intercomEvents: deps.pi.events,
@@ -1114,6 +1123,8 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		ctx: ExtensionContext,
 	): Promise<AgentToolResult<Details>> => {
 		deps.state.baseCwd = ctx.cwd;
+		const requestCwd = resolveRequestedCwd(ctx.cwd, params.cwd);
+		const paramsWithResolvedCwd = params.cwd === undefined ? params : { ...params, cwd: requestCwd };
 		if (params.action) {
 			const validActions = ["list", "get", "create", "update", "delete"];
 			if (!validActions.includes(params.action)) {
@@ -1123,7 +1134,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 					details: { mode: "management" as const, results: [] },
 				};
 			}
-			return handleManagementAction(params.action, params, ctx);
+			return handleManagementAction(params.action, paramsWithResolvedCwd, { ...ctx, cwd: requestCwd });
 		}
 
 		const { blocked, depth, maxDepth } = checkSubagentDepth(deps.config.maxSubagentDepth);
@@ -1143,14 +1154,15 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			};
 		}
 
-		const normalized = normalizeRepeatedParallelCounts(params);
+		const normalized = normalizeRepeatedParallelCounts(paramsWithResolvedCwd);
 		if (normalized.error) return normalized.error;
 		const normalizedParams = normalized.params!;
 
 		const scope: AgentScope = resolveExecutionAgentScope(normalizedParams.agentScope);
+		const effectiveCwd = normalizedParams.cwd ?? ctx.cwd;
 		const parentSessionFile = ctx.sessionManager.getSessionFile() ?? null;
 		deps.state.currentSessionId = parentSessionFile ?? `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-		const discoveredAgents = deps.discoverAgents(ctx.cwd, scope).agents;
+		const discoveredAgents = deps.discoverAgents(effectiveCwd, scope).agents;
 		const sessionName = resolveIntercomSessionTarget(deps.pi.getSessionName(), ctx.sessionManager.getSessionId());
 		const intercomBridge = resolveIntercomBridge({
 			config: deps.config.intercomBridge,
@@ -1227,6 +1239,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 
 		const execData: ExecutionContextData = {
 			params: normalizedParams,
+			effectiveCwd,
 			ctx,
 			signal,
 			onUpdate: onUpdateWithContext,

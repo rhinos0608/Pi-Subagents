@@ -1,7 +1,10 @@
 import { describe, it, before, after, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import type { MockPi } from "../support/helpers.ts";
 import { createMockPi, createTempDir, removeTempDir, tryImport } from "../support/helpers.ts";
+import { discoverAgents } from "../../agents.ts";
 
 interface ExecutorModule {
 	createSubagentExecutor?: (...args: unknown[]) => {
@@ -11,13 +14,21 @@ interface ExecutorModule {
 			signal: AbortSignal,
 			onUpdate: ((result: unknown) => void) | undefined,
 			ctx: unknown,
-		) => Promise<{ isError?: boolean; content: Array<{ text?: string }> }>;
+		) => Promise<{
+			isError?: boolean;
+			content: Array<{ text?: string }>;
+			details?: {
+				results?: Array<{ skills?: string[] }>;
+			};
+		}>;
 	};
 }
 
 const executorMod = await tryImport<ExecutorModule>("./subagent-executor.ts");
 const available = !!executorMod;
 const createSubagentExecutor = executorMod?.createSubagentExecutor;
+const originalHome = process.env.HOME;
+const originalUserProfile = process.env.USERPROFILE;
 
 interface SessionStubOptions {
 	sessionFile?: string;
@@ -85,10 +96,24 @@ describe("fork context execution wiring", { skip: !available ? "subagent executo
 	});
 
 	afterEach(() => {
+		if (originalHome === undefined) delete process.env.HOME;
+		else process.env.HOME = originalHome;
+		if (originalUserProfile === undefined) delete process.env.USERPROFILE;
+		else process.env.USERPROFILE = originalUserProfile;
 		removeTempDir(tempDir);
 	});
 
 	function makeExecutor() {
+		return makeExecutorWithDiscoverAgents(() => ({
+			agents: [
+				{ name: "echo", description: "Echo test agent" },
+				{ name: "second", description: "Second test agent" },
+			],
+			projectAgentsDir: null,
+		}));
+	}
+
+	function makeExecutorWithDiscoverAgents(discoverAgentsImpl: typeof discoverAgents) {
 		let sessionName: string | undefined;
 		return createSubagentExecutor({
 			pi: {
@@ -104,13 +129,54 @@ describe("fork context execution wiring", { skip: !available ? "subagent executo
 			tempArtifactsDir: tempDir,
 			getSubagentSessionRoot: () => tempDir,
 			expandTilde: (p: string) => p,
-			discoverAgents: () => ({
-				agents: [
-					{ name: "echo", description: "Echo test agent" },
-					{ name: "second", description: "Second test agent" },
-				],
-			}),
+			discoverAgents: discoverAgentsImpl,
 		});
+	}
+
+	function readCallArgs(): string[] {
+		const callFile = fs.readdirSync(mockPi.dir)
+			.filter((name) => name.startsWith("call-") && name.endsWith(".json"))
+			.sort()
+			.at(-1);
+		assert.ok(callFile, "expected a recorded mock pi call");
+		const payload = JSON.parse(fs.readFileSync(path.join(mockPi.dir, callFile), "utf-8")) as { args?: string[] };
+		assert.ok(Array.isArray(payload.args), "expected recorded args");
+		return payload.args;
+	}
+
+	function writeAgent(projectRoot: string, name: string, model: string): void {
+		const filePath = path.join(projectRoot, ".pi", "agents", `${name}.md`);
+		fs.mkdirSync(path.dirname(filePath), { recursive: true });
+		fs.writeFileSync(
+			filePath,
+			`---\nname: ${name}\ndescription: ${name} agent\nmodel: ${model}\n---\n\nUse ${model}.\n`,
+			"utf-8",
+		);
+	}
+
+	function writeProjectOverride(projectRoot: string, agentName: string, model: string): void {
+		const settingsPath = path.join(projectRoot, ".pi", "settings.json");
+		fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+		fs.writeFileSync(
+			settingsPath,
+			JSON.stringify({ subagents: { agentOverrides: { [agentName]: { model } } } }, null, 2),
+			"utf-8",
+		);
+	}
+
+	function writePackageSkill(packageRoot: string, skillName: string): void {
+		const skillDir = path.join(packageRoot, "skills", skillName);
+		fs.mkdirSync(skillDir, { recursive: true });
+		fs.writeFileSync(
+			path.join(packageRoot, "package.json"),
+			JSON.stringify({ name: `${skillName}-pkg`, version: "1.0.0", pi: { skills: [`./skills/${skillName}`] } }, null, 2),
+			"utf-8",
+		);
+		fs.writeFileSync(
+			path.join(skillDir, "SKILL.md"),
+			`---\nname: ${skillName}\ndescription: test skill\n---\nbody\n`,
+			"utf-8",
+		);
 	}
 
 	function makeCtx(sessionManager: SessionManagerStub) {
@@ -332,5 +398,98 @@ describe("fork context execution wiring", { skip: !available ? "subagent executo
 		assert.equal(result.isError, undefined);
 		assert.equal(calls.length, 6, "1 sequential + 4 parallel + 1 sequential");
 		assert.deepEqual(calls, ["leaf-chain", "leaf-chain", "leaf-chain", "leaf-chain", "leaf-chain", "leaf-chain"]);
+	});
+
+	it("uses request cwd for management actions", async () => {
+		const executor = makeExecutor();
+		const worktreeDir = path.join(tempDir, "worktree");
+		fs.mkdirSync(worktreeDir, { recursive: true });
+
+		const result = await executor.execute(
+			"id",
+			{
+				action: "create",
+				cwd: "worktree",
+				config: { name: "local-helper", description: "Local helper", scope: "project" },
+			},
+			new AbortController().signal,
+			undefined,
+			makeCtx(makeSessionManagerRecorder().manager),
+		);
+
+		assert.equal(result.isError, false);
+		assert.equal(fs.existsSync(path.join(worktreeDir, ".pi", "agents", "local-helper.md")), true);
+		assert.equal(fs.existsSync(path.join(tempDir, ".pi", "agents", "local-helper.md")), false);
+	});
+
+	it("uses request cwd for execution-time agent discovery", async () => {
+		const worktreeDir = path.join(tempDir, "worktree");
+		writeAgent(tempDir, "echo", "openai/gpt-5-main");
+		writeAgent(worktreeDir, "echo", "anthropic/claude-haiku-4-5");
+		const executor = makeExecutorWithDiscoverAgents(discoverAgents);
+
+		const result = await executor.execute(
+			"id",
+			{ agent: "echo", task: "test", cwd: "worktree" },
+			new AbortController().signal,
+			undefined,
+			makeCtx(makeSessionManagerRecorder().manager),
+		);
+
+		assert.equal(result.isError, undefined);
+		const args = readCallArgs();
+		const modelIndex = args.indexOf("--model");
+		assert.notEqual(modelIndex, -1);
+		assert.equal(args[modelIndex + 1], "anthropic/claude-haiku-4-5");
+	});
+
+	it("resolves parallel task cwd values relative to the request cwd", async () => {
+		const worktreeDir = path.join(tempDir, "worktree");
+		writePackageSkill(path.join(worktreeDir, "packages", "app"), "parallel-step-skill");
+		const executor = makeExecutorWithDiscoverAgents(() => ({
+			agents: [{ name: "echo", description: "Echo test agent", skills: ["parallel-step-skill"] }],
+			projectAgentsDir: null,
+		}));
+
+		const result = await executor.execute(
+			"id",
+			{
+				tasks: [{ agent: "echo", task: "test", cwd: "packages/app" }],
+				cwd: worktreeDir,
+			},
+			new AbortController().signal,
+			undefined,
+			makeCtx(makeSessionManagerRecorder().manager),
+		);
+
+		assert.equal(result.isError, undefined);
+		assert.deepEqual(result.details?.results?.[0]?.skills, ["parallel-step-skill"]);
+	});
+
+	it("uses request cwd for project builtin overrides during management", async () => {
+		const tempHome = createTempDir("pi-subagent-home-");
+		process.env.HOME = tempHome;
+		process.env.USERPROFILE = tempHome;
+		const worktreeDir = path.join(tempDir, "worktree");
+		fs.mkdirSync(worktreeDir, { recursive: true });
+		writeProjectOverride(tempDir, "reviewer", "openai/gpt-5-main");
+		writeProjectOverride(worktreeDir, "reviewer", "openai/gpt-5-worktree");
+		const executor = makeExecutor();
+
+		try {
+			const result = await executor.execute(
+				"id",
+				{ action: "get", agent: "reviewer", cwd: "worktree" },
+				new AbortController().signal,
+				undefined,
+				makeCtx(makeSessionManagerRecorder().manager),
+			);
+
+			assert.equal(result.isError, false);
+			assert.match(result.content[0]?.text ?? "", /Model: openai\/gpt-5-worktree/);
+			assert.doesNotMatch(result.content[0]?.text ?? "", /Model: openai\/gpt-5-main/);
+		} finally {
+			removeTempDir(tempHome);
+		}
 	});
 });

@@ -118,6 +118,17 @@ describe("worktree", () => {
 		);
 	});
 
+	it("findWorktreeTaskCwdConflict treats relative task cwd values as relative to the shared cwd", () => {
+		const sharedCwd = path.join("/tmp", "repo");
+		assert.equal(
+			findWorktreeTaskCwdConflict(
+				[{ agent: "worker-a", cwd: "." }],
+				sharedCwd,
+			),
+			undefined,
+		);
+	});
+
 	it("findWorktreeTaskCwdConflict returns the first conflicting task cwd", () => {
 		const sharedCwd = path.join("/tmp", "repo");
 		const conflict = findWorktreeTaskCwdConflict(

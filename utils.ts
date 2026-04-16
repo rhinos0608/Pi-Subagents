@@ -18,6 +18,11 @@ function getErrorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
 
+export function resolveChildCwd(baseCwd: string, childCwd: string | undefined): string {
+	if (!childCwd) return baseCwd;
+	return path.isAbsolute(childCwd) ? childCwd : path.resolve(baseCwd, childCwd);
+}
+
 function isNotFoundError(error: unknown): boolean {
 	return typeof error === "object"
 		&& error !== null
@@ -394,4 +399,4 @@ export function extractTextFromContent(content: unknown): string {
 // Concurrency Utilities
 // ============================================================================
 
-export { mapConcurrent } from "./parallel-utils.js";
+export { mapConcurrent } from "./parallel-utils.ts";
