@@ -248,13 +248,18 @@ function runPiStreaming(
 				if (event.message.model) model = event.message.model;
 				if (event.message.errorMessage) error = event.message.errorMessage;
 				const eventUsage = event.message.usage;
-				if (!eventUsage) return;
-				usage.turns++;
-				usage.input += eventUsage.input ?? eventUsage.inputTokens ?? 0;
-				usage.output += eventUsage.output ?? eventUsage.outputTokens ?? 0;
-				usage.cacheRead += eventUsage.cacheRead ?? 0;
-				usage.cacheWrite += eventUsage.cacheWrite ?? 0;
-				usage.cost += eventUsage.cost?.total ?? 0;
+				if (eventUsage) {
+					usage.turns++;
+					usage.input += eventUsage.input ?? eventUsage.inputTokens ?? 0;
+					usage.output += eventUsage.output ?? eventUsage.outputTokens ?? 0;
+					usage.cacheRead += eventUsage.cacheRead ?? 0;
+					usage.cacheWrite += eventUsage.cacheWrite ?? 0;
+					usage.cost += eventUsage.cost?.total ?? 0;
+				}
+				const stopReason = (event.message as { stopReason?: string }).stopReason;
+				const hasToolCall = Array.isArray(event.message.content)
+					&& event.message.content.some((part) => (part as { type?: string }).type === "toolCall");
+				if (stopReason === "stop" && !hasToolCall) startFinalDrain();
 			}
 		};
 
@@ -283,7 +288,56 @@ function runPiStreaming(
 			processStderrText(chunk.toString());
 		});
 
+		// Guard both cases that can leave the parent waiting on `close` forever:
+		// a lingering stdio holder after `exit`, or a child that never exits.
+		const FINAL_DRAIN_MS = 5000;
+		const HARD_KILL_MS = 3000;
+		let staleStdioGrace: NodeJS.Timeout | undefined;
+		let finalDrainTimer: NodeJS.Timeout | undefined;
+		let finalHardKillTimer: NodeJS.Timeout | undefined;
+		let settled = false;
+		const clearDrainTimers = () => {
+			if (finalDrainTimer) {
+				clearTimeout(finalDrainTimer);
+				finalDrainTimer = undefined;
+			}
+			if (finalHardKillTimer) {
+				clearTimeout(finalHardKillTimer);
+				finalHardKillTimer = undefined;
+			}
+		};
+		function startFinalDrain(): void {
+			if (finalDrainTimer || settled) return;
+			finalDrainTimer = setTimeout(() => {
+				if (settled) return;
+				if (!error) {
+					error = `Subagent process did not exit within ${FINAL_DRAIN_MS}ms after its final message. Forcing termination.`;
+				}
+				try { child.kill("SIGTERM"); } catch {}
+				finalHardKillTimer = setTimeout(() => {
+					if (settled) return;
+					try { child.kill("SIGKILL"); } catch {}
+				}, HARD_KILL_MS);
+				finalHardKillTimer.unref?.();
+			}, FINAL_DRAIN_MS);
+			finalDrainTimer.unref?.();
+		}
+		child.on("exit", () => {
+			clearDrainTimers();
+			if (staleStdioGrace) return;
+			staleStdioGrace = setTimeout(() => {
+				try { child.stdout?.destroy(); } catch {}
+				try { child.stderr?.destroy(); } catch {}
+			}, 2000);
+			staleStdioGrace.unref?.();
+		});
 		child.on("close", (exitCode) => {
+			settled = true;
+			clearDrainTimers();
+			if (staleStdioGrace) {
+				clearTimeout(staleStdioGrace);
+				staleStdioGrace = undefined;
+			}
 			if (stdoutBuf.trim()) processStdoutLine(stdoutBuf);
 			if (stderrBuf.trim()) appendChildLine("subagent.child.stderr", stderrBuf);
 			outputStream.end();
@@ -292,6 +346,8 @@ function runPiStreaming(
 		});
 
 		child.on("error", (spawnError) => {
+			settled = true;
+			clearDrainTimers();
 			outputStream.end();
 			const finalOutput = getFinalOutput(messages) || rawStdoutLines.join("\n").trim();
 			const spawnErrorMessage = spawnError instanceof Error ? spawnError.message : String(spawnError);

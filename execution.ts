@@ -156,6 +156,38 @@ async function runSingleAttempt(
 			finish(-2);
 		};
 
+		// If the child emits its final assistant message but never exits,
+		// start a bounded drain window and force termination if needed.
+		const FINAL_DRAIN_MS = 5000;
+		const HARD_KILL_MS = 3000;
+		let finalDrainTimer: NodeJS.Timeout | undefined;
+		let finalHardKillTimer: NodeJS.Timeout | undefined;
+		const clearFinalDrainTimers = () => {
+			if (finalDrainTimer) {
+				clearTimeout(finalDrainTimer);
+				finalDrainTimer = undefined;
+			}
+			if (finalHardKillTimer) {
+				clearTimeout(finalHardKillTimer);
+				finalHardKillTimer = undefined;
+			}
+		};
+		const startFinalDrain = () => {
+			if (finalDrainTimer || settled || processClosed || detached) return;
+			finalDrainTimer = setTimeout(() => {
+				if (settled || processClosed || detached) return;
+				result.error = result.error
+					?? `Subagent process did not exit within ${FINAL_DRAIN_MS}ms after its final message. Forcing termination.`;
+				try { proc.kill("SIGTERM"); } catch {}
+				finalHardKillTimer = setTimeout(() => {
+					if (settled || processClosed || detached) return;
+					try { proc.kill("SIGKILL"); } catch {}
+				}, HARD_KILL_MS);
+				finalHardKillTimer.unref?.();
+			}, FINAL_DRAIN_MS);
+			finalDrainTimer.unref?.();
+		};
+
 		const unsubscribeIntercomDetach = options.intercomEvents?.on?.(INTERCOM_DETACH_REQUEST_EVENT, (payload) => {
 			if (!options.allowIntercomDetach || detached || processClosed) return;
 			if (!payload || typeof payload !== "object") return;
@@ -170,6 +202,7 @@ async function runSingleAttempt(
 		const finish = (code: number) => {
 			if (settled) return;
 			settled = true;
+			clearFinalDrainTimers();
 			unsubscribeIntercomDetach?.();
 			removeAbortListener?.();
 			resolve(code);
@@ -237,6 +270,13 @@ async function runSingleAttempt(
 					if (!result.model && evt.message.model) result.model = evt.message.model;
 					if (evt.message.errorMessage) result.error = evt.message.errorMessage;
 					appendRecentOutput(progress, extractTextFromContent(evt.message.content).split("\n").slice(-10));
+					// Final assistant message: start the exit drain window.
+					const stopReason = (evt.message as { stopReason?: string }).stopReason;
+					const hasToolCall = Array.isArray(evt.message.content)
+						&& evt.message.content.some((part) => (part as { type?: string }).type === "toolCall");
+					if (stopReason === "stop" && !hasToolCall) {
+						startFinalDrain();
+					}
 				}
 				fireUpdate();
 			}
@@ -259,7 +299,24 @@ async function runSingleAttempt(
 		proc.stderr.on("data", (d) => {
 			stderrBuf += d.toString();
 		});
+		// `close` can outlive `exit` if a grandchild still holds stdout/stderr.
+		// After `exit`, give stdio a short grace window, then destroy it.
+		let staleStdioGrace: NodeJS.Timeout | undefined;
+		proc.on("exit", () => {
+			clearFinalDrainTimers();
+			if (staleStdioGrace) return;
+			staleStdioGrace = setTimeout(() => {
+				try { proc.stdout?.destroy(); } catch {}
+				try { proc.stderr?.destroy(); } catch {}
+			}, 2000);
+			staleStdioGrace.unref?.();
+		});
 		proc.on("close", (code) => {
+			clearFinalDrainTimers();
+			if (staleStdioGrace) {
+				clearTimeout(staleStdioGrace);
+				staleStdioGrace = undefined;
+			}
 			void jsonlWriter.close().catch(() => {
 				// JSONL artifact flush is best effort.
 			});
