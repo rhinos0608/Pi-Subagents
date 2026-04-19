@@ -1,127 +1,95 @@
-/**
- * Covers the `exit` -> grace timer -> `close` path used by the runners when a
- * grandchild keeps inherited stdout/stderr open.
- */
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
+import { attachPostExitStdioGuard } from "../../post-exit-stdio-guard.ts";
 
-/**
- * Launch a synthetic child that prints once, backgrounds a sleeper that keeps
- * stdout/stderr open, then exits immediately.
- */
-function makeLeakyLauncher(sleepSeconds: number): string {
+function writeScript(name: string, lines: string[]): string {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-close-grace-"));
-	const script = path.join(dir, "leaky-subagent.sh");
-	fs.writeFileSync(
-		script,
-		[
-			"#!/bin/bash",
-			"set -eu",
-			'echo \'{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}\'',
-			// Background sleeper inherits fd 1 and 2 on purpose.
-			`sleep ${sleepSeconds} &`,
-			"disown || true",
-			"exit 0",
-		].join("\n"),
-		{ mode: 0o755 },
-	);
+	const script = path.join(dir, name);
+	fs.writeFileSync(script, lines.join("\n"), { mode: 0o755 });
 	return script;
+}
+
+function makeSilentLeakyScript(sleepSeconds: number): string {
+	return writeScript("silent-leak.sh", [
+		"#!/bin/bash",
+		"set -eu",
+		"echo done",
+		`sleep ${sleepSeconds} &`,
+		"disown || true",
+		"exit 0",
+	]);
+}
+
+function makeChattyLeakyScript(tickMs: number): string {
+	return writeScript("chatty-leak.sh", [
+		"#!/bin/bash",
+		"set -eu",
+		"echo start",
+		`( while true; do echo tick; sleep ${(tickMs / 1000).toFixed(3)}; done ) &`,
+		"disown || true",
+		"exit 0",
+	]);
 }
 
 interface RunResult {
 	resolvedMs: number;
 	exitCode: number | null;
-	closeFired: boolean;
-	exitFired: boolean;
 	stdout: string;
 }
 
-function runWithGrace(script: string, graceMs: number, maxWaitMs: number): Promise<RunResult> {
+function runWithGuard(script: string, idleMs: number, hardMs: number, maxWaitMs: number): Promise<RunResult> {
 	return new Promise((resolve, reject) => {
 		const start = Date.now();
 		const child = spawn("bash", [script], { stdio: ["ignore", "pipe", "pipe"] });
 		let stdout = "";
-		let exitFired = false;
-		let closeFired = false;
-		let staleStdioGrace: NodeJS.Timeout | undefined;
-
+		const clearGuard = attachPostExitStdioGuard(child, { idleMs, hardMs });
 		const hardStop = setTimeout(() => {
 			try { child.kill("SIGKILL"); } catch {}
-			reject(new Error(`promise did not resolve within ${maxWaitMs}ms (close hang reproduced)`));
+			reject(new Error(`promise did not resolve within ${maxWaitMs}ms`));
 		}, maxWaitMs);
 		hardStop.unref?.();
 
-		child.stdout.on("data", (d) => { stdout += d.toString(); });
-		// stderr is drained but not captured for this test.
+		child.stdout.on("data", (chunk: Buffer) => {
+			stdout += chunk.toString();
+		});
 		child.stderr.on("data", () => {});
-
-		child.on("exit", () => {
-			exitFired = true;
-			if (staleStdioGrace) return;
-			staleStdioGrace = setTimeout(() => {
-				try { child.stdout?.destroy(); } catch {}
-				try { child.stderr?.destroy(); } catch {}
-			}, graceMs);
-			staleStdioGrace.unref?.();
-		});
-
 		child.on("close", (code) => {
-			if (staleStdioGrace) {
-				clearTimeout(staleStdioGrace);
-				staleStdioGrace = undefined;
-			}
 			clearTimeout(hardStop);
-			closeFired = true;
-			resolve({
-				resolvedMs: Date.now() - start,
-				exitCode: code,
-				closeFired,
-				exitFired,
-				stdout,
-			});
+			clearGuard();
+			resolve({ resolvedMs: Date.now() - start, exitCode: code, stdout });
 		});
-
 		child.on("error", reject);
 	});
 }
 
-describe("grace timer around child.on(\"close\")", () => {
-	it("still fast-paths when the child has no grandchildren holding stdio", async () => {
-		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-close-grace-clean-"));
-		const clean = path.join(dir, "clean-subagent.sh");
-		fs.writeFileSync(
-			clean,
-			[
-				"#!/bin/bash",
-				"set -eu",
-				"echo hello",
-				"exit 0",
-			].join("\n"),
-			{ mode: 0o755 },
-		);
-		const res = await runWithGrace(clean, 2000, 5_000);
-		assert.equal(res.exitCode, 0);
-		assert.ok(res.closeFired, "close should fire");
-		assert.ok(res.resolvedMs < 500, `fast path should resolve in well under the grace window (got ${res.resolvedMs}ms)`);
-		assert.match(res.stdout, /hello/);
+describe("attachPostExitStdioGuard", () => {
+	it("does not delay a clean exit", async () => {
+		const script = writeScript("clean.sh", ["#!/bin/bash", "set -eu", "echo hello", "exit 0"]);
+		const result = await runWithGuard(script, 2000, 8000, 5000);
+		assert.equal(result.exitCode, 0);
+		assert.match(result.stdout, /hello/);
+		assert.ok(result.resolvedMs < 500, `expected fast close, got ${result.resolvedMs}ms`);
 	});
 
-	it("resolves promptly even when a grandchild keeps stdio open past exit", async () => {
-		// Without the grace timer, `close` would wait for the full 30s sleeper.
-		const leaky = makeLeakyLauncher(30);
-		const graceMs = 1500;
-		const res = await runWithGrace(leaky, graceMs, 10_000);
-		assert.equal(res.exitCode, 0, "child exit code should still be 0");
-		assert.ok(res.exitFired, "exit should fire before close");
-		assert.ok(res.closeFired, "close should fire after grace timer destroys stdio");
-		assert.ok(
-			res.resolvedMs < graceMs + 2_000,
-			`close should resolve shortly after the grace window (got ${res.resolvedMs}ms, grace=${graceMs}ms)`,
-		);
-		assert.match(res.stdout, /message_end/);
+	it("cuts off a silent grandchild with the idle timer", async () => {
+		const idleMs = 1500;
+		const result = await runWithGuard(makeSilentLeakyScript(30), idleMs, 8000, 10000);
+		assert.equal(result.exitCode, 0);
+		assert.match(result.stdout, /done/);
+		assert.ok(result.resolvedMs >= idleMs, `resolved too early: ${result.resolvedMs}ms`);
+		assert.ok(result.resolvedMs < idleMs + 2000, `expected idle cutoff, got ${result.resolvedMs}ms`);
+	});
+
+	it("cuts off a chatty grandchild with the hard timer", async () => {
+		const hardMs = 2000;
+		const result = await runWithGuard(makeChattyLeakyScript(200), 1000, hardMs, 10000);
+		assert.equal(result.exitCode, 0);
+		assert.match(result.stdout, /start/);
+		assert.ok(result.resolvedMs >= hardMs - 500, `resolved too early: ${result.resolvedMs}ms`);
+		assert.ok(result.resolvedMs < hardMs + 2000, `expected hard cutoff, got ${result.resolvedMs}ms`);
 	});
 });

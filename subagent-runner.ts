@@ -28,6 +28,7 @@ import {
 } from "./parallel-utils.ts";
 import { buildPiArgs, cleanupTempDir } from "./pi-args.ts";
 import { formatModelAttemptNote, isRetryableModelFailure } from "./model-fallback.ts";
+import { attachPostExitStdioGuard } from "./post-exit-stdio-guard.ts";
 import { detectSubagentError, extractTextFromContent, extractToolArgsPreview, getFinalOutput } from "./utils.ts";
 import {
 	cleanupWorktrees,
@@ -276,6 +277,14 @@ function runPiStreaming(
 			}
 		};
 
+		// Guard both cases that can leave the parent waiting on `close` forever:
+		// a lingering stdio holder after `exit`, or a child that never exits.
+		const FINAL_DRAIN_MS = 5000;
+		const HARD_KILL_MS = 3000;
+		let finalDrainTimer: NodeJS.Timeout | undefined;
+		let finalHardKillTimer: NodeJS.Timeout | undefined;
+		let settled = false;
+		const clearStdioGuard = attachPostExitStdioGuard(child, { idleMs: 2000, hardMs: 8000 });
 		child.stdout.on("data", (chunk: Buffer) => {
 			const text = chunk.toString();
 			stdoutBuf += text;
@@ -287,15 +296,6 @@ function runPiStreaming(
 		child.stderr.on("data", (chunk: Buffer) => {
 			processStderrText(chunk.toString());
 		});
-
-		// Guard both cases that can leave the parent waiting on `close` forever:
-		// a lingering stdio holder after `exit`, or a child that never exits.
-		const FINAL_DRAIN_MS = 5000;
-		const HARD_KILL_MS = 3000;
-		let staleStdioGrace: NodeJS.Timeout | undefined;
-		let finalDrainTimer: NodeJS.Timeout | undefined;
-		let finalHardKillTimer: NodeJS.Timeout | undefined;
-		let settled = false;
 		const clearDrainTimers = () => {
 			if (finalDrainTimer) {
 				clearTimeout(finalDrainTimer);
@@ -324,20 +324,11 @@ function runPiStreaming(
 		}
 		child.on("exit", () => {
 			clearDrainTimers();
-			if (staleStdioGrace) return;
-			staleStdioGrace = setTimeout(() => {
-				try { child.stdout?.destroy(); } catch {}
-				try { child.stderr?.destroy(); } catch {}
-			}, 2000);
-			staleStdioGrace.unref?.();
 		});
 		child.on("close", (exitCode) => {
 			settled = true;
 			clearDrainTimers();
-			if (staleStdioGrace) {
-				clearTimeout(staleStdioGrace);
-				staleStdioGrace = undefined;
-			}
+			clearStdioGuard();
 			if (stdoutBuf.trim()) processStdoutLine(stdoutBuf);
 			if (stderrBuf.trim()) appendChildLine("subagent.child.stderr", stderrBuf);
 			outputStream.end();
@@ -348,6 +339,7 @@ function runPiStreaming(
 		child.on("error", (spawnError) => {
 			settled = true;
 			clearDrainTimers();
+			clearStdioGuard();
 			outputStream.end();
 			const finalOutput = getFinalOutput(messages) || rawStdoutLines.join("\n").trim();
 			const spawnErrorMessage = spawnError instanceof Error ? spawnError.message : String(spawnError);

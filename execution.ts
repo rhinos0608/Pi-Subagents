@@ -34,6 +34,7 @@ import {
 import { buildSkillInjection, resolveSkillsWithFallback } from "./skills.ts";
 import { getPiSpawnCommand } from "./pi-spawn.ts";
 import { createJsonlWriter } from "./jsonl-writer.ts";
+import { attachPostExitStdioGuard } from "./post-exit-stdio-guard.ts";
 import { applyThinkingSuffix, buildPiArgs, cleanupTempDir } from "./pi-args.ts";
 import { captureSingleOutputSnapshot, resolveSingleOutput, type SingleOutputSnapshot } from "./single-output.ts";
 import {
@@ -203,6 +204,7 @@ async function runSingleAttempt(
 			if (settled) return;
 			settled = true;
 			clearFinalDrainTimers();
+			clearStdioGuard();
 			unsubscribeIntercomDetach?.();
 			removeAbortListener?.();
 			resolve(code);
@@ -290,6 +292,7 @@ async function runSingleAttempt(
 
 		let stderrBuf = "";
 
+		const clearStdioGuard = attachPostExitStdioGuard(proc, { idleMs: 2000, hardMs: 8000 });
 		proc.stdout.on("data", (d) => {
 			buf += d.toString();
 			const lines = buf.split("\n");
@@ -299,24 +302,12 @@ async function runSingleAttempt(
 		proc.stderr.on("data", (d) => {
 			stderrBuf += d.toString();
 		});
-		// `close` can outlive `exit` if a grandchild still holds stdout/stderr.
-		// After `exit`, give stdio a short grace window, then destroy it.
-		let staleStdioGrace: NodeJS.Timeout | undefined;
 		proc.on("exit", () => {
 			clearFinalDrainTimers();
-			if (staleStdioGrace) return;
-			staleStdioGrace = setTimeout(() => {
-				try { proc.stdout?.destroy(); } catch {}
-				try { proc.stderr?.destroy(); } catch {}
-			}, 2000);
-			staleStdioGrace.unref?.();
 		});
 		proc.on("close", (code) => {
 			clearFinalDrainTimers();
-			if (staleStdioGrace) {
-				clearTimeout(staleStdioGrace);
-				staleStdioGrace = undefined;
-			}
+			clearStdioGuard();
 			void jsonlWriter.close().catch(() => {
 				// JSONL artifact flush is best effort.
 			});
@@ -333,6 +324,8 @@ async function runSingleAttempt(
 			finish(code ?? 0);
 		});
 		proc.on("error", (error) => {
+			clearFinalDrainTimers();
+			clearStdioGuard();
 			void jsonlWriter.close().catch(() => {
 				// JSONL artifact flush is best effort.
 			});

@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -138,23 +137,6 @@ async function main() {
 
 	if (typeof response.stderr === "string" && response.stderr.length > 0) {
 		process.stderr.write(response.stderr);
-	}
-
-	// Optional grandchild that keeps inherited stdio open past our own exit.
-	if (typeof response.leakyGrandchildSeconds === "number" && response.leakyGrandchildSeconds > 0) {
-		try {
-			const leaker = spawn(
-				process.execPath,
-				["-e", `setTimeout(() => {}, ${response.leakyGrandchildSeconds * 1000});`],
-				{ stdio: ["ignore", "inherit", "inherit"], detached: true },
-			);
-			leaker.unref();
-		} catch {}
-	}
-
-	// Optionally linger after the final message to simulate a child that never exits cleanly.
-	if (typeof response.keepAliveAfterFinalMessageSeconds === "number" && response.keepAliveAfterFinalMessageSeconds > 0) {
-		await new Promise((resolve) => setTimeout(resolve, response.keepAliveAfterFinalMessageSeconds * 1000));
 	}
 
 	process.exit(typeof response.exitCode === "number" ? response.exitCode : 0);
