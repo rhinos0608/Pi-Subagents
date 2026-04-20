@@ -32,6 +32,10 @@ interface ProgressSummary {
 	agent: string;
 	index: number;
 	status: string;
+	lastActivityAt?: number;
+	currentTool?: string;
+	currentToolArgs?: string;
+	currentToolStartedAt?: number;
 	durationMs: number;
 	toolCount: number;
 }
@@ -318,6 +322,40 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		assert.equal(result.progress.index, 3);
 		assert.equal(result.progress.status, "completed");
 		assert.ok(result.progress.durationMs > 0, "should track duration");
+	});
+
+	it("tracks live activity updates and exposes artifact paths while running", async () => {
+		const updates: Array<{ details?: { results?: Array<{ artifactPaths?: ArtifactPaths }>; progress?: ProgressSummary[] } }> = [];
+		mockPi.onCall({
+			steps: [
+				{ jsonl: [events.toolStart("read", { path: "package.json" })], delay: 20 },
+				{ jsonl: [events.toolEnd("read"), events.toolResult("read", "{\"name\":\"pkg\"}")], delay: 20 },
+				{ jsonl: [events.assistantMessage("Done")] },
+			],
+		});
+		const agents = makeAgentConfigs(["echo"]);
+		const artifactsDir = path.join(tempDir, "artifacts");
+
+		const result = await runSync(tempDir, agents, "echo", "Task", {
+			runId: "live-progress",
+			artifactsDir,
+			artifactConfig: { enabled: true, includeInput: true, includeOutput: true, includeMetadata: true },
+			onUpdate: (update: { details?: { results?: Array<{ artifactPaths?: ArtifactPaths }>; progress?: ProgressSummary[] } }) => {
+				updates.push(update);
+			},
+		});
+
+		assert.ok(updates.length > 0, "expected at least one live progress update");
+		assert.equal(
+			updates.some((update) => update.details?.results?.[0]?.artifactPaths?.outputPath.endsWith("_output.md") === true),
+			true,
+		);
+		const runningToolUpdate = updates.find((update) => update.details?.progress?.[0]?.currentTool === "read");
+		assert.ok(runningToolUpdate, "expected a live progress update for the running tool");
+		assert.equal(runningToolUpdate?.details?.progress?.[0]?.currentTool, "read");
+		assert.equal(typeof runningToolUpdate?.details?.progress?.[0]?.currentToolStartedAt, "number");
+		assert.equal(typeof result.progress.lastActivityAt, "number");
+		assert.equal(result.progress.currentToolStartedAt, undefined);
 	});
 
 	it("sets progress.status to failed on non-zero exit", async () => {

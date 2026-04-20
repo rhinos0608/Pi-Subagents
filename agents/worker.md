@@ -1,7 +1,7 @@
 ---
 name: worker
 description: General-purpose subagent with full capabilities
-model: claude-sonnet-4-6
+model: openai-codex/gpt-5.4
 systemPromptMode: replace
 inheritProjectContext: true
 inheritSkills: false

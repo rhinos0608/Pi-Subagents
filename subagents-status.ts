@@ -157,6 +157,12 @@ export class SubagentsStatusComponent implements Component {
 		const lines = [
 			row(`cwd: ${truncateToWidth(shortenPath(run.cwd ?? run.asyncDir), innerW - 5)}`, width, this.theme),
 		];
+		if (run.outputFile) {
+			lines.push(row(`output: ${truncateToWidth(shortenPath(run.outputFile), innerW - 8)}`, width, this.theme));
+		}
+		if (run.sessionFile) {
+			lines.push(row(`session: ${truncateToWidth(shortenPath(run.sessionFile), innerW - 9)}`, width, this.theme));
+		}
 		for (const step of run.steps) {
 			const model = step.model ? ` | ${step.model}` : "";
 			const attempts = step.attemptedModels && step.attemptedModels.length > 1
@@ -226,7 +232,7 @@ export class SubagentsStatusComponent implements Component {
 			lines.push(row(this.theme.fg("dim", "No runs selected."), w, this.theme));
 		}
 
-		const footer = `↑↓ select  esc close  ${this.active.length} active / ${this.recent.length} recent`;
+		const footer = `↑↓ select  esc close  summary view  ${this.active.length} active / ${this.recent.length} recent`;
 		lines.push(renderFooter(truncateToWidth(footer, innerW), w, this.theme));
 		return lines;
 	}

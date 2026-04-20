@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { compactForegroundResult } from "../../utils.ts";
+import { compactForegroundResult, extractToolArgsPreview } from "../../utils.ts";
 import { formatToolCall } from "../../formatters.ts";
 
 describe("foreground tool-call compaction", () => {
@@ -48,5 +48,31 @@ describe("foreground tool-call compaction", () => {
 		});
 
 		assert.equal(result.toolCalls, undefined);
+	});
+
+	it("formats array-based web search previews clearly", () => {
+		assert.equal(
+			extractToolArgsPreview({
+				queries: ["Chrome native messaging manifest path macOS", "Chromium native messaging path macOS"],
+				workflow: "none",
+			}),
+			"Chrome native messaging manifest path macOS (+1 more)",
+		);
+	});
+
+	it("formats fetch_content urls clearly", () => {
+		assert.equal(
+			extractToolArgsPreview({
+				urls: ["https://developer.chrome.com/docs/extensions/develop/concepts/native-messaging", "https://example.com/backup"],
+			}),
+			"https://developer.chrome.com/docs/extensions/develop/conc...",
+		);
+	});
+
+	it("falls back to generic array previews", () => {
+		assert.equal(
+			extractToolArgsPreview({ ids: ["run-a", "run-b", "run-c"] }),
+			"ids=run-a (+2 more)",
+		);
 	});
 });

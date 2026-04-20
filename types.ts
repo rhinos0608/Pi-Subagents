@@ -50,8 +50,10 @@ export interface AgentProgress {
 	status: "pending" | "running" | "completed" | "failed" | "detached";
 	task: string;
 	skills?: string[];
+	lastActivityAt?: number;
 	currentTool?: string;
 	currentToolArgs?: string;
+	currentToolStartedAt?: number;
 	recentTools: Array<{ tool: string; args: string; endMs: number }>;
 	recentOutput: string[];
 	toolCount: number;
@@ -384,9 +386,10 @@ export const MAX_WIDGET_JOBS = 4;
 export const DEFAULT_SUBAGENT_MAX_DEPTH = 2;
 
 export const DEFAULT_FORK_PREAMBLE =
-	"You are a delegated subagent with access to the parent session's context for reference. " +
-	"Your sole job is to execute the task below. Do not continue or respond to the prior conversation " +
-	"— focus exclusively on completing this task using your tools.";
+	"You are a delegated subagent running from a fork of the parent session. " +
+	"Treat the inherited conversation as reference-only context, not a live thread to continue. " +
+	"Do not continue or answer prior messages as if they are waiting for a reply. " +
+	"Your sole job is to execute the task below and return a focused result for that task using your tools.";
 
 function normalizeTopLevelParallelValue(value: unknown): number | undefined {
 	const parsed = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;

@@ -63,6 +63,35 @@ function appendRecentOutput(progress: AgentProgress, lines: string[]): void {
 	}
 }
 
+function snapshotProgress(progress: AgentProgress): AgentProgress {
+	return {
+		...progress,
+		skills: progress.skills ? [...progress.skills] : undefined,
+		recentTools: progress.recentTools.map((tool) => ({ ...tool })),
+		recentOutput: [...progress.recentOutput],
+	};
+}
+
+function snapshotResult(result: SingleResult, progress: AgentProgress): SingleResult {
+	return {
+		...result,
+		messages: result.messages ? [...result.messages] : undefined,
+		usage: { ...result.usage },
+		skills: result.skills ? [...result.skills] : undefined,
+		attemptedModels: result.attemptedModels ? [...result.attemptedModels] : undefined,
+		modelAttempts: result.modelAttempts
+			? result.modelAttempts.map((attempt) => ({
+				...attempt,
+				usage: attempt.usage ? { ...attempt.usage } : undefined,
+			}))
+			: undefined,
+		progress,
+		progressSummary: result.progressSummary ? { ...result.progressSummary } : undefined,
+		artifactPaths: result.artifactPaths ? { ...result.artifactPaths } : undefined,
+		truncation: result.truncation ? { ...result.truncation } : undefined,
+	};
+}
+
 async function runSingleAttempt(
 	runtimeCwd: string,
 	agent: AgentConfig,
@@ -75,6 +104,7 @@ async function runSingleAttempt(
 		resolvedSkillNames?: string[];
 		skillsWarning?: string;
 		jsonlPath?: string;
+		artifactPaths?: ArtifactPaths;
 		attemptNotes: string[];
 		outputSnapshot?: SingleOutputSnapshot;
 	},
@@ -105,6 +135,7 @@ async function runSingleAttempt(
 		messages: [],
 		usage: emptyUsage(),
 		model: modelArg,
+		artifactPaths: shared.artifactPaths,
 		skills: shared.resolvedSkillNames,
 		skillsWarning: shared.skillsWarning,
 	};
@@ -120,6 +151,7 @@ async function runSingleAttempt(
 		toolCount: 0,
 		tokens: 0,
 		durationMs: 0,
+		lastActivityAt: Date.now(),
 	};
 	result.progress = progress;
 
@@ -175,13 +207,20 @@ async function runSingleAttempt(
 			resolve(code);
 		};
 
+		const emitUpdateSnapshot = (text: string) => {
+			if (!options.onUpdate || processClosed) return;
+			const progressSnapshot = snapshotProgress(progress);
+			const resultSnapshot = snapshotResult(result, progressSnapshot);
+			options.onUpdate({
+				content: [{ type: "text", text }],
+				details: { mode: "single", results: [resultSnapshot], progress: [progressSnapshot] },
+			});
+		};
+
 		const fireUpdate = () => {
 			if (!options.onUpdate || processClosed) return;
 			progress.durationMs = Date.now() - startTime;
-			options.onUpdate({
-				content: [{ type: "text", text: getFinalOutput(result.messages) || "(running...)" }],
-				details: { mode: "single", results: [result], progress: [progress] },
-			});
+			emitUpdateSnapshot(getFinalOutput(result.messages) || "(running...)");
 		};
 
 		const processLine = (line: string) => {
@@ -197,6 +236,7 @@ async function runSingleAttempt(
 
 			const now = Date.now();
 			progress.durationMs = now - startTime;
+			progress.lastActivityAt = now;
 
 			if (evt.type === "tool_execution_start") {
 				if (options.allowIntercomDetach && evt.toolName === "intercom") {
@@ -205,6 +245,7 @@ async function runSingleAttempt(
 				progress.toolCount++;
 				progress.currentTool = evt.toolName;
 				progress.currentToolArgs = extractToolArgsPreview((evt.args || {}) as Record<string, unknown>);
+				progress.currentToolStartedAt = now;
 				fireUpdate();
 			}
 
@@ -218,6 +259,7 @@ async function runSingleAttempt(
 				}
 				progress.currentTool = undefined;
 				progress.currentToolArgs = undefined;
+				progress.currentToolStartedAt = undefined;
 				fireUpdate();
 			}
 
@@ -343,6 +385,15 @@ async function runSingleAttempt(
 		result.outputSaveError = resolvedOutput.saveError;
 	}
 	result.finalOutput = fullOutput;
+	if (options.onUpdate) {
+		const finalText = result.finalOutput || result.error || "(no output)";
+		const progressSnapshot = snapshotProgress(progress);
+		const resultSnapshot = snapshotResult(result, progressSnapshot);
+		options.onUpdate({
+			content: [{ type: "text", text: finalText }],
+			details: { mode: "single", results: [resultSnapshot], progress: [progressSnapshot] },
+		});
+	}
 	return result;
 }
 
@@ -417,6 +468,7 @@ export async function runSync(
 			resolvedSkillNames: resolvedSkills.length > 0 ? resolvedSkills.map((skill) => skill.name) : undefined,
 			skillsWarning: missingSkills.length > 0 ? `Skills not found: ${missingSkills.join(", ")}` : undefined,
 			jsonlPath,
+			artifactPaths: artifactPathsResult,
 			attemptNotes,
 			outputSnapshot,
 		});

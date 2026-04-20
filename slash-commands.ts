@@ -145,7 +145,7 @@ async function requestSlashRun(
 			if (!ctx.hasUI) return;
 			const tool = update.currentTool ? ` ${update.currentTool}` : "";
 			const count = update.toolCount ?? 0;
-			ctx.ui.setStatus("subagent-slash", `${count} tools${tool}`);
+			ctx.ui.setStatus("subagent-slash", `${count} tools${tool} | Ctrl+O live detail`);
 		};
 
 		const onTerminalInput = ctx.hasUI

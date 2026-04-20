@@ -2,7 +2,7 @@
 name: planner
 description: Creates implementation plans from context and requirements
 tools: read, grep, find, ls, write
-model: claude-opus-4-6
+model: openai-codex/gpt-5.4
 thinking: high
 systemPromptMode: replace
 inheritProjectContext: true

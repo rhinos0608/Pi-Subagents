@@ -1070,6 +1070,8 @@ During sync execution, the collapsed view shows real-time progress for single, c
 - Per-task step cards showing status icon, agent name, model, tool count, and duration
 - Current tool and recent output for each running task
 
+While a foreground run is active, the compact view also hints when richer detail is available and shows lightweight live-state signals like activity freshness and current-tool duration.
+
 Press **Ctrl+O** to expand the full streaming view with complete output per step.
 
 > **Note:** Chain visualization (the `done scout → running planner` line) is only shown for sequential chains. Chains with parallel steps show per-step cards instead.
@@ -1124,7 +1126,7 @@ subagent_status({ id: "<id>" })
 subagent_status({ dir: "<tmpdir>/pi-subagents-<scope>/async-subagent-runs/<id>" })
 ```
 
-For an interactive overview, run the `/subagents-status` slash command to open the overlay listing active runs and recent completed/failed runs. The overlay auto-refreshes every 2 seconds while it is open.
+For an interactive overview, run the `/subagents-status` slash command to open the overlay listing active runs and recent completed/failed runs. The overlay auto-refreshes every 2 seconds while it is open and focuses on summary/status information, including the current output/session paths when available.
 
 ## Events
 

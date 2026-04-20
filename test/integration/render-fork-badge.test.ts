@@ -159,4 +159,102 @@ describe("renderSubagentResult fork indicator", () => {
 		assert.doesNotMatch(unwrap(collapsed), /precisefailingtoolsequenceattheend\./);
 		assert.match(unwrap(expanded), /precisefailingtoolsequenceattheend\./);
 	});
+
+	it("shows live detail hints for running subagents", () => {
+		const now = Date.now();
+		const widget = renderSubagentResult!({
+			content: [{ type: "text", text: "(running...)" }],
+			details: {
+				mode: "single",
+				results: [{
+					agent: "reviewer",
+					task: "review",
+					exitCode: 0,
+					messages: [],
+					artifactPaths: {
+						outputPath: "/tmp/reviewer_output.md",
+					},
+					usage: {
+						input: 0,
+						output: 0,
+						cacheRead: 0,
+						cacheWrite: 0,
+						cost: 0,
+						turns: 0,
+					},
+					progress: {
+						index: 0,
+						agent: "reviewer",
+						status: "running",
+						task: "review",
+						lastActivityAt: now - 2_000,
+						currentTool: "read",
+						currentToolArgs: "package.json",
+						currentToolStartedAt: now - 3_000,
+						recentTools: [],
+						recentOutput: [],
+						toolCount: 1,
+						tokens: 42,
+						durationMs: 3_000,
+					},
+				}],
+			},
+		}, { expanded: false }, theme);
+
+		const text = widget.render(120).join("\n");
+		assert.match(text, /Press Ctrl\+O for live detail/);
+		assert.match(text, /active 2s ago/);
+		assert.match(text, /> read: package\.json \| 3\.0s/);
+		assert.match(text, /Artifacts: \/tmp\/reviewer_output\.md/);
+	});
+
+	it("uses the tracked progress index for live parallel step labels", () => {
+		const widget = renderSubagentResult!({
+			content: [{ type: "text", text: "(running...)" }],
+			details: {
+				mode: "parallel",
+				totalSteps: 3,
+				results: [{
+					agent: "worker",
+					task: "third task",
+					exitCode: 0,
+					messages: [],
+					usage: {
+						input: 0,
+						output: 0,
+						cacheRead: 0,
+						cacheWrite: 0,
+						cost: 0,
+						turns: 0,
+					},
+					progress: {
+						index: 2,
+						agent: "worker",
+						status: "running",
+						task: "third task",
+						recentTools: [],
+						recentOutput: [],
+						toolCount: 1,
+						tokens: 0,
+						durationMs: 10,
+					},
+				}],
+				progress: [{
+					index: 2,
+					agent: "worker",
+					status: "running",
+					task: "third task",
+					recentTools: [],
+					recentOutput: [],
+					toolCount: 1,
+					tokens: 0,
+					durationMs: 10,
+				}],
+			},
+		}, { expanded: false }, theme);
+
+		const text = widget.render(120).join("\n");
+		assert.match(text, /Step 3: worker/);
+		assert.doesNotMatch(text, /Step 1: worker/);
+	});
 });

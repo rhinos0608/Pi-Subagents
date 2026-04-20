@@ -6,6 +6,7 @@ import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { getMarkdownTheme, type ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Container, Markdown, Spacer, Text, visibleWidth, type Component } from "@mariozechner/pi-tui";
 import {
+	type AgentProgress,
 	type AsyncJobState,
 	type Details,
 	MAX_WIDGET_JOBS,
@@ -111,6 +112,34 @@ function getToolCallLines(
 			.map((item) => formatToolCall(item.name, item.args, expanded));
 	}
 	return result.toolCalls?.map((toolCall) => expanded ? toolCall.expandedText : toolCall.text) ?? [];
+}
+
+function formatActivityLabel(lastActivityAt: number | undefined, now = Date.now()): string | undefined {
+	if (lastActivityAt === undefined) return undefined;
+	const ago = Math.max(0, now - lastActivityAt);
+	if (ago < 1000) return "active now";
+	if (ago < 60000) return `active ${Math.floor(ago / 1000)}s ago`;
+	return `active ${Math.floor(ago / 60000)}m ago`;
+}
+
+function formatCurrentToolLine(progress: Pick<AgentProgress, "currentTool" | "currentToolArgs" | "currentToolStartedAt">, availableWidth: number, expanded: boolean): string | undefined {
+	if (!progress.currentTool) return undefined;
+	const maxToolArgsLen = Math.max(50, availableWidth - 20);
+	const toolArgsPreview = progress.currentToolArgs
+		? (expanded || progress.currentToolArgs.length <= maxToolArgsLen
+			? progress.currentToolArgs
+			: `${progress.currentToolArgs.slice(0, maxToolArgsLen)}...`)
+		: "";
+	const durationSuffix = progress.currentToolStartedAt !== undefined
+		? ` | ${formatDuration(Math.max(0, Date.now() - progress.currentToolStartedAt))}`
+		: "";
+	return toolArgsPreview
+		? `${progress.currentTool}: ${toolArgsPreview}${durationSuffix}`
+		: `${progress.currentTool}${durationSuffix}`;
+}
+
+function buildLiveStatusLine(progress: Pick<AgentProgress, "lastActivityAt">): string | undefined {
+	return formatActivityLabel(progress.lastActivityAt);
 }
 
 /**
@@ -226,17 +255,17 @@ export function renderSubagentResult(
 		c.addChild(new Spacer(1));
 
 		if (isRunning && r.progress) {
-			if (r.progress.currentTool) {
-				const maxToolArgsLen = Math.max(50, w - 20);
-				const toolArgsPreview = r.progress.currentToolArgs
-					? (expanded || r.progress.currentToolArgs.length <= maxToolArgsLen
-						? r.progress.currentToolArgs
-						: `${r.progress.currentToolArgs.slice(0, maxToolArgsLen)}...`)
-					: "";
-				const toolLine = toolArgsPreview
-					? `${r.progress.currentTool}: ${toolArgsPreview}`
-					: r.progress.currentTool;
+			const toolLine = formatCurrentToolLine(r.progress, w, expanded);
+			if (toolLine) {
 				c.addChild(new Text(fit(theme.fg("warning", `> ${toolLine}`)), 0, 0));
+			}
+			const liveStatusLine = buildLiveStatusLine(r.progress);
+			if (liveStatusLine) {
+				c.addChild(new Text(fit(theme.fg("accent", liveStatusLine)), 0, 0));
+			}
+			c.addChild(new Text(fit(theme.fg("accent", "Press Ctrl+O for live detail")), 0, 0));
+			if (r.artifactPaths) {
+				c.addChild(new Text(fit(theme.fg("dim", `Artifacts: ${shortenPath(r.artifactPaths.outputPath)}`)), 0, 0));
 			}
 			if (r.progress.recentTools?.length) {
 				for (const t of r.progress.recentTools.slice(-3)) {
@@ -250,7 +279,7 @@ export function renderSubagentResult(
 			for (const line of (r.progress.recentOutput ?? []).slice(-5)) {
 				c.addChild(new Text(fit(theme.fg("dim", `  ${line}`)), 0, 0));
 			}
-			if (r.progress.currentTool || r.progress.recentTools?.length || r.progress.recentOutput?.length) {
+			if (toolLine || liveStatusLine || r.progress.recentTools?.length || r.progress.recentOutput?.length || r.artifactPaths) {
 				c.addChild(new Spacer(1));
 			}
 		}
@@ -278,7 +307,7 @@ export function renderSubagentResult(
 			c.addChild(new Text(fit(theme.fg("dim", `Session: ${shortenPath(r.sessionFile)}`)), 0, 0));
 		}
 
-		if (r.artifactPaths) {
+		if (!isRunning && r.artifactPaths) {
 			c.addChild(new Spacer(1));
 			c.addChild(new Text(fit(theme.fg("dim", `Artifacts: ${shortenPath(r.artifactPaths.outputPath)}`)), 0, 0));
 		}
@@ -391,6 +420,7 @@ export function renderSubagentResult(
 			|| d.progress?.find((p) => p.agent === r.agent && p.status === "running");
 		const rProg = r.progress || progressFromArray || r.progressSummary;
 		const rRunning = rProg?.status === "running";
+		const stepNumber = typeof rProg?.index === "number" ? rProg.index + 1 : i + 1;
 
 		const resultOutput = getSingleResultOutput(r);
 		const statusIcon = rRunning
@@ -403,8 +433,8 @@ export function renderSubagentResult(
 		const stats = rProg ? ` | ${rProg.toolCount} tools, ${formatDuration(rProg.durationMs)}` : "";
 		const modelDisplay = r.model ? theme.fg("dim", ` (${r.model})`) : "";
 		const stepHeader = rRunning
-			? `${statusIcon} Step ${i + 1}: ${theme.bold(theme.fg("warning", r.agent))}${modelDisplay}${stats}`
-			: `${statusIcon} Step ${i + 1}: ${theme.bold(r.agent)}${modelDisplay}${stats}`;
+			? `${statusIcon} Step ${stepNumber}: ${theme.bold(theme.fg("warning", r.agent))}${modelDisplay}${stats}`
+			: `${statusIcon} Step ${stepNumber}: ${theme.bold(r.agent)}${modelDisplay}${stats}`;
 		const toolCallLines = getToolCallLines(r, expanded);
 		c.addChild(new Text(fit(stepHeader), 0, 0));
 
@@ -433,17 +463,17 @@ export function renderSubagentResult(
 			if (rProg.skills?.length) {
 				c.addChild(new Text(fit(theme.fg("accent", `    skills: ${rProg.skills.join(", ")}`)), 0, 0));
 			}
-			if (rProg.currentTool) {
-				const maxToolArgsLen = Math.max(50, w - 20);
-				const toolArgsPreview = rProg.currentToolArgs
-					? (expanded || rProg.currentToolArgs.length <= maxToolArgsLen
-						? rProg.currentToolArgs
-						: `${rProg.currentToolArgs.slice(0, maxToolArgsLen)}...`)
-					: "";
-				const toolLine = toolArgsPreview
-					? `${rProg.currentTool}: ${toolArgsPreview}`
-					: rProg.currentTool;
+			const toolLine = formatCurrentToolLine(rProg, w, expanded);
+			if (toolLine) {
 				c.addChild(new Text(fit(theme.fg("warning", `    > ${toolLine}`)), 0, 0));
+			}
+			const liveStatusLine = buildLiveStatusLine(rProg);
+			if (liveStatusLine) {
+				c.addChild(new Text(fit(theme.fg("accent", `    ${liveStatusLine}`)), 0, 0));
+			}
+			c.addChild(new Text(fit(theme.fg("accent", "    Press Ctrl+O for live detail")), 0, 0));
+			if (r.artifactPaths) {
+				c.addChild(new Text(fit(theme.fg("dim", `    artifacts: ${shortenPath(r.artifactPaths.outputPath)}`)), 0, 0));
 			}
 			if (rProg.recentTools?.length) {
 				for (const t of rProg.recentTools.slice(-3)) {
@@ -458,6 +488,10 @@ export function renderSubagentResult(
 			for (const line of recentLines) {
 				c.addChild(new Text(fit(theme.fg("dim", `      ${line}`)), 0, 0));
 			}
+		}
+
+		if (!rRunning && r.artifactPaths) {
+			c.addChild(new Text(fit(theme.fg("dim", `    artifacts: ${shortenPath(r.artifactPaths.outputPath)}`)), 0, 0));
 		}
 
 		if (expanded && !rRunning) {
