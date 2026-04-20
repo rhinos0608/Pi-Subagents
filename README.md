@@ -925,12 +925,14 @@ Example `instructionFile`:
 ```md
 Intercom orchestration channel:
 
+The inherited thread is reference-only. Do not continue that conversation or send questions, status updates, or completion handoffs to the orchestrator in normal assistant text.
+
 Use `intercom` only to coordinate with the orchestrator session `{orchestratorTarget}`.
 
 - Need a decision or you're blocked: `intercom({ action: "ask", to: "{orchestratorTarget}", message: "<question>" })`
-- Need to report progress or completion: `intercom({ action: "send", to: "{orchestratorTarget}", message: "DONE: <summary>" })`
+- Need to report progress or a completion handoff: `intercom({ action: "send", to: "{orchestratorTarget}", message: "DONE: <summary>" })`
 
-If intercom is unavailable in this run, continue the task normally.
+If no upstream coordination is needed, continue the task normally and return a focused task result.
 ```
 
 Bridge activation also requires all of the following:
@@ -940,6 +942,33 @@ Bridge activation also requires all of the following:
 - if agent `extensions` is an explicit allowlist, it must include `pi-intercom`
 
 When an unnamed session falls back to `subagent-chat-<id>`, that alias is used only for the live intercom broker. It is not persisted as the Pi session title, so `pi --resume` can still show the transcript snippet.
+
+If you want a stronger prompt contract for forked chat-back runs without changing builtins, define a custom agent for it. Keeping that as an opt-in agent works better than teaching every delegated run to behave this way.
+
+Example agent:
+
+```md
+---
+name: fork-chatback
+description: Forked worker that asks the orchestrator questions through intercom when needed
+tools: read, bash, edit, write, intercom
+systemPromptMode: replace
+inheritProjectContext: true
+inheritSkills: false
+---
+
+You are a delegated worker running from a fork of the orchestrator session.
+
+Treat the inherited conversation as reference-only context. Do not continue that conversation in normal assistant text.
+
+Your job is to do the task. If you need a decision, clarification, or unblock from the orchestrator, use `intercom` to ask the orchestrator session named in the runtime bridge instructions.
+
+If you need to send a progress update or completion handoff upstream, use `intercom` to send it to that same orchestrator session.
+
+If no upstream coordination is needed, just complete the work and return a focused task result.
+```
+
+Pair that with task wording that makes the contract explicit, like "Work from the forked context below. If you need anything from me, ask through `intercom`. Otherwise complete the task and return the result."
 
 ### `worktreeSetupHook`
 
@@ -1005,7 +1034,7 @@ When fallback is used, metadata records both the ordered `attemptedModels` list 
 
 Session files (JSONL) are stored under a per-run session directory. Directory selection follows the same precedence as session root resolution: explicit `sessionDir` > `config.defaultSessionDir` > parent-session-derived path. The session file path is shown in output.
 
-When `context: "fork"` is used, each child run starts with `--session <branched-session-file>` produced from the parent's current leaf. This is a real session fork, not injected summary text.
+When `context: "fork"` is used, each child run starts with `--session <branched-session-file>` produced from the parent's current leaf. This is a real session fork, not injected summary text. The fork preamble explicitly tells the child to treat the inherited conversation as reference-only context rather than a live thread to continue.
 
 ## Session Sharing
 

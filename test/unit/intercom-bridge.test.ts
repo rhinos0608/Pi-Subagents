@@ -143,6 +143,26 @@ describe("resolveIntercomBridge", () => {
 			fs.rmSync(tempDir, { recursive: true, force: true });
 		}
 	});
+
+	it("uses stronger default instructions for fork-aware coordination", () => {
+		const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-intercom-bridge-test-"));
+		const extensionDir = path.join(tempDir, "pi-intercom");
+		fs.mkdirSync(extensionDir, { recursive: true });
+		try {
+			const bridge = resolveIntercomBridge({
+				config: { mode: "always" },
+				context: "fork",
+				orchestratorTarget: "main",
+				extensionDir,
+			});
+			assert.equal(bridge.active, true);
+			assert.match(bridge.instruction, /reference-only/i);
+			assert.match(bridge.instruction, /normal assistant text/i);
+			assert.match(bridge.instruction, /focused task result/i);
+		} finally {
+			fs.rmSync(tempDir, { recursive: true, force: true });
+		}
+	});
 });
 
 describe("applyIntercomBridgeToAgent", () => {
