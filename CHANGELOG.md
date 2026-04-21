@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [0.17.2] - 2026-04-21
+
+### Added
+- Added `forceTopLevelAsync` so depth-0 delegated runs can be forced into background mode with `clarify: false`, while nested runs keep their existing behavior.
+
+### Fixed
+- Background completion notifications now render `(no output)` instead of a blank body when a completion summary is empty or whitespace-only.
+- Async status and token reporting now rerender more reliably when cleanup state changes, read token usage from `message.usage`, and prefer the newest session file when multiple async session files exist.
+- Async/background startup now fails fast for invalid resolved `cwd` values and spawn failures instead of reporting false launch success.
+- Sync and async runner paths now drain stuck child processes in bounded time, covering both post-exit stdio holders and children that emit a final message but never exit.
+
 ## [0.17.1] - 2026-04-20
 
 ### Added
