@@ -2,7 +2,7 @@
 name: researcher
 description: Autonomous web researcher — searches, evaluates, and synthesizes a focused research brief
 tools: read, write, web_search, fetch_content, get_search_content
-model: openai-codex/gpt-5.4
+model: openai-codex/gpt-5.5
 systemPromptMode: replace
 inheritProjectContext: true
 inheritSkills: false
