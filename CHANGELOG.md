@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [0.17.4] - 2026-04-22
+
+### Added
+- Bundled a `pi-subagents` skill that teaches agents how to use builtin subagents, slash-command vs tool workflows, management-mode agent creation/editing, fork/intercom coordination, clarify mode, worktrees, async status inspection, and chain templating.
+
+### Changed
+- Tightened the builtin `oracle` prompt so intercom-enabled forked reviews now prefer concise conversational handoffs during the review and send a short final recommendation via `pi-intercom` before returning the full structured result.
+- Tightened `oracle-executor` so it explicitly frames itself as the single writer thread and escalates gaps in the approved direction instead of silently patching around them.
+
 ## [0.17.3] - 2026-04-22
 
 ### Added
