@@ -2,7 +2,7 @@
  * TypeBox schemas for subagent tool parameters
  */
 
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 
 // Note: Using Type.Any() for Google API compatibility (doesn't support anyOf)
 const SkillOverride = Type.Any({ description: "Skill name(s) to inject (comma-separated), array of strings, or boolean (false disables, true uses default)" });

@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [0.17.3] - 2026-04-22
+
+### Added
+- Added builtin `oracle` and `oracle-executor` agents for the `main -> oracle -> main decision -> oracle-executor` workflow, plus README guidance for invoking the oracle pair with forked context.
+
+### Fixed
+- Migrated extension tool schemas from `@sinclair/typebox` to `typebox` 1.x so packaged installs follow Pi's current extension runtime contract.
+
+### Changed
+- Moved TypeBox from `peerDependencies` to a real `dependencies` entry so `pi install` production installs keep the schema package available at runtime.
+
 ## [0.17.2] - 2026-04-21
 
 ### Added

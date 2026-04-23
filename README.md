@@ -46,7 +46,10 @@ Project discovery also reads legacy `.agents/{name}.md` files. If both `.agents/
 
 Use `agentScope` parameter to control discovery: `"user"`, `"project"`, or `"both"` (default; project takes priority).
 
-**Builtin agents:** The extension ships with ready-to-use agents — `scout`, `planner`, `worker`, `reviewer`, `context-builder`, `researcher`, and `delegate`. They load at lowest priority so any user or project agent with the same name overrides them.
+**Builtin agents:** The extension ships with ready-to-use agents — `scout`, `planner`, `worker`, `reviewer`, `context-builder`, `researcher`, `delegate`, `oracle`, and `oracle-executor`. They load at lowest priority so any user or project agent with the same name overrides them.
+
+- `oracle` is a high-context advisory reviewer on `openai-codex/gpt-5.4:high`. It critiques direction, surfaces hidden risks, and proposes a concrete execution prompt, but it does not edit files directly.
+- `oracle-executor` is a high-context implementation escalator on `openai-codex/gpt-5.3-codex:high`. It is intended to run only after the main agent explicitly approves a course of action.
 
 You can also override selected builtin fields without copying the whole agent. Builtin overrides are stored in settings under `subagents.agentOverrides`:
 
@@ -300,6 +303,22 @@ You can combine `--fork` and `--bg` in any order:
 /run reviewer "review this diff" --fork --bg
 /run reviewer "review this diff" --bg --fork
 ```
+
+For the oracle pair, the intended default control loop is:
+
+1. main agent invokes `oracle` with forked context
+2. `oracle` returns diagnosis, recommendation, risks, and a suggested execution prompt
+3. main agent decides whether to accept that direction
+4. only then does main agent invoke `oracle-executor`
+
+Example:
+
+```text
+/run oracle "Review my current direction, challenge assumptions, and propose the best next move." --fork
+/run oracle-executor "Implement the approved approach: ..." --fork
+```
+
+This keeps decision authority in the main thread while still giving you a stronger review/escalation path.
 
 ## Agents Manager
 
