@@ -114,12 +114,16 @@ function getToolCallLines(
 	return result.toolCalls?.map((toolCall) => expanded ? toolCall.expandedText : toolCall.text) ?? [];
 }
 
-function formatActivityLabel(lastActivityAt: number | undefined, now = Date.now()): string | undefined {
-	if (lastActivityAt === undefined) return undefined;
-	const ago = Math.max(0, now - lastActivityAt);
-	if (ago < 1000) return "active now";
-	if (ago < 60000) return `active ${Math.floor(ago / 1000)}s ago`;
-	return `active ${Math.floor(ago / 60000)}m ago`;
+function formatActivityAge(ms: number): string {
+	if (ms < 1000) return "now";
+	if (ms < 60000) return `${Math.floor(ms / 1000)}s`;
+	return `${Math.floor(ms / 60000)}m`;
+}
+
+function formatActivityLabel(lastActivityAt: number | undefined, needsAttention?: boolean, now = Date.now()): string | undefined {
+	if (lastActivityAt === undefined) return needsAttention ? "needs attention" : undefined;
+	const age = formatActivityAge(Math.max(0, now - lastActivityAt));
+	return needsAttention ? `no activity for ${age}` : age === "now" ? "active now" : `active ${age} ago`;
 }
 
 function formatCurrentToolLine(progress: Pick<AgentProgress, "currentTool" | "currentToolArgs" | "currentToolStartedAt">, availableWidth: number, expanded: boolean): string | undefined {
@@ -138,13 +142,8 @@ function formatCurrentToolLine(progress: Pick<AgentProgress, "currentTool" | "cu
 		: `${progress.currentTool}${durationSuffix}`;
 }
 
-function buildLiveStatusLine(progress: Pick<AgentProgress, "lastActivityAt">): string | undefined {
-	return formatActivityLabel(progress.lastActivityAt);
-}
-
-function formatActivityState(state: AgentProgress["activityState"]): string | undefined {
-	if (!state) return undefined;
-	return `activity: ${state}`;
+function buildLiveStatusLine(progress: Pick<AgentProgress, "activityState" | "lastActivityAt">): string | undefined {
+	return formatActivityLabel(progress.lastActivityAt, progress.activityState === "needs_attention");
 }
 
 /**
@@ -192,7 +191,9 @@ export function renderWidget(ctx: ExtensionContext, jobs: AsyncJobState[]): void
 		const agentLabel = job.agents ? job.agents.join(" -> ") : (job.mode ?? "single");
 
 		const tokenText = job.totalTokens ? ` | ${formatTokens(job.totalTokens.total)} tok` : "";
-		const activityText = job.activityState ?? (job.status === "running" ? getLastActivity(job.outputFile) : "");
+		const activityText = job.currentTool && job.currentToolStartedAt
+			? `tool ${job.currentTool} ${formatDuration(Math.max(0, Date.now() - job.currentToolStartedAt))}`
+			: formatActivityLabel(job.lastActivityAt, job.activityState === "needs_attention") ?? (job.status === "running" ? getLastActivity(job.outputFile) : "");
 		const activitySuffix = activityText ? ` | ${theme.fg("dim", activityText)}` : "";
 
 		lines.push(truncLine(`- ${id} ${status} | ${agentLabel} | ${stepText}${elapsed ? ` | ${elapsed}` : ""}${tokenText}${activitySuffix}`, w));
@@ -265,10 +266,6 @@ export function renderSubagentResult(
 			const toolLine = formatCurrentToolLine(r.progress, w, expanded);
 			if (toolLine) {
 				c.addChild(new Text(fit(theme.fg("warning", `> ${toolLine}`)), 0, 0));
-			}
-			const activityStateLine = formatActivityState(r.progress.activityState);
-			if (activityStateLine) {
-				c.addChild(new Text(fit(theme.fg("accent", activityStateLine)), 0, 0));
 			}
 			const liveStatusLine = buildLiveStatusLine(r.progress);
 			if (liveStatusLine) {
@@ -477,10 +474,6 @@ export function renderSubagentResult(
 			const toolLine = formatCurrentToolLine(rProg, w, expanded);
 			if (toolLine) {
 				c.addChild(new Text(fit(theme.fg("warning", `    > ${toolLine}`)), 0, 0));
-			}
-			const activityStateLine = formatActivityState(rProg.activityState);
-			if (activityStateLine) {
-				c.addChild(new Text(fit(theme.fg("accent", `    ${activityStateLine}`)), 0, 0));
 			}
 			const liveStatusLine = buildLiveStatusLine(rProg);
 			if (liveStatusLine) {

@@ -8,6 +8,7 @@ import {
 	applyIntercomBridgeToAgent,
 	resolveIntercomBridge,
 	resolveIntercomSessionTarget,
+	resolveSubagentIntercomTarget,
 	resolveIntercomBridgeMode,
 	type IntercomBridgeState,
 } from "../../intercom-bridge.ts";
@@ -46,6 +47,13 @@ describe("resolveIntercomSessionTarget", () => {
 
 	it("uses a runtime-only subagent chat alias when unnamed", () => {
 		assert.equal(resolveIntercomSessionTarget(undefined, "session-12345678"), "subagent-chat-12345678");
+	});
+});
+
+describe("resolveSubagentIntercomTarget", () => {
+	it("builds stable child session targets from run metadata", () => {
+		assert.equal(resolveSubagentIntercomTarget("78f659a3", "worker"), "subagent-worker-78f659a3");
+		assert.equal(resolveSubagentIntercomTarget("78f659a3", "oracle executor", 1), "subagent-oracle-executor-78f659a3-2");
 	});
 });
 

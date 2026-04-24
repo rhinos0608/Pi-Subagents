@@ -48,8 +48,8 @@ Use `agentScope` parameter to control discovery: `"user"`, `"project"`, or `"bot
 
 **Builtin agents:** The extension ships with ready-to-use agents — `scout`, `planner`, `worker`, `reviewer`, `context-builder`, `researcher`, `delegate`, `oracle`, and `oracle-executor`. They load at lowest priority so any user or project agent with the same name overrides them.
 
-- `oracle` is a high-context advisory reviewer on `openai-codex/gpt-5.4:high`. It critiques direction, surfaces hidden risks, and proposes a concrete execution prompt, but it does not edit files directly.
-- `oracle-executor` is a high-context implementation escalator on `openai-codex/gpt-5.3-codex:high`. It is intended to run only after the main agent explicitly approves a course of action.
+- `oracle` is a high-context advisory reviewer on `openai-codex/gpt-5.5`. It critiques direction, surfaces hidden risks, and proposes a concrete execution prompt, but it does not edit files directly.
+- `oracle-executor` is a high-context implementation escalator on `openai-codex/gpt-5.5`. It is intended to run only after the main agent explicitly approves a course of action.
 
 You can also override selected builtin fields without copying the whole agent. Builtin overrides are stored in settings under `subagents.agentOverrides`:
 
@@ -285,7 +285,7 @@ Add `--bg` at the end of any slash command to run in the background:
 /parallel scout "scan frontend" -> scout "scan backend" -> scout "scan infra" --bg
 ```
 
-Without `--bg`, the run is foreground: the tool call stays active and streams progress until completion. With `--bg`, the run is launched asynchronously: control returns immediately, and completion arrives later via notification. In both cases subagents run as separate processes. Check status with the `subagent_status` tool, or open the `/subagents-status` slash command for a read-only overlay listing active runs and recent completions.
+Without `--bg`, the run is foreground: the tool call stays active and streams progress until completion. With `--bg`, the run is launched asynchronously: control returns immediately, and completion arrives later via notification. In both cases subagents run as separate processes. Check status with `subagent({ action: "status", id })`, or open the `/subagents-status` slash command for a read-only overlay listing active runs and recent completions.
 
 ### Forked Context Execution
 
@@ -649,16 +649,16 @@ These are the parameters the **LLM agent** passes when it calls the `subagent` t
 ], clarify: false, async: true }
 ```
 
-**subagent_status tool:**
+**Programmatic status:**
 ```typescript
-{ action: "list" }                    // active async runs only
-{ id: "a53ebe46" }                    // inspect one run
-{ dir: "<tmpdir>/pi-subagents-<scope>/async-subagent-runs/a53ebe46-..." }
+subagent({ action: "status" })                    // active async runs only
+subagent({ action: "status", id: "a53ebe46" })    // inspect one run
+subagent({ action: "status", dir: "<tmpdir>/pi-subagents-<scope>/async-subagent-runs/a53ebe46-..." })
 ```
 
 **/subagents-status slash command:**
 
-Opens a small read-only overlay that shows active async runs plus recent completed/failed runs. It auto-refreshes every 2 seconds while open, keeps the current run selected when possible, and uses `↑↓` to select a run plus `Esc` to close.
+Opens a small read-only overlay that shows active async runs plus recent completed, failed, and paused runs. It auto-refreshes every 2 seconds while open, keeps the current run selected when possible, and uses `↑↓` to select a run plus `Esc` to close.
 
 ## Management Actions
 
@@ -798,11 +798,12 @@ Fallbacks are inherited from the selected agent for that step. There is no per-s
 
 Fallbacks are inherited from the selected agent for that task. There is no per-task `fallbackModels` override in v1.
 
-Status tool:
+Status commands:
 
-| Tool | Description |
+| Command | Description |
 |------|-------------|
-| `subagent_status` | List active async runs or inspect one run by id or dir |
+| `subagent({ action: "status" })` | List active async runs |
+| `subagent({ action: "status", id })` | Inspect a foreground or async run by id or prefix |
 
 ## Worktree Isolation
 
@@ -1167,20 +1168,20 @@ When fallback is used in async/background mode, `status.json` and the final resu
 For programmatic access:
 
 ```typescript
-subagent_status({ action: "list" })
-subagent_status({ id: "<id>" })
-subagent_status({ dir: "<tmpdir>/pi-subagents-<scope>/async-subagent-runs/<id>" })
+subagent({ action: "status" })
+subagent({ action: "status", id: "<id>" })
+subagent({ action: "status", dir: "<tmpdir>/pi-subagents-<scope>/async-subagent-runs/<id>" })
 ```
 
-For an interactive overview, run the `/subagents-status` slash command to open the overlay listing active runs and recent completed/failed runs. The overlay auto-refreshes every 2 seconds while it is open and focuses on summary/status information, including the current output/session paths when available.
+For an interactive overview, run the `/subagents-status` slash command to open the overlay listing active runs and recent completed, failed, and paused runs. The overlay auto-refreshes every 2 seconds while it is open and focuses on summary/status information, including the current output/session paths when available.
 
 ## Events
 
 Async events:
-- `subagent:started`
-- `subagent:complete`
+- `subagent:async-started`
+- `subagent:async-complete`
 
-`notify.ts` consumes `subagent:complete` as the canonical completion channel.
+The result watcher emits `subagent:async-complete`; `index.ts` registers the notification handler that consumes it.
 
 ## Files
 
@@ -1227,7 +1228,6 @@ Async events:
 ├── run-history.ts                # Per-agent run recording (JSONL)
 ├── test/unit/                    # Fast unit tests for pure modules
 ├── test/integration/             # Loader-based execution/integration tests
-├── test/e2e/                     # End-to-end sandbox tests
 ├── test/support/                 # Shared test loader, helpers, and mock pi harness
 └── text-editor.ts                # Shared text editor (word nav, paste)
 ```

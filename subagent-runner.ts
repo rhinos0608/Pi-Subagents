@@ -19,7 +19,15 @@ import {
 	truncateOutput,
 	getSubagentDepthEnv,
 } from "./types.ts";
-import { DEFAULT_CONTROL_CONFIG } from "./subagent-control.ts";
+import {
+	DEFAULT_CONTROL_CONFIG,
+	buildControlEvent,
+	deriveActivityState,
+	claimControlNotification,
+	formatControlIntercomMessage,
+	formatControlNoticeMessage,
+	shouldEmitControlEvent,
+} from "./subagent-control.ts";
 import {
 	type RunnerSubagentStep as SubagentStep,
 	type RunnerStep,
@@ -64,6 +72,8 @@ interface SubagentRunConfig {
 	worktreeSetupHook?: string;
 	worktreeSetupHookTimeoutMs?: number;
 	controlConfig?: ResolvedControlConfig;
+	controlIntercomTarget?: string;
+	childIntercomTargets?: Array<string | undefined>;
 }
 
 interface StepResult {
@@ -514,6 +524,7 @@ interface SingleStepContext {
 	piPackageRoot?: string;
 	piArgv1?: string;
 	registerInterrupt?: (interrupt: (() => void) | undefined) => void;
+	childIntercomTarget?: string;
 }
 
 /** Run a single pi agent step, returning output and metadata */
@@ -575,6 +586,7 @@ async function runSingleStep(
 			systemPromptMode: step.systemPromptMode,
 			mcpDirectTools: step.mcpDirectTools,
 			promptFileStem: step.agent,
+			intercomSessionName: ctx.childIntercomTarget,
 		});
 		const run = await runPiStreaming(
 			args,
@@ -671,6 +683,9 @@ type RunnerStatusPayload = {
 	mode: "single" | "chain";
 	state: "queued" | "running" | "complete" | "failed" | "paused";
 	activityState?: ActivityState;
+	lastActivityAt?: number;
+	currentTool?: string;
+	currentToolStartedAt?: number;
 	startedAt: number;
 	endedAt?: number;
 	lastUpdate: number;
@@ -681,6 +696,9 @@ type RunnerStatusPayload = {
 		agent: string;
 		status: "pending" | "running" | "complete" | "failed";
 		activityState?: ActivityState;
+		lastActivityAt?: number;
+		currentTool?: string;
+		currentToolStartedAt?: number;
 		startedAt?: number;
 		endedAt?: number;
 		durationMs?: number;
@@ -752,11 +770,12 @@ function markParallelGroupRunning(input: {
 	for (let taskIndex = 0; taskIndex < input.group.parallel.length; taskIndex++) {
 		const flatTaskIndex = input.groupStartFlatIndex + taskIndex;
 		input.statusPayload.steps[flatTaskIndex].status = "running";
-		input.statusPayload.steps[flatTaskIndex].activityState = "active";
 		input.statusPayload.steps[flatTaskIndex].startedAt = input.groupStartTime;
+		input.statusPayload.steps[flatTaskIndex].lastActivityAt = input.groupStartTime;
 	}
 	input.statusPayload.currentStep = input.groupStartFlatIndex;
-	input.statusPayload.activityState = "active";
+	input.statusPayload.activityState = undefined;
+	input.statusPayload.lastActivityAt = input.groupStartTime;
 	input.statusPayload.lastUpdate = input.groupStartTime;
 	input.statusPayload.outputFile = path.join(input.asyncDir, `output-${input.groupStartFlatIndex}.log`);
 	writeJson(input.statusPath, input.statusPayload);
@@ -812,6 +831,8 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 	const controlConfig = config.controlConfig ?? DEFAULT_CONTROL_CONFIG;
 	let activeChildInterrupt: (() => void) | undefined;
 	let interrupted = false;
+	let currentActivityState: ActivityState | undefined;
+	let activityTimer: NodeJS.Timeout | undefined;
 	let previousCumulativeTokens: TokenUsage = { input: 0, output: 0, total: 0 };
 	let latestSessionFile: string | undefined;
 
@@ -823,7 +844,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 		runId: id,
 		mode: flatSteps.length > 1 ? "chain" : "single",
 		state: "running",
-		activityState: controlConfig.enabled ? "starting" : undefined,
+		lastActivityAt: overallStartTime,
 		startedAt: overallStartTime,
 		lastUpdate: overallStartTime,
 		pid: process.pid,
@@ -832,7 +853,6 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 		steps: flatSteps.map((step) => ({
 			agent: step.agent,
 			status: "pending",
-			activityState: controlConfig.enabled ? "starting" : undefined,
 			skills: step.skills,
 			model: step.model,
 			attemptedModels: step.modelCandidates && step.modelCandidates.length > 0 ? step.modelCandidates : step.model ? [step.model] : undefined,
@@ -844,16 +864,95 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 
 	fs.mkdirSync(asyncDir, { recursive: true });
 	writeJson(statusPath, statusPayload);
+
+	const currentStepAgent = () => statusPayload.steps[statusPayload.currentStep]?.agent ?? flatSteps[statusPayload.currentStep]?.agent ?? "subagent";
+	const currentOutputActivityAt = (): number => {
+		const runningIndexes = statusPayload.steps
+			.map((step, index) => step.status === "running" ? index : -1)
+			.filter((index) => index >= 0);
+		let lastActivityAt = statusPayload.steps[statusPayload.currentStep]?.startedAt ?? overallStartTime;
+		for (const index of runningIndexes.length > 0 ? runningIndexes : [statusPayload.currentStep]) {
+			try {
+				lastActivityAt = Math.max(lastActivityAt, fs.statSync(path.join(asyncDir, `output-${index}.log`)).mtimeMs);
+			} catch {
+				// Missing output files are normal before a child writes its first line.
+			}
+		}
+		return lastActivityAt;
+	};
+	const emittedControlEventKeys = new Set<string>();
+	const appendControlEvent = (event: ReturnType<typeof buildControlEvent>) => {
+		const childIntercomTarget = config.childIntercomTargets?.[statusPayload.currentStep];
+		if (controlConfig.notifyChannels.length === 0 || !claimControlNotification(controlConfig, event, emittedControlEventKeys, childIntercomTarget)) return;
+		appendJsonl(eventsPath, JSON.stringify({
+			type: "subagent.control",
+			event,
+			channels: controlConfig.notifyChannels,
+			childIntercomTarget,
+			noticeText: formatControlNoticeMessage(event, childIntercomTarget),
+			...(config.controlIntercomTarget && controlConfig.notifyChannels.includes("intercom") ? {
+				intercom: {
+					to: config.controlIntercomTarget,
+					message: formatControlIntercomMessage(event, childIntercomTarget),
+				},
+			} : {}),
+		}));
+	};
+	const updateRunnerActivityState = (now: number): boolean => {
+		const lastActivityAt = currentOutputActivityAt();
+		const next = deriveActivityState({
+			config: controlConfig,
+			startedAt: overallStartTime,
+			lastActivityAt,
+			now,
+		});
+		if (next === currentActivityState && statusPayload.lastActivityAt === lastActivityAt) return false;
+		const previous = currentActivityState;
+		currentActivityState = next;
+		statusPayload.activityState = next;
+		statusPayload.lastActivityAt = lastActivityAt;
+		for (const step of statusPayload.steps) {
+			if (step.status === "running") {
+				step.activityState = next;
+				step.lastActivityAt = lastActivityAt;
+			}
+		}
+		statusPayload.lastUpdate = now;
+		if (shouldEmitControlEvent(controlConfig, previous, next)) {
+			const event = buildControlEvent({
+				from: previous,
+				to: next,
+				runId: id,
+				agent: currentStepAgent(),
+				index: statusPayload.currentStep,
+				ts: now,
+				lastActivityAt,
+			});
+			appendControlEvent(event);
+		}
+		writeJson(statusPath, statusPayload);
+		return true;
+	};
+	if (controlConfig.enabled) {
+		activityTimer = setInterval(() => {
+			if (statusPayload.state !== "running") return;
+			const now = Date.now();
+			updateRunnerActivityState(now);
+		}, 1000);
+		activityTimer.unref?.();
+	}
+
 	const interruptRunner = () => {
 		if (interrupted || statusPayload.state !== "running") return;
 		interrupted = true;
 		const now = Date.now();
 		statusPayload.state = "paused";
-		statusPayload.activityState = "paused";
+		currentActivityState = undefined;
+		statusPayload.activityState = undefined;
 		statusPayload.lastUpdate = now;
 		const current = statusPayload.steps[statusPayload.currentStep];
 		if (current?.status === "running") {
-			current.activityState = "paused";
+			current.activityState = undefined;
 			current.endedAt = now;
 			current.durationMs = current.startedAt ? now - current.startedAt : undefined;
 		}
@@ -980,6 +1079,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 							outputFile: path.join(asyncDir, `output-${fi}.log`),
 							piPackageRoot: config.piPackageRoot,
 							piArgv1: config.piArgv1,
+							childIntercomTarget: config.childIntercomTargets?.[fi],
 							registerInterrupt: (interrupt) => {
 								activeChildInterrupt = interrupt;
 							},
@@ -1077,10 +1177,12 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 			const stepStartTime = Date.now();
 			statusPayload.currentStep = flatIndex;
 			statusPayload.steps[flatIndex].status = "running";
-			statusPayload.steps[flatIndex].activityState = "active";
-			statusPayload.activityState = "active";
+			statusPayload.steps[flatIndex].activityState = undefined;
+			statusPayload.activityState = undefined;
 			statusPayload.steps[flatIndex].skills = seqStep.skills;
 			statusPayload.steps[flatIndex].startedAt = stepStartTime;
+			statusPayload.steps[flatIndex].lastActivityAt = stepStartTime;
+			statusPayload.lastActivityAt = stepStartTime;
 			statusPayload.lastUpdate = stepStartTime;
 			statusPayload.outputFile = path.join(asyncDir, `output-${flatIndex}.log`);
 			writeJson(statusPath, statusPayload);
@@ -1101,6 +1203,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 				outputFile: path.join(asyncDir, `output-${flatIndex}.log`),
 				piPackageRoot: config.piPackageRoot,
 				piArgv1: config.piArgv1,
+				childIntercomTarget: config.childIntercomTargets?.[flatIndex],
 				registerInterrupt: (interrupt) => {
 					activeChildInterrupt = interrupt;
 				},
@@ -1221,10 +1324,14 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 		}
 	}
 
+	if (activityTimer) {
+		clearInterval(activityTimer);
+		activityTimer = undefined;
+	}
 	const effectiveSessionFile = sessionFile ?? latestSessionFile;
 	const runEndedAt = Date.now();
 	statusPayload.state = interrupted ? "paused" : results.every((r) => r.success) ? "complete" : "failed";
-	statusPayload.activityState = interrupted ? "paused" : undefined;
+	statusPayload.activityState = undefined;
 	statusPayload.endedAt = runEndedAt;
 	statusPayload.lastUpdate = runEndedAt;
 	statusPayload.sessionFile = effectiveSessionFile;
@@ -1272,6 +1379,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 			id,
 			agent: agentName,
 			success: !interrupted && results.every((r) => r.success),
+			state: interrupted ? "paused" : results.every((r) => r.success) ? "complete" : "failed",
 			summary: interrupted ? "Paused after interrupt. Waiting for explicit next action." : summary,
 			results: results.map((r) => ({
 				agent: r.agent,

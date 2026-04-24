@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { describe, it } from "node:test";
 import registerSubagentNotify from "../../notify.ts";
+import { SUBAGENT_ASYNC_COMPLETE_EVENT } from "../../types.ts";
 
 function createPi() {
 	const events = new EventEmitter();
@@ -22,7 +23,7 @@ describe("registerSubagentNotify", () => {
 	it("uses a fallback summary when a background completion is empty", () => {
 		const { events, sent } = createPi();
 
-		events.emit("subagent:complete", {
+		events.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, {
 			id: "notify-empty-1",
 			agent: "worker",
 			success: true,
@@ -46,7 +47,7 @@ describe("registerSubagentNotify", () => {
 		const { events, sent } = createPi();
 		const summary = "  Done streaming\nAll clear  ";
 
-		events.emit("subagent:complete", {
+		events.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, {
 			id: "notify-summary-1",
 			agent: "worker",
 			success: true,
@@ -62,6 +63,29 @@ describe("registerSubagentNotify", () => {
 			message: {
 				customType: "subagent-notify",
 				content: `Background task completed: **worker** (2/3)\n\n${summary}`,
+				display: true,
+			},
+			options: { triggerTurn: true },
+		});
+	});
+
+	it("labels paused completions as paused even without an exit code", () => {
+		const { events, sent } = createPi();
+
+		events.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, {
+			id: "notify-paused-1",
+			agent: "worker",
+			success: false,
+			state: "paused",
+			summary: "Paused after interrupt. Waiting for explicit next action.",
+			timestamp: 789,
+		});
+
+		assert.equal(sent.length, 1);
+		assert.deepEqual(sent[0], {
+			message: {
+				customType: "subagent-notify",
+				content: "Background task paused: **worker**\n\nPaused after interrupt. Waiting for explicit next action.",
 				display: true,
 			},
 			options: { triggerTurn: true },

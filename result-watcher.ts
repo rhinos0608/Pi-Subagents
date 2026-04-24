@@ -3,7 +3,7 @@ import * as path from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { buildCompletionKey, markSeenWithTtl } from "./completion-dedupe.js";
 import { createFileCoalescer } from "./file-coalescer.js";
-import type { SubagentState } from "./types.js";
+import { SUBAGENT_ASYNC_COMPLETE_EVENT, type SubagentState } from "./types.js";
 
 function isNotFoundError(error: unknown): boolean {
 	return typeof error === "object"
@@ -36,13 +36,11 @@ export function createResultWatcher(
 			const now = Date.now();
 			const completionKey = buildCompletionKey(data, `result:${file}`);
 			if (markSeenWithTtl(state.completionSeen, completionKey, now, completionTtlMs)) {
-				try {
-					fs.unlinkSync(resultPath);
-				} catch {}
+				fs.unlinkSync(resultPath);
 				return;
 			}
 
-			pi.events.emit("subagent:complete", data);
+			pi.events.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, data);
 			fs.unlinkSync(resultPath);
 		} catch (error) {
 			if (isNotFoundError(error)) return;

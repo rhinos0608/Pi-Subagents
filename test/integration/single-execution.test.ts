@@ -1,7 +1,7 @@
 /**
  * Integration tests for single (sync) agent execution.
  *
- * Uses createMockPi() from @marcfargas/pi-test-harness to simulate the pi CLI.
+ * Uses the local createMockPi() helper to simulate the pi CLI.
  * Tests the full spawn→parse→result pipeline in runSync without a real LLM.
  *
  * These tests require pi packages to be importable (they run inside a pi
@@ -553,6 +553,7 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		mockPi.onCall({ delay: 10000 });
 		const agents = makeAgentConfigs(["slow"]);
 		const controller = new AbortController();
+		const controlEvents: Array<{ type?: string; to?: string }> = [];
 
 		const start = Date.now();
 		setTimeout(() => controller.abort(), 200);
@@ -560,13 +561,17 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		const result = await runSync(tempDir, agents, "slow", "Slow task", {
 			runId: "interrupt-run",
 			interruptSignal: controller.signal,
+			onControlEvent: (event: { type?: string; to?: string }) => {
+				controlEvents.push(event);
+			},
 		});
 		const elapsed = Date.now() - start;
 
 		assert.ok(elapsed < 5000, `should interrupt early, took ${elapsed}ms`);
 		assert.equal(result.exitCode, 0);
 		assert.equal(result.interrupted, true);
-		assert.equal(result.progress.activityState, "paused");
+		assert.equal(result.progress.activityState, undefined);
+		assert.deepEqual(controlEvents, []);
 		assert.match(result.finalOutput ?? "", /Interrupted/);
 	});
 

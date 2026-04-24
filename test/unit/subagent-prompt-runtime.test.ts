@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
-import registerSubagentPromptRuntime, { rewriteSubagentPrompt, stripInheritedSkills, stripProjectContext } from "../../subagent-prompt-runtime.ts";
+import registerSubagentPromptRuntime, { SUBAGENT_INTERCOM_SESSION_NAME_ENV, rewriteSubagentPrompt, stripInheritedSkills, stripProjectContext } from "../../subagent-prompt-runtime.ts";
 
 const envSnapshot = {
 	PI_SUBAGENT_INHERIT_PROJECT_CONTEXT: process.env.PI_SUBAGENT_INHERIT_PROJECT_CONTEXT,
 	PI_SUBAGENT_INHERIT_SKILLS: process.env.PI_SUBAGENT_INHERIT_SKILLS,
+	PI_SUBAGENT_INTERCOM_SESSION_NAME: process.env.PI_SUBAGENT_INTERCOM_SESSION_NAME,
 };
 
 const BASE_PROMPT = [
@@ -27,6 +28,8 @@ afterEach(() => {
 	else process.env.PI_SUBAGENT_INHERIT_PROJECT_CONTEXT = envSnapshot.PI_SUBAGENT_INHERIT_PROJECT_CONTEXT;
 	if (envSnapshot.PI_SUBAGENT_INHERIT_SKILLS === undefined) delete process.env.PI_SUBAGENT_INHERIT_SKILLS;
 	else process.env.PI_SUBAGENT_INHERIT_SKILLS = envSnapshot.PI_SUBAGENT_INHERIT_SKILLS;
+	if (envSnapshot.PI_SUBAGENT_INTERCOM_SESSION_NAME === undefined) delete process.env.PI_SUBAGENT_INTERCOM_SESSION_NAME;
+	else process.env.PI_SUBAGENT_INTERCOM_SESSION_NAME = envSnapshot.PI_SUBAGENT_INTERCOM_SESSION_NAME;
 });
 
 describe("subagent prompt runtime", () => {
@@ -62,6 +65,25 @@ describe("subagent prompt runtime", () => {
 		assert.ok(rewritten.includes("<skill name=\"explicit\">"));
 		assert.ok(!rewritten.includes("<available_skills>"));
 		assert.ok(!rewritten.includes("# Project Context"));
+	});
+
+	it("sets the child intercom session name from env during agent startup", async () => {
+		let sessionName: string | undefined;
+		let beforeAgentStart: ((event: { systemPrompt: string }) => Promise<{ systemPrompt: string } | undefined>) | undefined;
+		process.env[SUBAGENT_INTERCOM_SESSION_NAME_ENV] = "subagent-worker-78f659a3";
+
+		registerSubagentPromptRuntime({
+			on(event: string, handler: (payload: { systemPrompt: string }) => Promise<{ systemPrompt: string } | undefined>) {
+				if (event === "before_agent_start") beforeAgentStart = handler;
+			},
+			setSessionName(name: string) {
+				sessionName = name;
+			},
+		} as { on(event: string, handler: (payload: { systemPrompt: string }) => Promise<{ systemPrompt: string } | undefined>): void; setSessionName(name: string): void });
+
+		await beforeAgentStart?.({ systemPrompt: BASE_PROMPT });
+
+		assert.equal(sessionName, "subagent-worker-78f659a3");
 	});
 
 	it("rewrites the final child-visible prompt through before_agent_start", async () => {

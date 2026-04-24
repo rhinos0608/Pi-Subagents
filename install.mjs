@@ -85,9 +85,8 @@ if (fs.existsSync(EXTENSION_DIR)) {
 }
 
 console.log(`
-The extension is now available in pi. Tools added:
-  • subagent       - Delegate tasks to agents (single, chain, parallel)
-  • subagent_status - Check async run status
+The extension is now available in pi. Tool added:
+  • subagent - Delegate tasks to agents and inspect run status
 
 Documentation: ${EXTENSION_DIR}/README.md
 `);

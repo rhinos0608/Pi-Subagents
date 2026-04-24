@@ -172,7 +172,11 @@ export class SubagentsStatusComponent implements Component {
 				: "";
 			const duration = step.durationMs !== undefined ? ` | ${formatDuration(step.durationMs)}` : "";
 			const tokens = step.tokens ? ` | ${formatTokens(step.tokens.total)} tok` : "";
-			const activity = step.activityState ? `/${step.activityState}` : "";
+			const activity = step.lastActivityAt
+				? step.activityState === "needs_attention"
+					? ` | no activity for ${formatDuration(Math.max(0, Date.now() - step.lastActivityAt))}`
+					: ` | active ${formatDuration(Math.max(0, Date.now() - step.lastActivityAt))} ago`
+				: "";
 			const line = `  ${step.index + 1}. ${step.agent} | ${stepStatusColor(this.theme, step.status)}${activity}${model}${attempts}${duration}${tokens}`;
 			lines.push(row(truncateToWidth(line, innerW), width, this.theme));
 			if (step.error) {

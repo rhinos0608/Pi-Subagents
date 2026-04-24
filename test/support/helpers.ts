@@ -98,7 +98,7 @@ export function makeMinimalCtx(cwd: string): MinimalCtx {
 
 /**
  * Try to dynamically import a module.
- * - Bare specifiers (e.g., "@marcfargas/pi-test-harness") are imported as-is.
+ * - Bare specifiers are imported as-is.
  * - Relative paths (e.g., "./utils.ts") are resolved from the project root.
  *
  * Only swallows MODULE_NOT_FOUND / ERR_MODULE_NOT_FOUND when the missing module

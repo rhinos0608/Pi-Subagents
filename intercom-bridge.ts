@@ -41,6 +41,15 @@ export function resolveIntercomSessionTarget(sessionName: string | undefined, se
 	return `${DEFAULT_INTERCOM_TARGET_PREFIX}-${normalizedSessionId.slice(0, 8)}`;
 }
 
+function sanitizeIntercomTargetPart(value: string): string {
+	return value.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") || "agent";
+}
+
+export function resolveSubagentIntercomTarget(runId: string, agent: string, index?: number): string {
+	const stepSuffix = index !== undefined ? `-${index + 1}` : "";
+	return `subagent-${sanitizeIntercomTargetPart(agent)}-${sanitizeIntercomTargetPart(runId)}${stepSuffix}`;
+}
+
 export function resolveIntercomBridgeMode(value: unknown): IntercomBridgeMode {
 	if (value === "off" || value === "always" || value === "fork-only") return value;
 	return "always";

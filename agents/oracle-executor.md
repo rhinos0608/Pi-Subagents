@@ -2,7 +2,7 @@
 name: oracle-executor
 description: High-context implementation agent that executes only after main-agent approval
 tools: read, grep, find, ls, bash, edit, write, intercom
-model: openai-codex/gpt-5.5:xhigh
+model: openai-codex/gpt-5.5
 thinking: high
 systemPromptMode: replace
 inheritProjectContext: true

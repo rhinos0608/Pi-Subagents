@@ -17,22 +17,24 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { type ExtensionAPI, type ExtensionContext, type ToolDefinition } from "@mariozechner/pi-coding-agent";
-import { Box, Container, Spacer, Text } from "@mariozechner/pi-tui";
+import { Box, Container, Spacer, Text, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component } from "@mariozechner/pi-tui";
 import { discoverAgents } from "./agents.ts";
 import { cleanupAllArtifactDirs, cleanupOldArtifacts, getArtifactsDir } from "./artifacts.ts";
 import { cleanupOldChainDirs } from "./settings.ts";
 import { renderWidget, renderSubagentResult } from "./render.ts";
-import { SubagentParams, StatusParams } from "./schemas.ts";
-import { findByPrefix, readStatus } from "./utils.ts";
+import { SubagentParams } from "./schemas.ts";
 import { createSubagentExecutor } from "./subagent-executor.ts";
 import { createAsyncJobTracker } from "./async-job-tracker.ts";
+import { controlNotificationKey, formatControlNoticeMessage } from "./subagent-control.ts";
 import { createResultWatcher } from "./result-watcher.ts";
 import { registerSlashCommands } from "./slash-commands.ts";
 import { registerPromptTemplateDelegationBridge } from "./prompt-template-bridge.ts";
 import { registerSlashSubagentBridge } from "./slash-bridge.ts";
 import { clearSlashSnapshots, getSlashRenderableSnapshot, resolveSlashMessageDetails, restoreSlashFinalSnapshots, type SlashMessageDetails } from "./slash-live-state.ts";
-import { formatAsyncRunList, listAsyncRuns } from "./async-status.ts";
+import { inspectSubagentStatus } from "./run-status.ts";
+import registerSubagentNotify from "./notify.ts";
 import {
+	type ControlEvent,
 	type Details,
 	type ExtensionConfig,
 	type SubagentState,
@@ -40,6 +42,9 @@ import {
 	DEFAULT_ARTIFACT_CONFIG,
 	RESULTS_DIR,
 	SLASH_RESULT_TYPE,
+	SUBAGENT_ASYNC_COMPLETE_EVENT,
+	SUBAGENT_ASYNC_STARTED_EVENT,
+	SUBAGENT_CONTROL_EVENT,
 	WIDGET_KEY,
 } from "./types.ts";
 
@@ -139,6 +144,52 @@ function createSlashResultComponent(
 	return container;
 }
 
+const SUBAGENT_CONTROL_MESSAGE_TYPE = "subagent_control_notice";
+
+interface SubagentControlMessageDetails {
+	event: ControlEvent;
+	source?: "foreground" | "async";
+	asyncDir?: string;
+	childIntercomTarget?: string;
+	noticeText?: string;
+}
+
+function controlNoticeTarget(details: SubagentControlMessageDetails): string | undefined {
+	return details.childIntercomTarget;
+}
+
+function formatSubagentControlNotice(details: SubagentControlMessageDetails, content?: string): string {
+	return details.noticeText ?? content ?? formatControlNoticeMessage(details.event, controlNoticeTarget(details));
+}
+
+class SubagentControlNoticeComponent implements Component {
+	constructor(
+		private readonly details: SubagentControlMessageDetails,
+		private readonly theme: ExtensionContext["ui"]["theme"],
+	) {}
+
+	invalidate(): void {}
+
+	render(width: number): string[] {
+		const eventLabel = this.details.event.type.replaceAll("_", " ");
+		if (width < 3) return [truncateToWidth(`Subagent ${eventLabel}`, width)];
+		const bodyWidth = Math.max(1, Math.min(width - 2, 68));
+		const borderChar = "─";
+		const header = ` ⚠ Subagent ${eventLabel}: ${this.details.event.agent} `;
+		const headerText = truncateToWidth(header, bodyWidth, "");
+		const headerPadding = Math.max(0, bodyWidth - visibleWidth(headerText));
+		const lines = [this.theme.fg("accent", `╭${headerText}${borderChar.repeat(headerPadding)}╮`)];
+
+		for (const line of wrapTextWithAnsi(formatSubagentControlNotice(this.details), bodyWidth)) {
+			const text = truncateToWidth(line, bodyWidth, "");
+			const padding = Math.max(0, bodyWidth - visibleWidth(text));
+			lines.push(this.theme.fg("accent", `│${text}${" ".repeat(padding)}│`));
+		}
+		lines.push(this.theme.fg("accent", `╰${borderChar.repeat(bodyWidth)}╯`));
+		return lines;
+	}
+}
+
 export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	ensureAccessibleDir(RESULTS_DIR);
 	ensureAccessibleDir(ASYNC_DIR);
@@ -176,7 +227,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	startResultWatcher();
 	primeExistingResults();
 
-	const { ensurePoller, handleStarted, handleComplete, resetJobs } = createAsyncJobTracker(state, ASYNC_DIR);
+	const { ensurePoller, handleStarted, handleComplete, resetJobs } = createAsyncJobTracker(pi, state, ASYNC_DIR);
 	const executor = createSubagentExecutor({
 		pi,
 		state,
@@ -192,6 +243,13 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		const details = resolveSlashMessageDetails(message.details);
 		if (!details) return undefined;
 		return createSlashResultComponent(details, options, theme);
+	});
+
+	pi.registerMessageRenderer<SubagentControlMessageDetails>(SUBAGENT_CONTROL_MESSAGE_TYPE, (message, _options, theme) => {
+		const details = message.details as SubagentControlMessageDetails | undefined;
+		if (!details?.event) return undefined;
+		const content = typeof message.content === "string" ? message.content : undefined;
+		return new SubagentControlNoticeComponent({ ...details, noticeText: formatSubagentControlNotice(details, content) }, theme);
 	});
 
 	const slashBridge = registerSlashSubagentBridge({
@@ -274,7 +332,8 @@ MANAGEMENT (use action field, omit agent/task/chain/tasks):
 • Use chainName for chain operations
 
 CONTROL:
-• { action: "interrupt", runId?: "..." } - soft-interrupt the current child turn and leave the run paused`, 
+• { action: "status", id: "..." } - inspect an async/background run by id or prefix
+• { action: "interrupt", id?: "..." } - soft-interrupt the current child turn and leave the run paused`,
 		parameters: SubagentParams,
 
 		execute(id, params, signal, onUpdate, ctx) {
@@ -317,134 +376,52 @@ CONTROL:
 
 	};
 
-	const statusTool: ToolDefinition<typeof StatusParams, Details> = {
-		name: "subagent_status",
-		label: "Subagent Status",
-		description: "Inspect async subagent run status and artifacts",
-		parameters: StatusParams,
-
-		async execute(_id, params, _signal, _onUpdate, _ctx) {
-			if (params.action === "list") {
-				try {
-					const runs = listAsyncRuns(ASYNC_DIR, { states: ["queued", "running"] });
-					return {
-						content: [{ type: "text", text: formatAsyncRunList(runs) }],
-						details: { mode: "single", results: [] },
-					};
-				} catch (error) {
-					const message = error instanceof Error ? error.message : String(error);
-					return {
-						content: [{ type: "text", text: message }],
-						isError: true,
-						details: { mode: "single", results: [] },
-					};
-				}
-			}
-
-			let asyncDir: string | null = null;
-			let resolvedId = params.id;
-
-			if (params.dir) {
-				asyncDir = path.resolve(params.dir);
-			} else if (params.id) {
-				const direct = path.join(ASYNC_DIR, params.id);
-				if (fs.existsSync(direct)) {
-					asyncDir = direct;
-				} else {
-					const match = findByPrefix(ASYNC_DIR, params.id);
-					if (match) {
-						asyncDir = match;
-						resolvedId = path.basename(match);
-					}
-				}
-			}
-
-			const resultPath =
-				params.id && !asyncDir ? findByPrefix(RESULTS_DIR, params.id, ".json") : null;
-
-			if (!asyncDir && !resultPath) {
-				return {
-					content: [{ type: "text", text: "Async run not found. Provide id or dir." }],
-					isError: true,
-					details: { mode: "single" as const, results: [] },
-				};
-			}
-
-			if (asyncDir) {
-				let status;
-				try {
-					status = readStatus(asyncDir);
-				} catch (error) {
-					const message = error instanceof Error ? error.message : String(error);
-					return {
-						content: [{ type: "text", text: message }],
-						isError: true,
-						details: { mode: "single" as const, results: [] },
-					};
-				}
-				const logPath = path.join(asyncDir, `subagent-log-${resolvedId ?? "unknown"}.md`);
-				const eventsPath = path.join(asyncDir, "events.jsonl");
-				if (status) {
-					const stepsTotal = status.steps?.length ?? 1;
-					const current = status.currentStep !== undefined ? status.currentStep + 1 : undefined;
-					const stepLine =
-						current !== undefined ? `Step: ${current}/${stepsTotal}` : `Steps: ${stepsTotal}`;
-					const started = new Date(status.startedAt).toISOString();
-					const updated = status.lastUpdate ? new Date(status.lastUpdate).toISOString() : "n/a";
-
-					const lines = [
-						`Run: ${status.runId}`,
-						`State: ${status.activityState ? `${status.state}/${status.activityState}` : status.state}`,
-						`Mode: ${status.mode}`,
-						stepLine,
-						`Started: ${started}`,
-						`Updated: ${updated}`,
-						`Dir: ${asyncDir}`,
-					];
-					for (const [index, step] of (status.steps ?? []).entries()) {
-						const stepState = step.activityState ? `${step.status}/${step.activityState}` : step.status;
-						lines.push(`Step ${index + 1}: ${step.agent} ${stepState}`);
-					}
-					if (status.sessionFile) lines.push(`Session: ${status.sessionFile}`);
-					if (fs.existsSync(logPath)) lines.push(`Log: ${logPath}`);
-					if (fs.existsSync(eventsPath)) lines.push(`Events: ${eventsPath}`);
-
-					return { content: [{ type: "text", text: lines.join("\n") }], details: { mode: "single", results: [] } };
-				}
-			}
-
-			if (resultPath) {
-				try {
-					const raw = fs.readFileSync(resultPath, "utf-8");
-					const data = JSON.parse(raw) as { id?: string; success?: boolean; summary?: string };
-					const status = data.success ? "complete" : "failed";
-					const lines = [`Run: ${data.id ?? params.id}`, `State: ${status}`, `Result: ${resultPath}`];
-					if (data.summary) lines.push("", data.summary);
-					return { content: [{ type: "text", text: lines.join("\n") }], details: { mode: "single", results: [] } };
-				} catch (error) {
-					const message = error instanceof Error ? error.message : String(error);
-					return {
-						content: [{ type: "text", text: `Failed to read async result file: ${message}` }],
-						isError: true,
-						details: { mode: "single" as const, results: [] },
-					};
-				}
-			}
-
-			return {
-				content: [{ type: "text", text: "Status file not found." }],
-				isError: true,
-				details: { mode: "single" as const, results: [] },
-			};
-		},
-	};
-
 	pi.registerTool(tool);
-	pi.registerTool(statusTool);
 	registerSlashCommands(pi, state);
 
-	pi.events.on("subagent:started", handleStarted);
-	pi.events.on("subagent:complete", handleComplete);
+	const eventUnsubscribeStoreKey = "__piSubagentEventUnsubscribes";
+	const controlNoticeSeenStoreKey = "__piSubagentVisibleControlNotices";
+	const globalStore = globalThis as Record<string, unknown>;
+	const previousEventUnsubscribes = globalStore[eventUnsubscribeStoreKey];
+	if (Array.isArray(previousEventUnsubscribes)) {
+		for (const unsubscribe of previousEventUnsubscribes) {
+			if (typeof unsubscribe !== "function") continue;
+			try {
+				unsubscribe();
+			} catch {
+				// Best effort cleanup for stale handlers from an older reload.
+			}
+		}
+	}
+	registerSubagentNotify(pi);
+
+	const existingVisibleControlNotices = globalStore[controlNoticeSeenStoreKey];
+	const visibleControlNotices = existingVisibleControlNotices instanceof Set ? existingVisibleControlNotices as Set<string> : new Set<string>();
+	globalStore[controlNoticeSeenStoreKey] = visibleControlNotices;
+	const controlEventHandler = (payload: unknown) => {
+		const details = payload as SubagentControlMessageDetails;
+		if (!details?.event) return;
+		const childIntercomTarget = controlNoticeTarget(details);
+		const key = controlNotificationKey(details.event, childIntercomTarget);
+		if (visibleControlNotices.has(key)) return;
+		visibleControlNotices.add(key);
+		const noticeText = details.noticeText ?? formatControlNoticeMessage(details.event, childIntercomTarget);
+		pi.sendMessage(
+			{
+				customType: SUBAGENT_CONTROL_MESSAGE_TYPE,
+				content: noticeText,
+				display: true,
+				details: { ...details, childIntercomTarget, noticeText },
+			},
+			{ triggerTurn: true },
+		);
+	};
+	const eventUnsubscribes = [
+		pi.events.on(SUBAGENT_ASYNC_STARTED_EVENT, handleStarted),
+		pi.events.on(SUBAGENT_ASYNC_COMPLETE_EVENT, handleComplete),
+		pi.events.on(SUBAGENT_CONTROL_EVENT, controlEventHandler),
+	];
+	globalStore[eventUnsubscribeStoreKey] = eventUnsubscribes;
 
 	pi.on("tool_result", (event, ctx) => {
 		if (event.toolName !== "subagent") return;
@@ -480,6 +457,16 @@ CONTROL:
 		resetSessionState(ctx);
 	});
 	pi.on("session_shutdown", () => {
+		for (const unsubscribe of eventUnsubscribes) {
+			try {
+				unsubscribe();
+			} catch {
+				// Best effort cleanup during shutdown.
+			}
+		}
+		if (globalStore[eventUnsubscribeStoreKey] === eventUnsubscribes) {
+			delete globalStore[eventUnsubscribeStoreKey];
+		}
 		stopResultWatcher();
 		if (state.poller) clearInterval(state.poller);
 		state.poller = null;

@@ -25,6 +25,7 @@ import {
 	type ResolvedControlConfig,
 	ASYNC_DIR,
 	RESULTS_DIR,
+	SUBAGENT_ASYNC_STARTED_EVENT,
 	TEMP_ROOT_DIR,
 	getAsyncConfigPath,
 	resolveChildMaxSubagentDepth,
@@ -77,6 +78,8 @@ export interface AsyncChainParams {
 	worktreeSetupHook?: string;
 	worktreeSetupHookTimeoutMs?: number;
 	controlConfig?: ResolvedControlConfig;
+	controlIntercomTarget?: string;
+	childIntercomTarget?: (agent: string, index: number) => string | undefined;
 }
 
 export interface AsyncSingleParams {
@@ -99,6 +102,8 @@ export interface AsyncSingleParams {
 	worktreeSetupHook?: string;
 	worktreeSetupHookTimeoutMs?: number;
 	controlConfig?: ResolvedControlConfig;
+	controlIntercomTarget?: string;
+	childIntercomTarget?: (agent: string, index: number) => string | undefined;
 }
 
 export interface AsyncExecutionResult {
@@ -182,6 +187,8 @@ export function executeAsyncChain(
 		worktreeSetupHook,
 		worktreeSetupHookTimeoutMs,
 		controlConfig,
+		controlIntercomTarget,
+		childIntercomTarget,
 	} = params;
 	const chainSkills = params.chainSkills ?? [];
 	const availableModels = params.availableModels;
@@ -280,6 +287,13 @@ export function executeAsyncChain(
 		}
 		return buildSeqStep(s as SequentialStep, nextSessionFile());
 	});
+	let childTargetIndex = 0;
+	const childIntercomTargets = childIntercomTarget ? steps.flatMap((step) => {
+		if ("parallel" in step) {
+			return step.parallel.map((task) => childIntercomTarget(task.agent, childTargetIndex++));
+		}
+		return [childIntercomTarget(step.agent, childTargetIndex++)];
+	}) : undefined;
 
 	let spawnResult: { pid?: number; error?: string } = {};
 	try {
@@ -302,6 +316,8 @@ export function executeAsyncChain(
 				worktreeSetupHook,
 				worktreeSetupHookTimeoutMs,
 				controlConfig,
+				controlIntercomTarget,
+				childIntercomTargets,
 			},
 			id,
 			runnerCwd,
@@ -320,7 +336,7 @@ export function executeAsyncChain(
 		const firstAgents = isParallelStep(firstStep)
 			? firstStep.parallel.map((t) => t.agent)
 			: [(firstStep as SequentialStep).agent];
-		ctx.pi.events.emit("subagent:started", {
+		ctx.pi.events.emit(SUBAGENT_ASYNC_STARTED_EVENT, {
 			id,
 			pid: spawnResult.pid,
 			agent: firstAgents[0],
@@ -370,6 +386,8 @@ export function executeAsyncSingle(
 		worktreeSetupHook,
 		worktreeSetupHookTimeoutMs,
 		controlConfig,
+		controlIntercomTarget,
+		childIntercomTarget,
 	} = params;
 	const runnerCwd = resolveChildCwd(ctx.cwd, cwd);
 	const skillNames = params.skills ?? agentConfig.skills ?? [];
@@ -437,6 +455,8 @@ export function executeAsyncSingle(
 				worktreeSetupHook,
 				worktreeSetupHookTimeoutMs,
 				controlConfig,
+				controlIntercomTarget,
+				childIntercomTargets: childIntercomTarget ? [childIntercomTarget(agent, 0)] : undefined,
 			},
 			id,
 			runnerCwd,
@@ -451,7 +471,7 @@ export function executeAsyncSingle(
 	}
 
 	if (spawnResult.pid) {
-		ctx.pi.events.emit("subagent:started", {
+		ctx.pi.events.emit(SUBAGENT_ASYNC_STARTED_EVENT, {
 			id,
 			pid: spawnResult.pid,
 			agent,

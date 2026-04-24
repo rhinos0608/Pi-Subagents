@@ -44,6 +44,7 @@ import {
 	type AgentProgress,
 	type ArtifactConfig,
 	type ArtifactPaths,
+	type ControlEvent,
 	type Details,
 	type ResolvedControlConfig,
 	type SingleResult,
@@ -84,12 +85,17 @@ interface ParallelChainRunInput {
 	artifactsDir: string;
 	signal?: AbortSignal;
 	onUpdate?: (r: AgentToolResult<Details>) => void;
+	onControlEvent?: (event: ControlEvent) => void;
 	controlConfig: ResolvedControlConfig;
+	childIntercomTarget?: (agent: string, index: number) => string | undefined;
 	foregroundControl?: {
 		updatedAt: number;
 		currentAgent?: string;
 		currentIndex?: number;
 		currentActivityState?: ActivityState;
+		lastActivityAt?: number;
+		currentTool?: string;
+		currentToolStartedAt?: number;
 		interrupt?: () => boolean;
 	};
 	results: SingleResult[];
@@ -200,12 +206,12 @@ async function runParallelChainTasks(input: ParallelChainRunInput): Promise<Sing
 			if (input.foregroundControl) {
 				input.foregroundControl.currentAgent = task.agent;
 				input.foregroundControl.currentIndex = input.globalTaskIndex + taskIndex;
-				input.foregroundControl.currentActivityState = "starting";
+				input.foregroundControl.currentActivityState = undefined;
 				input.foregroundControl.updatedAt = Date.now();
 				input.foregroundControl.interrupt = () => {
 					if (interruptController.signal.aborted) return false;
 					interruptController.abort();
-					input.foregroundControl!.currentActivityState = "paused";
+					input.foregroundControl!.currentActivityState = undefined;
 					input.foregroundControl!.updatedAt = Date.now();
 					return true;
 				};
@@ -225,6 +231,8 @@ async function runParallelChainTasks(input: ParallelChainRunInput): Promise<Sing
 				outputPath,
 				maxSubagentDepth,
 				controlConfig: input.controlConfig,
+				onControlEvent: input.onControlEvent,
+				intercomSessionName: input.childIntercomTarget?.(task.agent, input.globalTaskIndex + taskIndex),
 				modelOverride: effectiveModel,
 				availableModels: input.availableModels,
 				preferredModelProvider: input.ctx.model?.provider,
@@ -238,6 +246,9 @@ async function runParallelChainTasks(input: ParallelChainRunInput): Promise<Sing
 							input.foregroundControl.currentAgent = task.agent;
 							input.foregroundControl.currentIndex = input.globalTaskIndex + taskIndex;
 							input.foregroundControl.currentActivityState = current?.activityState;
+							input.foregroundControl.lastActivityAt = current?.lastActivityAt;
+							input.foregroundControl.currentTool = current?.currentTool;
+							input.foregroundControl.currentToolStartedAt = current?.currentToolStartedAt;
 							input.foregroundControl.updatedAt = Date.now();
 						}
 						input.onUpdate?.({
@@ -287,12 +298,17 @@ export interface ChainExecutionParams {
 	includeProgress?: boolean;
 	clarify?: boolean;
 	onUpdate?: (r: AgentToolResult<Details>) => void;
+	onControlEvent?: (event: ControlEvent) => void;
 	controlConfig: ResolvedControlConfig;
+	childIntercomTarget?: (agent: string, index: number) => string | undefined;
 	foregroundControl?: {
 		updatedAt: number;
 		currentAgent?: string;
 		currentIndex?: number;
 		currentActivityState?: ActivityState;
+		lastActivityAt?: number;
+		currentTool?: string;
+		currentToolStartedAt?: number;
 		interrupt?: () => boolean;
 	};
 	chainSkills?: string[];
@@ -332,7 +348,9 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 		includeProgress,
 		clarify,
 		onUpdate,
+		onControlEvent,
 		controlConfig,
+		childIntercomTarget,
 		foregroundControl,
 		chainSkills: chainSkillsParam,
 		chainDir: chainDirBase,
@@ -533,6 +551,8 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 					chainAgents,
 					totalSteps,
 					controlConfig,
+					onControlEvent,
+					childIntercomTarget,
 					foregroundControl,
 					worktreeSetup,
 					maxSubagentDepth: params.maxSubagentDepth,
@@ -674,12 +694,12 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 			if (foregroundControl) {
 				foregroundControl.currentAgent = seqStep.agent;
 				foregroundControl.currentIndex = globalTaskIndex;
-				foregroundControl.currentActivityState = "starting";
+				foregroundControl.currentActivityState = undefined;
 				foregroundControl.updatedAt = Date.now();
 				foregroundControl.interrupt = () => {
 					if (interruptController.signal.aborted) return false;
 					interruptController.abort();
-					foregroundControl.currentActivityState = "paused";
+					foregroundControl.currentActivityState = undefined;
 					foregroundControl.updatedAt = Date.now();
 					return true;
 				};
@@ -699,6 +719,8 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 				outputPath,
 				maxSubagentDepth,
 				controlConfig,
+				onControlEvent,
+				intercomSessionName: childIntercomTarget?.(seqStep.agent, globalTaskIndex),
 				modelOverride: effectiveModel,
 				availableModels,
 				preferredModelProvider: ctx.model?.provider,
@@ -712,6 +734,9 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 							foregroundControl.currentAgent = seqStep.agent;
 							foregroundControl.currentIndex = globalTaskIndex;
 							foregroundControl.currentActivityState = current?.activityState;
+							foregroundControl.lastActivityAt = current?.lastActivityAt;
+							foregroundControl.currentTool = current?.currentTool;
+							foregroundControl.currentToolStartedAt = current?.currentToolStartedAt;
 							foregroundControl.updatedAt = Date.now();
 						}
 						onUpdate({

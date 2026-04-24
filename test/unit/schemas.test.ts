@@ -22,34 +22,32 @@ interface SubagentParamsSchema {
 			minimum?: number;
 			description?: string;
 		};
+		id?: {
+			type?: string;
+			description?: string;
+		};
 		runId?: {
+			type?: string;
+			description?: string;
+		};
+		dir?: {
 			type?: string;
 			description?: string;
 		};
 		control?: {
 			properties?: {
-				quietAfterMs?: { minimum?: number };
-				stalledAfterMs?: { minimum?: number };
-				parentMode?: { enum?: string[] };
+				needsAttentionAfterMs?: { minimum?: number };
+				notifyOn?: { items?: { enum?: string[] } };
+				notifyChannels?: { items?: { enum?: string[] } };
 			};
 		};
 	};
 }
 
-interface StatusParamsSchema {
-	properties?: {
-		action?: {
-			type?: string;
-			description?: string;
-		};
-	};
-}
-
 let SubagentParams: SubagentParamsSchema | undefined;
-let StatusParams: StatusParamsSchema | undefined;
 let available = true;
 try {
-	({ SubagentParams, StatusParams } = await import("../../schemas.ts") as { SubagentParams: SubagentParamsSchema; StatusParams: StatusParamsSchema });
+	({ SubagentParams } = await import("../../schemas.ts") as { SubagentParams: SubagentParamsSchema });
 } catch {
 	// Skip in environments that do not install typebox.
 	available = false;
@@ -78,22 +76,26 @@ describe("SubagentParams schema", { skip: !available ? "typebox not available" :
 	});
 
 	it("includes subagent control fields", () => {
+		const idSchema = SubagentParams?.properties?.id;
+		assert.ok(idSchema, "id schema should exist");
+		assert.equal(idSchema.type, "string");
+		assert.match(String(idSchema.description ?? ""), /status/i);
+		assert.match(String(idSchema.description ?? ""), /interrupt/i);
+
 		const runIdSchema = SubagentParams?.properties?.runId;
 		assert.ok(runIdSchema, "runId schema should exist");
 		assert.equal(runIdSchema.type, "string");
 		assert.match(String(runIdSchema.description ?? ""), /interrupt/i);
 
+		const dirSchema = SubagentParams?.properties?.dir;
+		assert.ok(dirSchema, "dir schema should exist");
+		assert.equal(dirSchema.type, "string");
+		assert.match(String(dirSchema.description ?? ""), /status/i);
+
 		const controlSchema = SubagentParams?.properties?.control;
 		assert.ok(controlSchema, "control schema should exist");
-		assert.equal(controlSchema.properties?.quietAfterMs?.minimum, 1);
-		assert.equal(controlSchema.properties?.stalledAfterMs?.minimum, 1);
-		assert.deepEqual(controlSchema.properties?.parentMode?.enum, ["transitions", "verbose"]);
-	});
-
-	it("includes action on status params for list mode", () => {
-		const actionSchema = StatusParams?.properties?.action;
-		assert.ok(actionSchema, "status action schema should exist");
-		assert.equal(actionSchema.type, "string");
-		assert.match(String(actionSchema.description ?? ""), /list/i);
+		assert.equal(controlSchema.properties?.needsAttentionAfterMs?.minimum, 1);
+		assert.deepEqual(controlSchema.properties?.notifyOn?.items?.enum, ["needs_attention"]);
+		assert.deepEqual(controlSchema.properties?.notifyChannels?.items?.enum, ["event", "async", "intercom"]);
 	});
 });

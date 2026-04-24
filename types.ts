@@ -40,22 +40,22 @@ export interface TokenUsage {
 	total: number;
 }
 
-export type ActivityState = "starting" | "active" | "quiet" | "stalled" | "paused";
-export type ControlParentMode = "transitions" | "verbose";
-export type ControlEventType = "stalled" | "recovered" | "paused" | "resumed" | "activity";
+export type ActivityState = "needs_attention";
+export type ControlEventType = "needs_attention";
+export type ControlNotificationChannel = "event" | "async" | "intercom";
 
 export interface ControlConfig {
 	enabled?: boolean;
-	quietAfterMs?: number;
-	stalledAfterMs?: number;
-	parentMode?: ControlParentMode;
+	needsAttentionAfterMs?: number;
+	notifyOn?: ControlEventType[];
+	notifyChannels?: ControlNotificationChannel[];
 }
 
 export interface ResolvedControlConfig {
 	enabled: boolean;
-	quietAfterMs: number;
-	stalledAfterMs: number;
-	parentMode: ControlParentMode;
+	needsAttentionAfterMs: number;
+	notifyOn: ControlEventType[];
+	notifyChannels: ControlNotificationChannel[];
 }
 
 export interface ControlEvent {
@@ -197,6 +197,9 @@ export interface AsyncStatus {
 	mode: "single" | "chain";
 	state: "queued" | "running" | "complete" | "failed" | "paused";
 	activityState?: ActivityState;
+	lastActivityAt?: number;
+	currentTool?: string;
+	currentToolStartedAt?: number;
 	startedAt: number;
 	endedAt?: number;
 	lastUpdate?: number;
@@ -207,6 +210,11 @@ export interface AsyncStatus {
 		agent: string;
 		status: string;
 		activityState?: ActivityState;
+		lastActivityAt?: number;
+		currentTool?: string;
+		currentToolStartedAt?: number;
+		startedAt?: number;
+		endedAt?: number;
 		durationMs?: number;
 		tokens?: TokenUsage;
 		skills?: string[];
@@ -226,6 +234,9 @@ export interface AsyncJobState {
 	asyncDir: string;
 	status: "queued" | "running" | "complete" | "failed" | "paused";
 	activityState?: ActivityState;
+	lastActivityAt?: number;
+	currentTool?: string;
+	currentToolStartedAt?: number;
 	mode?: "single" | "chain";
 	agents?: string[];
 	currentStep?: number;
@@ -236,6 +247,7 @@ export interface AsyncJobState {
 	outputFile?: string;
 	totalTokens?: TokenUsage;
 	sessionFile?: string;
+	controlEventCursor?: number;
 }
 
 export interface SubagentState {
@@ -250,6 +262,9 @@ export interface SubagentState {
 		currentAgent?: string;
 		currentIndex?: number;
 		currentActivityState?: ActivityState;
+		lastActivityAt?: number;
+		currentTool?: string;
+		currentToolStartedAt?: number;
 		interrupt?: () => boolean;
 	}>;
 	lastForegroundControlId: string | null;
@@ -291,6 +306,10 @@ export interface IntercomEventBus {
 
 export const INTERCOM_DETACH_REQUEST_EVENT = "pi-intercom:detach-request";
 export const INTERCOM_DETACH_RESPONSE_EVENT = "pi-intercom:detach-response";
+export const SUBAGENT_ASYNC_STARTED_EVENT = "subagent:async-started";
+export const SUBAGENT_ASYNC_COMPLETE_EVENT = "subagent:async-complete";
+export const SUBAGENT_CONTROL_EVENT = "subagent:control-event";
+export const SUBAGENT_CONTROL_INTERCOM_EVENT = "subagent:control-intercom";
 
 // ============================================================================
 // Execution Options
@@ -305,6 +324,7 @@ export interface RunSyncOptions {
 	onUpdate?: (r: import("@mariozechner/pi-agent-core").AgentToolResult<Details>) => void;
 	onControlEvent?: (event: ControlEvent) => void;
 	controlConfig?: ResolvedControlConfig;
+	intercomSessionName?: string;
 	maxOutput?: MaxOutputConfig;
 	artifactsDir?: string;
 	artifactConfig?: ArtifactConfig;

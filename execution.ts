@@ -28,8 +28,10 @@ import {
 import {
 	DEFAULT_CONTROL_CONFIG,
 	buildControlEvent,
+	claimControlNotification,
 	deriveActivityState,
 	shouldEmitControlEvent,
+	shouldNotifyControlEvent,
 } from "./subagent-control.ts";
 import {
 	getFinalOutput,
@@ -135,6 +137,7 @@ async function runSingleAttempt(
 		systemPrompt: shared.systemPrompt,
 		mcpDirectTools: agent.mcpDirectTools,
 		promptFileStem: agent.name,
+		intercomSessionName: options.intercomSessionName,
 	});
 
 	const result: SingleResult = {
@@ -150,8 +153,6 @@ async function runSingleAttempt(
 	};
 	const startTime = Date.now();
 	const controlConfig = options.controlConfig ?? DEFAULT_CONTROL_CONFIG;
-	let hasSeenActivity = false;
-	let pausedByInterrupt = false;
 	let interruptedByControl = false;
 	const allControlEvents: ControlEvent[] = [];
 	let pendingControlEvents: ControlEvent[] = [];
@@ -160,7 +161,6 @@ async function runSingleAttempt(
 		index: options.index ?? 0,
 		agent: agent.name,
 		status: "running",
-		activityState: controlConfig.enabled ? "starting" : undefined,
 		task,
 		skills: shared.resolvedSkillNames,
 		recentTools: [],
@@ -274,33 +274,38 @@ async function runSingleAttempt(
 			return events;
 		};
 
+		const emittedControlEventKeys = new Set<string>();
+		const emitControlEvent = (event: ControlEvent) => {
+			if (shouldNotifyControlEvent(controlConfig, event) && !claimControlNotification(controlConfig, event, emittedControlEventKeys)) return;
+			allControlEvents.push(event);
+			pendingControlEvents.push(event);
+			options.onControlEvent?.(event);
+		};
+
 		const updateActivityState = (now: number): boolean => {
 			const next = deriveActivityState({
 				config: controlConfig,
 				startedAt: startTime,
 				lastActivityAt: progress.lastActivityAt,
-				hasSeenActivity,
-				paused: pausedByInterrupt,
 				now,
 			});
-			if (!next || next === progress.activityState) return false;
+			if (next === progress.activityState) return false;
 			const previous = progress.activityState;
 			progress.activityState = next;
 			if (shouldEmitControlEvent(controlConfig, previous, next)) {
-				const event = buildControlEvent({
+				emitControlEvent(buildControlEvent({
 					from: previous,
 					to: next,
 					runId: options.runId,
 					agent: agent.name,
 					index: options.index,
 					ts: now,
-				});
-				allControlEvents.push(event);
-				pendingControlEvents.push(event);
-				options.onControlEvent?.(event);
+					lastActivityAt: progress.lastActivityAt,
+				}));
 			}
 			return true;
 		};
+
 
 		const emitUpdateSnapshot = (text: string) => {
 			if (!options.onUpdate || processClosed) return;
@@ -338,7 +343,6 @@ async function runSingleAttempt(
 			const now = Date.now();
 			progress.durationMs = now - startTime;
 			progress.lastActivityAt = now;
-			hasSeenActivity = true;
 			updateActivityState(now);
 
 			if (evt.type === "tool_execution_start") {
@@ -481,27 +485,11 @@ async function runSingleAttempt(
 			const interrupt = () => {
 				if (processClosed || detached || settled) return;
 				interruptedByControl = true;
-				pausedByInterrupt = true;
 				progress.status = "running";
 				progress.durationMs = Date.now() - startTime;
 				result.interrupted = true;
 				result.finalOutput = "Interrupted. Waiting for explicit next action.";
-				const now = Date.now();
-				const previous = progress.activityState;
-				progress.activityState = "paused";
-				if (shouldEmitControlEvent(controlConfig, previous, "paused")) {
-					const event = buildControlEvent({
-						from: previous,
-						to: "paused",
-						runId: options.runId,
-						agent: agent.name,
-						index: options.index,
-						ts: now,
-					});
-					allControlEvents.push(event);
-					pendingControlEvents.push(event);
-					options.onControlEvent?.(event);
-				}
+				progress.activityState = undefined;
 				fireUpdate();
 				trySignalChild(proc, "SIGINT");
 				setTimeout(() => {
@@ -523,7 +511,7 @@ async function runSingleAttempt(
 		result.error = undefined;
 		result.finalOutput = result.finalOutput || "Interrupted. Waiting for explicit next action.";
 		result.controlEvents = allControlEvents.length ? allControlEvents : undefined;
-		progress.activityState = "paused";
+		progress.activityState = undefined;
 		progress.durationMs = Date.now() - startTime;
 		result.progressSummary = {
 			toolCount: progress.toolCount,

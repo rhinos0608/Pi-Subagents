@@ -23,6 +23,7 @@ export interface BuildPiArgsInput {
 	systemPrompt?: string | null;
 	mcpDirectTools?: string[];
 	promptFileStem?: string;
+	intercomSessionName?: string;
 }
 
 export interface BuildPiArgsResult {
@@ -112,6 +113,9 @@ export function buildPiArgs(input: BuildPiArgsInput): BuildPiArgsResult {
 	const env: Record<string, string | undefined> = {};
 	env.PI_SUBAGENT_INHERIT_PROJECT_CONTEXT = input.inheritProjectContext ? "1" : "0";
 	env.PI_SUBAGENT_INHERIT_SKILLS = input.inheritSkills ? "1" : "0";
+	if (input.intercomSessionName) {
+		env.PI_SUBAGENT_INTERCOM_SESSION_NAME = input.intercomSessionName;
+	}
 	if (input.mcpDirectTools?.length) {
 		env.MCP_DIRECT_TOOLS = input.mcpDirectTools.join(",");
 	} else {

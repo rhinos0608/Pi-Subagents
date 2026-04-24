@@ -20,12 +20,12 @@ agents into a workflow, or create/edit agents and chains on demand.
 - **Recon and planning**: use `scout` or `context-builder`, then `planner`
 - **Parallel exploration**: run multiple non-conflicting tasks concurrently
 - **Long-running work**: launch async/background runs and inspect them later
-- **Subagent control**: watch clear stalled/paused signals and soft-interrupt only when a delegated run is genuinely blocked
+- **Subagent control**: watch needs-attention signals and soft-interrupt only when a delegated run is genuinely blocked
 - **Agent authoring**: create, update, or override agents and chains for a project
 
 ## Tool vs Slash Commands
 
-Agents can use the `subagent(...)` and `subagent_status(...)` tools directly.
+Agents can use the `subagent(...)` tool directly for execution, management, status, and control.
 Humans often use the slash-command layer instead:
 
 - `/run` — launch a single agent
@@ -45,14 +45,14 @@ and user/project agents override builtins with the same name.
 | Agent | Purpose | Model | Typical output / role |
 |-------|---------|-------|------------------------|
 | `scout` | Fast codebase recon | `openai-codex/gpt-5.4-mini` | Writes `context.md` handoff material |
-| `planner` | Creates implementation plans | `openai-codex/gpt-5.4` | Writes `plan.md` |
-| `worker` | General implementation | `openai-codex/gpt-5.4` | Edits code directly |
-| `reviewer` | Review-and-fix specialist | `openai-codex/gpt-5.3-codex:high` | Can edit/fix reviewed code |
-| `context-builder` | Requirements/codebase handoff builder | `openai-codex/gpt-5.4` | Writes structured context files |
-| `researcher` | Web research brief generator | `openai-codex/gpt-5.4` | Writes `research.md` |
+| `planner` | Creates implementation plans | `openai-codex/gpt-5.5` | Writes `plan.md` |
+| `worker` | General implementation | `openai-codex/gpt-5.5` | Edits code directly |
+| `reviewer` | Review-and-fix specialist | `openai-codex/gpt-5.5` | Can edit/fix reviewed code |
+| `context-builder` | Requirements/codebase handoff builder | `openai-codex/gpt-5.5` | Writes structured context files |
+| `researcher` | Web research brief generator | `openai-codex/gpt-5.5` | Writes `research.md` |
 | `delegate` | Lightweight generic delegate | inherits parent model | No fixed output; generic delegated work |
-| `oracle` | Decision-consistency advisory review | `openai-codex/gpt-5.4:high` | Advisory review, intercom coordination |
-| `oracle-executor` | Implementation after approval | `openai-codex/gpt-5.3-codex:high` | Single-writer implementation after approval |
+| `oracle` | Decision-consistency advisory review | `openai-codex/gpt-5.5` | Advisory review, intercom coordination |
+| `oracle-executor` | Implementation after approval | `openai-codex/gpt-5.5` | Single-writer implementation after approval |
 
 Override builtin defaults via settings before copying full agent files when a
 small tweak is enough.
@@ -145,14 +145,13 @@ subagent({
 })
 ```
 
-Inspect async runs with the `subagent_status(...)` tool or the
-`/subagents-status` slash command.
+Inspect async runs with `subagent({ action: "status", id: "..." })`, `subagent({ action: "status" })` for active runs, or the `/subagents-status` slash command.
 
 ### Subagent control
 
-Subagent control is the runtime visibility and intervention layer for delegated runs. It is separate from lifecycle status. Lifecycle status says whether a child is `running`, `completed`, `failed`, or detached. Activity state says what the child appears to be doing right now: `starting`, `active`, `quiet`, `stalled`, or `paused`.
+Subagent control is the runtime visibility and intervention layer for delegated runs. It is separate from lifecycle status. Lifecycle status says whether a child is `queued`, `running`, `paused`, `complete`, or `failed`. Activity reporting is factual: it tracks the last observed activity time and the current tool when known. It does not pretend to know that a child is truly stuck.
 
-Default behavior is intentionally conservative. Routine `active` and `quiet` updates are mostly UI/status information. Clear transitions such as `stalled`, `recovered`, and `paused` are the signals worth acting on.
+Default behavior is intentionally conservative. When no activity has been observed past the configured threshold, the run emits a `needs_attention` control event. Foreground runs can push this as a `subagent:control-event` event, and async runs persist it to `events.jsonl` so the parent tracker can surface it without constant manual polling. Notification-worthy control events are also inserted into the visible transcript so both the user and the parent agent can see them, with a proactive hint plus concrete `nudge`, `status`, and `interrupt` options. Visible notifications fire once per child run and attention state.
 
 Use soft interrupt when a child is clearly blocked or drifting and the parent needs to regain control:
 
@@ -160,27 +159,28 @@ Use soft interrupt when a child is clearly blocked or drifting and the parent ne
 subagent({ action: "interrupt" })
 ```
 
-Pass `runId` when targeting a specific controllable run:
+Pass `id` when targeting a specific controllable run:
 
 ```typescript
-subagent({ action: "interrupt", runId: "abc123" })
+subagent({ action: "interrupt", id: "abc123" })
 ```
 
 A soft interrupt cancels the current child turn and leaves the run paused. It does not mean the delegated task succeeded or failed. After an interrupt, decide the next explicit action: resume with clearer instructions, replace the task, ask the user, or stop the workflow.
 
-Per-run control thresholds can be overridden when a task legitimately runs quiet for longer than usual:
+Per-run control thresholds can be overridden when a task legitimately runs without observable output for longer than usual:
 
 ```typescript
 subagent({
   agent: "worker",
   task: "Run the slow migration test suite",
   control: {
-    quietAfterMs: 60000,
-    stalledAfterMs: 300000,
-    parentMode: "transitions"
+    needsAttentionAfterMs: 300000,
+    notifyOn: ["needs_attention"]
   }
 })
 ```
+
+If the run already has an active intercom bridge target, needs-attention notifications can also prepare a compact intercom ping for the orchestrator. When a child route is available, the ping tells the orchestrator which agent needs attention and includes the exact `intercom({ action: "send", to: "..." })` target for a nudge. Do not invent a target or ask the child to self-report when no bridge exists.
 
 ## Clarify TUI
 
@@ -369,7 +369,7 @@ particular agent or with forked context.
   filtered contexts.
 - **Default subagent nesting depth is 2.** Deeper recursive delegation is blocked
   unless configured otherwise.
-- **Control state is not lifecycle state.** `paused` means the child turn was intentionally interrupted or is awaiting direction; it is not the same as `failed`.
+- **Attention signals are not lifecycle state.** `needs_attention` means no activity has been observed past the configured threshold. `paused` means the child turn was intentionally interrupted or is awaiting direction; it is not the same as `failed`.
 - **Intercom asks are blocking.** A session can only maintain one pending outbound
   ask wait state at a time.
 - **Keep conversational authority clear.** Advisory subagents should not silently
@@ -400,7 +400,7 @@ it should coordinate back via `intercom` instead of deciding alone.
 
 ### Intervene only on clear control signals
 
-Use subagent control proactively when a delegated run is explicitly `stalled` or `paused`, or when a human asks you to regain control. Do not interrupt just because a child is briefly `quiet`. Quiet can be normal during long tool calls, test runs, or model reasoning.
+Use subagent control proactively when a delegated run emits `needs_attention`, or when a human asks you to regain control. Do not interrupt just because a child has briefly produced no output. Silence can be normal during long tool calls, test runs, or model reasoning.
 
 ### Name sessions meaningfully
 

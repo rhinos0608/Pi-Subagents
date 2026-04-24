@@ -58,10 +58,14 @@ export const ParallelStepSchema = Type.Object({
 export const ChainItem = Type.Any({ description: "Chain step: either {agent, task?, ...} for sequential or {parallel: [...]} for concurrent execution" });
 
 export const ControlOverrides = Type.Object({
-	enabled: Type.Optional(Type.Boolean({ description: "Enable/disable subagent control activity tracking for this run" })),
-	quietAfterMs: Type.Optional(Type.Integer({ minimum: 1, description: "Idle window before activity moves from active to quiet" })),
-	stalledAfterMs: Type.Optional(Type.Integer({ minimum: 1, description: "Idle window before activity moves from quiet to stalled" })),
-	parentMode: Type.Optional(Type.String({ enum: ["transitions", "verbose"], description: "Parent-visible control event mode" })),
+	enabled: Type.Optional(Type.Boolean({ description: "Enable/disable subagent control attention tracking for this run" })),
+	needsAttentionAfterMs: Type.Optional(Type.Integer({ minimum: 1, description: "No-observed-activity window before a run needs attention" })),
+	notifyOn: Type.Optional(Type.Array(Type.String({ enum: ["needs_attention"] }), {
+		description: "Control event types that should notify the parent/orchestrator. Defaults to needs_attention.",
+	})),
+	notifyChannels: Type.Optional(Type.Array(Type.String({ enum: ["event", "async", "intercom"] }), {
+		description: "Notification channels to use when available. Defaults to event, async, and intercom.",
+	})),
 });
 
 export const SubagentParams = Type.Object({
@@ -69,10 +73,16 @@ export const SubagentParams = Type.Object({
 	task: Type.Optional(Type.String({ description: "Task (SINGLE mode)" })),
 	// Management action (when present, tool operates in management mode)
 	action: Type.Optional(Type.String({
-		description: "Action: management ('list','get','create','update','delete') or control ('interrupt'). Omit for execution mode."
+		description: "Action: management ('list','get','create','update','delete') or control ('status','interrupt'). Omit for execution mode."
+	})),
+	id: Type.Optional(Type.String({
+		description: "Run id or prefix for action='status' or action='interrupt'."
 	})),
 	runId: Type.Optional(Type.String({
-		description: "Target run ID for action='interrupt'. Defaults to the most recently active controllable run in this session."
+		description: "Target run ID for action='interrupt'. Defaults to the most recently active controllable run in this session. Prefer id for new calls."
+	})),
+	dir: Type.Optional(Type.String({
+		description: "Async run directory for action='status'."
 	})),
 	// Chain identifier for management (can't reuse 'chain' — that's the execution array)
 	chainName: Type.Optional(Type.String({
@@ -111,10 +121,4 @@ export const SubagentParams = Type.Object({
 	output: Type.Optional(Type.Any({ description: "Output file for single agent (string), or false to disable. Relative paths resolve against cwd." })),
 	skill: Type.Optional(SkillOverride),
 	model: Type.Optional(Type.String({ description: "Override model for single agent (e.g. 'anthropic/claude-sonnet-4')" })),
-});
-
-export const StatusParams = Type.Object({
-	action: Type.Optional(Type.String({ description: "Action: 'list' to show active async runs, or omit to inspect one run by id/dir" })),
-	id: Type.Optional(Type.String({ description: "Async run id or prefix" })),
-	dir: Type.Optional(Type.String({ description: "Async run directory (overrides id search)" })),
 });

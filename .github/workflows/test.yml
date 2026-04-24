@@ -24,5 +24,3 @@ jobs:
         run: npm test
       - name: Integration tests
         run: npm run test:integration
-      - name: E2E tests
-        run: npm run test:e2e
