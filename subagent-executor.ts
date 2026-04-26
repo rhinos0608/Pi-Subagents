@@ -14,11 +14,15 @@ import { resolveModelCandidate } from "./model-fallback.ts";
 import { aggregateParallelOutputs } from "./parallel-utils.ts";
 import { recordRun } from "./run-history.ts";
 import {
+	buildChainInstructions,
+	writeInitialProgressFile,
 	getStepAgents,
 	isParallelStep,
 	resolveStepBehavior,
 	type ChainStep,
+	type ResolvedStepBehavior,
 	type SequentialStep,
+	type StepOverrides,
 } from "./settings.ts";
 import { discoverAvailableSkills, normalizeSkillInput } from "./skills.ts";
 import { executeAsyncChain, executeAsyncSingle, isAsyncAvailable } from "./async-execution.ts";
@@ -69,6 +73,9 @@ interface TaskParam {
 	task: string;
 	cwd?: string;
 	count?: number;
+	output?: string | boolean;
+	reads?: string[] | boolean;
+	progress?: boolean;
 	model?: string;
 	skill?: string | string[] | boolean;
 }
@@ -545,6 +552,9 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 			cwd: task.cwd,
 			...(modelOverrides[index] ? { model: modelOverrides[index] } : {}),
 			...(skillOverrides[index] !== undefined ? { skill: skillOverrides[index] } : {}),
+			...(task.output === true ? (agentConfigs[index]?.output ? { output: agentConfigs[index]!.output } : {}) : task.output !== undefined ? { output: task.output } : {}),
+			...(task.reads !== undefined && task.reads !== true ? { reads: task.reads } : {}),
+			...(task.progress !== undefined ? { progress: task.progress } : {}),
 		}));
 		return executeAsyncChain(id, {
 			chain: [{
@@ -752,12 +762,12 @@ interface ForegroundParallelRunInput {
 	artifactConfig: ArtifactConfig;
 	artifactsDir: string;
 	maxOutput?: MaxOutputConfig;
-	paramsCwd?: string;
+	paramsCwd: string;
 	maxSubagentDepths: number[];
 	availableModels: ModelInfo[];
 	modelOverrides: (string | undefined)[];
-	skillOverrides: (string[] | false | undefined)[];
 	behaviors: Array<ReturnType<typeof resolveStepBehavior>>;
+	firstProgressIndex: number;
 	controlConfig: ResolvedControlConfig;
 	onControlEvent?: (event: ControlEvent) => void;
 	childIntercomTarget?: (agent: string, index: number) => string | undefined;
@@ -825,12 +835,11 @@ function buildChainWorktreeTaskCwdError(chain: ChainStep[], sharedCwd: string): 
 
 function resolveParallelTaskCwd(
 	task: TaskParam,
-	paramsCwd: string | undefined,
+	paramsCwd: string,
 	worktreeSetup: WorktreeSetup | undefined,
 	index: number,
-): string | undefined {
+): string {
 	if (worktreeSetup) return worktreeSetup.worktrees[index]!.agentCwd;
-	if (!paramsCwd) return task.cwd;
 	return resolveChildCwd(paramsCwd, task.cwd);
 }
 
@@ -845,11 +854,46 @@ function buildParallelWorktreeSuffix(
 	return formatWorktreeDiffSummary(diffs);
 }
 
+function findDuplicateParallelOutputPath(input: {
+	tasks: TaskParam[];
+	behaviors: ResolvedStepBehavior[];
+	paramsCwd: string;
+	ctxCwd: string;
+	worktreeSetup?: WorktreeSetup;
+}): string | undefined {
+	const seen = new Map<string, { index: number; agent: string }>();
+	for (let index = 0; index < input.tasks.length; index++) {
+		const behavior = input.behaviors[index];
+		if (!behavior?.output) continue;
+		const task = input.tasks[index]!;
+		const taskCwd = resolveParallelTaskCwd(task, input.paramsCwd, input.worktreeSetup, index);
+		const outputPath = resolveSingleOutputPath(behavior.output, input.ctxCwd, taskCwd);
+		if (!outputPath) continue;
+		const previous = seen.get(outputPath);
+		if (previous) {
+			return `Parallel tasks ${previous.index + 1} (${previous.agent}) and ${index + 1} (${task.agent}) resolve output to the same path: ${outputPath}. Use distinct output paths.`;
+		}
+		seen.set(outputPath, { index, agent: task.agent });
+	}
+	return undefined;
+}
+
 async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Promise<SingleResult[]> {
 	return mapConcurrent(input.tasks, input.concurrencyLimit, async (task, index) => {
-		const overrideSkills = input.skillOverrides[index];
-		const effectiveSkills = overrideSkills === undefined ? input.behaviors[index]?.skills : overrideSkills;
+		const behavior = input.behaviors[index];
+		const effectiveSkills = behavior?.skills;
 		const taskCwd = resolveParallelTaskCwd(task, input.paramsCwd, input.worktreeSetup, index);
+		const readInstructions = behavior
+			? buildChainInstructions({ ...behavior, output: false, progress: false }, taskCwd, false)
+			: { prefix: "", suffix: "" };
+		const progressInstructions = behavior
+			? buildChainInstructions({ ...behavior, output: false, reads: false }, input.paramsCwd, index === input.firstProgressIndex)
+			: { prefix: "", suffix: "" };
+		const outputPath = resolveSingleOutputPath(behavior?.output, input.ctx.cwd, taskCwd);
+		const taskText = injectSingleOutputInstruction(
+			`${readInstructions.prefix}${input.taskTexts[index]!}${progressInstructions.suffix}`,
+			outputPath,
+		);
 		const interruptController = new AbortController();
 		if (input.foregroundControl) {
 			input.foregroundControl.currentAgent = task.agent;
@@ -865,7 +909,7 @@ async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Pr
 			};
 		}
 		const agentConfig = input.agents.find((agent) => agent.name === task.agent);
-		return runSync(input.ctx.cwd, input.agents, task.agent, input.taskTexts[index]!, {
+		return runSync(input.ctx.cwd, input.agents, task.agent, taskText, {
 			cwd: taskCwd,
 			signal: input.signal,
 			interruptSignal: interruptController.signal,
@@ -879,6 +923,7 @@ async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Pr
 			artifactsDir: input.artifactConfig.enabled ? input.artifactsDir : undefined,
 			artifactConfig: input.artifactConfig,
 			maxOutput: input.maxOutput,
+			outputPath,
 			maxSubagentDepth: input.maxSubagentDepths[index],
 			controlConfig: input.controlConfig,
 			onControlEvent: input.onControlEvent,
@@ -989,16 +1034,23 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 		fullId: `${m.provider}/${m.id}`,
 	}));
 	let taskTexts = tasks.map((t) => t.task);
-	const modelOverrides: (string | undefined)[] = tasks.map((t, i) =>
-		resolveModelCandidate(t.model ?? agentConfigs[i]?.model, availableModels, currentProvider),
-	);
 	const skillOverrides: (string[] | false | undefined)[] = tasks.map((t) =>
 		normalizeSkillInput(t.skill),
+	);
+	const behaviorOverrides: StepOverrides[] = tasks.map((task, index) => ({
+		...(task.output !== undefined ? { output: task.output === true ? agentConfigs[index]?.output ?? false : task.output } : {}),
+		...(task.reads !== undefined && task.reads !== true ? { reads: task.reads } : {}),
+		...(task.progress !== undefined ? { progress: task.progress } : {}),
+		...(skillOverrides[index] !== undefined ? { skills: skillOverrides[index] } : {}),
+		...(task.model ? { model: task.model } : {}),
+	}));
+	const modelOverrides: (string | undefined)[] = tasks.map((_, i) =>
+		resolveModelCandidate(behaviorOverrides[i]?.model ?? agentConfigs[i]?.model, availableModels, currentProvider),
 	);
 
 	if (params.clarify === true && ctx.hasUI) {
 		const behaviors = agentConfigs.map((c, i) =>
-			resolveStepBehavior(c, { skills: skillOverrides[i] }),
+			resolveStepBehavior(c, behaviorOverrides[i]!),
 		);
 		const availableSkills = discoverAvailableSkills(effectiveCwd);
 
@@ -1027,8 +1079,17 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 		taskTexts = result.templates;
 		for (let i = 0; i < result.behaviorOverrides.length; i++) {
 			const override = result.behaviorOverrides[i];
-			if (override?.model) modelOverrides[i] = override.model;
-			if (override?.skills !== undefined) skillOverrides[i] = override.skills;
+			if (override?.model) {
+				modelOverrides[i] = override.model;
+				behaviorOverrides[i]!.model = override.model;
+			}
+			if (override?.output !== undefined) behaviorOverrides[i]!.output = override.output;
+			if (override?.reads !== undefined) behaviorOverrides[i]!.reads = override.reads;
+			if (override?.progress !== undefined) behaviorOverrides[i]!.progress = override.progress;
+			if (override?.skills !== undefined) {
+				skillOverrides[i] = override.skills;
+				behaviorOverrides[i]!.skills = override.skills;
+			}
 		}
 
 		if (result.runInBackground) {
@@ -1052,6 +1113,9 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 				cwd: t.cwd,
 				...(modelOverrides[i] ? { model: modelOverrides[i] } : {}),
 				...(skillOverrides[i] !== undefined ? { skill: skillOverrides[i] } : {}),
+				...(behaviorOverrides[i]?.output !== undefined ? { output: behaviorOverrides[i]!.output } : {}),
+				...(behaviorOverrides[i]?.reads !== undefined ? { reads: behaviorOverrides[i]!.reads } : {}),
+				...(behaviorOverrides[i]?.progress !== undefined ? { progress: behaviorOverrides[i]!.progress } : {}),
 			}));
 			return executeAsyncChain(id, {
 				chain: [{ parallel: parallelTasks, concurrency: parallelConcurrency, worktree: params.worktree }],
@@ -1076,7 +1140,8 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 		}
 	}
 
-	const behaviors = agentConfigs.map((config) => resolveStepBehavior(config, {}));
+	const behaviors = agentConfigs.map((config, index) => resolveStepBehavior(config, behaviorOverrides[index]!));
+	const firstProgressIndex = behaviors.findIndex((behavior) => behavior.progress);
 	const liveResults: (SingleResult | undefined)[] = new Array(tasks.length).fill(undefined);
 	const liveProgress: (AgentProgress | undefined)[] = new Array(tasks.length).fill(undefined);
 	const foregroundControl = deps.state.foregroundControls.get(runId);
@@ -1091,6 +1156,18 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 	if (errorResult) return errorResult;
 
 	try {
+		const duplicateOutputError = findDuplicateParallelOutputPath({
+			tasks,
+			behaviors,
+			paramsCwd: effectiveCwd,
+			ctxCwd: ctx.cwd,
+			worktreeSetup,
+		});
+		if (duplicateOutputError) return buildParallelModeError(duplicateOutputError);
+
+		const parallelProgressPrecreated = firstProgressIndex !== -1;
+		if (parallelProgressPrecreated) writeInitialProgressFile(effectiveCwd);
+
 		if (params.context === "fork") {
 			for (let i = 0; i < taskTexts.length; i++) {
 				taskTexts[i] = wrapForkTask(taskTexts[i]!);
@@ -1114,8 +1191,8 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 			paramsCwd: effectiveCwd,
 			availableModels,
 			modelOverrides,
-			skillOverrides,
 			behaviors,
+			firstProgressIndex: parallelProgressPrecreated ? -1 : firstProgressIndex,
 			controlConfig,
 			onControlEvent,
 			childIntercomTarget: childIntercomTarget ? (agent, index) => childIntercomTarget(runId, agent, index) : undefined,

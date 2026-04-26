@@ -51,6 +51,7 @@ import {
 	formatWorktreeTaskCwdConflict,
 	type WorktreeSetup,
 } from "./worktree.ts";
+import { writeInitialProgressFile } from "./settings.ts";
 
 interface SubagentRunConfig {
 	id: string;
@@ -817,6 +818,12 @@ function appendParallelWorktreeSummary(
 	return `${previousOutput}\n\n${diffSummary}`;
 }
 
+function ensureParallelProgressFile(cwd: string, group: Extract<RunnerStep, { parallel: SubagentStep[] }>): void {
+	const progressPath = path.join(cwd, "progress.md");
+	if (!group.parallel.some((task) => task.task.includes(`Update progress at: ${progressPath}`))) return;
+	writeInitialProgressFile(cwd);
+}
+
 async function runSubagent(config: SubagentRunConfig): Promise<void> {
 	const { id, steps, resultPath, cwd, placeholder, taskIndex, totalTasks, maxOutput, artifactsDir, artifactConfig } =
 		config;
@@ -1039,6 +1046,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 			}
 
 			try {
+				if (group.worktree) ensureParallelProgressFile(cwd, group);
 				const groupStartTime = Date.now();
 				markParallelGroupRunning({
 					statusPayload,

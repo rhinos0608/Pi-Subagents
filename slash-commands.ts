@@ -499,8 +499,11 @@ export function registerSlashCommands(
 				const tasks = parsed.steps.map(({ name, config, task: stepTask }) => ({
 					agent: name,
 					task: stepTask ?? parsed.task,
+					...(config.output !== undefined ? { output: config.output } : {}),
+					...(config.reads !== undefined ? { reads: config.reads } : {}),
 					...(config.model ? { model: config.model } : {}),
 					...(config.skill !== undefined ? { skill: config.skill } : {}),
+					...(config.progress !== undefined ? { progress: config.progress } : {}),
 				}));
 				const params: SubagentParamsLike = { tasks, clarify: false, agentScope: "both" };
 				if (bg) params.async = true;

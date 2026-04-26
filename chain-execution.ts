@@ -15,6 +15,7 @@ import {
 	resolveStepBehavior,
 	resolveParallelBehaviors,
 	buildChainInstructions,
+	writeInitialProgressFile,
 	createParallelDirs,
 	aggregateParallelOutputs,
 	isParallelStep,
@@ -137,8 +138,7 @@ function ensureParallelProgressFile(
 	if (progressCreated || !parallelBehaviors.some((behavior) => behavior.progress)) {
 		return progressCreated;
 	}
-	const progressPath = path.join(chainDir, "progress.md");
-	fs.writeFileSync(progressPath, "# Progress\n\n## Status\nIn Progress\n\n## Tasks\n\n## Files Changed\n\n## Notes\n");
+	writeInitialProgressFile(chainDir);
 	return true;
 }
 

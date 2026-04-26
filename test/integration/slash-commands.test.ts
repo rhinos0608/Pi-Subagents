@@ -333,6 +333,43 @@ describe("slash command custom message delivery", { skip: !available ? "slash-co
 		assert.equal((visibleSnapshot.result.content[0] as { text?: string }).text, "Subagent failed");
 	});
 
+	it("/parallel forwards inline output, reads, and progress config", async () => {
+		const commands = new Map<string, { handler(args: string, ctx: unknown): Promise<void> }>();
+		const events = createEventBus();
+		let requestedParams: unknown;
+		events.on(SLASH_SUBAGENT_REQUEST_EVENT, (data) => {
+			const payload = data as { requestId: string; params?: unknown };
+			requestedParams = payload.params;
+			events.emit(SLASH_SUBAGENT_STARTED_EVENT, { requestId: payload.requestId });
+			events.emit(SLASH_SUBAGENT_RESPONSE_EVENT, {
+				requestId: payload.requestId,
+				result: {
+					content: [{ type: "text", text: "parallel finished" }],
+					details: { mode: "parallel", results: [] },
+				},
+				isError: false,
+			});
+		});
+
+		const pi = {
+			events,
+			registerCommand(name: string, spec: { handler(args: string, ctx: unknown): Promise<void> }) {
+				commands.set(name, spec);
+			},
+			registerShortcut() {},
+			sendMessage(_message: unknown) {},
+		};
+
+		registerSlashCommands!(pi, createState(process.cwd()));
+		await commands.get("parallel")!.handler("scout[output=x.md,reads=a.md+b.md,progress] -- Review", createCommandContext());
+
+		assert.deepEqual(requestedParams, {
+			tasks: [{ agent: "scout", task: "Review", output: "x.md", reads: ["a.md", "b.md"], progress: true }],
+			clarify: false,
+			agentScope: "both",
+		});
+	});
+
 	it("/parallel no longer hard-blocks runs above the old 8-task limit before the executor responds", async () => {
 		const sent: unknown[] = [];
 		const commands = new Map<string, { handler(args: string, ctx: unknown): Promise<void> }>();
