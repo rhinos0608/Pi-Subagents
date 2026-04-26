@@ -4,6 +4,7 @@
 
 ### Fixed
 - `/run` and single-agent tool calls now allow self-contained agents to run without a task string.
+- The `subagent` tool description no longer advertises hardcoded builtin agent names and management list output now separates disabled builtins from executable agents.
 
 ## [0.18.0] - 2026-04-23
 

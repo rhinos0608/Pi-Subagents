@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { buildBuiltinOverrideConfig, discoverAgents, discoverAgentsAll } from "../../agents.ts";
+import { handleList } from "../../agent-management.ts";
 
 let tempHome = "";
 let tempProject = "";
@@ -13,6 +14,14 @@ const originalUserProfile = process.env.USERPROFILE;
 function writeJson(filePath: string, value: unknown): void {
 	fs.mkdirSync(path.dirname(filePath), { recursive: true });
 	fs.writeFileSync(filePath, JSON.stringify(value, null, 2), "utf-8");
+}
+
+function readText(result: { content: Array<{ type: string; text?: string }> }): string {
+	const first = result.content[0];
+	assert.ok(first);
+	assert.equal(first.type, "text");
+	assert.equal(typeof first.text, "string");
+	return first.text;
 }
 
 describe("builtin agent disabling", () => {
@@ -147,6 +156,32 @@ describe("builtin agent disabling", () => {
 				&& error.message.includes(settingsPath)
 				&& error.message.includes("disableBuiltins"),
 		);
+	});
+
+	it("separates disabled builtins from executable agents in management list output", () => {
+		writeJson(path.join(tempHome, ".pi", "agent", "settings.json"), {
+			subagents: { disableBuiltins: true },
+		});
+		const agentsDir = path.join(tempProject, ".pi", "agents");
+		fs.mkdirSync(agentsDir, { recursive: true });
+		fs.writeFileSync(
+			path.join(agentsDir, "helper.md"),
+			"---\nname: helper\ndescription: Helper\n---\n\nHelp.\n",
+			"utf-8",
+		);
+
+		const text = readText(handleList(
+			{},
+			{ cwd: tempProject, modelRegistry: { getAvailable: () => [] } },
+		));
+
+		assert.match(text, /Executable agents:\n- helper \(project\): Helper/);
+		assert.match(text, /Disabled builtins:\n- .* \(builtin, disabled\): /);
+		const executableSection = text.slice(
+			text.indexOf("Executable agents:"),
+			text.indexOf("\n\nDisabled builtins:"),
+		);
+		assert.doesNotMatch(executableSection, /\(builtin, disabled\)/);
 	});
 
 	it("buildBuiltinOverrideConfig emits disabled false when re-enabling a builtin", () => {

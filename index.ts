@@ -311,8 +311,9 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		description: `Delegate to subagents or manage agent definitions.
 
 EXECUTION (use exactly ONE mode):
+• Before executing, use { action: "list" } to inspect configured agents/chains. Only execute agents listed as executable/non-disabled.
 • SINGLE: { agent, task? } - one task; omit task for self-contained agents
-• CHAIN: { chain: [{agent:"scout"}, {parallel:[{agent:"worker",count:3}]}] } - sequential pipeline with optional parallel fan-out
+• CHAIN: { chain: [{agent:"agent-a"}, {parallel:[{agent:"agent-b",count:3}]}] } - sequential pipeline with optional parallel fan-out
 • PARALLEL: { tasks: [{agent,task,count?}, ...], concurrency?: number, worktree?: true } - concurrent execution (worktree: isolate each task in a git worktree)
 • Optional context: { context: "fresh" | "fork" } (default: "fresh")
 
@@ -321,10 +322,10 @@ CHAIN TEMPLATE VARIABLES (use in task strings):
 • {previous} - Text response from the previous step (empty for first step)
 • {chain_dir} - Shared directory for chain files (e.g., <tmpdir>/pi-subagents-<scope>/chain-runs/abc123/)
 
-Example: { chain: [{agent:"scout", task:"Analyze {task}"}, {agent:"planner", task:"Plan based on {previous}"}] }
+Example: { chain: [{agent:"agent-a", task:"Analyze {task}"}, {agent:"agent-b", task:"Plan based on {previous}"}] }
 
 MANAGEMENT (use action field, omit agent/task/chain/tasks):
-• { action: "list" } - discover agents/chains
+• { action: "list" } - discover executable agents/chains and any disabled builtins
 • { action: "get", agent: "name" } - full detail
 • { action: "create", config: { name, systemPrompt, systemPromptMode, inheritProjectContext, inheritSkills, ... } }
 • { action: "update", agent: "name", config: { ... } } - merge
