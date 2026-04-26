@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- `/run` and single-agent tool calls now allow self-contained agents to run without a task string.
+
 ## [0.18.0] - 2026-04-23
 
 ### Added

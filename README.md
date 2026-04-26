@@ -222,7 +222,7 @@ Subagents only get direct MCP tools when `mcp:` items are explicitly listed. Eve
 
 | Command | Description |
 |---------|-------------|
-| `/run <agent> <task>` | Run a single agent with a task |
+| `/run <agent> [task]` | Run a single agent; omit the task for self-contained agents |
 | `/chain agent1 "task1" -> agent2 "task2"` | Run agents in sequence with per-step tasks |
 | `/parallel agent1 "task1" -> agent2 "task2"` | Run agents in parallel with per-step tasks |
 | `/subagents-status` | Open the async status overlay for active and recent runs |
@@ -438,7 +438,7 @@ Chains can be created from the Agents Manager template picker ("Blank Chain"), o
 
 | Mode | Async Support | Notes |
 |------|---------------|-------|
-| Single | Yes | `{ agent, task }` - agents with `output` write to temp dir |
+| Single | Yes | `{ agent, task? }` - omit `task` for self-contained agents; agents with `output` write to temp dir |
 | Chain | Yes | `{ chain: [{agent, task}...] }` with `{task}`, `{previous}`, `{chain_dir}` variables |
 | Parallel | Yes | `{ tasks: [{agent, task}...] }` - via TUI toggle or converted to chain for async |
 

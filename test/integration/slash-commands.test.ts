@@ -118,6 +118,45 @@ describe("slash command custom message delivery", { skip: !available ? "slash-co
 		clearSlashSnapshots?.();
 	});
 
+	it("/run accepts an agent without a task", async () => {
+		const sent: unknown[] = [];
+		const commands = new Map<string, { handler(args: string, ctx: unknown): Promise<void> }>();
+		const events = createEventBus();
+		let requestedParams: unknown;
+		events.on(SLASH_SUBAGENT_REQUEST_EVENT, (data) => {
+			const payload = data as { requestId: string; params?: unknown };
+			requestedParams = payload.params;
+			events.emit(SLASH_SUBAGENT_STARTED_EVENT, { requestId: payload.requestId });
+			events.emit(SLASH_SUBAGENT_RESPONSE_EVENT, {
+				requestId: payload.requestId,
+				result: {
+					content: [{ type: "text", text: "Commit finished" }],
+					details: { mode: "single", results: [] },
+				},
+				isError: false,
+			});
+		});
+
+		const pi = {
+			events,
+			registerCommand(name: string, spec: { handler(args: string, ctx: unknown): Promise<void> }) {
+				commands.set(name, spec);
+			},
+			registerShortcut() {},
+			sendMessage(message: unknown) {
+				sent.push(message);
+			},
+		};
+
+		registerSlashCommands!(pi, createState(process.cwd()));
+		await commands.get("run")!.handler("scout", createCommandContext());
+
+		assert.deepEqual(requestedParams, { agent: "scout", task: "", clarify: false, agentScope: "both" });
+		assert.equal(sent.length, 2);
+		assert.equal((sent[0] as { content?: string }).content, "Running subagent...");
+		assert.equal((sent[1] as { content?: string }).content, "Commit finished");
+	});
+
 	it("/run finalizes the slash snapshot before the last UI redraw on success", async () => {
 		const sent: unknown[] = [];
 		const log: string[] = [];

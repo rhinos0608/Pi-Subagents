@@ -326,7 +326,7 @@ function validateExecutionInput(
 function getRequestedModeLabel(params: SubagentParamsLike): Details["mode"] {
 	if ((params.chain?.length ?? 0) > 0) return "chain";
 	if ((params.tasks?.length ?? 0) > 0) return "parallel";
-	if (params.agent && params.task) return "single";
+	if (params.agent) return "single";
 	return "single";
 }
 
@@ -483,7 +483,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 	} = data;
 	const hasChain = (params.chain?.length ?? 0) > 0;
 	const hasTasks = (params.tasks?.length ?? 0) > 0;
-	const hasSingle = Boolean(params.agent && params.task);
+	const hasSingle = !hasChain && !hasTasks && Boolean(params.agent);
 	if (!effectiveAsync) return null;
 
 	if (hasChain && params.chain) {
@@ -614,7 +614,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 		const modelOverride = resolveModelCandidate((params.model as string | undefined) ?? a.model, availableModels, currentProvider);
 		return executeAsyncSingle(id, {
 			agent: params.agent!,
-			task: params.context === "fork" ? wrapForkTask(params.task!) : params.task!,
+			task: params.context === "fork" ? wrapForkTask(params.task ?? "") : (params.task ?? ""),
 			agentConfig: a,
 			ctx: asyncCtx,
 			availableModels,
@@ -1211,7 +1211,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 		id: m.id,
 		fullId: `${m.provider}/${m.id}`,
 	}));
-	let task = params.task!;
+	let task = params.task ?? "";
 	let modelOverride: string | undefined = resolveModelCandidate(
 		(params.model as string | undefined) ?? agentConfig.model,
 		availableModels,
@@ -1548,7 +1548,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		const shareEnabled = effectiveParams.share === true;
 		const hasChain = (effectiveParams.chain?.length ?? 0) > 0;
 		const hasTasks = (effectiveParams.tasks?.length ?? 0) > 0;
-		const hasSingle = Boolean(effectiveParams.agent && effectiveParams.task);
+		const hasSingle = !hasChain && !hasTasks && Boolean(effectiveParams.agent);
 		const allowClarifyTaskPrompt = hasChain
 			&& effectiveParams.clarify === true
 			&& ctx.hasUI

@@ -311,7 +311,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		description: `Delegate to subagents or manage agent definitions.
 
 EXECUTION (use exactly ONE mode):
-• SINGLE: { agent, task } - one task
+• SINGLE: { agent, task? } - one task; omit task for self-contained agents
 • CHAIN: { chain: [{agent:"scout"}, {parallel:[{agent:"worker",count:3}]}] } - sequential pipeline with optional parallel fan-out
 • PARALLEL: { tasks: [{agent,task,count?}, ...], concurrency?: number, worktree?: true } - concurrent execution (worktree: isolate each task in a git worktree)
 • Optional context: { context: "fresh" | "fork" } (default: "fresh")

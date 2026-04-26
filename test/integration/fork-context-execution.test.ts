@@ -259,6 +259,40 @@ describe("fork context execution wiring", { skip: !available ? "subagent executo
 		};
 	}
 
+	it("runs a single agent when task is omitted", async () => {
+		const { manager } = makeSessionManagerRecorder();
+		const executor = makeExecutor();
+
+		const result = await executor.execute(
+			"id",
+			{ agent: "echo" },
+			new AbortController().signal,
+			undefined,
+			makeCtx(manager),
+		);
+
+		assert.equal(result.isError, undefined);
+		const args = readCallArgs();
+		assert.equal(args.at(-1), "Task: ");
+	});
+
+	it("does not treat top-level agent as single mode when tasks are present", async () => {
+		const { manager } = makeSessionManagerRecorder();
+		const executor = makeExecutor();
+
+		const result = await executor.execute(
+			"id",
+			{ agent: "echo", tasks: [{ agent: "second", task: "parallel task" }] },
+			new AbortController().signal,
+			undefined,
+			makeCtx(manager),
+		);
+
+		assert.equal(result.isError, undefined);
+		const args = readCallArgs();
+		assert.equal(args.at(-1), "Task: parallel task");
+	});
+
 	it("fails fast when context=fork and parent session is missing", async () => {
 		const { manager } = makeSessionManagerRecorder({ sessionFile: undefined, leafId: "leaf-current" });
 		const executor = makeExecutor();

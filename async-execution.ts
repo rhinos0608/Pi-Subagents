@@ -84,7 +84,7 @@ export interface AsyncChainParams {
 
 export interface AsyncSingleParams {
 	agent: string;
-	task: string;
+	task?: string;
 	agentConfig: AgentConfig;
 	ctx: AsyncExecutionContext;
 	cwd?: string;
@@ -372,7 +372,6 @@ export function executeAsyncSingle(
 ): AsyncExecutionResult {
 	const {
 		agent,
-		task,
 		agentConfig,
 		ctx,
 		cwd,
@@ -389,6 +388,7 @@ export function executeAsyncSingle(
 		controlIntercomTarget,
 		childIntercomTarget,
 	} = params;
+	const task = params.task ?? "";
 	const runnerCwd = resolveChildCwd(ctx.cwd, cwd);
 	const skillNames = params.skills ?? agentConfig.skills ?? [];
 	const availableModels = params.availableModels;
