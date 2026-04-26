@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+- Added `subagent({ action: "doctor" })` and `/subagents-doctor` for read-only subagent environment diagnostics.
 - Added `/run-chain` to launch saved `.chain.md` workflows directly from slash commands with completion, shared task input, and `--bg`/`--fork` support.
 
 ## [0.19.0] - 2026-04-26

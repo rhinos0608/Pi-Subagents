@@ -779,6 +779,17 @@ describe("agent manager slash routing", { skip: !available ? "slash-commands.ts 
 	});
 });
 
+describe("subagents-doctor slash command", { skip: !available ? "slash-commands.ts not importable" : undefined }, () => {
+	beforeEach(() => {
+		clearSlashSnapshots?.();
+	});
+
+	it("routes to the doctor tool action", async () => {
+		const { params } = await captureSlashCommandParams("subagents-doctor", "", process.cwd());
+		assert.deepEqual(params, { action: "doctor" });
+	});
+});
+
 describe("subagents-status slash command", { skip: !available ? "slash-commands.ts not importable" : undefined }, () => {
 	beforeEach(() => {
 		clearSlashSnapshots?.();

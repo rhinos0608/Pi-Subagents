@@ -3,10 +3,10 @@ import * as path from "node:path";
 import type { Theme } from "@mariozechner/pi-coding-agent";
 import type { Component, TUI } from "@mariozechner/pi-tui";
 import { matchesKey, truncateToWidth } from "@mariozechner/pi-tui";
-import { type AsyncRunOverlayData, type AsyncRunSummary, listAsyncRunsForOverlay } from "./async-status.js";
-import { ASYNC_DIR } from "./types.js";
-import { formatDuration, formatTokens, shortenPath } from "./formatters.js";
-import { formatScrollInfo, renderFooter, renderHeader, row } from "./render-helpers.js";
+import { type AsyncRunOverlayData, type AsyncRunSummary, listAsyncRunsForOverlay } from "./async-status.ts";
+import { ASYNC_DIR } from "./types.ts";
+import { formatDuration, formatTokens, shortenPath } from "./formatters.ts";
+import { formatScrollInfo, renderFooter, renderHeader, row } from "./render-helpers.ts";
 
 const AUTO_REFRESH_MS = 2000;
 const DETAIL_EVENT_LIMIT = 8;
@@ -178,13 +178,19 @@ export class SubagentsStatusComponent implements Component {
 	private recent: AsyncRunSummary[] = [];
 	private rows: StatusRow[] = [];
 	private errorMessage?: string;
+	private tui: TUI;
+	private theme: Theme;
+	private done: () => void;
 
 	constructor(
-		private tui: TUI,
-		private theme: Theme,
-		private done: () => void,
+		tui: TUI,
+		theme: Theme,
+		done: () => void,
 		deps: StatusOverlayDeps = {},
 	) {
+		this.tui = tui;
+		this.theme = theme;
+		this.done = done;
 		this.listRunsForOverlay = deps.listRunsForOverlay ?? listAsyncRunsForOverlay;
 		const refreshMs = deps.refreshMs ?? AUTO_REFRESH_MS;
 		this.reload();

@@ -421,7 +421,10 @@ MANAGEMENT (use action field, omit agent/task/chain/tasks):
 
 CONTROL:
 • { action: "status", id: "..." } - inspect an async/background run by id or prefix
-• { action: "interrupt", id?: "..." } - soft-interrupt the current child turn and leave the run paused`,
+• { action: "interrupt", id?: "..." } - soft-interrupt the current child turn and leave the run paused
+
+DIAGNOSTICS:
+• { action: "doctor" } - read-only report for runtime paths, discovery, sessions, and intercom`,
 		parameters: SubagentParams,
 
 		execute(id, params, signal, onUpdate, ctx) {

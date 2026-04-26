@@ -106,7 +106,7 @@ export const SubagentParams = Type.Object({
 	task: Type.Optional(Type.String({ description: "Task (SINGLE mode, optional for self-contained agents)" })),
 	// Management action (when present, tool operates in management mode)
 	action: Type.Optional(Type.String({
-		description: "Action: management ('list','get','create','update','delete') or control ('status','interrupt'). Omit for execution mode."
+		description: "Action: 'list', 'get', 'create', 'update', 'delete', 'status', 'interrupt', or 'doctor'. Omit for execution mode."
 	})),
 	id: Type.Optional(Type.String({
 		description: "Run id or prefix for action='status' or action='interrupt'."

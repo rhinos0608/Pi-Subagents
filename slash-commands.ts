@@ -569,6 +569,13 @@ export function registerSlashCommands(
 		},
 	});
 
+	pi.registerCommand("subagents-doctor", {
+		description: "Show subagent diagnostics",
+		handler: async (_args, ctx) => {
+			await runSlashSubagent(pi, ctx, { action: "doctor" });
+		},
+	});
+
 	pi.registerShortcut("ctrl+shift+a", {
 		handler: async (ctx) => {
 			await openAgentManager(pi, ctx);

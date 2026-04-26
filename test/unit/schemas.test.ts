@@ -36,6 +36,10 @@ interface SubagentParamsSchema {
 			type?: string;
 			description?: string;
 		};
+		action?: {
+			type?: string;
+			description?: string;
+		};
 		control?: {
 			properties?: {
 				needsAttentionAfterMs?: { minimum?: number };
@@ -93,6 +97,14 @@ describe("SubagentParams schema", { skip: !available ? "typebox not available" :
 		assert.ok(concurrencySchema, "concurrency schema should exist");
 		assert.equal(concurrencySchema.minimum, 1);
 		assert.match(String(concurrencySchema.description ?? ""), /parallel/i);
+	});
+
+	it("includes diagnostics action documentation", () => {
+		const actionSchema = SubagentParams?.properties?.action;
+		assert.ok(actionSchema, "action schema should exist");
+		assert.equal(actionSchema.type, "string");
+		assert.match(String(actionSchema.description ?? ""), /doctor/);
+		assert.match(String(actionSchema.description ?? ""), /diagnostics/i);
 	});
 
 	it("includes subagent control fields", () => {

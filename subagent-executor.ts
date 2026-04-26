@@ -9,6 +9,7 @@ import { ChainClarifyComponent, type ChainClarifyResult, type ModelInfo } from "
 import { executeChain } from "./chain-execution.ts";
 import { resolveExecutionAgentScope } from "./agent-scope.ts";
 import { handleManagementAction } from "./agent-management.ts";
+import { buildDoctorReport } from "./doctor.ts";
 import { runSync } from "./execution.ts";
 import { resolveModelCandidate } from "./model-fallback.ts";
 import { aggregateParallelOutputs } from "./parallel-utils.ts";
@@ -1544,6 +1545,39 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		const requestCwd = resolveRequestedCwd(ctx.cwd, params.cwd);
 		const paramsWithResolvedCwd = params.cwd === undefined ? params : { ...params, cwd: requestCwd };
 		if (params.action) {
+			if (params.action === "doctor") {
+				let currentSessionFile: string | null = null;
+				let currentSessionId = deps.state.currentSessionId;
+				let sessionError: string | undefined;
+				try {
+					currentSessionFile = ctx.sessionManager.getSessionFile() ?? null;
+					currentSessionId = ctx.sessionManager.getSessionId();
+				} catch (error) {
+					sessionError = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+				}
+				let orchestratorTarget: string | undefined;
+				try {
+					orchestratorTarget = resolveIntercomSessionTarget(deps.pi.getSessionName(), ctx.sessionManager.getSessionId());
+				} catch {}
+				return {
+					content: [{
+						type: "text",
+						text: buildDoctorReport({
+							cwd: requestCwd,
+							config: deps.config,
+							state: deps.state,
+							context: paramsWithResolvedCwd.context,
+							requestedSessionDir: paramsWithResolvedCwd.sessionDir,
+							currentSessionFile,
+							currentSessionId,
+							orchestratorTarget,
+							sessionError,
+							expandTilde: deps.expandTilde,
+						}),
+					}],
+					details: { mode: "management", results: [] },
+				};
+			}
 			if (params.action === "status") {
 				const foreground = getForegroundControl(deps.state, paramsWithResolvedCwd.id ?? paramsWithResolvedCwd.runId);
 				if (foreground) return foregroundStatusResult(foreground);
@@ -1576,7 +1610,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 					details: { mode: "management", results: [] },
 				};
 			}
-			const validActions = ["list", "get", "create", "update", "delete", "status", "interrupt"];
+			const validActions = ["list", "get", "create", "update", "delete", "status", "interrupt", "doctor"];
 			if (!validActions.includes(params.action)) {
 				return {
 					content: [{ type: "text", text: `Unknown action: ${params.action}. Valid: ${validActions.join(", ")}` }],
