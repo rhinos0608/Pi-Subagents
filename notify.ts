@@ -12,6 +12,16 @@ interface ChainStepResult {
 	success: boolean;
 }
 
+export interface SubagentNotifyDetails {
+	agent: string;
+	status: "completed" | "failed" | "paused";
+	taskInfo?: string;
+	resultPreview: string;
+	durationMs?: number;
+	sessionLabel?: string;
+	sessionValue?: string;
+}
+
 interface SubagentResult {
 	id: string | null;
 	agent: string | null;
@@ -20,6 +30,7 @@ interface SubagentResult {
 	exitCode?: number;
 	state?: string;
 	timestamp: number;
+	durationMs?: number;
 	sessionFile?: string;
 	shareUrl?: string;
 	gistUrl?: string;
@@ -64,22 +75,21 @@ export default function registerSubagentNotify(pi: ExtensionAPI): void {
 				? ` (${result.taskIndex + 1}/${result.totalTasks})`
 				: "";
 
-		const extra: string[] = [];
-		if (result.shareUrl) {
-			extra.push(`Session: ${result.shareUrl}`);
-		} else if (result.shareError) {
-			extra.push(`Session share error: ${result.shareError}`);
-		} else if (result.sessionFile) {
-			extra.push(`Session file: ${result.sessionFile}`);
-		}
+		const sessionLine = result.shareUrl
+			? `Session: ${result.shareUrl}`
+			: result.shareError
+				? `Session share error: ${result.shareError}`
+				: result.sessionFile
+					? `Session file: ${result.sessionFile}`
+					: undefined;
 
 		const displaySummary = summary.trim() ? summary : "(no output)";
 		const content = [
 			`Background task ${status}: **${agent}**${taskInfo}`,
 			"",
 			displaySummary,
-			extra.length ? "" : undefined,
-			extra.length ? extra.join("\n") : undefined,
+			sessionLine ? "" : undefined,
+			sessionLine,
 		]
 			.filter((line) => line !== undefined)
 			.join("\n");

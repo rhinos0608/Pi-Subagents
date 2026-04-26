@@ -69,6 +69,29 @@ describe("registerSubagentNotify", () => {
 		});
 	});
 
+	it("preserves session paths in notification content", () => {
+		const { events, sent } = createPi();
+
+		events.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, {
+			id: "notify-path-1",
+			agent: "worker",
+			success: true,
+			summary: "Done",
+			exitCode: 0,
+			timestamp: 456,
+			sessionFile: "/tmp/session.jsonl",
+		});
+
+		assert.deepEqual(sent, [{
+			message: {
+				customType: "subagent-notify",
+				content: "Background task completed: **worker**\n\nDone\n\nSession file: /tmp/session.jsonl",
+				display: true,
+			},
+			options: { triggerTurn: true },
+		}]);
+	});
+
 	it("labels paused completions as paused even without an exit code", () => {
 		const { events, sent } = createPi();
 

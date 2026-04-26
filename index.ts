@@ -21,7 +21,7 @@ import { Box, Container, Spacer, Text, truncateToWidth, visibleWidth, wrapTextWi
 import { discoverAgents } from "./agents.ts";
 import { cleanupAllArtifactDirs, cleanupOldArtifacts, getArtifactsDir } from "./artifacts.ts";
 import { cleanupOldChainDirs } from "./settings.ts";
-import { renderWidget, renderSubagentResult } from "./render.ts";
+import { renderWidget, renderSubagentResult, stopResultAnimations, stopWidgetAnimation, syncResultAnimation } from "./render.ts";
 import { SubagentParams } from "./schemas.ts";
 import { createSubagentExecutor } from "./subagent-executor.ts";
 import { createAsyncJobTracker } from "./async-job-tracker.ts";
@@ -32,7 +32,8 @@ import { registerPromptTemplateDelegationBridge } from "./prompt-template-bridge
 import { registerSlashSubagentBridge } from "./slash-bridge.ts";
 import { clearSlashSnapshots, getSlashRenderableSnapshot, resolveSlashMessageDetails, restoreSlashFinalSnapshots, type SlashMessageDetails } from "./slash-live-state.ts";
 import { inspectSubagentStatus } from "./run-status.ts";
-import registerSubagentNotify from "./notify.ts";
+import registerSubagentNotify, { type SubagentNotifyDetails } from "./notify.ts";
+import { formatDuration, shortenPath } from "./formatters.ts";
 import {
 	type ControlEvent,
 	type Details,
@@ -130,12 +131,15 @@ function createSlashResultComponent(
 	details: SlashMessageDetails,
 	options: { expanded: boolean },
 	theme: ExtensionContext["ui"]["theme"],
+	requestRender: () => void,
 ): Container {
 	const container = new Container();
+	const animationState: { subagentResultAnimationTimer?: ReturnType<typeof setInterval> } = {};
 	let lastVersion = -1;
 	container.render = (width: number): string[] => {
 		const snapshot = getSlashRenderableSnapshot(details);
-		if (snapshot.version !== lastVersion) {
+		syncResultAnimation(snapshot.result, { state: animationState, invalidate: requestRender });
+		if (snapshot.version !== lastVersion || isSlashResultRunning(snapshot.result)) {
 			lastVersion = snapshot.version;
 			rebuildSlashResultContainer(container, snapshot.result, options, theme);
 		}
@@ -160,6 +164,38 @@ function controlNoticeTarget(details: SubagentControlMessageDetails): string | u
 
 function formatSubagentControlNotice(details: SubagentControlMessageDetails, content?: string): string {
 	return details.noticeText ?? content ?? formatControlNoticeMessage(details.event, controlNoticeTarget(details));
+}
+
+function parseSubagentNotifyContent(content: string): SubagentNotifyDetails | undefined {
+	const lines = content.split("\n");
+	const header = lines[0] ?? "";
+	const match = header.match(/^Background task (completed|failed|paused): \*\*(.+?)\*\*(?:\s+(\([^)]*\)))?$/);
+	if (!match) return undefined;
+	const body = lines.slice(2);
+	let sessionIndex = -1;
+	for (let i = body.length - 1; i >= 1; i--) {
+		if (body[i - 1]?.trim() === "" && /^(Session|Session file|Session share error):\s+/.test(body[i]!)) {
+			sessionIndex = i;
+			break;
+		}
+	}
+	const sessionLine = sessionIndex >= 0 ? body[sessionIndex] : undefined;
+	const resultLines = sessionIndex >= 0 ? body.slice(0, sessionIndex) : body;
+	const resultPreview = resultLines.join("\n").trim() || "(no output)";
+	let sessionLabel: string | undefined;
+	let sessionValue: string | undefined;
+	if (sessionLine) {
+		const separator = sessionLine.indexOf(":");
+		sessionLabel = sessionLine.slice(0, separator).toLowerCase();
+		sessionValue = sessionLine.slice(separator + 1).trim();
+	}
+	return {
+		agent: match[2]!,
+		status: match[1] as SubagentNotifyDetails["status"],
+		...(match[3] ? { taskInfo: match[3] } : {}),
+		resultPreview,
+		...(sessionLabel && sessionValue ? { sessionLabel, sessionValue } : {}),
+	};
 }
 
 class SubagentControlNoticeComponent implements Component {
@@ -191,6 +227,17 @@ class SubagentControlNoticeComponent implements Component {
 }
 
 export default function registerSubagentExtension(pi: ExtensionAPI): void {
+	const globalStore = globalThis as Record<string, unknown>;
+	const runtimeCleanupStoreKey = "__piSubagentRuntimeCleanup";
+	const previousRuntimeCleanup = globalStore[runtimeCleanupStoreKey];
+	if (typeof previousRuntimeCleanup === "function") {
+		try {
+			previousRuntimeCleanup();
+		} catch {
+			// Best effort cleanup for stale timers from an older reload.
+		}
+	}
+
 	ensureAccessibleDir(RESULTS_DIR);
 	ensureAccessibleDir(ASYNC_DIR);
 	cleanupOldChainDirs();
@@ -227,6 +274,16 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	startResultWatcher();
 	primeExistingResults();
 
+	const runtimeCleanup = () => {
+		stopWidgetAnimation();
+		stopResultAnimations();
+		if (state.poller) {
+			clearInterval(state.poller);
+			state.poller = null;
+		}
+	};
+	globalStore[runtimeCleanupStoreKey] = runtimeCleanup;
+
 	const { ensurePoller, handleStarted, handleComplete, resetJobs } = createAsyncJobTracker(pi, state, ASYNC_DIR);
 	const executor = createSubagentExecutor({
 		pi,
@@ -242,7 +299,37 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	pi.registerMessageRenderer<SlashMessageDetails>(SLASH_RESULT_TYPE, (message, options, theme) => {
 		const details = resolveSlashMessageDetails(message.details);
 		if (!details) return undefined;
-		return createSlashResultComponent(details, options, theme);
+		return createSlashResultComponent(details, options, theme, () => state.lastUiContext?.ui.requestRender?.());
+	});
+
+	pi.registerMessageRenderer<SubagentNotifyDetails>("subagent-notify", (message, options, theme) => {
+		const content = typeof message.content === "string" ? message.content : "";
+		const details = (message.details as SubagentNotifyDetails | undefined) ?? parseSubagentNotifyContent(content);
+		if (!details) return new Text(content, 0, 0);
+		const icon = details.status === "completed"
+			? theme.fg("success", "✓")
+			: details.status === "paused"
+				? theme.fg("warning", "■")
+				: theme.fg("error", "✗");
+		const parts: string[] = [];
+		if (details.taskInfo) parts.push(details.taskInfo);
+		if (details.durationMs !== undefined) parts.push(formatDuration(details.durationMs));
+		let text = `${icon} ${theme.bold(details.agent)} ${theme.fg("dim", details.status)}`;
+		if (parts.length > 0) text += ` ${theme.fg("dim", "·")} ${parts.map((part) => theme.fg("dim", part)).join(` ${theme.fg("dim", "·")} `)}`;
+		const trimmedPreview = details.resultPreview.trim();
+		const previewLines = options.expanded
+			? trimmedPreview.split("\n").filter((line) => line.trim())
+			: [trimmedPreview.split("\n", 1)[0] ?? ""].filter((line) => line.trim());
+		for (const line of previewLines.length > 0 ? previewLines : ["(no output)"]) {
+			text += `\n  ${theme.fg("dim", `⎿  ${line}`)}`;
+		}
+		if (!options.expanded && trimmedPreview.includes("\n")) {
+			text += `\n  ${theme.fg("dim", "Ctrl+O full notification")}`;
+		}
+		if (details.sessionLabel && details.sessionValue) {
+			text += `\n  ${theme.fg("muted", `${details.sessionLabel}: ${shortenPath(details.sessionValue)}`)}`;
+		}
+		return new Text(text, 0, 0);
 	});
 
 	pi.registerMessageRenderer<SubagentControlMessageDetails>(SUBAGENT_CONTROL_MESSAGE_TYPE, (message, _options, theme) => {
@@ -371,7 +458,8 @@ CONTROL:
 			);
 		},
 
-		renderResult(result, options, theme) {
+		renderResult(result, options, theme, context) {
+			syncResultAnimation(result, context);
 			return renderSubagentResult(result, options, theme);
 		},
 
@@ -382,7 +470,6 @@ CONTROL:
 
 	const eventUnsubscribeStoreKey = "__piSubagentEventUnsubscribes";
 	const controlNoticeSeenStoreKey = "__piSubagentVisibleControlNotices";
-	const globalStore = globalThis as Record<string, unknown>;
 	const previousEventUnsubscribes = globalStore[eventUnsubscribeStoreKey];
 	if (Array.isArray(previousEventUnsubscribes)) {
 		for (const unsubscribe of previousEventUnsubscribes) {
@@ -481,6 +568,11 @@ CONTROL:
 		slashBridge.dispose();
 		promptTemplateBridge.cancelAll();
 		promptTemplateBridge.dispose();
+		stopWidgetAnimation();
+		stopResultAnimations();
+		if (globalStore[runtimeCleanupStoreKey] === runtimeCleanup) {
+			delete globalStore[runtimeCleanupStoreKey];
+		}
 		if (state.lastUiContext?.hasUI) {
 			state.lastUiContext.ui.setWidget(WIDGET_KEY, undefined);
 		}
