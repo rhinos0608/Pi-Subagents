@@ -204,12 +204,12 @@ Run this implementation in the background. If the worker gets blocked or needs a
 Ask oracle to review this plan. If it sees a decision I need to make, have it ask me instead of assuming.
 ```
 
-The child can use two kinds of messages:
+The child can use two kinds of coordination messages:
 
 - `ask`: the child needs a decision or clarification from the parent session
 - `send`: the child sends a short update when blocked or explicitly asked for progress
 
-Routine completion does not go through intercom. The normal subagent result still comes back through `pi-subagents`.
+Child-side routine completion handoffs are still not expected. With the intercom bridge active, parent-side `pi-subagents` sends grouped completion results through `pi-intercom`: one grouped message per foreground parent `subagent` run and one per completed async result file. Acknowledged foreground delivery returns a compact receipt with artifact/session paths; if unacknowledged, the normal full output is preserved. Grouped messages include child intercom targets and full child summaries.
 
 If a child appears stalled, needs-attention notices can show up in the parent session with useful next actions, such as checking `/subagents-status`, interrupting the run, or nudging the child.
 
@@ -937,7 +937,12 @@ Async events:
 - `subagent:async-started`
 - `subagent:async-complete`
 
-The result watcher emits `subagent:async-complete`; `index.ts` registers the notification handler that consumes it. Control/attention events are surfaced as visible parent notices and persisted for async runs. With `pi-intercom`, needs-attention notices can also reach the orchestrator over intercom.
+Intercom delivery events:
+
+- `subagent:control-intercom`
+- `subagent:result-intercom`
+
+The result watcher emits `subagent:async-complete`; `index.ts` registers the notification handler that consumes it. Control/attention events are surfaced as visible parent notices and persisted for async runs. With `pi-intercom`, needs-attention notices and grouped parent-side subagent result deliveries can reach the orchestrator over intercom.
 
 ## Prompt-template integration
 

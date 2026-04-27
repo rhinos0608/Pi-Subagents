@@ -2,8 +2,18 @@
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-04-27
+
+### Added
+- Added a packaged `/parallel-cleanup` prompt for focused cleanup review passes.
+
 ### Changed
 - Consolidated the `oracle-executor` role into `worker`: `worker` now uses `openai-codex/gpt-5.3-codex` with high thinking and stricter approved-direction guardrails, while `researcher` and `context-builder` now use medium thinking.
+- Updated the bundled `scout` agent model/thinking defaults.
+- Hard-cut over grouped intercom bridge result delivery: with the bridge active, parent-side `pi-subagents` emits one grouped `subagent:result-intercom` message per foreground parent run (single, top-level parallel, or chain) and one per completed async result file. Acknowledged foreground delivery returns a compact receipt instead of duplicating full output in the normal tool result; unacknowledged delivery preserves the normal full output. Grouped messages include child intercom targets and full child summaries.
+
+### Fixed
+- Fixed status and manager row rendering so multiline or tabbed content cannot overflow table rows.
 
 ### Removed
 - Removed the bundled `oracle-executor` agent and `/oracle-executor` prompt template in favor of using `worker` for approved oracle handoffs.

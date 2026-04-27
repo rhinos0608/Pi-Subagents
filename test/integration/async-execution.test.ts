@@ -24,6 +24,7 @@ interface AsyncExecutionResult {
 
 interface AsyncResultPayload {
 	success: boolean;
+	mode?: string;
 	results: Array<unknown>;
 }
 
@@ -192,6 +193,8 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 			await new Promise((resolve) => setTimeout(resolve, 100));
 		}
 
+		const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8")) as AsyncResultPayload;
+		assert.equal(payload.mode, "parallel");
 		const outputPath = path.join(tempDir, "async-top-output.md");
 		assert.equal(fs.readFileSync(outputPath, "utf-8"), "Async top-level report");
 		const callFile = fs.readdirSync(mockPi.dir).find((name) => name.startsWith("call-"));

@@ -64,6 +64,7 @@ export interface AsyncExecutionContext {
 
 export interface AsyncChainParams {
 	chain: ChainStep[];
+	resultMode?: "parallel" | "chain";
 	agents: AgentConfig[];
 	ctx: AsyncExecutionContext;
 	availableModels?: AvailableModelInfo[];
@@ -345,6 +346,7 @@ export function executeAsyncChain(
 				controlConfig,
 				controlIntercomTarget,
 				childIntercomTargets,
+				resultMode: params.resultMode ?? "chain",
 			},
 			id,
 			runnerCwd,
@@ -484,6 +486,7 @@ export function executeAsyncSingle(
 				controlConfig,
 				controlIntercomTarget,
 				childIntercomTargets: childIntercomTarget ? [childIntercomTarget(agent, 0)] : undefined,
+				resultMode: "single",
 			},
 			id,
 			runnerCwd,

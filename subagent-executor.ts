@@ -32,6 +32,13 @@ import { applyIntercomBridgeToAgent, INTERCOM_BRIDGE_MARKER, resolveIntercomBrid
 import { formatControlIntercomMessage, formatControlNoticeMessage, resolveControlConfig, shouldNotifyControlEvent } from "./subagent-control.ts";
 import { finalizeSingleOutput, injectSingleOutputInstruction, resolveSingleOutputPath } from "./single-output.ts";
 import { compactForegroundDetails, getSingleResultOutput, mapConcurrent, readStatus, resolveChildCwd } from "./utils.ts";
+import {
+	buildSubagentResultIntercomPayload,
+	deliverSubagentResultIntercomEvent,
+	formatSubagentResultReceipt,
+	resolveSubagentResultStatus,
+	stripDetailsOutputsForIntercomReceipt,
+} from "./result-intercom.ts";
 import { inspectSubagentStatus } from "./run-status.ts";
 import { applyForceTopLevelAsyncOverride } from "./top-level-async.ts";
 import {
@@ -259,6 +266,64 @@ function createForegroundControlNotifier(data: Pick<ExecutionContextData, "contr
 		intercomBridge: data.intercomBridge,
 		event,
 	});
+}
+
+async function emitForegroundResultIntercom(input: {
+	pi: ExtensionAPI;
+	intercomBridge: IntercomBridgeState;
+	runId: string;
+	mode: "single" | "parallel" | "chain";
+	results: SingleResult[];
+	chainSteps?: number;
+}): Promise<ReturnType<typeof buildSubagentResultIntercomPayload> | null> {
+	if (!input.intercomBridge.active || !input.intercomBridge.orchestratorTarget) return null;
+	const children = input.results.flatMap((result, index) => result.detached ? [] : [{
+		agent: result.agent,
+		status: resolveSubagentResultStatus({
+			exitCode: result.exitCode,
+			interrupted: result.interrupted,
+			detached: result.detached,
+		}),
+		summary: getSingleResultOutput(result) || result.error || "(no output)",
+		index,
+		artifactPath: result.artifactPaths?.outputPath,
+		sessionPath: result.sessionFile,
+		intercomTarget: resolveSubagentIntercomTarget(input.runId, result.agent, index),
+	}]);
+	if (children.length === 0) return null;
+	const payload = buildSubagentResultIntercomPayload({
+		to: input.intercomBridge.orchestratorTarget,
+		runId: input.runId,
+		mode: input.mode,
+		source: "foreground",
+		children,
+		...(typeof input.chainSteps === "number" ? { chainSteps: input.chainSteps } : {}),
+	});
+	const delivered = await deliverSubagentResultIntercomEvent(input.pi.events, payload);
+	if (!delivered) return null;
+	return payload;
+}
+
+async function maybeBuildForegroundIntercomReceipt(input: {
+	pi: ExtensionAPI;
+	intercomBridge: IntercomBridgeState;
+	runId: string;
+	mode: "single" | "parallel" | "chain";
+	details: Details;
+}): Promise<{ text: string; details: Details } | null> {
+	const payload = await emitForegroundResultIntercom({
+		pi: input.pi,
+		intercomBridge: input.intercomBridge,
+		runId: input.runId,
+		mode: input.mode,
+		results: input.details.results,
+		...(typeof input.details.totalSteps === "number" ? { chainSteps: input.details.totalSteps } : {}),
+	});
+	if (!payload) return null;
+	return {
+		text: formatSubagentResultReceipt({ mode: input.mode, runId: input.runId, payload }),
+		details: stripDetailsOutputsForIntercomReceipt(input.details),
+	};
 }
 
 function validateExecutionInput(
@@ -563,6 +628,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 				concurrency: resolveTopLevelParallelConcurrency(params.concurrency, deps.config.parallel?.concurrency),
 				worktree: params.worktree,
 			}],
+			resultMode: "parallel",
 			agents,
 			ctx: asyncCtx,
 			availableModels,
@@ -744,6 +810,24 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 			controlIntercomTarget: data.intercomBridge.active ? data.intercomBridge.orchestratorTarget : undefined,
 			childIntercomTarget: data.intercomBridge.active ? (agent, index) => resolveSubagentIntercomTarget(runId, agent, index) : undefined,
 		});
+	}
+
+	const chainDetails = chainResult.details ? compactForegroundDetails(chainResult.details) : undefined;
+	const intercomReceipt = chainDetails && !chainDetails.results.some((result) => result.interrupted)
+		? await maybeBuildForegroundIntercomReceipt({
+			pi: deps.pi,
+			intercomBridge: data.intercomBridge,
+			runId,
+			mode: "chain",
+			details: chainDetails,
+		})
+		: null;
+	if (intercomReceipt) {
+		return {
+			...chainResult,
+			content: [{ type: "text", text: intercomReceipt.text }],
+			details: intercomReceipt.details,
+		};
 	}
 
 	return chainResult;
@@ -1120,6 +1204,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 			}));
 			return executeAsyncChain(id, {
 				chain: [{ parallel: parallelTasks, concurrency: parallelConcurrency, worktree: params.worktree }],
+				resultMode: "parallel",
 				agents,
 				ctx: asyncCtx,
 				availableModels,
@@ -1216,15 +1301,30 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 		}
 
 		const interrupted = results.find((result) => result.interrupted);
+		const details = compactForegroundDetails({
+			mode: "parallel",
+			results,
+			progress: params.includeProgress ? allProgress : undefined,
+			artifacts: allArtifactPaths.length ? { dir: artifactsDir, files: allArtifactPaths } : undefined,
+		});
 		if (interrupted) {
 			return {
 				content: [{ type: "text", text: `Parallel run paused after interrupt (${interrupted.agent}). Waiting for explicit next action.` }],
-				details: compactForegroundDetails({
-					mode: "parallel",
-					results,
-					progress: params.includeProgress ? allProgress : undefined,
-					artifacts: allArtifactPaths.length ? { dir: artifactsDir, files: allArtifactPaths } : undefined,
-				}),
+				details,
+			};
+		}
+
+		const intercomReceipt = await maybeBuildForegroundIntercomReceipt({
+			pi: deps.pi,
+			intercomBridge: data.intercomBridge,
+			runId,
+			mode: "parallel",
+			details,
+		});
+		if (intercomReceipt) {
+			return {
+				content: [{ type: "text", text: intercomReceipt.text }],
+				details: intercomReceipt.details,
 			};
 		}
 
@@ -1248,12 +1348,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 
 		return {
 			content: [{ type: "text", text: fullContent }],
-			details: compactForegroundDetails({
-				mode: "parallel",
-				results,
-				progress: params.includeProgress ? allProgress : undefined,
-				artifacts: allArtifactPaths.length ? { dir: artifactsDir, files: allArtifactPaths } : undefined,
-			}),
+			details,
 		};
 	} finally {
 		if (worktreeSetup) cleanupWorktrees(worktreeSetup);
@@ -1472,54 +1567,54 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 		savedPath: r.savedOutputPath,
 		saveError: r.outputSaveError,
 	});
+	const details = compactForegroundDetails({
+		mode: "single",
+		results: [r],
+		progress: params.includeProgress ? allProgress : undefined,
+		artifacts: allArtifactPaths.length ? { dir: artifactsDir, files: allArtifactPaths } : undefined,
+		truncation: r.truncation,
+	});
+
+	if (!r.detached && !r.interrupted) {
+		const intercomReceipt = await maybeBuildForegroundIntercomReceipt({
+			pi: deps.pi,
+			intercomBridge: data.intercomBridge,
+			runId,
+			mode: "single",
+			details,
+		});
+		if (intercomReceipt) {
+			return {
+				content: [{ type: "text", text: intercomReceipt.text }],
+				details: intercomReceipt.details,
+				...(r.exitCode !== 0 ? { isError: true } : {}),
+			};
+		}
+	}
 
 	if (r.detached) {
 		return {
 			content: [{ type: "text", text: `Detached for intercom coordination: ${params.agent}` }],
-			details: compactForegroundDetails({
-				mode: "single",
-				results: [r],
-				progress: params.includeProgress ? allProgress : undefined,
-				artifacts: allArtifactPaths.length ? { dir: artifactsDir, files: allArtifactPaths } : undefined,
-				truncation: r.truncation,
-			}),
+			details,
 		};
 	}
 
 	if (r.interrupted) {
 		return {
 			content: [{ type: "text", text: `Run paused after interrupt (${params.agent}). Waiting for explicit next action.` }],
-			details: compactForegroundDetails({
-				mode: "single",
-				results: [r],
-				progress: params.includeProgress ? allProgress : undefined,
-				artifacts: allArtifactPaths.length ? { dir: artifactsDir, files: allArtifactPaths } : undefined,
-				truncation: r.truncation,
-			}),
+			details,
 		};
 	}
 
 	if (r.exitCode !== 0)
 		return {
 			content: [{ type: "text", text: r.error || "Failed" }],
-			details: compactForegroundDetails({
-				mode: "single",
-				results: [r],
-				progress: params.includeProgress ? allProgress : undefined,
-				artifacts: allArtifactPaths.length ? { dir: artifactsDir, files: allArtifactPaths } : undefined,
-				truncation: r.truncation,
-			}),
+			details,
 			isError: true,
 		};
 	return {
 		content: [{ type: "text", text: finalizedOutput.displayOutput || "(no output)" }],
-		details: compactForegroundDetails({
-			mode: "single",
-			results: [r],
-			progress: params.includeProgress ? allProgress : undefined,
-			artifacts: allArtifactPaths.length ? { dir: artifactsDir, files: allArtifactPaths } : undefined,
-			truncation: r.truncation,
-		}),
+		details,
 	};
 }
 
