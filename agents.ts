@@ -14,7 +14,8 @@ import { parseFrontmatter } from "./frontmatter.ts";
 export type AgentScope = "user" | "project" | "both";
 
 export type AgentSource = "builtin" | "user" | "project";
-export type SystemPromptMode = "append" | "replace";
+type SystemPromptMode = "append" | "replace";
+export type AgentDefaultContext = "fresh" | "fork";
 
 export function defaultSystemPromptMode(name: string): SystemPromptMode {
 	return name === "delegate" ? "append" : "replace";
@@ -35,6 +36,7 @@ export interface BuiltinAgentOverrideBase {
 	systemPromptMode: SystemPromptMode;
 	inheritProjectContext: boolean;
 	inheritSkills: boolean;
+	defaultContext?: AgentDefaultContext;
 	disabled?: boolean;
 	systemPrompt: string;
 	skills?: string[];
@@ -42,20 +44,21 @@ export interface BuiltinAgentOverrideBase {
 	mcpDirectTools?: string[];
 }
 
-export interface BuiltinAgentOverrideConfig {
+interface BuiltinAgentOverrideConfig {
 	model?: string | false;
 	fallbackModels?: string[] | false;
 	thinking?: string | false;
 	systemPromptMode?: SystemPromptMode;
 	inheritProjectContext?: boolean;
 	inheritSkills?: boolean;
+	defaultContext?: AgentDefaultContext | false;
 	disabled?: boolean;
 	systemPrompt?: string;
 	skills?: string[] | false;
 	tools?: string[] | false;
 }
 
-export interface BuiltinAgentOverrideInfo {
+interface BuiltinAgentOverrideInfo {
 	scope: "user" | "project";
 	path: string;
 	base: BuiltinAgentOverrideBase;
@@ -72,6 +75,7 @@ export interface AgentConfig {
 	systemPromptMode: SystemPromptMode;
 	inheritProjectContext: boolean;
 	inheritSkills: boolean;
+	defaultContext?: AgentDefaultContext;
 	systemPrompt: string;
 	source: AgentSource;
 	filePath: string;
@@ -113,7 +117,7 @@ export interface ChainConfig {
 	extraFields?: Record<string, string>;
 }
 
-export interface AgentDiscoveryResult {
+interface AgentDiscoveryResult {
 	agents: AgentConfig[];
 	projectAgentsDir: string | null;
 }
@@ -160,6 +164,7 @@ function cloneOverrideBase(agent: AgentConfig): BuiltinAgentOverrideBase {
 		systemPromptMode: agent.systemPromptMode,
 		inheritProjectContext: agent.inheritProjectContext,
 		inheritSkills: agent.inheritSkills,
+		defaultContext: agent.defaultContext,
 		disabled: agent.disabled,
 		systemPrompt: agent.systemPrompt,
 		skills: agent.skills ? [...agent.skills] : undefined,
@@ -178,6 +183,7 @@ function cloneOverrideValue(override: BuiltinAgentOverrideConfig): BuiltinAgentO
 		...(override.systemPromptMode !== undefined ? { systemPromptMode: override.systemPromptMode } : {}),
 		...(override.inheritProjectContext !== undefined ? { inheritProjectContext: override.inheritProjectContext } : {}),
 		...(override.inheritSkills !== undefined ? { inheritSkills: override.inheritSkills } : {}),
+		...(override.defaultContext !== undefined ? { defaultContext: override.defaultContext } : {}),
 		...(override.disabled !== undefined ? { disabled: override.disabled } : {}),
 		...(override.systemPrompt !== undefined ? { systemPrompt: override.systemPrompt } : {}),
 		...(override.skills !== undefined ? { skills: override.skills === false ? false : [...override.skills] } : {}),
@@ -198,11 +204,11 @@ function findNearestProjectRoot(cwd: string): string | null {
 	}
 }
 
-export function getUserAgentSettingsPath(): string {
+function getUserAgentSettingsPath(): string {
 	return path.join(os.homedir(), ".pi", "agent", "settings.json");
 }
 
-export function getProjectAgentSettingsPath(cwd: string): string | null {
+function getProjectAgentSettingsPath(cwd: string): string | null {
 	const projectRoot = findNearestProjectRoot(cwd);
 	return projectRoot ? path.join(projectRoot, ".pi", "settings.json") : null;
 }
@@ -302,6 +308,14 @@ function parseBuiltinOverrideEntry(
 		}
 	}
 
+	if ("defaultContext" in input) {
+		if (input.defaultContext === "fresh" || input.defaultContext === "fork" || input.defaultContext === false) {
+			override.defaultContext = input.defaultContext;
+		} else {
+			throw new Error(`Builtin override '${name}' in '${filePath}' has invalid 'defaultContext'; expected 'fresh', 'fork', or false.`);
+		}
+	}
+
 	if ("disabled" in input) {
 		if (typeof input.disabled === "boolean") {
 			override.disabled = input.disabled;
@@ -373,6 +387,7 @@ function applyBuiltinOverride(
 	if (override.systemPromptMode !== undefined) next.systemPromptMode = override.systemPromptMode;
 	if (override.inheritProjectContext !== undefined) next.inheritProjectContext = override.inheritProjectContext;
 	if (override.inheritSkills !== undefined) next.inheritSkills = override.inheritSkills;
+	if (override.defaultContext !== undefined) next.defaultContext = override.defaultContext === false ? undefined : override.defaultContext;
 	if (override.disabled !== undefined) next.disabled = override.disabled;
 	if (override.systemPrompt !== undefined) next.systemPrompt = override.systemPrompt;
 	if (override.skills !== undefined) next.skills = override.skills === false ? undefined : [...override.skills];
@@ -420,7 +435,7 @@ function applyBuiltinOverrides(
 
 export function buildBuiltinOverrideConfig(
 	base: BuiltinAgentOverrideBase,
-	draft: Pick<AgentConfig, "model" | "fallbackModels" | "thinking" | "systemPromptMode" | "inheritProjectContext" | "inheritSkills" | "disabled" | "systemPrompt" | "skills" | "tools" | "mcpDirectTools">,
+	draft: Pick<AgentConfig, "model" | "fallbackModels" | "thinking" | "systemPromptMode" | "inheritProjectContext" | "inheritSkills" | "defaultContext" | "disabled" | "systemPrompt" | "skills" | "tools" | "mcpDirectTools">,
 ): BuiltinAgentOverrideConfig | undefined {
 	const override: BuiltinAgentOverrideConfig = {};
 
@@ -430,6 +445,7 @@ export function buildBuiltinOverrideConfig(
 	if (draft.systemPromptMode !== base.systemPromptMode) override.systemPromptMode = draft.systemPromptMode;
 	if (draft.inheritProjectContext !== base.inheritProjectContext) override.inheritProjectContext = draft.inheritProjectContext;
 	if (draft.inheritSkills !== base.inheritSkills) override.inheritSkills = draft.inheritSkills;
+	if (draft.defaultContext !== base.defaultContext) override.defaultContext = draft.defaultContext ?? false;
 	if (draft.disabled !== base.disabled) override.disabled = draft.disabled ?? false;
 	if (draft.systemPrompt !== base.systemPrompt) override.systemPrompt = draft.systemPrompt;
 	if (!arraysEqual(draft.skills, base.skills)) override.skills = draft.skills ? [...draft.skills] : false;
@@ -568,6 +584,11 @@ function loadAgentsFromDir(dir: string, source: AgentSource): AgentConfig[] {
 			: frontmatter.inheritSkills === "false"
 				? false
 				: defaultInheritSkills();
+		const defaultContext = frontmatter.defaultContext === "fork"
+			? "fork" as const
+			: frontmatter.defaultContext === "fresh"
+				? "fresh" as const
+				: undefined;
 
 		let extensions: string[] | undefined;
 		if (frontmatter.extensions !== undefined) {
@@ -595,6 +616,7 @@ function loadAgentsFromDir(dir: string, source: AgentSource): AgentConfig[] {
 			systemPromptMode,
 			inheritProjectContext,
 			inheritSkills,
+			defaultContext,
 			systemPrompt: body,
 			source,
 			filePath,

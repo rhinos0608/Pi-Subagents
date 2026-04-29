@@ -58,7 +58,7 @@ function resolveGroupedStatus(children: SubagentResultIntercomChild[]): Subagent
 	return "failed";
 }
 
-export interface GroupedResultIntercomMessageInput {
+interface GroupedResultIntercomMessageInput {
 	to: string;
 	runId: string;
 	mode: "single" | "parallel" | "chain";
@@ -69,7 +69,7 @@ export interface GroupedResultIntercomMessageInput {
 	chainSteps?: number;
 }
 
-export function formatSubagentResultIntercomMessage(input: {
+function formatSubagentResultIntercomMessage(input: {
 	runId: string;
 	mode: "single" | "parallel" | "chain";
 	status: SubagentResultStatus;

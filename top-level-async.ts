@@ -1,4 +1,4 @@
-export interface AsyncOverrideParams {
+interface AsyncOverrideParams {
 	async?: boolean;
 	clarify?: boolean;
 }

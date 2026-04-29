@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
-export interface MockPiResponse {
+interface MockPiResponse {
 	output?: string;
 	stderr?: string;
 	exitCode?: number;

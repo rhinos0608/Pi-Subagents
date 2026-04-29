@@ -6,8 +6,9 @@ import { fileURLToPath } from "node:url";
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"];
 const TASK_ARG_LIMIT = 8000;
 const PROMPT_RUNTIME_EXTENSION_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), "subagent-prompt-runtime.ts");
+export const SUBAGENT_CHILD_ENV = "PI_SUBAGENT_CHILD";
 
-export interface BuildPiArgsInput {
+interface BuildPiArgsInput {
 	baseArgs: string[];
 	task: string;
 	sessionEnabled: boolean;
@@ -26,7 +27,7 @@ export interface BuildPiArgsInput {
 	intercomSessionName?: string;
 }
 
-export interface BuildPiArgsResult {
+interface BuildPiArgsResult {
 	args: string[];
 	env: Record<string, string | undefined>;
 	tempDir?: string;
@@ -112,6 +113,7 @@ export function buildPiArgs(input: BuildPiArgsInput): BuildPiArgsResult {
 	}
 
 	const env: Record<string, string | undefined> = {};
+	env[SUBAGENT_CHILD_ENV] = "1";
 	env.PI_SUBAGENT_INHERIT_PROJECT_CONTEXT = input.inheritProjectContext ? "1" : "0";
 	env.PI_SUBAGENT_INHERIT_SKILLS = input.inheritSkills ? "1" : "0";
 	if (input.intercomSessionName) {

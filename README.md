@@ -174,6 +174,20 @@ or ask:
 Check whether subagents and intercom are set up correctly.
 ```
 
+## Recommended orchestration pattern (scaffolding)
+
+Use orchestration as parent-agent guidance, not as a runtime workflow mode. For implementation work, the recommended loop is:
+
+```text
+clarify → planner → worker → fresh reviewers → worker
+```
+
+Use the optional prompt shortcuts below when you want the pattern to be repeatable.
+
+Packaged `planner`, `worker`, and `oracle` default to forked context when a launch omits `context`; pass `context: "fresh"` when you intentionally want a fresh child run.
+
+Child-safety boundaries are enforced at runtime. Spawned child sessions do not register the `subagent` tool, do not receive the bundled `pi-subagents` skill, and receive explicit boundary instructions that they are not the parent orchestrator and must not propose or run subagents. Forked child context filtering also removes parent-only subagent artifacts (including old hidden orchestration-instruction messages, slash/status/control messages, and prior parent `subagent` tool-call/tool-result history) while preserving ordinary prose and unrelated tool calls/results.
+
 ## Optional shortcuts
 
 The package includes reusable prompt templates for common workflows. You do not need them, but they are handy when you want the same shape every time:
@@ -183,6 +197,7 @@ The package includes reusable prompt templates for common workflows. You do not 
 | `/parallel-review` | Launch fresh-context reviewers with distinct angles, then synthesize what to fix. |
 | `/parallel-research` | Combine `researcher` and `scout` for external evidence, local code context, and practical tradeoffs. |
 | `/gather-context-and-clarify` | Scout/research first, then ask the user the clarification questions that matter. |
+| `/parallel-cleanup` | Run review-only cleanup passes after implementation. |
 
 ## Optional pi-intercom companion
 
@@ -237,7 +252,7 @@ Skip this section until you want exact syntax.
 | `/subagents-status` | Open the active/recent run overlay |
 | `/subagents-doctor` | Show read-only setup diagnostics |
 
-Commands validate agent names locally, support tab completion, and still send results back into the conversation.
+Commands validate agent names locally, support tab completion, and send results back into the conversation.
 
 ### Per-step tasks
 
@@ -413,7 +428,7 @@ Example:
 }
 ```
 
-Supported override fields are `model`, `fallbackModels`, `thinking`, `systemPromptMode`, `inheritProjectContext`, `inheritSkills`, `disabled`, `skills`, `tools`, and `systemPrompt`. Project overrides beat user overrides.
+Supported override fields are `model`, `fallbackModels`, `thinking`, `systemPromptMode`, `inheritProjectContext`, `inheritSkills`, `defaultContext`, `disabled`, `skills`, `tools`, and `systemPrompt`. Use `defaultContext: false` in builtin overrides to clear an inherited context default. Project overrides beat user overrides.
 
 You can also manage builtin overrides from `/agents`. On a builtin detail screen, press `e`, choose user or project scope if needed, and save the fields you want to override.
 
@@ -430,6 +445,7 @@ Use these fields when an agent should see more:
 | `systemPromptMode: append` | Append the agent prompt to Pi’s normal base prompt. |
 | `inheritProjectContext: true` | Keep inherited project instructions from files like `AGENTS.md` and `CLAUDE.md`. |
 | `inheritSkills: true` | Let the child see Pi’s discovered skills catalog. |
+| `defaultContext: fork` | Use forked session context when a launch omits `context`; explicit `context: "fresh"` still wins. |
 
 Builtin agents opt into project instruction inheritance by default so they follow repo-specific rules out of the box. `delegate` also uses append mode because its job is orchestration inside the parent workflow.
 
@@ -472,6 +488,7 @@ Important fields:
 | `systemPromptMode` | `replace` by default; `append` keeps Pi’s base prompt. |
 | `inheritProjectContext` | Keeps or strips inherited project instruction blocks. |
 | `inheritSkills` | Keeps or strips Pi’s discovered skills catalog. |
+| `defaultContext` | Optional `fresh` or `fork` launch context default for this agent. |
 | `skills` | Injects specific skills directly, regardless of `inheritSkills`. |
 | `output` | Default single-agent output file. |
 | `defaultReads` | Files to read before running in chain/parallel behavior. |
@@ -712,7 +729,7 @@ Agent definitions are not loaded into context by default. Management actions let
 | `concurrency` | number | config or `4` | Top-level parallel concurrency. |
 | `worktree` | boolean | false | Create isolated git worktrees for parallel tasks. |
 | `chain` | array | - | Sequential and parallel chain steps. |
-| `context` | `fresh \| fork` | `fresh` | `fork` creates real branched sessions from the parent leaf. |
+| `context` | `fresh \| fork` | agent default or `fresh` | `fork` creates real branched sessions from the parent leaf. Packaged `planner`, `worker`, and `oracle` default to `fork`. |
 | `chainDir` | string | temp chain dir | Persistent directory for chain artifacts. |
 | `clarify` | boolean | true for chains | Show TUI preview/edit flow. |
 | `agentScope` | `user \| project \| both` | `both` | Agent discovery scope. Project wins on collisions. |
@@ -724,7 +741,7 @@ Agent definitions are not loaded into context by default. Management actions let
 | `share` | boolean | false | Upload session export to GitHub Gist. |
 | `sessionDir` | string | derived | Override session log directory. |
 
-`context: "fork"` fails fast when the parent session is not persisted, the current leaf is missing, or the branched child session cannot be created. It never silently downgrades to `fresh`.
+`context: "fork"` fails fast when the parent session is not persisted, the current leaf is missing, or the branched child session cannot be created. It never silently downgrades to `fresh`. In multi-agent runs, if any requested agent has `defaultContext: fork` and the launch omits `context`, the whole invocation uses forked context; pass `context: "fresh"` when you intentionally want a fresh run.
 
 Sequential and parallel chain tasks accept `agent`, `task`, `cwd`, `output`, `reads`, `progress`, `skill`, and `model`. Parallel tasks also accept `count`. Parallel step groups accept `parallel`, `concurrency`, `failFast`, and `worktree`.
 

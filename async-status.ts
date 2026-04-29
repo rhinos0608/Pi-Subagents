@@ -5,7 +5,7 @@ import { type ActivityState, type AsyncParallelGroupStatus, type AsyncStatus, ty
 import { DEFAULT_CONTROL_CONFIG, deriveActivityState } from "./subagent-control.ts";
 import { readStatus } from "./utils.ts";
 
-export interface AsyncRunStepSummary {
+interface AsyncRunStepSummary {
 	index: number;
 	agent: string;
 	status: string;
@@ -87,7 +87,7 @@ function flatToLogicalStepIndex(flatIndex: number, chainStepCount: number, paral
 	return Math.max(0, chainStepCount - 1);
 }
 
-export interface AsyncRunListOptions {
+interface AsyncRunListOptions {
 	states?: Array<AsyncRunSummary["state"]>;
 	limit?: number;
 }

@@ -19,7 +19,7 @@ import { updateFrontmatterField } from "./agent-serializer.ts";
 import { serializeChain } from "./chain-serializer.ts";
 import { resolveModelCandidate, splitThinkingSuffix } from "./model-fallback.ts";
 
-export type ClarifyMode = 'single' | 'parallel' | 'chain';
+type ClarifyMode = 'single' | 'parallel' | 'chain';
 
 export interface ModelInfo {
 	provider: string;

@@ -35,7 +35,7 @@ export function captureSingleOutputSnapshot(outputPath: string | undefined): Sin
 	}
 }
 
-export function persistSingleOutput(
+function persistSingleOutput(
 	outputPath: string | undefined,
 	fullOutput: string,
 ): { savedPath?: string; error?: string } {

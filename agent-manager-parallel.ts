@@ -4,7 +4,7 @@ import type { TextEditorState } from "./text-editor.ts";
 import { createEditorState, handleEditorInput, renderEditor, wrapText, getCursorDisplayPos, ensureCursorVisible } from "./text-editor.ts";
 import { pad, row, renderHeader, renderFooter, fuzzyFilter } from "./render-helpers.ts";
 
-export interface ParallelSlot {
+interface ParallelSlot {
 	agentName: string;
 	customTask: string;
 }
@@ -20,7 +20,7 @@ export interface ParallelState {
 	editEditor: TextEditorState | null;
 }
 
-export type ParallelAction =
+type ParallelAction =
 	| { type: "proceed" }
 	| { type: "back" };
 

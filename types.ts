@@ -17,7 +17,7 @@ export interface MaxOutputConfig {
 	lines?: number;
 }
 
-export interface TruncationResult {
+interface TruncationResult {
 	text: string;
 	truncated: boolean;
 	originalBytes?: number;
@@ -148,7 +148,7 @@ export interface ToolCallSummary {
 	expandedText: string;
 }
 
-export interface ProgressSummary {
+interface ProgressSummary {
 	toolCount: number;
 	tokens: number;
 	durationMs: number;
@@ -440,7 +440,7 @@ export interface IntercomBridgeConfig {
 	instructionFile?: string;
 }
 
-export interface TopLevelParallelConfig {
+interface TopLevelParallelConfig {
 	maxTasks?: number;
 	concurrency?: number;
 }
@@ -528,7 +528,7 @@ export function resolveTempScopeId(options?: {
 	return "shared";
 }
 
-export const MAX_PARALLEL = 8;
+const MAX_PARALLEL = 8;
 export const MAX_CONCURRENCY = 4;
 export const TEMP_ROOT_DIR = path.join(os.tmpdir(), `pi-subagents-${resolveTempScopeId()}`);
 export const RESULTS_DIR = path.join(TEMP_ROOT_DIR, "async-subagent-results");
@@ -625,7 +625,7 @@ export function getSubagentDepthEnv(maxDepth?: number): Record<string, string> {
 // Utility Functions
 // ============================================================================
 
-export function formatBytes(bytes: number): string {
+function formatBytes(bytes: number): string {
 	if (bytes < 1024) return `${bytes}B`;
 	if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
 	return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;

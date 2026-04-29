@@ -1,22 +1,22 @@
 import type { ResolvedControlConfig } from "./types.ts";
 
-export interface LongRunningNoticeMetrics {
+interface LongRunningNoticeMetrics {
 	startedAt: number;
 	now: number;
 	turns: number;
 	tokens: number;
 }
 
-export type LongRunningTriggerReason = "time_threshold" | "turn_threshold" | "token_threshold";
+type LongRunningTriggerReason = "time_threshold" | "turn_threshold" | "token_threshold";
 
-export interface FailedMutatingAttempt {
+interface FailedMutatingAttempt {
 	tool: string;
 	path?: string;
 	error: string;
 	ts: number;
 }
 
-export interface MutatingFailureState {
+interface MutatingFailureState {
 	consecutiveFailures: number;
 	lastFailureAt?: number;
 	recentFailures: FailedMutatingAttempt[];

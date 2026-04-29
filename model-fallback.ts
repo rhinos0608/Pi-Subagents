@@ -6,7 +6,7 @@ export interface AvailableModelInfo {
 	fullId: string;
 }
 
-export interface ModelAttemptSummary {
+interface ModelAttemptSummary {
 	model: string;
 	success: boolean;
 	exitCode?: number | null;

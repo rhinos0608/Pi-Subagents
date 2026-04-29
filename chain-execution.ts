@@ -291,7 +291,7 @@ async function runParallelChainTasks(input: ParallelChainRunInput): Promise<Sing
 	return parallelResults;
 }
 
-export interface ChainExecutionParams {
+interface ChainExecutionParams {
 	chain: ChainStep[];
 	task?: string;
 	agents: AgentConfig[];
@@ -328,7 +328,7 @@ export interface ChainExecutionParams {
 	worktreeSetupHookTimeoutMs?: number;
 }
 
-export interface ChainExecutionResult {
+interface ChainExecutionResult {
 	content: Array<{ type: "text"; text: string }>;
 	details: Details;
 	isError?: boolean;

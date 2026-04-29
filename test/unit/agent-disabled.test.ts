@@ -176,12 +176,13 @@ describe("builtin agent disabling", () => {
 		));
 
 		assert.match(text, /Executable agents:\n- helper \(project\): Helper/);
-		assert.match(text, /Disabled builtins:\n- .* \(builtin, disabled\): /);
+		assert.match(text, /Disabled builtins:\n- .* \(builtin(?:, context: (?:fork|fresh))?, disabled\): /);
+		assert.match(text, /- worker \(builtin, context: fork, disabled\): /);
 		const executableSection = text.slice(
 			text.indexOf("Executable agents:"),
 			text.indexOf("\n\nDisabled builtins:"),
 		);
-		assert.doesNotMatch(executableSection, /\(builtin, disabled\)/);
+		assert.doesNotMatch(executableSection, /\(builtin(?:, context: (?:fork|fresh))?, disabled\)/);
 	});
 
 	it("buildBuiltinOverrideConfig emits disabled false when re-enabling a builtin", () => {

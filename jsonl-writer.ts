@@ -13,12 +13,12 @@ export interface JsonlWriteStream {
 
 const DEFAULT_MAX_JSONL_BYTES = 50 * 1024 * 1024;
 
-export interface JsonlWriterDeps {
+interface JsonlWriterDeps {
 	createWriteStream?: (filePath: string) => JsonlWriteStream;
 	maxBytes?: number;
 }
 
-export interface JsonlWriter {
+interface JsonlWriter {
 	writeLine(line: string): void;
 	close(): Promise<void>;
 }

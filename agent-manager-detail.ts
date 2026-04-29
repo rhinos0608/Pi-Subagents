@@ -58,12 +58,14 @@ function buildDetailLines(
 	const output = agent.output ?? "(none)";
 	const reads = agent.defaultReads && agent.defaultReads.length > 0 ? agent.defaultReads.join(", ") : "(none)";
 	const progress = agent.defaultProgress ? "on" : "off";
+	const defaultContext = agent.defaultContext ?? "auto";
 	const maxSubagentDepth = agent.maxSubagentDepth !== undefined ? String(agent.maxSubagentDepth) : "(default)";
 
 	lines.push(renderFieldLine("Model:", agent.model ?? "default", contentWidth, theme));
 	lines.push(renderFieldLine("Prompt mode:", agent.systemPromptMode, contentWidth, theme));
 	lines.push(renderFieldLine("Project ctx:", agent.inheritProjectContext ? "on" : "off", contentWidth, theme));
 	lines.push(renderFieldLine("Skills ctx:", agent.inheritSkills ? "on" : "off", contentWidth, theme));
+	lines.push(renderFieldLine("Run context:", defaultContext, contentWidth, theme));
 	if (agent.source === "builtin") {
 		lines.push(renderFieldLine("Disabled:", agent.disabled ? "on" : "off", contentWidth, theme));
 	}

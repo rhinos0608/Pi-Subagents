@@ -17,7 +17,7 @@ const CHAIN_DETAIL_VIEWPORT_HEIGHT = 12;
 
 type DetailChainStep = ChainStepConfig | ChainStep;
 
-export function buildDependencyMap(steps: DetailChainStep[]): Map<number, number[]> {
+function buildDependencyMap(steps: DetailChainStep[]): Map<number, number[]> {
 	const outputMap = new Map<string, number>();
 	const deps = new Map<number, number[]>();
 	for (let i = 0; i < steps.length; i++) {

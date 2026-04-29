@@ -33,6 +33,7 @@ import { registerSlashSubagentBridge } from "./slash-bridge.ts";
 import { clearSlashSnapshots, getSlashRenderableSnapshot, resolveSlashMessageDetails, restoreSlashFinalSnapshots, type SlashMessageDetails } from "./slash-live-state.ts";
 import { inspectSubagentStatus } from "./run-status.ts";
 import registerSubagentNotify, { type SubagentNotifyDetails } from "./notify.ts";
+import { SUBAGENT_CHILD_ENV } from "./pi-args.ts";
 import { formatDuration, shortenPath } from "./formatters.ts";
 import {
 	type ControlEvent,
@@ -111,6 +112,10 @@ function isSlashResultRunning(result: { details?: Details }): boolean {
 
 function isSlashResultError(result: { details?: Details }): boolean {
 	return result.details?.results.some((entry) => entry.exitCode !== 0 && entry.progress?.status !== "running") || false;
+}
+
+function isStaleExtensionContextError(error: unknown): boolean {
+	return error instanceof Error && error.message.includes("Extension context no longer active");
 }
 
 function rebuildSlashResultContainer(
@@ -227,6 +232,7 @@ class SubagentControlNoticeComponent implements Component {
 }
 
 export default function registerSubagentExtension(pi: ExtensionAPI): void {
+	if (process.env[SUBAGENT_CHILD_ENV] === "1") return;
 	const globalStore = globalThis as Record<string, unknown>;
 	const runtimeCleanupStoreKey = "__piSubagentRuntimeCleanup";
 	const previousRuntimeCleanup = globalStore[runtimeCleanupStoreKey];
@@ -402,7 +408,7 @@ EXECUTION (use exactly ONE mode):
 • SINGLE: { agent, task? } - one task; omit task for self-contained agents
 • CHAIN: { chain: [{agent:"agent-a"}, {parallel:[{agent:"agent-b",count:3}]}] } - sequential pipeline with optional parallel fan-out
 • PARALLEL: { tasks: [{agent,task,count?,output?,reads?,progress?}, ...], concurrency?: number, worktree?: true } - concurrent execution (worktree: isolate each task in a git worktree)
-• Optional context: { context: "fresh" | "fork" } (default: "fresh")
+• Optional context: { context: "fresh" | "fork" } (default: if any requested agent has defaultContext: "fork", the whole invocation uses fork; otherwise "fresh"; inspect agent defaults via { action: "list" })
 
 CHAIN TEMPLATE VARIABLES (use in task strings):
 • {task} - The original task/request from the user
@@ -414,7 +420,7 @@ Example: { chain: [{agent:"agent-a", task:"Analyze {task}"}, {agent:"agent-b", t
 MANAGEMENT (use action field, omit agent/task/chain/tasks):
 • { action: "list" } - discover executable agents/chains and any disabled builtins
 • { action: "get", agent: "name" } - full detail
-• { action: "create", config: { name, systemPrompt, systemPromptMode, inheritProjectContext, inheritSkills, ... } }
+• { action: "create", config: { name, systemPrompt, systemPromptMode, inheritProjectContext, inheritSkills, defaultContext, ... } }
 • { action: "update", agent: "name", config: { ... } } - merge
 • { action: "delete", agent: "name" }
 • Use chainName for chain operations
@@ -547,6 +553,7 @@ DIAGNOSTICS:
 	pi.on("session_start", (_event, ctx) => {
 		resetSessionState(ctx);
 	});
+
 	pi.on("session_shutdown", () => {
 		for (const unsubscribe of eventUnsubscribes) {
 			try {
@@ -576,8 +583,12 @@ DIAGNOSTICS:
 		if (globalStore[runtimeCleanupStoreKey] === runtimeCleanup) {
 			delete globalStore[runtimeCleanupStoreKey];
 		}
-		if (state.lastUiContext?.hasUI) {
-			state.lastUiContext.ui.setWidget(WIDGET_KEY, undefined);
+		try {
+			if (state.lastUiContext?.hasUI) {
+				state.lastUiContext.ui.setWidget(WIDGET_KEY, undefined);
+			}
+		} catch (error) {
+			if (!isStaleExtensionContextError(error)) throw error;
 		}
 	});
 }

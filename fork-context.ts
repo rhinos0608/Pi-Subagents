@@ -1,16 +1,16 @@
-export type SubagentExecutionContext = "fresh" | "fork";
+type SubagentExecutionContext = "fresh" | "fork";
 
 interface ForkableSessionManagerStatic {
 	open(path: string): { createBranchedSession(leafId: string): string | undefined };
 }
 
-export interface ForkableSessionManager {
+interface ForkableSessionManager {
 	getSessionFile(): string | undefined;
 	getLeafId(): string | null;
 	constructor: ForkableSessionManagerStatic;
 }
 
-export interface ForkContextResolver {
+interface ForkContextResolver {
 	sessionFileForIndex(index?: number): string | undefined;
 }
 

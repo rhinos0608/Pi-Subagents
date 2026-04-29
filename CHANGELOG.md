@@ -2,10 +2,15 @@
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-04-29
+
 ### Changed
-- Expanded builtin subagent guidance so agents with a safe pi-intercom target can hand results back with blocking `intercom ask`, and documented the self-orchestrated clarify → plan → implement → review workflow in the bundled skill.
+- Document the recommended parent-agent workflow as `clarify → planner → worker → fresh reviewers → worker` in the docs and bundled skill.
+- Packaged `planner`, `worker`, and `oracle` now default to forked session context when the launch omits `context`; explicit `context: "fresh"` still overrides the agent default.
+- Expanded builtin subagent guidance so agents with a safe pi-intercom target can hand results back with blocking `intercom ask`, documented the self-orchestrated clarify → plan → implement → review workflow, and added GPT-5.5-oriented subagent prompt guidance to the bundled skill and `context-builder`.
 
 ### Fixed
+- Prevent child subagents from receiving parent orchestration tooling/history, and inject boundary instructions that forbid sub-delegation and pseudo tool calls.
 - Added active-long-running and repeated mutating-tool failure notices so supervised/forked workers cannot burn turns silently while still appearing healthy.
 - Fixed task editor wrapping so wide characters cannot push text past the right border.
 - Mark implementation subagents as failed when they complete without any file mutation attempt.

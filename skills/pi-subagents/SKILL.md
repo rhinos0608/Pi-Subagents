@@ -10,8 +10,9 @@ description: |
 
 # Pi Subagents
 
-Use this skill when you need to launch a specialized subagent, compose multiple
-agents into a workflow, or create/edit agents and chains on demand.
+This skill is for the main parent orchestrator only. Do not inject or follow it inside spawned child subagents. The parent session owns delegation, orchestration, review fanout, and final fix-worker launches; child subagents should receive concrete role-specific tasks and should not run their own subagent workflows.
+
+Use this skill when the parent orchestrator needs to launch a specialized subagent, compose multiple agents into a workflow, or create/edit agents and chains on demand.
 
 ## When to Use
 
@@ -51,9 +52,9 @@ and user/project agents override builtins with the same name.
 
 | Agent | Purpose | Model | Typical output / role |
 |-------|---------|-------|------------------------|
-| `scout` | Fast codebase recon | `openai-codex/gpt-5.4-mini` | Writes `context.md` handoff material |
+| `scout` | Fast codebase recon | `openai-codex/gpt-5.5` | Writes `context.md` handoff material |
 | `planner` | Creates implementation plans | `openai-codex/gpt-5.5` | Writes `plan.md` |
-| `worker` | Implementation and approved oracle handoffs | `openai-codex/gpt-5.3-codex` | Single-writer implementation with decision escalation |
+| `worker` | Implementation and approved oracle handoffs | `openai-codex/gpt-5.5` | Single-writer implementation with decision escalation |
 | `reviewer` | Review-and-fix specialist | `openai-codex/gpt-5.5` | Can edit/fix reviewed code |
 | `context-builder` | Requirements/codebase handoff builder | `openai-codex/gpt-5.5` | Writes structured context files |
 | `researcher` | Web research brief generator | `openai-codex/gpt-5.5` | Writes `research.md` |
@@ -69,6 +70,23 @@ For one run, use inline config:
 ```
 
 For persistent tweaks, prefer `/agents`: choose the builtin, press `e`, change the model or other fields, then save a user or project override. User overrides apply everywhere. Project overrides apply only in that repo and win over user overrides.
+
+## Prompting GPT-5.5 Subagents
+
+Most builtin role agents use GPT-5.5. When launching them, write the task prompt as a compact contract, not a long procedural script. Define the destination and let the role choose the efficient path.
+
+A strong GPT-5.5 subagent prompt usually includes:
+- **Goal**: the concrete outcome the child should produce.
+- **Context/evidence**: relevant plan paths, files, diffs, decisions, or user constraints already approved.
+- **Success criteria**: what must be true before the child can finish.
+- **Hard constraints**: true invariants only, such as no edits for review-only tasks, one writer thread, child must not run subagents, or escalation for unapproved decisions.
+- **Validation**: targeted checks to run, or the next-best check when validation is impossible.
+- **Output**: the expected summary shape, artifact path, or finding format.
+- **Stop rules**: when to ask via `intercom`, when to stop after enough evidence, and when not to keep searching.
+
+Avoid carrying over old prompt habits that over-specify every step. Use `must`, `always`, and `never` for real invariants; for judgment calls, give decision rules. For example, tell a reviewer to inspect the staged diff directly and report only evidence-backed findings, rather than prescribing every file or command. Tell a researcher the retrieval budget: start with broad targeted searches, fetch only the strongest sources, search again only when a required fact is missing, then stop.
+
+For implementation handoffs, name the approved scope and success criteria more clearly than the process. Good prompts say what to change, what not to change, where the evidence lives, how to validate, and when to escalate. They should not ask the child to create another subagent plan or continue the parent conversation.
 
 Settings locations:
 - User scope: `~/.pi/agent/settings.json`
@@ -91,9 +109,9 @@ Direct settings example:
 ```
 
 Useful override fields: `model`, `fallbackModels`, `thinking`,
-`systemPromptMode`, `inheritProjectContext`, `inheritSkills`, `disabled`,
-`skills`, `tools`, and `systemPrompt`. Create a user or project agent with the
-same name only when you want a substantially different agent.
+`systemPromptMode`, `inheritProjectContext`, `inheritSkills`, `defaultContext`,
+`disabled`, `skills`, `tools`, and `systemPrompt`. Create a user or project
+agent with the same name only when you want a substantially different agent.
 
 ## Discovery and Scope Rules
 
@@ -128,8 +146,7 @@ subagent({
 ```typescript
 subagent({
   agent: "oracle",
-  task: "Review my current direction and challenge assumptions.",
-  context: "fork"
+  task: "Review my current direction and challenge assumptions."
 })
 ```
 
@@ -283,18 +300,16 @@ The intended oracle loop is:
 5. only then should `worker` implement
 
 ```typescript
-// Advisory review in a branched thread
+// Advisory review in a branched thread. Oracle defaults to forked context.
 subagent({
   agent: "oracle",
-  task: "Review my current direction, challenge assumptions, and propose the best next move.",
-  context: "fork"
+  task: "Review my current direction, challenge assumptions, and propose the best next move."
 })
 
-// Implementation only after explicit approval
+// Implementation only after explicit approval. Worker defaults to forked context.
 subagent({
   agent: "worker",
-  task: "Implement the approved approach: ...",
-  context: "fork"
+  task: "Implement the approved approach: ..."
 })
 ```
 
@@ -434,7 +449,9 @@ particular agent or with forked context.
 ## Important Constraints
 
 - **Forking requires a persisted parent session.** If the current session does not
-  have a persisted session file, forked runs fail.
+  have a persisted session file, forked runs fail. Packaged `planner`, `worker`,
+  and `oracle` default to forked context, so use `context: "fresh"` explicitly
+  when that is not available or not wanted.
 - **Forked runs inherit parent history.** They are branched threads, not fresh
   filtered contexts. Use fresh context for adversarial reviewers unless the user explicitly asks for forked context.
 - **Default subagent nesting depth is 2.** Deeper recursive delegation is blocked
@@ -494,27 +511,39 @@ subagent({
 
 ### Clarify → Plan → Implement → Review (self-orchestrated workflow)
 
-When you are the orchestrating agent for a new feature or non-trivial change, factor in the packaged prompt workflows without literally invoking slash commands. Use the same patterns through tools and subagents:
+When you are the orchestrating agent for a new feature or non-trivial change, factor in the packaged prompt workflows without literally invoking slash commands. Use the same patterns through tools and subagents.
+
+Keep builtin agent defaults unless the user explicitly asks for a different model, thinking level, skills, output behavior, context mode, or other override. Do not add overrides just because you are orchestrating; the defaults encode the intended role behavior. In particular, packaged `planner`, `worker`, and `oracle` default to forked context.
+
+When the user approves launching a subagent to carry out a plan or workflow, treat that as approval to generate a proper role-specific meta prompt for that subagent. Include the approved plan path or summary, clarified requirements, non-goals, relevant context, role boundaries, files or areas to inspect, acceptance criteria, expected output, and validation expectations. Do not pass vague instructions like “implement the plan fully” or “review this” by themselves.
 
 - `/gather-context-and-clarify` maps to: launch `scout` and, when needed, `researcher`; synthesize findings; then use `interview` to ask every clarification question needed for shared understanding.
 - `/parallel-review` maps to: launch fresh-context `reviewer` agents with distinct review angles; synthesize the feedback before applying anything.
 - `/parallel-research` maps to: combine local `scout` context with external `researcher` evidence when current docs, ecosystem behavior, or API details matter.
 - `/parallel-cleanup` maps to: use review-only cleanup passes after implementation, especially for simplicity, verbosity, and redundant tests.
 
-For feature work, use this sequence:
+For feature work, use this sequence as scaffolding for parent-agent behavior:
+
+```text
+clarify → planner → worker → parallel fresh-context reviewers → worker
+```
+
+The first `worker` implements the approved plan. The parallel reviewers inspect the resulting diff from fresh context. The final `worker` applies synthesized review fixes in forked context. Do not stop after parallel review unless the user explicitly asked for review-only output or the review surfaced a decision that needs approval first.
+
+Keep orchestration authority in the parent session. Child subagents should not launch more subagents, read this skill, or run their own orchestration loops. Spawned subagents do not receive the `pi-subagents` skill, parent-only subagent status/control/slash messages, prior parent `subagent` tool-call/tool-result artifacts, or the `subagent` extension tool. Child context filtering also strips old hidden orchestration-instruction messages when they appear in inherited history. Every child also receives a boundary instruction that says the parent owns orchestration, the child must not propose or run subagents, and implementation children must call real edit/write tools instead of printing pseudo tool calls. Pass children concrete role-specific work instead.
 
 1. Clarify first. This is mandatory. Gather code context with `scout` or `context-builder`, add `researcher` only when external evidence matters, then ask the user clarifying questions with `interview` until scope, acceptance criteria, constraints, and non-goals are clear.
-2. Plan when useful. For complex work, call `planner` or write a plan doc yourself. For simple work, confirm the shared understanding and skip the plan.
-3. Implement with one writer. After approval, launch a forked `worker` with a proper meta prompt that includes the clarified requirements, relevant context, plan path or summary, acceptance criteria, and validation expectations.
-4. Review automatically. After the worker completes, launch parallel fresh-context `reviewer` agents for correctness/regressions, tests/validation, and simplicity/maintainability. Use `output: false` unless review artifacts are explicitly needed.
-5. Synthesize before acting. Separate blockers, fixes worth doing now, optional improvements, and feedback to ignore/defer. Ask before applying review fixes unless the user already authorized a writer pass.
+2. Plan when useful. For complex work, call `planner` or write a plan doc yourself and get approval before implementation. For simple work, confirm shared understanding and explicitly note why planning is skipped.
+3. Implement with one writer. After approval, launch `worker` with a proper meta prompt that includes clarified requirements, relevant context, plan path or summary, acceptance criteria, and validation expectations. Packaged `worker` defaults to forked context; pass `context: "fresh"` only when you intentionally want a fresh child.
+4. Review after implementation. After the worker completes, launch parallel fresh-context `reviewer` agents for correctness/regressions, tests/validation, and simplicity/maintainability. Use `output: false` unless review artifacts are explicitly needed.
+5. Synthesize, then run the fix worker. Separate blockers, fixes worth doing now, optional improvements, and feedback to ignore/defer, then launch a forked `worker` to apply fixes worth doing now when the workflow is implementation-authorized. If reviewers found scope/product/architecture choices that were not approved, ask the user first instead of applying them.
+6. Validate and complete. After the fix worker returns, run or confirm focused validation, update docs/changelog when relevant, and summarize what changed and why.
 
 Example implementation handoff after clarification and optional planning:
 
 ```typescript
 subagent({
   agent: "worker",
-  context: "fork",
   task: "Implement the approved feature.\n\nClarified requirements:\n- ...\n\nPlan: see ~/Documents/docs/...-plan.md\n\nValidation expected:\n- ..."
 })
 ```
@@ -528,19 +557,23 @@ subagent({
     { agent: "reviewer", task: "Review the current diff for tests and validation quality. Inspect changed files directly.", output: false },
     { agent: "reviewer", task: "Review the current diff for simplicity and maintainability. Inspect changed files directly.", output: false }
   ],
-  concurrency: 3
+  concurrency: 3,
+  context: "fresh"
+})
+```
+
+Example fix worker after parallel reviews:
+
+```typescript
+subagent({
+  agent: "worker",
+  task: "Apply the synthesized reviewer feedback below. Only apply fixes worth doing now; preserve user-approved scope; ask before unapproved product or architecture changes. Run focused validation and summarize what changed.\n\nReviewer synthesis:\n..."
 })
 ```
 
 ### Review loop
 
-```typescript
-subagent({ agent: "worker", task: "Add retry logic to the API client." })
-subagent({
-  agent: "reviewer",
-  task: "Review the retry logic implementation. Inspect the repo and current diff directly. Look for edge cases and race conditions."
-})
-```
+Do not treat review as the final step for implementation work. Use the implementation, fresh-reviewer, and fix-worker examples above: run reviewers, synthesize their findings, then launch a final `worker` for accepted fixes.
 
 ### Parallel non-conflicting analysis
 

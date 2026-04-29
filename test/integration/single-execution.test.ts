@@ -227,6 +227,7 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		assert.ok(result.error?.includes("Unknown agent"));
 	});
 
+
 	it("emits an active-long-running notice after the turn threshold", async () => {
 		mockPi.onCall({
 			jsonl: [
@@ -538,6 +539,26 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		assert.equal(result.exitCode, 0);
 		assert.deepEqual(result.skills, ["runtime-fallback-skill"]);
 		assert.equal(result.skillsWarning, undefined);
+	});
+
+	it("fails foreground runs on explicit unavailable pi-subagents skill requests without spawning", async () => {
+		const agents = [makeAgent("worker")];
+
+		const result = await runSync(tempDir, agents, "worker", "Task", { skills: ["pi-subagents"] });
+
+		assert.equal(result.exitCode, 1);
+		assert.equal(result.error, "Skills not found: pi-subagents");
+		assert.equal(mockPi.callCount(), 0);
+	});
+
+	it("fails foreground runs when an agent default requests pi-subagents skill", async () => {
+		const agents = [makeAgent("worker", { skills: ["pi-subagents"] })];
+
+		const result = await runSync(tempDir, agents, "worker", "Task", {});
+
+		assert.equal(result.exitCode, 1);
+		assert.equal(result.error, "Skills not found: pi-subagents");
+		assert.equal(mockPi.callCount(), 0);
 	});
 
 	it("writes artifacts when configured", async () => {

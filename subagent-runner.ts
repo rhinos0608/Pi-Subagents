@@ -54,7 +54,8 @@ import {
 	shouldEscalateMutatingFailures,
 	summarizeRecentMutatingFailures,
 } from "./long-running-guard.ts";
-import { parseSessionTokens, type TokenUsage } from "./session-tokens.ts";
+import { parseSessionTokens } from "./session-tokens.ts";
+import type { TokenUsage } from "./types.ts";
 import {
 	cleanupWorktrees,
 	createWorktrees,

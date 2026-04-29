@@ -27,7 +27,7 @@ interface DoctorDeps {
 	diagnoseIntercomBridge: typeof diagnoseIntercomBridge;
 }
 
-export interface DoctorReportInput {
+interface DoctorReportInput {
 	cwd: string;
 	config: ExtensionConfig;
 	state: SubagentState;

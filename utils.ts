@@ -84,7 +84,7 @@ const outputTailCache = new Map<string, { mtime: number; size: number; lines: st
 /**
  * Get the last N lines from an output file (with mtime/size-based caching)
  */
-export function getOutputTail(outputFile: string | undefined, maxLines: number = 3): string[] {
+function getOutputTail(outputFile: string | undefined, maxLines: number = 3): string[] {
 	if (!outputFile) return [];
 	let fd: number | null = null;
 	try {
@@ -178,7 +178,7 @@ export function findLatestSessionFile(sessionDir: string): string | null {
 /**
  * Write a prompt to a temporary file
  */
-export function writePrompt(agent: string, prompt: string): { dir: string; path: string } {
+function writePrompt(agent: string, prompt: string): { dir: string; path: string } {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagent-"));
 	const p = path.join(dir, `${agent.replace(/[^\w.-]/g, "_")}.md`);
 	fs.writeFileSync(p, prompt, { mode: 0o600 });
@@ -244,7 +244,7 @@ function compactCompletedProgress(progress: AgentProgress): AgentProgress {
 	};
 }
 
-export function extractToolCallSummaries(messages: Message[] | undefined): ToolCallSummary[] {
+function extractToolCallSummaries(messages: Message[] | undefined): ToolCallSummary[] {
 	if (!messages?.length) return [];
 	const summaries: ToolCallSummary[] = [];
 	for (const msg of messages) {

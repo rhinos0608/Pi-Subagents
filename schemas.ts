@@ -28,7 +28,7 @@ const ReadsOverride = Type.Unsafe({
 	description: "Files to read before running (array of filenames), or false to disable",
 });
 
-export const TaskItem = Type.Object({ 
+const TaskItem = Type.Object({
 	agent: Type.String(), 
 	task: Type.String(), 
 	cwd: Type.Optional(Type.String()),
@@ -41,7 +41,7 @@ export const TaskItem = Type.Object({
 });
 
 // Sequential chain step (single agent)
-export const SequentialStepSchema = Type.Object({
+const SequentialStepSchema = Type.Object({
 	agent: Type.String(),
 	task: Type.Optional(Type.String({ 
 		description: "Task template with variables: {task}=original request, {previous}=prior step's text response, {chain_dir}=shared folder. Required for first step, defaults to '{previous}' for subsequent steps." 
@@ -55,7 +55,7 @@ export const SequentialStepSchema = Type.Object({
 });
 
 // Parallel task item (within a parallel step)
-export const ParallelTaskSchema = Type.Object({
+const ParallelTaskSchema = Type.Object({
 	agent: Type.String(),
 	task: Type.Optional(Type.String({ description: "Task template with {task}, {previous}, {chain_dir} variables. Defaults to {previous}." })),
 	cwd: Type.Optional(Type.String()),
@@ -68,7 +68,7 @@ export const ParallelTaskSchema = Type.Object({
 });
 
 // Parallel chain step (multiple agents running concurrently)
-export const ParallelStepSchema = Type.Object({
+const ParallelStepSchema = Type.Object({
 	parallel: Type.Array(ParallelTaskSchema, { minItems: 1, description: "Tasks to run in parallel" }),
 	concurrency: Type.Optional(Type.Number({ description: "Max concurrent tasks (default: 4)" })),
 	failFast: Type.Optional(Type.Boolean({ description: "Stop on first failure (default: false)" })),
@@ -78,7 +78,7 @@ export const ParallelStepSchema = Type.Object({
 });
 
 // Flattened so providers that reject anyOf/oneOf can still accept either sequential or parallel steps.
-export const ChainItem = Type.Object({
+const ChainItem = Type.Object({
 	agent: Type.Optional(Type.String({ description: "Sequential step agent name" })),
 	task: Type.Optional(Type.String({
 		description: "Task template with variables: {task}=original request, {previous}=prior step's text response, {chain_dir}=shared folder. Required for first step, defaults to '{previous}' for subsequent steps."
@@ -97,7 +97,7 @@ export const ChainItem = Type.Object({
 	})),
 }, { description: "Chain step: use {agent, task?, ...} for sequential or {parallel: [...]} for concurrent execution" });
 
-export const ControlOverrides = Type.Object({
+const ControlOverrides = Type.Object({
 	enabled: Type.Optional(Type.Boolean({ description: "Enable/disable subagent control attention tracking for this run" })),
 	needsAttentionAfterMs: Type.Optional(Type.Integer({ minimum: 1, description: "No-observed-activity window before a run needs attention" })),
 	activeNoticeAfterMs: Type.Optional(Type.Integer({ minimum: 1, description: "Active-long-running notice threshold by elapsed ms (default: 300000)" })),
@@ -136,7 +136,7 @@ export const SubagentParams = Type.Object({
 	config: Type.Optional(Type.Unsafe({
 		type: ["object", "string"],
 		additionalProperties: true,
-		description: "Agent or chain config for create/update. Agent: name, description, scope ('user'|'project', default 'user'), systemPrompt, systemPromptMode, inheritProjectContext, inheritSkills, model, tools (comma-separated), extensions (comma-separated), skills (comma-separated), thinking, output, reads, progress, maxSubagentDepth. Chain: name, description, scope, steps (array of {agent, task?, output?, reads?, model?, skills?, progress?}). Presence of 'steps' creates a chain instead of an agent. String values must be valid JSON."
+		description: "Agent or chain config for create/update. Agent: name, description, scope ('user'|'project', default 'user'), systemPrompt, systemPromptMode, inheritProjectContext, inheritSkills, defaultContext ('fresh'|'fork'), model, tools (comma-separated), extensions (comma-separated), skills (comma-separated), thinking, output, reads, progress, maxSubagentDepth. Chain: name, description, scope, steps (array of {agent, task?, output?, reads?, model?, skills?, progress?}). Presence of 'steps' creates a chain instead of an agent. String values must be valid JSON."
 	})),
 	tasks: Type.Optional(Type.Array(TaskItem, { description: "PARALLEL mode: [{agent, task, count?, output?, reads?, progress?}, ...]" })),
 	concurrency: Type.Optional(Type.Integer({ minimum: 1, description: "Top-level PARALLEL mode only: max concurrent tasks. Defaults to config.parallel.concurrency or 4." })),
@@ -148,7 +148,7 @@ export const SubagentParams = Type.Object({
 	chain: Type.Optional(Type.Array(ChainItem, { description: "CHAIN mode: sequential pipeline where each step's response becomes {previous} for the next. Use {task}, {previous}, {chain_dir} in task templates." })),
 	context: Type.Optional(Type.String({
 		enum: ["fresh", "fork"],
-		description: "'fresh' (default) or 'fork' to branch from parent session",
+		description: "'fresh' or 'fork' to branch from parent session. If omitted, any requested agent with defaultContext: 'fork' makes the whole invocation forked; otherwise the default is 'fresh'.",
 	})),
 	chainDir: Type.Optional(Type.String({ description: "Persistent directory for chain artifacts. Default: a user-scoped temp directory under <tmpdir>/ (auto-cleaned after 24h)" })),
 	async: Type.Optional(Type.Boolean({ description: "Run in background (default: false, or per config)" })),

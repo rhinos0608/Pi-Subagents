@@ -199,6 +199,7 @@ describe("builtin agent overrides", () => {
 				systemPromptMode: "append",
 				inheritProjectContext: true,
 				inheritSkills: false,
+				defaultContext: "fork",
 				systemPrompt: "Base prompt",
 				skills: ["safe-bash"],
 				tools: ["bash"],
@@ -211,6 +212,7 @@ describe("builtin agent overrides", () => {
 				systemPromptMode: "replace",
 				inheritProjectContext: false,
 				inheritSkills: false,
+				defaultContext: undefined,
 				systemPrompt: "Base prompt",
 				skills: undefined,
 				tools: undefined,
@@ -224,6 +226,7 @@ describe("builtin agent overrides", () => {
 			thinking: false,
 			systemPromptMode: "replace",
 			inheritProjectContext: false,
+			defaultContext: false,
 			skills: false,
 			tools: false,
 		});

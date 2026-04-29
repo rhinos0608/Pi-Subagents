@@ -127,6 +127,45 @@ describe("agent manager", () => {
 		assert.equal(component["editState"]?.fields.includes("disabled"), false);
 	});
 
+	it("includes defaultContext in builtin override editing and base state", () => {
+		const root = createTempRoot("pi-agent-manager-builtin-default-context-");
+		const component = new AgentManagerComponent(
+			{ requestRender() {} } as { requestRender(): void },
+			theme(),
+			{
+				builtin: [{
+					name: "worker",
+					description: "Worker",
+					systemPromptMode: "replace",
+					inheritProjectContext: false,
+					inheritSkills: false,
+					defaultContext: "fork",
+					systemPrompt: "Do work",
+					source: "builtin",
+					filePath: path.join(root, "worker.md"),
+				}],
+				user: [],
+				project: [],
+				chains: [],
+				userDir: root,
+				projectDir: null,
+				userSettingsPath: path.join(root, "settings.json"),
+				projectSettingsPath: null,
+				cwd: root,
+			},
+			[],
+			[],
+			() => {},
+		);
+
+		const entry = component["agents"].find((candidate) => candidate.config.name === "worker");
+		assert.ok(entry);
+		component["enterBuiltinOverrideEdit"](entry, "user");
+
+		assert.equal(component["editState"]?.fields.includes("defaultContext"), true);
+		assert.equal(component["editState"]?.overrideBase?.defaultContext, "fork");
+	});
+
 	it("collects a task before launching a multi-agent chain selection", () => {
 		const root = createTempRoot("pi-agent-manager-chain-task-");
 		let result: ManagerResult;

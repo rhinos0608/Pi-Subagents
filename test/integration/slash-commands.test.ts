@@ -788,6 +788,7 @@ describe("subagents-doctor slash command", { skip: !available ? "slash-commands.
 		const { params } = await captureSlashCommandParams("subagents-doctor", "", process.cwd());
 		assert.deepEqual(params, { action: "doctor" });
 	});
+
 });
 
 describe("subagents-status slash command", { skip: !available ? "slash-commands.ts not importable" : undefined }, () => {

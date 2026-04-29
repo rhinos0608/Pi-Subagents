@@ -11,6 +11,7 @@ export const KNOWN_FIELDS = new Set([
 	"systemPromptMode",
 	"inheritProjectContext",
 	"inheritSkills",
+	"defaultContext",
 	"skill",
 	"skills",
 	"extensions",
@@ -46,6 +47,7 @@ export function serializeAgent(config: AgentConfig): string {
 	lines.push(`systemPromptMode: ${config.systemPromptMode}`);
 	lines.push(`inheritProjectContext: ${config.inheritProjectContext ? "true" : "false"}`);
 	lines.push(`inheritSkills: ${config.inheritSkills ? "true" : "false"}`);
+	if (config.defaultContext) lines.push(`defaultContext: ${config.defaultContext}`);
 
 	const skillsValue = joinComma(config.skills);
 	if (skillsValue) lines.push(`skills: ${skillsValue}`);

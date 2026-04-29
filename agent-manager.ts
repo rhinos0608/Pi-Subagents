@@ -44,7 +44,7 @@ interface NameInputState { mode: "new-agent" | "clone-agent" | "clone-chain" | "
 interface StatusMessage { text: string; type: "error" | "info"; }
 interface OverrideScopeState { selectedScope: "user" | "project"; allowProject: boolean; }
 
-const BUILTIN_OVERRIDE_FIELDS: EditField[] = ["model", "fallbackModels", "thinking", "systemPromptMode", "inheritProjectContext", "inheritSkills", "disabled", "tools", "skills", "prompt"];
+const BUILTIN_OVERRIDE_FIELDS: EditField[] = ["model", "fallbackModels", "thinking", "systemPromptMode", "inheritProjectContext", "inheritSkills", "defaultContext", "disabled", "tools", "skills", "prompt"];
 
 function cloneConfig(config: AgentConfig): AgentConfig {
 	return {
@@ -61,6 +61,7 @@ function cloneConfig(config: AgentConfig): AgentConfig {
 				base: {
 					...config.override.base,
 					disabled: config.override.base.disabled,
+					defaultContext: config.override.base.defaultContext,
 					fallbackModels: config.override.base.fallbackModels ? [...config.override.base.fallbackModels] : undefined,
 					skills: config.override.base.skills ? [...config.override.base.skills] : undefined,
 					tools: config.override.base.tools ? [...config.override.base.tools] : undefined,
@@ -162,6 +163,7 @@ export class AgentManagerComponent implements Component {
 			systemPromptMode: entry.config.systemPromptMode,
 			inheritProjectContext: entry.config.inheritProjectContext,
 			inheritSkills: entry.config.inheritSkills,
+			defaultContext: entry.config.defaultContext,
 			disabled: entry.config.disabled,
 			systemPrompt: entry.config.systemPrompt,
 			skills: entry.config.skills ? [...entry.config.skills] : undefined,

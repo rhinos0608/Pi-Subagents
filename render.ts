@@ -90,7 +90,7 @@ const resultAnimationTimers = new Map<ReturnType<typeof setInterval>, ResultAnim
 const outputActivityCache = new Map<string, { checkedAt: number; text: string }>();
 const STALE_EXTENSION_CONTEXT_MESSAGE = "This extension ctx is stale after session replacement or reload";
 
-export interface ResultAnimationContext {
+interface ResultAnimationContext {
 	state: { subagentResultAnimationTimer?: ReturnType<typeof setInterval> };
 	invalidate: () => void;
 }

@@ -6,7 +6,7 @@ export interface TextEditorState {
 	viewportOffset: number;
 }
 
-export interface TextEditorOptions {
+interface TextEditorOptions {
 	multiLine?: boolean;
 }
 

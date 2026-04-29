@@ -1,6 +1,6 @@
 import type { Theme } from "@mariozechner/pi-coding-agent";
 import { matchesKey, truncateToWidth } from "@mariozechner/pi-tui";
-import { defaultSystemPromptMode, type AgentConfig, type BuiltinAgentOverrideBase } from "./agents.ts";
+import { defaultSystemPromptMode, type AgentConfig, type AgentDefaultContext, type BuiltinAgentOverrideBase } from "./agents.ts";
 import { createEditorState, ensureCursorVisible, getCursorDisplayPos, handleEditorInput, renderEditor, wrapText } from "./text-editor.ts";
 import type { TextEditorState } from "./text-editor.ts";
 import { pad, row, renderHeader, renderFooter, formatScrollInfo } from "./render-helpers.ts";
@@ -18,15 +18,15 @@ export interface EditState {
 	title?: string;
 	overrideBase?: BuiltinAgentOverrideBase;
 }
-export interface EditInputResult { action?: "save" | "discard" | "delete"; nextScreen?: EditScreen; }
-export interface CreateEditStateOptions {
+interface EditInputResult { action?: "save" | "discard" | "delete"; nextScreen?: EditScreen; }
+interface CreateEditStateOptions {
 	fields?: EditField[];
 	title?: string;
 	overrideBase?: BuiltinAgentOverrideBase;
 }
 
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
-const FIELD_ORDER = ["name", "description", "model", "fallbackModels", "thinking", "systemPromptMode", "inheritProjectContext", "inheritSkills", "tools", "extensions", "skills", "output", "reads", "progress", "interactive", "prompt"] as const;
+const FIELD_ORDER = ["name", "description", "model", "fallbackModels", "thinking", "systemPromptMode", "inheritProjectContext", "inheritSkills", "defaultContext", "tools", "extensions", "skills", "output", "reads", "progress", "interactive", "prompt"] as const;
 type ThinkingLevel = typeof THINKING_LEVELS[number];
 const PROMPT_VIEWPORT_HEIGHT = 16;
 const MODEL_SELECTOR_HEIGHT = 10;
@@ -38,6 +38,12 @@ function parseTools(value: string): { tools?: string[]; mcp?: string[] } { const
 function parseCommaList(value: string): string[] | undefined { const items = value.split(",").map((item) => item.trim()).filter((item) => item.length > 0); return items.length > 0 ? items : undefined; }
 function arraysEqual(a: string[] | undefined, b: string[] | undefined): boolean { if (!a && !b) return true; if (!a || !b || a.length !== b.length) return false; for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false; return true; }
 
+function nextDefaultContext(value: AgentDefaultContext | undefined): AgentDefaultContext | undefined {
+	if (value === undefined) return "fork";
+	if (value === "fork") return "fresh";
+	return undefined;
+}
+
 function fieldValueMatchesBase(field: EditField, state: EditState): boolean {
 	const base = state.overrideBase;
 	if (!base) return false;
@@ -48,6 +54,7 @@ function fieldValueMatchesBase(field: EditField, state: EditState): boolean {
 		case "systemPromptMode": return state.draft.systemPromptMode === base.systemPromptMode;
 		case "inheritProjectContext": return state.draft.inheritProjectContext === base.inheritProjectContext;
 		case "inheritSkills": return state.draft.inheritSkills === base.inheritSkills;
+		case "defaultContext": return state.draft.defaultContext === base.defaultContext;
 		case "disabled": return state.draft.disabled === base.disabled;
 		case "tools": return arraysEqual(toolList(state.draft), toolList(base));
 		case "skills": return arraysEqual(state.draft.skills, base.skills);
@@ -66,6 +73,7 @@ function resetFieldToBase(field: EditField, state: EditState): void {
 		case "systemPromptMode": state.draft.systemPromptMode = base.systemPromptMode; break;
 		case "inheritProjectContext": state.draft.inheritProjectContext = base.inheritProjectContext; break;
 		case "inheritSkills": state.draft.inheritSkills = base.inheritSkills; break;
+		case "defaultContext": state.draft.defaultContext = base.defaultContext; break;
 		case "disabled": state.draft.disabled = base.disabled; break;
 		case "tools": state.draft.tools = base.tools ? [...base.tools] : undefined; state.draft.mcpDirectTools = base.mcpDirectTools ? [...base.mcpDirectTools] : undefined; break;
 		case "skills": state.draft.skills = base.skills ? [...base.skills] : undefined; break;
@@ -94,6 +102,7 @@ function renderFieldValue(field: EditField, state: EditState): string {
 		case "systemPromptMode": return draft.systemPromptMode ?? defaultSystemPromptMode(draft.name);
 		case "inheritProjectContext": return draft.inheritProjectContext ? "on" : "off";
 		case "inheritSkills": return draft.inheritSkills ? "on" : "off";
+		case "defaultContext": return draft.defaultContext ?? "auto";
 		case "disabled": return draft.disabled ? "on" : "off";
 		case "tools": return formatTools(draft);
 		case "extensions": return draft.extensions !== undefined ? (draft.extensions.length > 0 ? draft.extensions.join(", ") : "") : "(all)";
@@ -129,6 +138,15 @@ function applyFieldValue(field: EditField, state: EditState, value: string): voi
 		case "skills": draft.skills = parseCommaList(value); break;
 		case "output": { const trimmed = value.trim(); draft.output = trimmed.length > 0 ? trimmed : undefined; break; }
 		case "reads": draft.defaultReads = parseCommaList(value); break;
+		case "defaultContext": {
+			const trimmed = value.trim();
+			if (trimmed === "" || trimmed === "auto") {
+				draft.defaultContext = undefined;
+				break;
+			}
+			if (trimmed === "fresh" || trimmed === "fork") draft.defaultContext = trimmed;
+			break;
+		}
 		case "inheritProjectContext":
 		case "inheritSkills":
 		case "disabled":
@@ -260,9 +278,10 @@ export function handleEditInput(screen: EditScreen, state: EditState, data: stri
 		if (data === "m") { openModelPicker(state, models); return { nextScreen: "edit-field" }; }
 		if (data === "t") { openThinkingPicker(state); return { nextScreen: "edit-field" }; }
 		if (data === "s") { openSkillPicker(state, skills); return { nextScreen: "edit-field" }; }
-		if (data === " " && (field === "inheritProjectContext" || field === "inheritSkills" || field === "disabled" || field === "progress" || field === "interactive")) {
+		if (data === " " && (field === "inheritProjectContext" || field === "inheritSkills" || field === "defaultContext" || field === "disabled" || field === "progress" || field === "interactive")) {
 			if (field === "inheritProjectContext") state.draft.inheritProjectContext = !state.draft.inheritProjectContext;
 			if (field === "inheritSkills") state.draft.inheritSkills = !state.draft.inheritSkills;
+			if (field === "defaultContext") state.draft.defaultContext = nextDefaultContext(state.draft.defaultContext);
 			if (field === "disabled") state.draft.disabled = !state.draft.disabled;
 			if (field === "progress") state.draft.defaultProgress = !state.draft.defaultProgress;
 			if (field === "interactive") state.draft.interactive = !state.draft.interactive;
@@ -273,6 +292,10 @@ export function handleEditInput(screen: EditScreen, state: EditState, data: stri
 			if (field === "thinking") { openThinkingPicker(state); return { nextScreen: "edit-field" }; }
 			if (field === "skills") { openSkillPicker(state, skills); return { nextScreen: "edit-field" }; }
 			if (field === "prompt") { state.promptEditor = createEditorState(state.draft.systemPrompt ?? ""); return { nextScreen: "edit-prompt" }; }
+			if (field === "defaultContext") {
+				state.draft.defaultContext = nextDefaultContext(state.draft.defaultContext);
+				return;
+			}
 			if (field === "inheritProjectContext" || field === "inheritSkills" || field === "disabled" || field === "progress" || field === "interactive") return;
 			state.fieldMode = "text"; state.fieldEditor = createEditorState(renderFieldValue(field, state)); return { nextScreen: "edit-field" };
 		}
@@ -346,7 +369,9 @@ export function renderEdit(screen: EditScreen, state: EditState, width: number, 
 				? "Project Ctx"
 				: field === "inheritSkills"
 					? "Skills Ctx"
-					: field === "disabled"
+					: field === "defaultContext"
+						? "Default Ctx"
+						: field === "disabled"
 						? "Disabled"
 					: `${field[0]!.toUpperCase()}${field.slice(1)}`;
 		const rawLabel = pad(`${fieldLabel}:`, labelWidth);

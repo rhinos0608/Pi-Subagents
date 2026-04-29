@@ -55,14 +55,14 @@ const jitiCliPath: string | undefined = (() => {
 	return undefined;
 })();
 
-export interface AsyncExecutionContext {
+interface AsyncExecutionContext {
 	pi: ExtensionAPI;
 	cwd: string;
 	currentSessionId: string;
 	currentModelProvider?: string;
 }
 
-export interface AsyncChainParams {
+interface AsyncChainParams {
 	chain: ChainStep[];
 	resultMode?: "parallel" | "chain";
 	agents: AgentConfig[];
@@ -84,7 +84,7 @@ export interface AsyncChainParams {
 	childIntercomTarget?: (agent: string, index: number) => string | undefined;
 }
 
-export interface AsyncSingleParams {
+interface AsyncSingleParams {
 	agent: string;
 	task?: string;
 	agentConfig: AgentConfig;
@@ -108,7 +108,7 @@ export interface AsyncSingleParams {
 	childIntercomTarget?: (agent: string, index: number) => string | undefined;
 }
 
-export interface AsyncExecutionResult {
+interface AsyncExecutionResult {
 	content: Array<{ type: "text"; text: string }>;
 	details: Details;
 	isError?: boolean;
@@ -166,6 +166,10 @@ function formatAsyncStartError(mode: "single" | "chain", message: string): Async
 		details: { mode, results: [] },
 	};
 }
+
+const UNAVAILABLE_SUBAGENT_SKILL_ERROR = "Skills not found: pi-subagents";
+
+class UnavailableSubagentSkillError extends Error {}
 
 /**
  * Execute a chain asynchronously
@@ -240,7 +244,8 @@ export function executeAsyncChain(
 		const instructionCwd = behaviorCwd ?? stepCwd;
 		const behavior = resolvedBehavior ?? resolveStepBehavior(a, buildStepOverrides(s), chainSkills);
 		const skillNames = behavior.skills === false ? [] : behavior.skills;
-		const { resolved: resolvedSkills } = resolveSkillsWithFallback(skillNames, stepCwd, ctx.cwd);
+		const { resolved: resolvedSkills, missing: missingSkills } = resolveSkillsWithFallback(skillNames, stepCwd, ctx.cwd);
+		if (missingSkills.includes("pi-subagents")) throw new UnavailableSubagentSkillError(UNAVAILABLE_SUBAGENT_SKILL_ERROR);
 
 		let systemPrompt = a.systemPrompt?.trim() ?? "";
 		if (resolvedSkills.length > 0) {
@@ -285,36 +290,42 @@ export function executeAsyncChain(
 		return sessionFile;
 	};
 
-	const steps: RunnerStep[] = chain.map((s, stepIndex) => {
-		if (isParallelStep(s)) {
-			const parallelBehaviors = s.parallel.map((task) => {
-				const agent = agents.find((candidate) => candidate.name === task.agent)!;
-				return resolveStepBehavior(agent, buildStepOverrides(task), chainSkills);
-			});
-			const progressPrecreated = parallelBehaviors.some((behavior) => behavior.progress);
-			if (progressPrecreated) {
-				if (!s.worktree) writeInitialProgressFile(runnerCwd);
-				progressInstructionCreated = true;
-			}
-			return {
-				parallel: s.parallel.map((t, taskIndex) => {
-					let behaviorCwd: string | undefined;
-					if (s.worktree) {
-						try {
-							behaviorCwd = resolveExpectedWorktreeAgentCwd(runnerCwd, `${id}-s${stepIndex}`, taskIndex);
-						} catch {
-							behaviorCwd = undefined;
+	let steps: RunnerStep[];
+	try {
+		steps = chain.map((s, stepIndex) => {
+			if (isParallelStep(s)) {
+				const parallelBehaviors = s.parallel.map((task) => {
+					const agent = agents.find((candidate) => candidate.name === task.agent)!;
+					return resolveStepBehavior(agent, buildStepOverrides(task), chainSkills);
+				});
+				const progressPrecreated = parallelBehaviors.some((behavior) => behavior.progress);
+				if (progressPrecreated) {
+					if (!s.worktree) writeInitialProgressFile(runnerCwd);
+					progressInstructionCreated = true;
+				}
+				return {
+					parallel: s.parallel.map((t, taskIndex) => {
+						let behaviorCwd: string | undefined;
+						if (s.worktree) {
+							try {
+								behaviorCwd = resolveExpectedWorktreeAgentCwd(runnerCwd, `${id}-s${stepIndex}`, taskIndex);
+							} catch {
+								behaviorCwd = undefined;
+							}
 						}
-					}
-					return buildSeqStep(t, nextSessionFile(), behaviorCwd, progressPrecreated, parallelBehaviors[taskIndex]);
-				}),
-				concurrency: s.concurrency,
-				failFast: s.failFast,
-				worktree: s.worktree,
-			};
-		}
-		return buildSeqStep(s as SequentialStep, nextSessionFile());
-	});
+						return buildSeqStep(t, nextSessionFile(), behaviorCwd, progressPrecreated, parallelBehaviors[taskIndex]);
+					}),
+					concurrency: s.concurrency,
+					failFast: s.failFast,
+					worktree: s.worktree,
+				};
+			}
+			return buildSeqStep(s as SequentialStep, nextSessionFile());
+		});
+	} catch (error) {
+		if (error instanceof UnavailableSubagentSkillError) return formatAsyncStartError("chain", error.message);
+		throw error;
+	}
 	let childTargetIndex = 0;
 	const childIntercomTargets = childIntercomTarget ? steps.flatMap((step) => {
 		if ("parallel" in step) {
@@ -438,7 +449,8 @@ export function executeAsyncSingle(
 	const runnerCwd = resolveChildCwd(ctx.cwd, cwd);
 	const skillNames = params.skills ?? agentConfig.skills ?? [];
 	const availableModels = params.availableModels;
-	const { resolved: resolvedSkills } = resolveSkillsWithFallback(skillNames, runnerCwd, ctx.cwd);
+	const { resolved: resolvedSkills, missing: missingSkills } = resolveSkillsWithFallback(skillNames, runnerCwd, ctx.cwd);
+	if (missingSkills.includes("pi-subagents")) return formatAsyncStartError("single", UNAVAILABLE_SUBAGENT_SKILL_ERROR);
 	let systemPrompt = agentConfig.systemPrompt?.trim() ?? "";
 	if (resolvedSkills.length > 0) {
 		const injection = buildSkillInjection(resolvedSkills);

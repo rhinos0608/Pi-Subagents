@@ -67,7 +67,7 @@ function normalizeListScope(scope: unknown): AgentScope | undefined {
 	return undefined;
 }
 
-export function sanitizeName(name: string): string {
+function sanitizeName(name: string): string {
 	return name.toLowerCase().trim().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "").replace(/-+/g, "-").replace(/^-+|-+$/g, "");
 }
 
@@ -81,7 +81,7 @@ function availableNames(cwd: string, kind: "agent" | "chain"): string[] {
 	return [...new Set(items.map((x) => x.name))].sort((a, b) => a.localeCompare(b));
 }
 
-export function findAgents(name: string, cwd: string, scope: AgentScope = "both"): AgentConfig[] {
+function findAgents(name: string, cwd: string, scope: AgentScope = "both"): AgentConfig[] {
 	const d = discoverAgentsAll(cwd);
 	const raw = name.trim();
 	const sanitized = sanitizeName(raw);
@@ -90,7 +90,7 @@ export function findAgents(name: string, cwd: string, scope: AgentScope = "both"
 		.sort((a, b) => a.source.localeCompare(b.source));
 }
 
-export function findChains(name: string, cwd: string, scope: AgentScope = "both"): ChainConfig[] {
+function findChains(name: string, cwd: string, scope: AgentScope = "both"): ChainConfig[] {
 	const raw = name.trim();
 	const sanitized = sanitizeName(raw);
 	return discoverAgentsAll(cwd).chains
@@ -259,6 +259,11 @@ function applyAgentConfig(target: AgentConfig, cfg: Record<string, unknown>): st
 		if (typeof cfg.inheritSkills !== "boolean") return "config.inheritSkills must be a boolean when provided.";
 		target.inheritSkills = cfg.inheritSkills;
 	}
+	if (hasKey(cfg, "defaultContext")) {
+		if (cfg.defaultContext === false || cfg.defaultContext === "") target.defaultContext = undefined;
+		else if (cfg.defaultContext === "fresh" || cfg.defaultContext === "fork") target.defaultContext = cfg.defaultContext;
+		else return "config.defaultContext must be 'fresh', 'fork', or false when provided.";
+	}
 	if (hasKey(cfg, "output")) {
 		if (cfg.output === false || cfg.output === "") target.output = undefined;
 		else if (typeof cfg.output === "string") target.output = cfg.output;
@@ -328,7 +333,7 @@ function renamePath(
 	return { filePath };
 }
 
-export function formatAgentDetail(agent: AgentConfig): string {
+function formatAgentDetail(agent: AgentConfig): string {
 	const tools = [...(agent.tools ?? []), ...(agent.mcpDirectTools ?? []).map((t) => `mcp:${t}`)];
 	const lines: string[] = [`Agent: ${agent.name} (${agent.source})`, `Path: ${agent.filePath}`, `Description: ${agent.description}`];
 	if (agent.model) lines.push(`Model: ${agent.model}`);
@@ -338,6 +343,7 @@ export function formatAgentDetail(agent: AgentConfig): string {
 	lines.push(`System prompt mode: ${agent.systemPromptMode}`);
 	lines.push(`Inherit project context: ${agent.inheritProjectContext ? "true" : "false"}`);
 	lines.push(`Inherit skills: ${agent.inheritSkills ? "true" : "false"}`);
+	if (agent.defaultContext) lines.push(`Default context: ${agent.defaultContext}`);
 	if (agent.source === "builtin") lines.push(`Disabled: ${agent.disabled ? "true" : "false"}`);
 	if (agent.extensions !== undefined) lines.push(`Extensions: ${agent.extensions.length ? agent.extensions.join(", ") : "(none)"}`);
 	if (agent.thinking) lines.push(`Thinking: ${agent.thinking}`);
@@ -349,7 +355,7 @@ export function formatAgentDetail(agent: AgentConfig): string {
 	return lines.join("\n");
 }
 
-export function formatChainDetail(chain: ChainConfig): string {
+function formatChainDetail(chain: ChainConfig): string {
 	const lines: string[] = [`Chain: ${chain.name} (${chain.source})`, `Path: ${chain.filePath}`, `Description: ${chain.description}`, "", "Steps:"];
 	for (let i = 0; i < chain.steps.length; i++) {
 		const s = chain.steps[i]!;
@@ -376,8 +382,12 @@ export function handleList(params: ManagementParams, ctx: ManagementContext): Ag
 	const chains = d.chains.filter((c) => scope === "both" || c.source === scope).sort((a, b) => a.name.localeCompare(b.name));
 	const lines = [
 		"Executable agents:",
-		...(agents.length ? agents.map((a) => `- ${a.name} (${a.source}): ${a.description}`) : ["- (none)"]),
-		...(disabledBuiltins.length ? ["", "Disabled builtins:", ...disabledBuiltins.map((a) => `- ${a.name} (${a.source}, disabled): ${a.description}`)] : []),
+		...(agents.length
+			? agents.map((a) => `- ${a.name} (${a.source}${a.defaultContext ? `, context: ${a.defaultContext}` : ""}): ${a.description}`)
+			: ["- (none)"]),
+		...(disabledBuiltins.length
+			? ["", "Disabled builtins:", ...disabledBuiltins.map((a) => `- ${a.name} (${a.source}${a.defaultContext ? `, context: ${a.defaultContext}` : ""}, disabled): ${a.description}`)]
+			: []),
 		"",
 		"Chains:",
 		...(chains.length ? chains.map((c) => `- ${c.name} (${c.source}): ${c.description}`) : ["- (none)"]),
@@ -385,7 +395,7 @@ export function handleList(params: ManagementParams, ctx: ManagementContext): Ag
 	return result(lines.join("\n"));
 }
 
-export function handleGet(params: ManagementParams, ctx: ManagementContext): AgentToolResult<Details> {
+function handleGet(params: ManagementParams, ctx: ManagementContext): AgentToolResult<Details> {
 	if (!params.agent && !params.chainName) return result("Specify 'agent' or 'chainName' for get.", true);
 	const hasBoth = Boolean(params.agent && params.chainName);
 	const blocks: string[] = [];
@@ -560,7 +570,7 @@ export function handleUpdate(params: ManagementParams, ctx: ManagementContext): 
 	return result([headline, ...warnings].join("\n"));
 }
 
-export function handleDelete(params: ManagementParams, ctx: ManagementContext): AgentToolResult<Details> {
+function handleDelete(params: ManagementParams, ctx: ManagementContext): AgentToolResult<Details> {
 	if (!params.agent && !params.chainName) return result("Specify 'agent' or 'chainName' for delete.", true);
 	if (params.agent && params.chainName) return result("Specify either 'agent' or 'chainName', not both.", true);
 	const scopeHint = asDisambiguationScope(params.agentScope);

@@ -5,7 +5,7 @@ import { formatAsyncRunList, listAsyncRuns } from "./async-status.ts";
 import { ASYNC_DIR, RESULTS_DIR, type Details } from "./types.ts";
 import { findByPrefix, readStatus } from "./utils.ts";
 
-export interface RunStatusParams {
+interface RunStatusParams {
 	action?: "status";
 	id?: string;
 	runId?: string;

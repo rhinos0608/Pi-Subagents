@@ -30,7 +30,7 @@ export interface PiSpawnDeps {
 	piPackageRoot?: string;
 }
 
-export interface PiSpawnCommand {
+interface PiSpawnCommand {
 	command: string;
 	args: string[];
 }

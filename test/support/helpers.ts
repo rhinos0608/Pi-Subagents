@@ -85,7 +85,7 @@ export function makeAgent(name: string, overrides: Partial<AgentConfig> = {}): A
 	};
 }
 
-export interface MinimalCtx {
+interface MinimalCtx {
 	cwd: string;
 	hasUI: boolean;
 	ui: Record<string, never>;

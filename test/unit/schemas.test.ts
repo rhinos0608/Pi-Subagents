@@ -110,8 +110,10 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 		assert.ok(contextSchema, "context schema should exist");
 		assert.equal(contextSchema.type, "string");
 		assert.deepEqual(contextSchema.enum, ["fresh", "fork"]);
-		assert.match(String(contextSchema.description ?? ""), /fresh/);
-		assert.match(String(contextSchema.description ?? ""), /fork/);
+		const description = String(contextSchema.description ?? "");
+		assert.match(description, /fresh/);
+		assert.match(description, /fork/);
+		assert.match(description, /whole invocation/);
 	});
 
 	it("includes count and concurrency on top-level parallel mode", () => {
@@ -137,8 +139,10 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 		const actionSchema = SubagentParams?.properties?.action;
 		assert.ok(actionSchema, "action schema should exist");
 		assert.equal(actionSchema.type, "string");
-		assert.match(String(actionSchema.description ?? ""), /doctor/);
-		assert.match(String(actionSchema.description ?? ""), /diagnostics/i);
+		const description = String(actionSchema.description ?? "");
+		assert.match(description, /doctor/);
+		assert.match(description, /diagnostics/i);
+		assert.doesNotMatch(description, /orchestration\./);
 	});
 
 	it("includes subagent control fields", () => {

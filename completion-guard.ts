@@ -55,13 +55,13 @@ const GENERAL_IMPLEMENTATION_PATTERNS = [
 ];
 
 
-export interface CompletionMutationGuardInput {
+interface CompletionMutationGuardInput {
 	agent: string;
 	task: string;
 	messages: Message[];
 }
 
-export interface CompletionMutationGuardResult {
+interface CompletionMutationGuardResult {
 	expectedMutation: boolean;
 	attemptedMutation: boolean;
 	triggered: boolean;
