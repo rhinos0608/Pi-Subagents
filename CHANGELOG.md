@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+- Resolve intercom bridge default paths at runtime so tests and isolated environments that change `HOME` use the correct `pi-intercom` location.
+- Made the tool-description source check tolerant of Windows line endings.
+
 ## [0.21.0] - 2026-04-29
 
 ### Changed
