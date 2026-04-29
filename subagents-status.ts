@@ -3,7 +3,7 @@ import * as path from "node:path";
 import type { Theme } from "@mariozechner/pi-coding-agent";
 import type { Component, TUI } from "@mariozechner/pi-tui";
 import { matchesKey, truncateToWidth } from "@mariozechner/pi-tui";
-import { type AsyncRunOverlayData, type AsyncRunSummary, listAsyncRunsForOverlay } from "./async-status.ts";
+import { type AsyncRunOverlayData, type AsyncRunSummary, formatAsyncRunProgressLabel, listAsyncRunsForOverlay } from "./async-status.ts";
 import { ASYNC_DIR } from "./types.ts";
 import { formatDuration, formatTokens, shortenPath } from "./formatters.ts";
 import { formatScrollInfo, renderFooter, renderHeader, row } from "./render-helpers.ts";
@@ -46,8 +46,7 @@ function stepStatusColor(theme: Theme, status: string): string {
 
 function runLabel(theme: Theme, run: AsyncRunSummary, selected: boolean): string {
 	const prefix = selected ? theme.fg("accent", ">") : " ";
-	const stepCount = run.steps.length || 1;
-	const stepLabel = run.currentStep !== undefined ? `step ${run.currentStep + 1}/${stepCount}` : `steps ${stepCount}`;
+	const stepLabel = formatAsyncRunProgressLabel(run);
 	const cwd = shortenPath(run.cwd ?? run.asyncDir);
 	return `${prefix} ${run.id.slice(0, 8)} ${statusColor(theme, run.state)} | ${run.mode} | ${stepLabel} | ${cwd}`;
 }
@@ -283,7 +282,9 @@ export class SubagentsStatusComponent implements Component {
 			const activity = step.lastActivityAt
 				? step.activityState === "needs_attention"
 					? ` | no activity for ${formatDuration(Math.max(0, Date.now() - step.lastActivityAt))}`
-					: ` | active ${formatDuration(Math.max(0, Date.now() - step.lastActivityAt))} ago`
+					: step.activityState === "active_long_running"
+						? ` | active but long-running; last activity ${formatDuration(Math.max(0, Date.now() - step.lastActivityAt))} ago`
+						: ` | active ${formatDuration(Math.max(0, Date.now() - step.lastActivityAt))} ago`
 				: "";
 			const line = `  ${step.index + 1}. ${step.agent} | ${stepStatusColor(this.theme, step.status)}${activity}${model}${attempts}${duration}${tokens}`;
 			lines.push(row(truncateToWidth(line, innerW), width, this.theme));
@@ -298,15 +299,16 @@ export class SubagentsStatusComponent implements Component {
 	}
 
 	private renderDetail(run: AsyncRunSummary, width: number, innerW: number): string[] {
-		const stepCount = run.steps.length || 1;
-		const stepLabel = run.currentStep !== undefined ? `step ${run.currentStep + 1}/${stepCount}` : `steps ${stepCount}`;
+		const stepLabel = formatAsyncRunProgressLabel(run);
 		const duration = run.endedAt !== undefined
 			? formatDuration(Math.max(0, run.endedAt - run.startedAt))
 			: formatDuration(Math.max(0, Date.now() - run.startedAt));
 		const activity = run.lastActivityAt
 			? run.activityState === "needs_attention"
 				? `no activity for ${formatDuration(Math.max(0, Date.now() - run.lastActivityAt))}`
-				: `active ${formatDuration(Math.max(0, Date.now() - run.lastActivityAt))} ago`
+				: run.activityState === "active_long_running"
+					? `active but long-running; last activity ${formatDuration(Math.max(0, Date.now() - run.lastActivityAt))} ago`
+					: `active ${formatDuration(Math.max(0, Date.now() - run.lastActivityAt))} ago`
 			: undefined;
 
 		const body: string[] = [];

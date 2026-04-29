@@ -5,6 +5,8 @@ import { renderWidget } from "./render.ts";
 import { formatControlNoticeMessage } from "./subagent-control.ts";
 import {
 	type AsyncJobState,
+	type AsyncParallelGroupStatus,
+	type AsyncStartedEvent,
 	type ControlEvent,
 	type SubagentState,
 	POLL_INTERVAL_MS,
@@ -12,6 +14,23 @@ import {
 	SUBAGENT_CONTROL_INTERCOM_EVENT,
 } from "./types.ts";
 import { readStatus } from "./utils.ts";
+
+
+function isValidParallelGroup(group: AsyncParallelGroupStatus, stepCount: number, chainStepCount: number): boolean {
+	return Number.isInteger(group.start)
+		&& Number.isInteger(group.count)
+		&& Number.isInteger(group.stepIndex)
+		&& group.start >= 0
+		&& group.count > 0
+		&& group.stepIndex >= 0
+		&& group.stepIndex < chainStepCount
+		&& group.start + group.count <= stepCount;
+}
+
+function normalizeParallelGroups(groups: AsyncParallelGroupStatus[] | undefined, stepCount: number, chainStepCount: number): AsyncParallelGroupStatus[] {
+	if (!groups?.length) return [];
+	return groups.filter((group) => isValidParallelGroup(group, stepCount, chainStepCount));
+}
 
 interface AsyncJobTrackerOptions {
 	completionRetentionMs?: number;
@@ -66,8 +85,8 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 				let parsed: unknown;
 				try {
 					parsed = JSON.parse(line);
-				} catch {
-					// Ignore malformed completed records but keep the poller alive for later events.
+				} catch (error) {
+					console.error(`Ignoring malformed async control event in '${eventsPath}':`, error);
 					continue;
 				}
 				if (!parsed || typeof parsed !== "object" || (parsed as { type?: unknown }).type !== "subagent.control") continue;
@@ -83,7 +102,7 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 				if (record.channels.includes("event")) {
 					pi.events.emit(SUBAGENT_CONTROL_EVENT, payload);
 				}
-				if (record.channels.includes("intercom") && record.intercom?.to && record.intercom.message) {
+				if (record.event.type !== "active_long_running" && record.channels.includes("intercom") && record.intercom?.to && record.intercom.message) {
 					pi.events.emit(SUBAGENT_CONTROL_INTERCOM_EVENT, {
 						...payload,
 						to: record.intercom.to,
@@ -119,15 +138,30 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 						job.status = status.state;
 						job.activityState = status.activityState;
 						job.lastActivityAt = status.lastActivityAt ?? job.lastActivityAt;
-						job.currentTool = status.currentTool ?? job.currentTool;
-						job.currentToolStartedAt = status.currentToolStartedAt ?? job.currentToolStartedAt;
+						job.currentTool = status.currentTool;
+						job.currentToolStartedAt = status.currentToolStartedAt;
+						job.currentPath = status.currentPath;
+						job.turnCount = status.turnCount ?? job.turnCount;
+						job.toolCount = status.toolCount ?? job.toolCount;
 						job.mode = status.mode;
 						job.currentStep = status.currentStep ?? job.currentStep;
-						job.stepsTotal = status.steps?.length ?? job.stepsTotal;
 						job.startedAt = status.startedAt ?? job.startedAt;
 						job.updatedAt = status.lastUpdate ?? Date.now();
 						if (status.steps?.length) {
-							job.agents = status.steps.map((step) => step.agent);
+							const groups = normalizeParallelGroups(status.parallelGroups, status.steps.length, status.chainStepCount ?? status.steps.length);
+							job.hasParallelGroups = groups.length > 0 || job.hasParallelGroups;
+							const activeGroup = status.currentStep !== undefined
+								? groups.find((group) => status.currentStep! >= group.start && status.currentStep! < group.start + group.count)
+								: undefined;
+							const visibleSteps = activeGroup
+								? status.steps.slice(activeGroup.start, activeGroup.start + activeGroup.count)
+								: status.steps;
+							job.activeParallelGroup = Boolean(activeGroup);
+							job.agents = visibleSteps.map((step) => step.agent);
+							job.stepsTotal = visibleSteps.length;
+							job.runningSteps = visibleSteps.filter((step) => step.status === "running").length;
+							job.completedSteps = visibleSteps.filter((step) => step.status === "complete" || step.status === "completed").length;
+							if (status.state === "complete") job.completedSteps = visibleSteps.length;
 						}
 						job.sessionDir = status.sessionDir ?? job.sessionDir;
 						job.outputFile = status.outputFile ?? job.outputFile;
@@ -153,23 +187,26 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 	};
 
 	const handleStarted = (data: unknown) => {
-		const info = data as {
-			id?: string;
-			asyncDir?: string;
-			agent?: string;
-			chain?: string[];
-		};
+		const info = data as AsyncStartedEvent;
 		if (!info.id) return;
 		const now = Date.now();
 		const asyncDir = info.asyncDir ?? path.join(asyncDirRoot, info.id);
-		const agents = info.chain && info.chain.length > 0 ? info.chain : info.agent ? [info.agent] : undefined;
+		const rawAgents = info.agents?.length ? info.agents : info.chain && info.chain.length > 0 ? info.chain : info.agent ? [info.agent] : undefined;
+		const validParallelGroups = normalizeParallelGroups(info.parallelGroups, Number.MAX_SAFE_INTEGER, info.chainStepCount ?? Number.MAX_SAFE_INTEGER);
+		const firstGroup = validParallelGroups.find((group) => group.start === 0);
+		const firstGroupCount = firstGroup?.count;
+		const agents = firstGroupCount && firstGroupCount > 0
+			? rawAgents?.slice(0, firstGroupCount)
+			: rawAgents;
 		state.asyncJobs.set(info.id, {
 			asyncId: info.id,
 			asyncDir,
 			status: "queued",
 			mode: info.chain ? "chain" : "single",
 			agents,
-			stepsTotal: agents?.length,
+			stepsTotal: firstGroupCount ?? agents?.length,
+			hasParallelGroups: validParallelGroups.length > 0,
+			activeParallelGroup: Boolean(firstGroupCount && firstGroupCount > 0),
 			startedAt: now,
 			updatedAt: now,
 		});

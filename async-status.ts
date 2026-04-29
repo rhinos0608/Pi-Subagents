@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { formatDuration, formatTokens, shortenPath } from "./formatters.ts";
-import { type ActivityState, type AsyncStatus, type TokenUsage } from "./types.ts";
+import { type ActivityState, type AsyncParallelGroupStatus, type AsyncStatus, type TokenUsage } from "./types.ts";
 import { DEFAULT_CONTROL_CONFIG, deriveActivityState } from "./subagent-control.ts";
 import { readStatus } from "./utils.ts";
 
@@ -13,6 +13,9 @@ export interface AsyncRunStepSummary {
 	lastActivityAt?: number;
 	currentTool?: string;
 	currentToolStartedAt?: number;
+	currentPath?: string;
+	turnCount?: number;
+	toolCount?: number;
 	durationMs?: number;
 	tokens?: TokenUsage;
 	skills?: string[];
@@ -29,17 +32,59 @@ export interface AsyncRunSummary {
 	lastActivityAt?: number;
 	currentTool?: string;
 	currentToolStartedAt?: number;
+	currentPath?: string;
+	turnCount?: number;
+	toolCount?: number;
 	mode: "single" | "chain";
 	cwd?: string;
 	startedAt: number;
 	lastUpdate?: number;
 	endedAt?: number;
 	currentStep?: number;
+	chainStepCount?: number;
+	parallelGroups?: AsyncParallelGroupStatus[];
 	steps: AsyncRunStepSummary[];
 	sessionDir?: string;
 	outputFile?: string;
 	totalTokens?: TokenUsage;
 	sessionFile?: string;
+}
+
+function isValidParallelGroup(group: AsyncParallelGroupStatus, stepCount: number, chainStepCount: number): boolean {
+	return Number.isInteger(group.start)
+		&& Number.isInteger(group.count)
+		&& Number.isInteger(group.stepIndex)
+		&& group.start >= 0
+		&& group.count > 0
+		&& group.stepIndex >= 0
+		&& group.stepIndex < chainStepCount
+		&& group.start + group.count <= stepCount;
+}
+
+function normalizeParallelGroups(groups: AsyncParallelGroupStatus[] | undefined, stepCount: number, chainStepCount: number): AsyncParallelGroupStatus[] {
+	if (!groups?.length) return [];
+	return groups.filter((group) => isValidParallelGroup(group, stepCount, chainStepCount));
+}
+
+function flatToLogicalStepIndex(flatIndex: number, chainStepCount: number, parallelGroups: AsyncParallelGroupStatus[]): number {
+	let logicalIndex = 0;
+	let cursor = 0;
+	for (const group of parallelGroups) {
+		while (logicalIndex < chainStepCount && cursor < group.start) {
+			if (flatIndex === cursor) return logicalIndex;
+			logicalIndex++;
+			cursor++;
+		}
+		if (flatIndex >= group.start && flatIndex < group.start + group.count) return group.stepIndex;
+		logicalIndex = Math.max(logicalIndex, group.stepIndex + 1);
+		cursor = group.start + group.count;
+	}
+	while (logicalIndex < chainStepCount) {
+		if (flatIndex === cursor) return logicalIndex;
+		logicalIndex++;
+		cursor++;
+	}
+	return Math.max(0, chainStepCount - 1);
 }
 
 export interface AsyncRunListOptions {
@@ -79,8 +124,11 @@ function outputFileMtime(outputFile: string | undefined): number | undefined {
 	if (!outputFile) return undefined;
 	try {
 		return fs.statSync(outputFile).mtimeMs;
-	} catch {
-		return undefined;
+	} catch (error) {
+		if (isNotFoundError(error)) return undefined;
+		throw new Error(`Failed to inspect async output file '${outputFile}': ${getErrorMessage(error)}`, {
+			cause: error instanceof Error ? error : undefined,
+		});
 	}
 }
 
@@ -101,6 +149,9 @@ function deriveAsyncActivityState(asyncDir: string, status: AsyncStatus): { acti
 
 function statusToSummary(asyncDir: string, status: AsyncStatus & { cwd?: string }): AsyncRunSummary {
 	const { activityState, lastActivityAt } = deriveAsyncActivityState(asyncDir, status);
+	const steps = status.steps ?? [];
+	const chainStepCount = status.chainStepCount ?? steps.length;
+	const parallelGroups = normalizeParallelGroups(status.parallelGroups, steps.length, chainStepCount);
 	return {
 		id: status.runId || path.basename(asyncDir),
 		asyncDir,
@@ -109,15 +160,20 @@ function statusToSummary(asyncDir: string, status: AsyncStatus & { cwd?: string 
 		lastActivityAt,
 		currentTool: status.currentTool,
 		currentToolStartedAt: status.currentToolStartedAt,
+		currentPath: status.currentPath,
+		turnCount: status.turnCount,
+		toolCount: status.toolCount,
 		mode: status.mode,
 		cwd: status.cwd,
 		startedAt: status.startedAt,
 		lastUpdate: status.lastUpdate,
 		endedAt: status.endedAt,
 		currentStep: status.currentStep,
-		steps: (status.steps ?? []).map((step, index) => {
-			const stepActivityState = step.activityState ?? (step.status === "running" ? activityState : undefined);
-			const stepLastActivityAt = step.lastActivityAt ?? (step.status === "running" ? lastActivityAt : undefined);
+		...(status.chainStepCount !== undefined ? { chainStepCount: status.chainStepCount } : {}),
+		...(parallelGroups.length ? { parallelGroups } : {}),
+		steps: steps.map((step, index) => {
+			const stepActivityState = step.activityState;
+			const stepLastActivityAt = step.lastActivityAt;
 			return {
 				index,
 				agent: step.agent,
@@ -126,6 +182,9 @@ function statusToSummary(asyncDir: string, status: AsyncStatus & { cwd?: string 
 				...(stepLastActivityAt ? { lastActivityAt: stepLastActivityAt } : {}),
 				...(step.currentTool ? { currentTool: step.currentTool } : {}),
 				...(step.currentToolStartedAt ? { currentToolStartedAt: step.currentToolStartedAt } : {}),
+				...(step.currentPath ? { currentPath: step.currentPath } : {}),
+				...(step.turnCount !== undefined ? { turnCount: step.turnCount } : {}),
+				...(step.toolCount !== undefined ? { toolCount: step.toolCount } : {}),
 				...(step.durationMs !== undefined ? { durationMs: step.durationMs } : {}),
 				...(step.tokens ? { tokens: step.tokens } : {}),
 				...(step.skills ? { skills: step.skills } : {}),
@@ -198,11 +257,22 @@ export function listAsyncRunsForOverlay(asyncDirRoot: string, recentLimit = 5): 
 	};
 }
 
-function formatActivityFacts(input: { activityState?: ActivityState; lastActivityAt?: number; currentTool?: string; currentToolStartedAt?: number }): string | undefined {
-	if (input.currentTool && input.currentToolStartedAt) return `tool ${input.currentTool} ${formatDuration(Math.max(0, Date.now() - input.currentToolStartedAt))}`;
-	if (!input.lastActivityAt) return input.activityState === "needs_attention" ? "needs attention" : undefined;
+function formatActivityFacts(input: { activityState?: ActivityState; lastActivityAt?: number; currentTool?: string; currentToolStartedAt?: number; currentPath?: string; turnCount?: number; toolCount?: number }): string | undefined {
+	const facts: string[] = [];
+	if (input.currentTool && input.currentToolStartedAt) facts.push(`tool ${input.currentTool} ${formatDuration(Math.max(0, Date.now() - input.currentToolStartedAt))}`);
+	else if (input.currentTool) facts.push(`tool ${input.currentTool}`);
+	if (input.currentPath) facts.push(shortenPath(input.currentPath));
+	if (input.turnCount !== undefined) facts.push(`${input.turnCount} turns`);
+	if (input.toolCount !== undefined) facts.push(`${input.toolCount} tools`);
+	if (!input.lastActivityAt) {
+		if (input.activityState === "needs_attention") return ["needs attention", ...facts].join(" | ");
+		if (input.activityState === "active_long_running") return ["active but long-running", ...facts].join(" | ");
+		return facts.length ? facts.join(" | ") : undefined;
+	}
 	const elapsed = formatDuration(Math.max(0, Date.now() - input.lastActivityAt));
-	return input.activityState === "needs_attention" ? `no activity for ${elapsed}` : `active ${elapsed} ago`;
+	if (input.activityState === "needs_attention") return [`no activity for ${elapsed}`, ...facts].join(" | ");
+	if (input.activityState === "active_long_running") return [`active but long-running; last activity ${elapsed} ago`, ...facts].join(" | ");
+	return [`active ${elapsed} ago`, ...facts].join(" | ");
 }
 
 function formatStepLine(step: AsyncRunStepSummary): string {
@@ -215,9 +285,32 @@ function formatStepLine(step: AsyncRunStepSummary): string {
 	return parts.join(" | ");
 }
 
-function formatRunHeader(run: AsyncRunSummary): string {
+export function formatAsyncRunProgressLabel(run: Pick<AsyncRunSummary, "mode" | "state" | "currentStep" | "chainStepCount" | "parallelGroups" | "steps">): string {
 	const stepCount = run.steps.length || 1;
-	const stepLabel = run.currentStep !== undefined ? `step ${run.currentStep + 1}/${stepCount}` : `steps ${stepCount}`;
+	const chainStepCount = run.chainStepCount ?? stepCount;
+	const groups = normalizeParallelGroups(run.parallelGroups, run.steps.length, chainStepCount);
+	const activeGroup = run.currentStep !== undefined
+		? groups.find((group) => run.currentStep! >= group.start && run.currentStep! < group.start + group.count)
+		: undefined;
+	if (run.mode === "chain" && activeGroup) {
+		const groupSteps = run.steps.slice(activeGroup.start, activeGroup.start + activeGroup.count);
+		const running = groupSteps.filter((step) => step.status === "running").length;
+		const done = groupSteps.filter((step) => step.status === "complete" || step.status === "completed").length;
+		const runningLabel = running === 1 ? "1 agent running" : `${running} agents running`;
+		const groupLabel = run.state === "running"
+			? `parallel group: ${runningLabel} · ${done}/${activeGroup.count} done`
+			: `parallel group: ${done}/${activeGroup.count} done`;
+		return `step ${activeGroup.stepIndex + 1}/${chainStepCount} · ${groupLabel}`;
+	}
+	if (run.mode === "chain" && run.currentStep !== undefined && groups.length > 0) {
+		const logicalStep = flatToLogicalStepIndex(run.currentStep, chainStepCount, groups);
+		return `step ${logicalStep + 1}/${chainStepCount}`;
+	}
+	return run.currentStep !== undefined ? `step ${run.currentStep + 1}/${stepCount}` : `steps ${stepCount}`;
+}
+
+function formatRunHeader(run: AsyncRunSummary): string {
+	const stepLabel = formatAsyncRunProgressLabel(run);
 	const cwd = run.cwd ? shortenPath(run.cwd) : shortenPath(run.asyncDir);
 	const activity = formatActivityFacts(run);
 	return `${run.id} | ${run.state}${activity ? ` | ${activity}` : ""} | ${run.mode} | ${stepLabel} | ${cwd}`;

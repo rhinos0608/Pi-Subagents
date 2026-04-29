@@ -365,16 +365,33 @@ export function executeAsyncChain(
 		const firstAgents = isParallelStep(firstStep)
 			? firstStep.parallel.map((t) => t.agent)
 			: [(firstStep as SequentialStep).agent];
+		const parallelGroups: Array<{ start: number; count: number; stepIndex: number }> = [];
+		const flatAgents: string[] = [];
+		let flatStepStart = 0;
+		for (let stepIndex = 0; stepIndex < chain.length; stepIndex++) {
+			const step = chain[stepIndex]!;
+			if (isParallelStep(step)) {
+				parallelGroups.push({ start: flatStepStart, count: step.parallel.length, stepIndex });
+				flatAgents.push(...step.parallel.map((task) => task.agent));
+				flatStepStart += step.parallel.length;
+			} else {
+				flatAgents.push((step as SequentialStep).agent);
+				flatStepStart++;
+			}
+		}
 		ctx.pi.events.emit(SUBAGENT_ASYNC_STARTED_EVENT, {
 			id,
 			pid: spawnResult.pid,
 			agent: firstAgents[0],
+			agents: flatAgents,
 			task: isParallelStep(firstStep)
 				? firstStep.parallel[0]?.task?.slice(0, 50)
 				: (firstStep as SequentialStep).task?.slice(0, 50),
 			chain: chain.map((s) =>
 				isParallelStep(s) ? `[${s.parallel.map((t) => t.agent).join("+")}]` : (s as SequentialStep).agent,
 			),
+			chainStepCount: chain.length,
+			parallelGroups,
 			cwd: runnerCwd,
 			asyncDir,
 		});

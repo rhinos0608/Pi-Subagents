@@ -667,7 +667,7 @@ export class AgentManagerComponent implements Component {
 	}
 
 	render(width: number): string[] {
-		this.overlayWidth = Math.min(width, 84); const w = this.overlayWidth;
+		this.overlayWidth = width; const w = this.overlayWidth;
 		switch (this.screen) {
 			case "list": return renderList(this.listState, this.listAgents(), w, this.theme, this.statusMessage);
 			case "template-select": return this.renderTemplateSelect(w);

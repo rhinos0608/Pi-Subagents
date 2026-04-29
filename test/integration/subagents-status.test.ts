@@ -43,6 +43,42 @@ function createTestTheme(): StatusTheme {
 }
 
 describe("SubagentsStatusComponent", () => {
+	it("uses parallel-running wording in summary rows for explicit parallel groups", () => {
+		const parallelRun = {
+			id: "run-parallel",
+			asyncDir: "/tmp/run-parallel",
+			state: "running" as const,
+			mode: "chain" as const,
+			cwd: "/tmp/run-parallel",
+			startedAt: 100,
+			lastUpdate: 200,
+			currentStep: 1,
+			chainStepCount: 1,
+			parallelGroups: [{ start: 0, count: 3, stepIndex: 0 }],
+			steps: [
+				{ index: 0, agent: "scout", status: "complete" },
+				{ index: 1, agent: "reviewer", status: "running" },
+				{ index: 2, agent: "worker", status: "pending" },
+			],
+		};
+		const component = new SubagentsStatusComponent(
+			createTestTui(() => {}),
+			createTestTheme(),
+			() => {},
+			{
+				listRunsForOverlay: () => ({ active: [parallelRun], recent: [] }),
+				refreshMs: 1000,
+			},
+		);
+		try {
+			const output = component.render(160).join("\n");
+			assert.match(output, /step 1\/1 · parallel group: 1 agent running · 1\/3/);
+			assert.doesNotMatch(output, /step 2\/3/);
+		} finally {
+			component.dispose();
+		}
+	});
+
 	it("auto-refreshes and keeps the same run selected when it moves to Recent", async () => {
 		const states: AsyncRunOverlayData[] = [
 			{ active: [createRun("run-a", "running")], recent: [] },

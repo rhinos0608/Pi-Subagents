@@ -379,22 +379,33 @@ describe("chain execution — sequential", { skip: !available ? "pi packages not
 	});
 
 	it("tightens child recursion depth per agent without relaxing the inherited chain max", async () => {
-		mockPi.onCall({ echoEnv: ["PI_SUBAGENT_DEPTH", "PI_SUBAGENT_MAX_DEPTH"] });
-		const agents = [makeAgent("worker", { maxSubagentDepth: 1 })];
+		const originalDepth = process.env.PI_SUBAGENT_DEPTH;
+		const originalMaxDepth = process.env.PI_SUBAGENT_MAX_DEPTH;
+		delete process.env.PI_SUBAGENT_DEPTH;
+		delete process.env.PI_SUBAGENT_MAX_DEPTH;
+		try {
+			mockPi.onCall({ echoEnv: ["PI_SUBAGENT_DEPTH", "PI_SUBAGENT_MAX_DEPTH"] });
+			const agents = [makeAgent("worker", { maxSubagentDepth: 1 })];
 
-		const result = await executeChain(
-			makeChainParams(
-				[{ agent: "worker", task: "Inspect env" }],
-				agents,
-				{ maxSubagentDepth: 3 },
-			),
-		);
+			const result = await executeChain(
+				makeChainParams(
+					[{ agent: "worker", task: "Inspect env" }],
+					agents,
+					{ maxSubagentDepth: 3 },
+				),
+			);
 
-		assert.ok(!result.isError);
-		assert.deepEqual(JSON.parse(result.details.results[0].finalOutput ?? "{}"), {
-			PI_SUBAGENT_DEPTH: "1",
-			PI_SUBAGENT_MAX_DEPTH: "1",
-		});
+			assert.ok(!result.isError);
+			assert.deepEqual(JSON.parse(result.details.results[0].finalOutput ?? "{}"), {
+				PI_SUBAGENT_DEPTH: "1",
+				PI_SUBAGENT_MAX_DEPTH: "1",
+			});
+		} finally {
+			if (originalDepth === undefined) delete process.env.PI_SUBAGENT_DEPTH;
+			else process.env.PI_SUBAGENT_DEPTH = originalDepth;
+			if (originalMaxDepth === undefined) delete process.env.PI_SUBAGENT_MAX_DEPTH;
+			else process.env.PI_SUBAGENT_MAX_DEPTH = originalMaxDepth;
+		}
 	});
 });
 

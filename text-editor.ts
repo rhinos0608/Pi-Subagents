@@ -1,4 +1,4 @@
-import { matchesKey } from "@mariozechner/pi-tui";
+import { matchesKey, visibleWidth } from "@mariozechner/pi-tui";
 
 export interface TextEditorState {
 	buffer: string;
@@ -39,12 +39,28 @@ export function wrapText(text: string, width: number): { lines: string[]; starts
 			starts.push(offset);
 			lines.push("");
 		} else {
+			let lineStart = 0;
 			let pos = 0;
+			let lineWidth = 0;
+
 			while (pos < segment.length) {
-				starts.push(offset + pos);
-				lines.push(segment.slice(pos, pos + width));
-				pos += width;
+				const char = String.fromCodePoint(segment.codePointAt(pos)!);
+				const charWidth = visibleWidth(char);
+
+				if (lineWidth > 0 && lineWidth + charWidth > width) {
+					starts.push(offset + lineStart);
+					lines.push(segment.slice(lineStart, pos));
+					lineStart = pos;
+					lineWidth = 0;
+					continue;
+				}
+
+				pos += char.length;
+				lineWidth += charWidth;
 			}
+
+			starts.push(offset + lineStart);
+			lines.push(segment.slice(lineStart));
 		}
 
 		offset += segment.length;
@@ -56,7 +72,7 @@ export function wrapText(text: string, width: number): { lines: string[]; starts
 	const endsWithNewline = text.endsWith("\n");
 	if (!endsWithNewline) {
 		const lastLine = lines[lines.length - 1] ?? "";
-		if (text.length > 0 && lastLine.length === width) {
+		if (text.length > 0 && visibleWidth(lastLine) === width) {
 			starts.push(text.length);
 			lines.push("");
 		}

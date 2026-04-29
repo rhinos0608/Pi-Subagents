@@ -14,6 +14,26 @@ const theme = {
 	bold: (text: string) => text,
 };
 
+const STALE_EXTENSION_CONTEXT_MESSAGE = "This extension ctx is stale after session replacement or reload";
+
+function staleExtensionContextError(): Error {
+	return new Error(STALE_EXTENSION_CONTEXT_MESSAGE);
+}
+
+async function expectNoUncaught(action: () => Promise<void> | void): Promise<void> {
+	let uncaught: unknown;
+	const handler = (error: unknown) => {
+		uncaught = error;
+	};
+	process.once("uncaughtException", handler);
+	try {
+		await action();
+	} finally {
+		process.removeListener("uncaughtException", handler);
+	}
+	assert.equal(uncaught, undefined, `expected no uncaught exception, got: ${uncaught instanceof Error ? uncaught.message : String(uncaught)}`);
+}
+
 function createUiContext() {
 	const widgets: unknown[] = [];
 	let renderRequests = 0;
@@ -47,10 +67,20 @@ describe("subagent async widget rendering", () => {
 		], theme, 120);
 
 		const text = lines.join("\n");
-		assert.match(text, /^● Agents/);
+		assert.match(text, /^● Async agents · background · \/subagents-status/);
 		assert.ok(text.indexOf("scout") < text.indexOf("queued"), "running row should precede queued summary");
 		assert.ok(text.indexOf("queued") < text.indexOf("reviewer"), "queued summary should precede completions");
 		assert.match(text, /⎿  read/);
+	});
+
+	it("uses parallel running/done wording for async jobs with parallel groups", () => {
+		const lines = buildWidgetLines([
+			{ asyncId: "run-1", asyncDir: "/tmp/1", status: "running", agents: ["scout", "reviewer", "worker"], hasParallelGroups: true, activeParallelGroup: true, runningSteps: 3, completedSteps: 0, stepsTotal: 3 },
+		], theme, 120);
+
+		const text = lines.join("\n");
+		assert.match(text, /3 agents running · 0\/3 done/);
+		assert.doesNotMatch(text, /step 1\/3/);
 	});
 
 	it("shows explicit overflow counts for hidden work", () => {
@@ -137,6 +167,35 @@ describe("subagent async widget rendering", () => {
 		}
 	});
 
+	it("stops result animation when invalidate throws stale-context errors", async () => {
+		let invalidations = 0;
+		const context = {
+			state: {},
+			invalidate: () => {
+				invalidations += 1;
+				throw staleExtensionContextError();
+			},
+		};
+		try {
+			await expectNoUncaught(async () => {
+				syncResultAnimation({
+					content: [{ type: "text", text: "running" }],
+					details: {
+						mode: "parallel",
+						results: [{ agent: "scout", task: "scan", exitCode: 0, progress: { status: "running" } }],
+					},
+				}, context);
+				await new Promise((resolve) => setTimeout(resolve, 190));
+			});
+			assert.equal(context.state.subagentResultAnimationTimer, undefined, "stale invalidate should clear timer state");
+			const afterStop = invalidations;
+			await new Promise((resolve) => setTimeout(resolve, 190));
+			assert.equal(invalidations, afterStop, "stale invalidate should stop future timer ticks");
+		} finally {
+			stopResultAnimations();
+		}
+	});
+
 	it("animates while active and stops after the widget is cleared", async () => {
 		const ui = createUiContext();
 		try {
@@ -151,6 +210,43 @@ describe("subagent async widget rendering", () => {
 			await new Promise((resolve) => setTimeout(resolve, 190));
 			assert.equal(ui.widgets.length, afterClearCount, "cleared widget should stop animating");
 			assert.equal(ui.widgets.at(-1), undefined);
+		} finally {
+			stopWidgetAnimation();
+		}
+	});
+
+	it("stops widget animation when stale-context errors are thrown during refresh", async () => {
+		const widgets: unknown[] = [];
+		let hasUiReads = 0;
+		let setWidgetCalls = 0;
+		let renderRequests = 0;
+		const ctx = {
+			get hasUI() {
+				hasUiReads += 1;
+				if (hasUiReads > 1) throw staleExtensionContextError();
+				return true;
+			},
+			ui: {
+				theme,
+				setWidget: (_key: string, value: unknown) => {
+					setWidgetCalls += 1;
+					widgets.push(value);
+				},
+				requestRender: () => {
+					renderRequests += 1;
+				},
+			},
+		};
+		try {
+			await expectNoUncaught(async () => {
+				renderWidget(ctx as never, [{ asyncId: "run-anim", asyncDir: "/tmp/run", status: "running", agents: ["scout"] }]);
+				await new Promise((resolve) => setTimeout(resolve, 190));
+			});
+			assert.equal(hasUiReads, 2, "widget refresh should stop immediately after stale hasUI throw");
+			assert.equal(setWidgetCalls, 1, "stale hasUI throw should stop before refreshing widget lines");
+			const requestsAfterStop = renderRequests;
+			await new Promise((resolve) => setTimeout(resolve, 190));
+			assert.equal(renderRequests, requestsAfterStop, "stale-context throw should stop future render requests");
 		} finally {
 			stopWidgetAnimation();
 		}

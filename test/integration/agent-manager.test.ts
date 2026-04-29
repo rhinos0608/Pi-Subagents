@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
+import { visibleWidth } from "@mariozechner/pi-tui";
 import { AgentManagerComponent, type AgentData, type ManagerResult } from "../../agent-manager.ts";
 import { discoverAgentsAll, type AgentConfig, type ChainConfig } from "../../agents.ts";
 
@@ -68,6 +69,16 @@ afterEach(() => {
 });
 
 describe("agent manager", () => {
+	it("renders at the available terminal width", () => {
+		const root = createTempRoot("pi-agent-manager-width-");
+		const component = createManager(root);
+
+		const lines = component.render(120);
+
+		assert.ok(lines.length > 0);
+		for (const line of lines) assert.equal(visibleWidth(line), 120);
+	});
+
 	it("renames the backing file when saving an existing renamed agent", () => {
 		const root = createTempRoot("pi-agent-manager-rename-");
 		const agentsDir = path.join(root, ".pi", "agents");

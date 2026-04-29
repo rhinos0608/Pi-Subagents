@@ -105,6 +105,32 @@ describe("async job tracker", { skip: !available ? "pi packages not available" :
 		}
 	});
 
+	it("uses flattened async-start agents for initial parallel group widget state", () => {
+		const asyncRoot = createTempDir("pi-async-job-tracker-");
+		try {
+			const state = createState();
+			const recorder = createEventRecorder();
+			const tracker = trackerMod!.createAsyncJobTracker(recorder.pi, state as never, asyncRoot);
+
+			tracker.handleStarted({
+				id: "run-parallel-start",
+				asyncDir: path.join(asyncRoot, "run-parallel-start"),
+				agent: "scout",
+				agents: ["scout", "reviewer", "worker", "writer"],
+				chain: ["[scout+reviewer+worker]", "writer"],
+				chainStepCount: 2,
+				parallelGroups: [{ start: 0, count: 3, stepIndex: 0 }],
+			});
+
+			const job = state.asyncJobs.get("run-parallel-start");
+			assert.deepEqual(job?.agents, ["scout", "reviewer", "worker"]);
+			assert.equal(job?.stepsTotal, 3);
+			assert.equal(job?.activeParallelGroup, true);
+		} finally {
+			removeTempDir(asyncRoot);
+		}
+	});
+
 	it("schedules cleanup when polling observes a completed status without a completion event", async () => {
 		const asyncRoot = createTempDir("pi-async-job-tracker-");
 		try {
@@ -185,6 +211,54 @@ describe("async job tracker", { skip: !available ? "pi packages not available" :
 		}
 	});
 
+	it("clears transient current tool fields when status clears them", async () => {
+		const asyncRoot = createTempDir("pi-async-job-tracker-");
+		try {
+			const runDir = path.join(asyncRoot, "run-clear-tool");
+			fs.mkdirSync(runDir, { recursive: true });
+			fs.writeFileSync(path.join(runDir, "status.json"), JSON.stringify({
+				runId: "run-clear-tool",
+				mode: "single",
+				state: "running",
+				startedAt: Date.now() - 1000,
+				lastUpdate: Date.now(),
+				currentTool: "edit",
+				currentToolStartedAt: Date.now() - 100,
+				currentPath: "subagent-runner.ts",
+				steps: [{ agent: "worker", status: "running" }],
+			}), "utf-8");
+
+			const state = createState();
+			const recorder = createEventRecorder();
+			const tracker = trackerMod!.createAsyncJobTracker(recorder.pi, state as never, asyncRoot, {
+				pollIntervalMs: 10,
+			});
+			tracker.handleStarted({ id: "run-clear-tool", asyncDir: runDir, agent: "worker" });
+
+			await new Promise((resolve) => setTimeout(resolve, 30));
+			let job = state.asyncJobs.get("run-clear-tool");
+			assert.equal(job?.currentTool, "edit");
+			assert.equal(job?.currentPath, "subagent-runner.ts");
+
+			fs.writeFileSync(path.join(runDir, "status.json"), JSON.stringify({
+				runId: "run-clear-tool",
+				mode: "single",
+				state: "running",
+				startedAt: Date.now() - 1000,
+				lastUpdate: Date.now(),
+				steps: [{ agent: "worker", status: "running" }],
+			}), "utf-8");
+
+			await new Promise((resolve) => setTimeout(resolve, 30));
+			job = state.asyncJobs.get("run-clear-tool");
+			assert.equal(job?.currentTool, undefined);
+			assert.equal(job?.currentToolStartedAt, undefined);
+			assert.equal(job?.currentPath, undefined);
+		} finally {
+			removeTempDir(asyncRoot);
+		}
+	});
+
 	it("honors async control notification channels", async () => {
 		const asyncRoot = createTempDir("pi-async-job-tracker-");
 		try {
@@ -222,6 +296,48 @@ describe("async job tracker", { skip: !available ? "pi packages not available" :
 			await new Promise((resolve) => setTimeout(resolve, 30));
 			assert.equal(recorder.events.some((event) => event.channel === "subagent:control-event"), false);
 			assert.equal(recorder.events.some((event) => event.channel === "subagent:control-intercom"), true);
+		} finally {
+			removeTempDir(asyncRoot);
+		}
+	});
+
+	it("does not bridge active-long-running records to intercom", async () => {
+		const asyncRoot = createTempDir("pi-async-job-tracker-");
+		try {
+			const runDir = path.join(asyncRoot, "run-active-intercom");
+			fs.mkdirSync(runDir, { recursive: true });
+			fs.writeFileSync(path.join(runDir, "status.json"), JSON.stringify({
+				runId: "run-active-intercom",
+				mode: "single",
+				state: "running",
+				startedAt: Date.now() - 1000,
+				lastUpdate: Date.now(),
+				steps: [{ agent: "worker", status: "running" }],
+			}), "utf-8");
+			fs.writeFileSync(path.join(runDir, "events.jsonl"), `${JSON.stringify({
+				type: "subagent.control",
+				channels: ["event", "intercom"],
+				event: {
+					type: "active_long_running",
+					to: "active_long_running",
+					ts: 123,
+					runId: "run-active-intercom",
+					agent: "worker",
+					message: "worker is still active but long-running",
+				},
+				intercom: { to: "main", message: "stale active notice" },
+			})}\n`, "utf-8");
+
+			const state = createState();
+			const recorder = createEventRecorder();
+			const tracker = trackerMod!.createAsyncJobTracker(recorder.pi, state as never, asyncRoot, {
+				pollIntervalMs: 10,
+			});
+			tracker.handleStarted({ id: "run-active-intercom", asyncDir: runDir, agent: "worker" });
+
+			await new Promise((resolve) => setTimeout(resolve, 30));
+			assert.equal(recorder.events.some((event) => event.channel === "subagent:control-event"), true);
+			assert.equal(recorder.events.some((event) => event.channel === "subagent:control-intercom"), false);
 		} finally {
 			removeTempDir(asyncRoot);
 		}

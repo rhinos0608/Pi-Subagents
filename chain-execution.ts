@@ -254,6 +254,10 @@ async function runParallelChainTasks(input: ParallelChainRunInput): Promise<Sing
 							input.foregroundControl.lastActivityAt = current?.lastActivityAt;
 							input.foregroundControl.currentTool = current?.currentTool;
 							input.foregroundControl.currentToolStartedAt = current?.currentToolStartedAt;
+							input.foregroundControl.currentPath = current?.currentPath;
+							input.foregroundControl.turnCount = current?.turnCount;
+							input.foregroundControl.tokens = current?.tokens;
+							input.foregroundControl.toolCount = current?.toolCount;
 							input.foregroundControl.updatedAt = Date.now();
 						}
 						input.onUpdate?.({
@@ -747,6 +751,10 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 							foregroundControl.lastActivityAt = current?.lastActivityAt;
 							foregroundControl.currentTool = current?.currentTool;
 							foregroundControl.currentToolStartedAt = current?.currentToolStartedAt;
+							foregroundControl.currentPath = current?.currentPath;
+							foregroundControl.turnCount = current?.turnCount;
+							foregroundControl.tokens = current?.tokens;
+							foregroundControl.toolCount = current?.toolCount;
 							foregroundControl.updatedAt = Date.now();
 						}
 						onUpdate({
