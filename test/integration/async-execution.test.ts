@@ -29,8 +29,14 @@ interface AsyncResultPayload {
 }
 
 interface AsyncStatusPayload {
+	activityState?: string;
+	currentTool?: string;
+	currentPath?: string;
 	steps?: Array<{
 		skills?: string[];
+		activityState?: string;
+		currentTool?: string;
+		status?: string;
 	}>;
 }
 
@@ -196,6 +202,13 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8")) as AsyncResultPayload;
 		assert.equal(payload.mode, "parallel");
 		const outputPath = path.join(tempDir, "async-top-output.md");
+		const outputDeadline = Date.now() + 5_000;
+		while (!fs.existsSync(outputPath)) {
+			if (Date.now() > outputDeadline) {
+				assert.fail(`Timed out waiting for saved output file: ${outputPath}`);
+			}
+			await new Promise((resolve) => setTimeout(resolve, 50));
+		}
 		assert.equal(fs.readFileSync(outputPath, "utf-8"), "Async top-level report");
 		const callFile = fs.readdirSync(mockPi.dir).find((name) => name.startsWith("call-"));
 		assert.ok(callFile, "expected a recorded mock pi call");
@@ -394,6 +407,54 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		assert.equal(payload.results[0].success, false);
 	});
 
+	it("background implementation runs fail when no mutation attempt occurred", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
+		mockPi.onCall({ output: "I’ll do that now and report back after implementing." });
+
+		const id = `async-no-mutation-${Date.now().toString(36)}`;
+		const resultPath = path.join(RESULTS_DIR, `${id}.json`);
+		const sessionRoot = path.join(tempDir, "sessions");
+
+		executeAsyncSingle(id, {
+			agent: "worker",
+			task: "Implement the approved fixes",
+			agentConfig: makeAgent("worker"),
+			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
+			artifactConfig: {
+				enabled: false,
+				includeInput: false,
+				includeOutput: false,
+				includeJsonl: false,
+				includeMetadata: false,
+				cleanupDays: 7,
+			},
+			shareEnabled: false,
+			sessionRoot,
+			maxSubagentDepth: 2,
+		});
+
+		const deadline = Date.now() + 10_000;
+		while (!fs.existsSync(resultPath)) {
+			if (Date.now() > deadline) {
+				assert.fail(`Timed out waiting for async result file: ${resultPath}`);
+			}
+			await new Promise((resolve) => setTimeout(resolve, 100));
+		}
+
+		const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8"));
+		assert.equal(payload.success, false);
+		assert.equal(payload.exitCode, 1);
+		assert.equal(payload.results[0].success, false);
+		assert.match(String(payload.results[0].error ?? ""), /completed without making edits/);
+		assert.match(String(payload.results[0].modelAttempts?.[0]?.error ?? ""), /completed without making edits/);
+
+		const eventsPath = path.join(ASYNC_DIR, id, "events.jsonl");
+		const eventsText = fs.readFileSync(eventsPath, "utf-8");
+		assert.match(eventsText, /"reason":"completion_guard"/);
+		assert.match(eventsText, /Subagent failed: worker/);
+		assert.doesNotMatch(eventsText, /Status:/);
+		assert.doesNotMatch(eventsText, /Interrupt:/);
+	});
+
 	it("background runs prefer the parent session provider for ambiguous bare model ids", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
 		mockPi.onCall({ output: "Done asynchronously" });
 
@@ -533,6 +594,62 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		}
 	});
 
+	it("keeps top-level current tool/path aligned with still-running parallel children", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
+		mockPi.onCall({
+			steps: [
+				{ jsonl: [events.toolStart("read", { path: "README.md" })] },
+				{ delay: 900, jsonl: [events.toolEnd("read"), events.toolResult("read", "done"), events.assistantMessage("reader done")] },
+			],
+		});
+		mockPi.onCall({
+			steps: [
+				{ delay: 100, jsonl: [events.toolStart("edit", { path: "docs.md" })] },
+				{ delay: 100, jsonl: [events.toolEnd("edit"), events.toolResult("edit", "ok")] },
+				{ delay: 700, jsonl: [events.assistantMessage("editor done")] },
+			],
+		});
+
+		const id = `async-parallel-tool-sync-${Date.now().toString(36)}`;
+		const asyncDir = path.join(ASYNC_DIR, id);
+		const resultPath = path.join(RESULTS_DIR, `${id}.json`);
+
+		executeAsyncChain(id, {
+			chain: [{ parallel: [{ agent: "reader", task: "Read" }, { agent: "editor", task: "Edit" }] }],
+			agents: [makeAgent("reader"), makeAgent("editor")],
+			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
+			artifactConfig: { enabled: false, includeInput: false, includeOutput: false, includeJsonl: false, includeMetadata: false, cleanupDays: 7 },
+			shareEnabled: false,
+			sessionRoot: path.join(tempDir, "sessions"),
+			maxSubagentDepth: 2,
+		});
+
+		const statusPath = path.join(asyncDir, "status.json");
+		const doneDeadline = Date.now() + 10_000;
+		let sawRunningTool = false;
+		let invariantViolated = false;
+		while (!fs.existsSync(resultPath) && Date.now() < doneDeadline) {
+			if (fs.existsSync(statusPath)) {
+				const status = JSON.parse(fs.readFileSync(statusPath, "utf-8")) as AsyncStatusPayload;
+				const runningTools = (status.steps ?? [])
+					.filter((step) => step.status === "running" && typeof step.currentTool === "string")
+					.map((step) => step.currentTool as string);
+				if (runningTools.length > 0) {
+					sawRunningTool = true;
+					if (!status.currentTool || !runningTools.includes(status.currentTool)) {
+						invariantViolated = true;
+						break;
+					}
+				}
+			}
+			await new Promise((resolve) => setTimeout(resolve, 50));
+		}
+		if (!fs.existsSync(resultPath)) {
+			assert.fail(`Timed out waiting for async result file: ${resultPath}`);
+		}
+		assert.equal(sawRunningTool, true, "expected at least one polling interval with a running step tool");
+		assert.equal(invariantViolated, false, "top-level currentTool drifted from running step tools");
+	});
+
 	it("returns a tool error when the detached runner config cannot be written", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, () => {
 		const id = `async-write-fail-${Date.now().toString(36)}`;
 		assert.ok(TEMP_ROOT_DIR, "TEMP_ROOT_DIR should be available for async tests");
@@ -670,6 +787,123 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		assert.equal(result.isError, true);
 		assert.match(result.content[0]?.text ?? "", /Failed to start async chain/);
 		assert.match(result.content[0]?.text ?? "", /async-cfg-/);
+	});
+
+	it("background runs emit active-long-running control events from child turns", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
+		mockPi.onCall({
+			steps: [
+				{ jsonl: [events.assistantMessage("still working")] },
+				{ delay: 500, jsonl: [events.assistantMessage("done")] },
+			],
+		});
+
+		const id = `async-active-long-${Date.now().toString(36)}`;
+		const asyncDir = path.join(ASYNC_DIR, id);
+		const eventsPath = path.join(asyncDir, "events.jsonl");
+		const resultPath = path.join(RESULTS_DIR, `${id}.json`);
+
+		executeAsyncSingle(id, {
+			agent: "scout",
+			task: "Investigate behavior",
+			agentConfig: makeAgent("scout"),
+			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
+			artifactConfig: { enabled: false, includeInput: false, includeOutput: false, includeJsonl: false, includeMetadata: false, cleanupDays: 7 },
+			shareEnabled: false,
+			sessionRoot: path.join(tempDir, "sessions"),
+			maxSubagentDepth: 2,
+			controlConfig: {
+				enabled: true,
+				needsAttentionAfterMs: 999_999,
+				activeNoticeAfterTurns: 1,
+				activeNoticeAfterMs: 999_999,
+				activeNoticeAfterTokens: 999_999,
+				failedToolAttemptsBeforeAttention: 3,
+				notifyOn: ["active_long_running", "needs_attention"],
+				notifyChannels: ["event", "async", "intercom"],
+			},
+		});
+
+		const deadline = Date.now() + 10_000;
+		let eventText = "";
+		while (Date.now() < deadline) {
+			if (fs.existsSync(eventsPath)) {
+				eventText = fs.readFileSync(eventsPath, "utf-8");
+				if (eventText.includes('"type":"active_long_running"')) break;
+			}
+			await new Promise((resolve) => setTimeout(resolve, 100));
+		}
+
+		assert.match(eventText, /"type":"active_long_running"/);
+		assert.match(eventText, /"reason":"turn_threshold"/);
+		const status = JSON.parse(fs.readFileSync(path.join(asyncDir, "status.json"), "utf-8")) as AsyncStatusPayload;
+		assert.equal(status.activityState, "active_long_running");
+		assert.equal(status.steps?.[0]?.activityState, "active_long_running");
+
+		const doneDeadline = Date.now() + 10_000;
+		while (!fs.existsSync(resultPath)) {
+			if (Date.now() > doneDeadline) assert.fail(`Timed out waiting for async result file: ${resultPath}`);
+			await new Promise((resolve) => setTimeout(resolve, 100));
+		}
+	});
+
+	it("background runs escalate repeated mutating tool failures", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
+		mockPi.onCall({
+			steps: [
+				{ jsonl: [events.toolStart("edit", { path: "subagent-runner.ts" }), events.toolEnd("edit"), events.toolResult("edit", "No exact match found for subagent-runner.ts", true)] },
+				{ jsonl: [events.toolStart("edit", { path: "subagent-runner.ts" }), events.toolEnd("edit"), events.toolResult("edit", "No exact match found for subagent-runner.ts", true)] },
+				{ jsonl: [events.toolStart("edit", { path: "subagent-runner.ts" }), events.toolEnd("edit"), events.toolResult("edit", "No exact match found for subagent-runner.ts", true)] },
+				{ delay: 500, jsonl: [events.assistantMessage("I need another attempt.")] },
+			],
+		});
+
+		const id = `async-tool-failures-${Date.now().toString(36)}`;
+		const asyncDir = path.join(ASYNC_DIR, id);
+		const eventsPath = path.join(asyncDir, "events.jsonl");
+		const resultPath = path.join(RESULTS_DIR, `${id}.json`);
+
+		executeAsyncSingle(id, {
+			agent: "worker",
+			task: "Implement the approved fixes",
+			agentConfig: makeAgent("worker"),
+			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
+			artifactConfig: { enabled: false, includeInput: false, includeOutput: false, includeJsonl: false, includeMetadata: false, cleanupDays: 7 },
+			shareEnabled: false,
+			sessionRoot: path.join(tempDir, "sessions"),
+			maxSubagentDepth: 2,
+			controlConfig: {
+				enabled: true,
+				needsAttentionAfterMs: 999_999,
+				activeNoticeAfterTurns: 999_999,
+				activeNoticeAfterMs: 999_999,
+				activeNoticeAfterTokens: 999_999,
+				failedToolAttemptsBeforeAttention: 3,
+				notifyOn: ["active_long_running", "needs_attention"],
+				notifyChannels: ["event", "async", "intercom"],
+			},
+		});
+
+		const deadline = Date.now() + 10_000;
+		let eventText = "";
+		while (Date.now() < deadline) {
+			if (fs.existsSync(eventsPath)) {
+				eventText = fs.readFileSync(eventsPath, "utf-8");
+				if (eventText.includes('"reason":"tool_failures"')) break;
+			}
+			await new Promise((resolve) => setTimeout(resolve, 100));
+		}
+
+		assert.match(eventText, /"type":"needs_attention"/);
+		assert.match(eventText, /"reason":"tool_failures"/);
+		assert.match(eventText, /subagent-runner\.ts/);
+		const status = JSON.parse(fs.readFileSync(path.join(asyncDir, "status.json"), "utf-8")) as AsyncStatusPayload;
+		assert.equal(status.activityState, "needs_attention");
+		assert.equal(status.steps?.[0]?.activityState, "needs_attention");
+
+		const doneDeadline = Date.now() + 10_000;
+		while (!fs.existsSync(resultPath)) {
+			if (Date.now() > doneDeadline) assert.fail(`Timed out waiting for async result file: ${resultPath}`);
+			await new Promise((resolve) => setTimeout(resolve, 100));
+		}
 	});
 
 	it("background runs stream child events and live output while active", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {

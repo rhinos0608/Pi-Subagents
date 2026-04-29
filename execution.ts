@@ -31,7 +31,6 @@ import {
 	buildControlEvent,
 	claimControlNotification,
 	deriveActivityState,
-	shouldEmitControlEvent,
 	shouldNotifyControlEvent,
 } from "./subagent-control.ts";
 import {
@@ -42,6 +41,7 @@ import {
 	extractTextFromContent,
 } from "./utils.ts";
 import { buildSkillInjection, resolveSkillsWithFallback } from "./skills.ts";
+import { evaluateCompletionMutationGuard } from "./completion-guard.ts";
 import { getPiSpawnCommand } from "./pi-spawn.ts";
 import { createJsonlWriter } from "./jsonl-writer.ts";
 import { attachPostExitStdioGuard, trySignalChild } from "./post-exit-stdio-guard.ts";
@@ -52,6 +52,17 @@ import {
 	formatModelAttemptNote,
 	isRetryableModelFailure,
 } from "./model-fallback.ts";
+import {
+	createMutatingFailureState,
+	didMutatingToolFail,
+	isMutatingTool,
+	nextLongRunningTrigger,
+	recordMutatingFailure,
+	resetMutatingFailureState,
+	resolveCurrentPath,
+	shouldEscalateMutatingFailures,
+	summarizeRecentMutatingFailures,
+} from "./long-running-guard.ts";
 
 function emptyUsage(): Usage {
 	return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 };
@@ -157,6 +168,14 @@ async function runSingleAttempt(
 	let interruptedByControl = false;
 	const allControlEvents: ControlEvent[] = [];
 	let pendingControlEvents: ControlEvent[] = [];
+	const emittedControlEventKeys = new Set<string>();
+	const emitControlEvent = (event: ControlEvent) => {
+		if (!shouldNotifyControlEvent(controlConfig, event)) return;
+		if (!claimControlNotification(controlConfig, event, emittedControlEventKeys)) return;
+		allControlEvents.push(event);
+		pendingControlEvents.push(event);
+		options.onControlEvent?.(event);
+	};
 
 	const progress: AgentProgress = {
 		index: options.index ?? 0,
@@ -173,6 +192,7 @@ async function runSingleAttempt(
 	};
 	result.progress = progress;
 	const spawnEnv = { ...process.env, ...sharedEnv, ...getSubagentDepthEnv(options.maxSubagentDepth) };
+	let observedMutationAttempt = false;
 
 	const exitCode = await new Promise<number>((resolve) => {
 		const spawnSpec = getPiSpawnCommand(args);
@@ -273,36 +293,80 @@ async function runSingleAttempt(
 			return events;
 		};
 
-		const emittedControlEventKeys = new Set<string>();
-		const emitControlEvent = (event: ControlEvent) => {
-			if (shouldNotifyControlEvent(controlConfig, event) && !claimControlNotification(controlConfig, event, emittedControlEventKeys)) return;
-			allControlEvents.push(event);
-			pendingControlEvents.push(event);
-			options.onControlEvent?.(event);
+		let activeLongRunningNotified = false;
+		let pendingToolResult: { tool: string; path?: string; mutates: boolean; startedAt?: number } | undefined;
+		const mutatingFailures = createMutatingFailureState();
+		const mutatingFailureWindowMs = 5 * 60_000;
+		const currentToolDurationMs = (now: number) => progress.currentToolStartedAt ? Math.max(0, now - progress.currentToolStartedAt) : undefined;
+		const emitNeedsAttention = (now: number, input: { message?: string; reason?: ControlEvent["reason"]; recentFailureSummary?: string; currentTool?: string; currentPath?: string; currentToolDurationMs?: number } = {}): boolean => {
+			if (!controlConfig.enabled) return false;
+			const previous = progress.activityState;
+			progress.activityState = "needs_attention";
+			const event = buildControlEvent({
+				type: "needs_attention",
+				from: previous,
+				to: "needs_attention",
+				runId: options.runId,
+				agent: agent.name,
+				index: options.index,
+				ts: now,
+				lastActivityAt: progress.lastActivityAt,
+				message: input.message,
+				reason: input.reason ?? "idle",
+				turns: result.usage.turns,
+				tokens: progress.tokens,
+				toolCount: progress.toolCount,
+				currentTool: input.currentTool ?? progress.currentTool,
+				currentToolDurationMs: input.currentToolDurationMs ?? currentToolDurationMs(now),
+				currentPath: input.currentPath ?? progress.currentPath,
+				recentFailureSummary: input.recentFailureSummary,
+			});
+			emitControlEvent(event);
+			return previous !== "needs_attention";
 		};
-
+		const emitActiveLongRunning = (now: number, reason: ControlEvent["reason"]): boolean => {
+			if (!controlConfig.enabled || activeLongRunningNotified || progress.activityState === "needs_attention") return false;
+			activeLongRunningNotified = true;
+			const previous = progress.activityState;
+			progress.activityState = "active_long_running";
+			emitControlEvent(buildControlEvent({
+				type: "active_long_running",
+				from: previous,
+				to: "active_long_running",
+				runId: options.runId,
+				agent: agent.name,
+				index: options.index,
+				ts: now,
+				message: `${agent.name} is still active but long-running`,
+				reason,
+				turns: result.usage.turns,
+				tokens: progress.tokens,
+				toolCount: progress.toolCount,
+				currentTool: progress.currentTool,
+				currentToolDurationMs: currentToolDurationMs(now),
+				currentPath: progress.currentPath,
+				elapsedMs: now - startTime,
+			}));
+			return true;
+		};
 		const updateActivityState = (now: number): boolean => {
-			const next = deriveActivityState({
+			if (!controlConfig.enabled) return false;
+			const idleState = deriveActivityState({
 				config: controlConfig,
 				startedAt: startTime,
 				lastActivityAt: progress.lastActivityAt,
 				now,
 			});
-			if (next === progress.activityState) return false;
-			const previous = progress.activityState;
-			progress.activityState = next;
-			if (shouldEmitControlEvent(controlConfig, previous, next)) {
-				emitControlEvent(buildControlEvent({
-					from: previous,
-					to: next,
-					runId: options.runId,
-					agent: agent.name,
-					index: options.index,
-					ts: now,
-					lastActivityAt: progress.lastActivityAt,
-				}));
+			if (idleState === "needs_attention") {
+				return progress.activityState === "needs_attention" ? false : emitNeedsAttention(now);
 			}
-			return true;
+			const activeReason = nextLongRunningTrigger(controlConfig, {
+				startedAt: startTime,
+				now,
+				turns: result.usage.turns,
+				tokens: progress.tokens,
+			});
+			return activeReason ? emitActiveLongRunning(now, activeReason) : false;
 		};
 
 
@@ -345,13 +409,20 @@ async function runSingleAttempt(
 			updateActivityState(now);
 
 			if (evt.type === "tool_execution_start") {
+				const toolArgs = evt.args && typeof evt.args === "object" && !Array.isArray(evt.args)
+					? evt.args as Record<string, unknown>
+					: {};
 				if (options.allowIntercomDetach && evt.toolName === "intercom") {
 					intercomStarted = true;
 				}
 				progress.toolCount++;
 				progress.currentTool = evt.toolName;
-				progress.currentToolArgs = extractToolArgsPreview((evt.args || {}) as Record<string, unknown>);
+				progress.currentToolArgs = extractToolArgsPreview(toolArgs);
 				progress.currentToolStartedAt = now;
+				progress.currentPath = resolveCurrentPath(evt.toolName, toolArgs);
+				const mutates = isMutatingTool(evt.toolName, toolArgs);
+				observedMutationAttempt = observedMutationAttempt || mutates;
+				pendingToolResult = { tool: evt.toolName ?? "tool", path: progress.currentPath, mutates, startedAt: now };
 				fireUpdate();
 			}
 
@@ -366,6 +437,7 @@ async function runSingleAttempt(
 				progress.currentTool = undefined;
 				progress.currentToolArgs = undefined;
 				progress.currentToolStartedAt = undefined;
+				progress.currentPath = undefined;
 				fireUpdate();
 			}
 
@@ -373,6 +445,7 @@ async function runSingleAttempt(
 				result.messages.push(evt.message);
 				if (evt.message.role === "assistant") {
 					result.usage.turns++;
+					progress.turnCount = result.usage.turns;
 					const u = evt.message.usage;
 					if (u) {
 						result.usage.input += u.input || 0;
@@ -393,12 +466,36 @@ async function runSingleAttempt(
 						startFinalDrain();
 					}
 				}
+				updateActivityState(now);
 				fireUpdate();
 			}
 
 			if (evt.type === "tool_result_end" && evt.message) {
 				result.messages.push(evt.message);
-				appendRecentOutput(progress, extractTextFromContent(evt.message.content).split("\n").slice(-10));
+				const resultText = extractTextFromContent(evt.message.content);
+				appendRecentOutput(progress, resultText.split("\n").slice(-10));
+				const toolSnapshot = pendingToolResult;
+				pendingToolResult = undefined;
+				if (toolSnapshot?.mutates && didMutatingToolFail(resultText)) {
+					recordMutatingFailure(mutatingFailures, {
+						tool: toolSnapshot.tool,
+						path: toolSnapshot.path,
+						error: resultText.split("\n").find((line) => line.trim())?.trim().slice(0, 180) ?? "mutating tool failed",
+						ts: now,
+					}, mutatingFailureWindowMs);
+					if (shouldEscalateMutatingFailures(mutatingFailures, controlConfig.failedToolAttemptsBeforeAttention)) {
+						emitNeedsAttention(now, {
+							message: `${agent.name} needs attention after repeated mutating tool failures`,
+							reason: "tool_failures",
+							currentTool: toolSnapshot.tool,
+							currentPath: toolSnapshot.path,
+							currentToolDurationMs: toolSnapshot.startedAt ? Math.max(0, now - toolSnapshot.startedAt) : undefined,
+							recentFailureSummary: summarizeRecentMutatingFailures(mutatingFailures),
+						});
+					}
+				} else if (toolSnapshot?.mutates) {
+					resetMutatingFailureState(mutatingFailures);
+				}
 				fireUpdate();
 			}
 		};
@@ -551,6 +648,25 @@ async function runSingleAttempt(
 	};
 
 	let fullOutput = getFinalOutput(result.messages);
+	const completionGuard = result.exitCode === 0 && !result.error
+		? evaluateCompletionMutationGuard({ agent: agent.name, task, messages: result.messages })
+		: undefined;
+	if (completionGuard?.triggered && !observedMutationAttempt) {
+		result.exitCode = 1;
+		result.error = "Subagent completed without making edits for an implementation task.\nIt appears to have returned planning or scratchpad output instead of applying changes.";
+		progress.status = "failed";
+		progress.error = result.error;
+		emitControlEvent(buildControlEvent({
+			from: progress.activityState,
+			to: "needs_attention",
+			runId: options.runId ?? agent.name,
+			agent: agent.name,
+			index: options.index,
+			ts: Date.now(),
+			message: `${agent.name} completed without making edits for an implementation task`,
+			reason: "completion_guard",
+		}));
+	}
 	if (options.outputPath && result.exitCode === 0) {
 		const resolvedOutput = resolveSingleOutput(options.outputPath, fullOutput, shared.outputSnapshot);
 		fullOutput = resolvedOutput.fullOutput;
@@ -558,13 +674,19 @@ async function runSingleAttempt(
 		result.outputSaveError = resolvedOutput.saveError;
 	}
 	result.finalOutput = fullOutput;
+	result.controlEvents = allControlEvents.length ? allControlEvents : undefined;
 	if (options.onUpdate) {
 		const finalText = result.finalOutput || result.error || "(no output)";
 		const progressSnapshot = snapshotProgress(progress);
 		const resultSnapshot = snapshotResult(result, progressSnapshot);
 		options.onUpdate({
 			content: [{ type: "text", text: finalText }],
-			details: { mode: "single", results: [resultSnapshot], progress: [progressSnapshot] },
+			details: {
+				mode: "single",
+				results: [resultSnapshot],
+				progress: [progressSnapshot],
+				controlEvents: allControlEvents.length ? allControlEvents : undefined,
+			},
 		});
 	}
 	return result;

@@ -165,21 +165,32 @@ function getForegroundControl(state: SubagentState, runId: string | undefined) {
 }
 
 function formatForegroundActivity(control: SubagentState["foregroundControls"] extends Map<string, infer T> ? T : never): string | undefined {
-	if (control.currentTool && control.currentToolStartedAt) {
-		return `tool ${control.currentTool} for ${Math.floor(Math.max(0, Date.now() - control.currentToolStartedAt) / 1000)}s`;
+	const facts: string[] = [];
+	if (control.currentTool && control.currentToolStartedAt) facts.push(`tool ${control.currentTool} for ${Math.floor(Math.max(0, Date.now() - control.currentToolStartedAt) / 1000)}s`);
+	else if (control.currentTool) facts.push(`tool ${control.currentTool}`);
+	if (control.currentPath) facts.push(`path ${control.currentPath}`);
+	if (control.turnCount !== undefined) facts.push(`${control.turnCount} turns`);
+	if (control.tokens !== undefined) facts.push(`${control.tokens} tokens`);
+	if (control.toolCount !== undefined) facts.push(`${control.toolCount} tools`);
+	if (!control.lastActivityAt) {
+		if (control.currentActivityState === "needs_attention") return ["needs attention", ...facts].join(" | ");
+		if (control.currentActivityState === "active_long_running") return ["active but long-running", ...facts].join(" | ");
+		return facts.length ? facts.join(" | ") : undefined;
 	}
-	if (!control.lastActivityAt) return control.currentActivityState === "needs_attention" ? "needs attention" : undefined;
 	const seconds = Math.floor(Math.max(0, Date.now() - control.lastActivityAt) / 1000);
-	return control.currentActivityState === "needs_attention" ? `no activity for ${seconds}s` : `active ${seconds}s ago`;
+	if (control.currentActivityState === "needs_attention") return [`no activity for ${seconds}s`, ...facts].join(" | ");
+	if (control.currentActivityState === "active_long_running") return [`active but long-running; last activity ${seconds}s ago`, ...facts].join(" | ");
+	return [`active ${seconds}s ago`, ...facts].join(" | ");
 }
 
 function foregroundStatusResult(control: SubagentState["foregroundControls"] extends Map<string, infer T> ? T : never): AgentToolResult<Details> {
+	const activity = formatForegroundActivity(control);
 	const lines = [
 		`Run: ${control.runId}`,
 		"State: running",
 		`Mode: ${control.mode}`,
 		control.currentAgent ? `Current: ${control.currentAgent}${control.currentIndex !== undefined ? ` step ${control.currentIndex + 1}` : ""}` : undefined,
-		formatForegroundActivity(control) ? `Activity: ${formatForegroundActivity(control)}` : undefined,
+		activity ? `Activity: ${activity}` : undefined,
 	].filter((line): line is string => Boolean(line));
 	return { content: [{ type: "text", text: lines.join("\n") }], details: { mode: "management", results: [] } };
 }
@@ -218,7 +229,7 @@ function emitControlNotification(input: {
 	if (input.controlConfig.notifyChannels.includes("event")) {
 		input.pi.events.emit(SUBAGENT_CONTROL_EVENT, payload);
 	}
-	if (input.controlConfig.notifyChannels.includes("intercom") && input.intercomBridge.active && input.intercomBridge.orchestratorTarget) {
+	if (input.event.type !== "active_long_running" && input.controlConfig.notifyChannels.includes("intercom") && input.intercomBridge.active && input.intercomBridge.orchestratorTarget) {
 		input.pi.events.emit(SUBAGENT_CONTROL_INTERCOM_EVENT, {
 			...payload,
 			to: input.intercomBridge.orchestratorTarget,
@@ -259,6 +270,14 @@ function interruptAsyncRun(state: SubagentState, runId: string | undefined): Age
 	}
 }
 
+function resultSummaryForIntercom(result: SingleResult): string {
+	const output = getSingleResultOutput(result);
+	if (result.exitCode !== 0 && result.error) {
+		return output ? `${result.error}\n\nOutput:\n${output}` : result.error;
+	}
+	return output || result.error || "(no output)";
+}
+
 function createForegroundControlNotifier(data: Pick<ExecutionContextData, "controlConfig" | "intercomBridge">, deps: Pick<ExecutorDeps, "pi">): (event: ControlEvent) => void {
 	return (event) => emitControlNotification({
 		pi: deps.pi,
@@ -284,7 +303,7 @@ async function emitForegroundResultIntercom(input: {
 			interrupted: result.interrupted,
 			detached: result.detached,
 		}),
-		summary: getSingleResultOutput(result) || result.error || "(no output)",
+		summary: resultSummaryForIntercom(result),
 		index,
 		artifactPath: result.artifactPaths?.outputPath,
 		sessionPath: result.sessionFile,
@@ -808,7 +827,7 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 			worktreeSetupHookTimeoutMs: deps.config.worktreeSetupHookTimeoutMs,
 			controlConfig,
 			controlIntercomTarget: data.intercomBridge.active ? data.intercomBridge.orchestratorTarget : undefined,
-			childIntercomTarget: data.intercomBridge.active ? (agent, index) => resolveSubagentIntercomTarget(runId, agent, index) : undefined,
+			childIntercomTarget: data.intercomBridge.active ? (agent, index) => resolveSubagentIntercomTarget(id, agent, index) : undefined,
 		});
 	}
 
@@ -1029,6 +1048,10 @@ async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Pr
 							input.foregroundControl.lastActivityAt = current?.lastActivityAt;
 							input.foregroundControl.currentTool = current?.currentTool;
 							input.foregroundControl.currentToolStartedAt = current?.currentToolStartedAt;
+							input.foregroundControl.currentPath = current?.currentPath;
+							input.foregroundControl.turnCount = current?.turnCount;
+							input.foregroundControl.tokens = current?.tokens;
+							input.foregroundControl.toolCount = current?.toolCount;
 							input.foregroundControl.updatedAt = Date.now();
 						}
 						if (stepResults.length > 0) input.liveResults[index] = stepResults[0];
@@ -1221,7 +1244,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 				worktreeSetupHookTimeoutMs: deps.config.worktreeSetupHookTimeoutMs,
 				controlConfig,
 				controlIntercomTarget: data.intercomBridge.active ? data.intercomBridge.orchestratorTarget : undefined,
-				childIntercomTarget: data.intercomBridge.active ? (agent, index) => resolveSubagentIntercomTarget(runId, agent, index) : undefined,
+				childIntercomTarget: data.intercomBridge.active ? (agent, index) => resolveSubagentIntercomTarget(id, agent, index) : undefined,
 			});
 		}
 	}
@@ -1373,7 +1396,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 		controlConfig,
 	} = data;
 	const onControlEvent = createForegroundControlNotifier(data, deps);
-	const childIntercomTarget = data.intercomBridge.active ? resolveSubagentIntercomTarget(runId, params.agent!, undefined) : undefined;
+	const childIntercomTarget = data.intercomBridge.active ? resolveSubagentIntercomTarget(runId, params.agent!, 0) : undefined;
 	const allProgress: AgentProgress[] = [];
 	const allArtifactPaths: ArtifactPaths[] = [];
 	const agentConfig = agents.find((a) => a.name === params.agent);
@@ -1471,7 +1494,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 				worktreeSetupHookTimeoutMs: deps.config.worktreeSetupHookTimeoutMs,
 				controlConfig,
 				controlIntercomTarget: data.intercomBridge.active ? data.intercomBridge.orchestratorTarget : undefined,
-				childIntercomTarget: data.intercomBridge.active ? (agent, index) => resolveSubagentIntercomTarget(runId, agent, index) : undefined,
+				childIntercomTarget: data.intercomBridge.active ? (agent, index) => resolveSubagentIntercomTarget(id, agent, index) : undefined,
 			});
 		}
 	}
@@ -1515,6 +1538,10 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 				foregroundControl.lastActivityAt = firstProgress?.lastActivityAt;
 				foregroundControl.currentTool = firstProgress?.currentTool;
 				foregroundControl.currentToolStartedAt = firstProgress?.currentToolStartedAt;
+				foregroundControl.currentPath = firstProgress?.currentPath;
+				foregroundControl.turnCount = firstProgress?.turnCount;
+				foregroundControl.tokens = firstProgress?.tokens;
+				foregroundControl.toolCount = firstProgress?.toolCount;
 				foregroundControl.updatedAt = Date.now();
 			}
 			onUpdate(update);
@@ -1540,6 +1567,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 		controlConfig,
 		onControlEvent,
 		intercomSessionName: childIntercomTarget,
+		index: 0,
 		modelOverride,
 		availableModels,
 		preferredModelProvider: currentProvider,
@@ -1551,6 +1579,10 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 		foregroundControl.lastActivityAt = r.progress?.lastActivityAt;
 		foregroundControl.currentTool = r.progress?.currentTool;
 		foregroundControl.currentToolStartedAt = r.progress?.currentToolStartedAt;
+		foregroundControl.currentPath = r.progress?.currentPath;
+		foregroundControl.turnCount = r.progress?.turnCount;
+		foregroundControl.tokens = r.progress?.tokens;
+		foregroundControl.toolCount = r.progress?.toolCount;
 		foregroundControl.updatedAt = Date.now();
 	}
 	recordRun(params.agent!, cleanTask, r.exitCode, r.progressSummary?.durationMs ?? 0);

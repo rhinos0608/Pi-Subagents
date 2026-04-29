@@ -13,7 +13,8 @@ const DEFAULT_INTERCOM_BRIDGE_TEMPLATE = `The inherited thread is reference-only
 
 Use intercom only for coordination with the orchestrator session "{orchestratorTarget}".
 - Need a decision or blocked: intercom({ action: "ask", to: "{orchestratorTarget}", message: "<question>" })
-- Blocked or explicitly asked to send progress: intercom({ action: "send", to: "{orchestratorTarget}", message: "UPDATE: <summary>" })
+- After intercom ask, stay alive and continue only after the reply arrives. Do not finish your final response with a choose-one question.
+- Non-blocking progress update: intercom({ action: "send", to: "{orchestratorTarget}", message: "UPDATE: <summary>" })
 
 Do not send routine completion handoffs through intercom. If no coordination is needed, return a focused task result.`;
 

@@ -11,6 +11,8 @@ import {
 	type ActivityState,
 	type ArtifactConfig,
 	type ArtifactPaths,
+	type AsyncParallelGroupStatus,
+	type AsyncStatus,
 	type ModelAttempt,
 	type ResolvedControlConfig,
 	type Usage,
@@ -26,7 +28,6 @@ import {
 	claimControlNotification,
 	formatControlIntercomMessage,
 	formatControlNoticeMessage,
-	shouldEmitControlEvent,
 } from "./subagent-control.ts";
 import {
 	type RunnerSubagentStep as SubagentStep,
@@ -41,6 +42,18 @@ import { buildPiArgs, cleanupTempDir } from "./pi-args.ts";
 import { formatModelAttemptNote, isRetryableModelFailure } from "./model-fallback.ts";
 import { attachPostExitStdioGuard, trySignalChild } from "./post-exit-stdio-guard.ts";
 import { detectSubagentError, extractTextFromContent, extractToolArgsPreview, getFinalOutput } from "./utils.ts";
+import { evaluateCompletionMutationGuard } from "./completion-guard.ts";
+import {
+	createMutatingFailureState,
+	didMutatingToolFail,
+	isMutatingTool,
+	nextLongRunningTrigger,
+	recordMutatingFailure,
+	resetMutatingFailureState,
+	resolveCurrentPath,
+	shouldEscalateMutatingFailures,
+	summarizeRecentMutatingFailures,
+} from "./long-running-guard.ts";
 import { parseSessionTokens, type TokenUsage } from "./session-tokens.ts";
 import {
 	cleanupWorktrees,
@@ -81,6 +94,7 @@ interface SubagentRunConfig {
 interface StepResult {
 	agent: string;
 	output: string;
+	error?: string;
 	success: boolean;
 	skipped?: boolean;
 	intercomTarget?: string;
@@ -164,6 +178,7 @@ interface RunPiStreamingResult {
 	error?: string;
 	finalOutput: string;
 	interrupted?: boolean;
+	observedMutationAttempt?: boolean;
 }
 
 function runPiStreaming(
@@ -176,6 +191,7 @@ function runPiStreaming(
 	maxSubagentDepth?: number,
 	childEventContext?: ChildEventContext,
 	registerInterrupt?: (interrupt: (() => void) | undefined) => void,
+	onChildEvent?: (event: ChildEvent) => void,
 ): Promise<RunPiStreamingResult> {
 	return new Promise((resolve) => {
 		const outputStream = fs.createWriteStream(outputFile, { flags: "w" });
@@ -193,6 +209,7 @@ function runPiStreaming(
 		let model: string | undefined;
 		let error: string | undefined;
 		let interrupted = false;
+		let observedMutationAttempt = false;
 		const rawStdoutLines: string[] = [];
 
 		const writeOutputLine = (line: string) => {
@@ -235,8 +252,10 @@ function runPiStreaming(
 			}
 
 			appendChildEvent(event);
+			onChildEvent?.(event);
 
 			if (event.type === "tool_execution_start" && event.toolName) {
+				observedMutationAttempt = observedMutationAttempt || isMutatingTool(event.toolName, event.args);
 				const toolArgs = extractToolArgsPreview(event.args ?? {});
 				writeOutputLine(toolArgs ? `${event.toolName}: ${toolArgs}` : event.toolName);
 				return;
@@ -359,6 +378,7 @@ function runPiStreaming(
 				error: interrupted ? undefined : error,
 				finalOutput,
 				interrupted,
+				observedMutationAttempt,
 			});
 		});
 
@@ -370,7 +390,7 @@ function runPiStreaming(
 			outputStream.end();
 			const finalOutput = getFinalOutput(messages) || rawStdoutLines.join("\n").trim();
 			const spawnErrorMessage = spawnError instanceof Error ? spawnError.message : String(spawnError);
-			resolve({ stderr, exitCode: 1, messages, usage, model, error: error ?? spawnErrorMessage, finalOutput });
+			resolve({ stderr, exitCode: 1, messages, usage, model, error: error ?? spawnErrorMessage, finalOutput, observedMutationAttempt });
 		});
 	});
 }
@@ -528,6 +548,7 @@ interface SingleStepContext {
 	piArgv1?: string;
 	registerInterrupt?: (interrupt: (() => void) | undefined) => void;
 	childIntercomTarget?: string;
+	onChildEvent?: (event: ChildEvent) => void;
 }
 
 /** Run a single pi agent step, returning output and metadata */
@@ -545,6 +566,7 @@ async function runSingleStep(
 	artifactPaths?: ArtifactPaths;
 	interrupted?: boolean;
 	intercomTarget?: string;
+	completionGuardTriggered?: boolean;
 }> {
 	const placeholderRegex = new RegExp(ctx.placeholder.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g");
 	const task = step.task.replace(placeholderRegex, () => ctx.previousOutput);
@@ -572,6 +594,7 @@ async function runSingleStep(
 	const attemptNotes: string[] = [];
 	const eventsPath = path.join(path.dirname(ctx.outputFile), "events.jsonl");
 	let finalResult: RunPiStreamingResult | undefined;
+	let completionGuardTriggeredFinal = false;
 
 	for (let index = 0; index < candidates.length; index++) {
 		const candidate = candidates[index];
@@ -602,16 +625,33 @@ async function runSingleStep(
 			step.maxSubagentDepth,
 			{ eventsPath, runId: ctx.id, stepIndex: ctx.flatIndex, agent: step.agent },
 			ctx.registerInterrupt,
+			ctx.onChildEvent,
 		);
 		cleanupTempDir(tempDir);
 
 		const hiddenError = run.exitCode === 0 && !run.error ? detectSubagentError(run.messages) : null;
-		const effectiveExitCode = hiddenError?.hasError ? (hiddenError.exitCode ?? 1) : run.exitCode;
-		const error = hiddenError?.hasError
-			? hiddenError.details
-				? `${hiddenError.errorType} failed (exit ${effectiveExitCode}): ${hiddenError.details}`
-				: `${hiddenError.errorType} failed with exit code ${effectiveExitCode}`
-			: run.error || (run.exitCode !== 0 && run.stderr.trim() ? run.stderr.trim() : undefined);
+		const completionGuard = run.exitCode === 0 && !run.error && !hiddenError?.hasError
+			? evaluateCompletionMutationGuard({
+				agent: step.agent,
+				task,
+				messages: run.messages,
+			})
+			: undefined;
+		const completionGuardTriggered = completionGuard?.triggered === true && !run.observedMutationAttempt;
+		const completionGuardError = completionGuardTriggered
+			? "Subagent completed without making edits for an implementation task.\nIt appears to have returned planning or scratchpad output instead of applying changes."
+			: undefined;
+		const effectiveExitCode = completionGuardTriggered
+			? 1
+			: hiddenError?.hasError
+				? (hiddenError.exitCode ?? 1)
+				: run.exitCode;
+		const error = completionGuardError
+			?? (hiddenError?.hasError
+				? hiddenError.details
+					? `${hiddenError.errorType} failed (exit ${effectiveExitCode}): ${hiddenError.details}`
+					: `${hiddenError.errorType} failed with exit code ${effectiveExitCode}`
+				: run.error || (run.exitCode !== 0 && run.stderr.trim() ? run.stderr.trim() : undefined));
 		const attempt: ModelAttempt = {
 			model: candidate ?? run.model ?? step.model ?? "default",
 			success: effectiveExitCode === 0 && !error,
@@ -621,8 +661,9 @@ async function runSingleStep(
 		};
 		modelAttempts.push(attempt);
 		if (candidate) attemptedModels.push(candidate);
+		completionGuardTriggeredFinal = completionGuardTriggered;
 		finalResult = { ...run, exitCode: effectiveExitCode, model: candidate ?? run.model, error };
-		if (attempt.success) break;
+		if (attempt.success || completionGuardTriggered) break;
 		if (!isRetryableModelFailure(error) || index === candidates.length - 1) break;
 		attemptNotes.push(formatModelAttemptNote(attempt, candidates[index + 1]));
 	}
@@ -680,46 +721,23 @@ async function runSingleStep(
 		modelAttempts,
 		artifactPaths,
 		interrupted: finalResult?.interrupted,
+		completionGuardTriggered: completionGuardTriggeredFinal,
 	};
 }
 
-type RunnerStatusPayload = {
-	runId: string;
-	mode: "single" | "chain";
-	state: "queued" | "running" | "complete" | "failed" | "paused";
-	activityState?: ActivityState;
-	lastActivityAt?: number;
-	currentTool?: string;
-	currentToolStartedAt?: number;
-	startedAt: number;
-	endedAt?: number;
-	lastUpdate: number;
+type RunnerStatusStep = NonNullable<AsyncStatus["steps"]>[number] & {
+	exitCode?: number | null;
+};
+
+type RunnerStatusPayload = Omit<AsyncStatus, "steps" | "parallelGroups" | "pid" | "cwd" | "currentStep" | "chainStepCount" | "lastUpdate"> & {
 	pid: number;
 	cwd: string;
 	currentStep: number;
-	steps: Array<{
-		agent: string;
-		status: "pending" | "running" | "complete" | "failed";
-		activityState?: ActivityState;
-		lastActivityAt?: number;
-		currentTool?: string;
-		currentToolStartedAt?: number;
-		startedAt?: number;
-		endedAt?: number;
-		durationMs?: number;
-		exitCode?: number | null;
-		tokens?: TokenUsage;
-		skills?: string[];
-		model?: string;
-		attemptedModels?: string[];
-		modelAttempts?: ModelAttempt[];
-		error?: string;
-	}>;
+	chainStepCount: number;
+	parallelGroups: AsyncParallelGroupStatus[];
+	steps: RunnerStatusStep[];
+	lastUpdate: number;
 	artifactsDir?: string;
-	sessionDir?: string;
-	outputFile?: string;
-	totalTokens?: TokenUsage;
-	sessionFile?: string;
 	shareUrl?: string;
 	gistUrl?: string;
 	shareError?: string;
@@ -774,9 +792,13 @@ function markParallelGroupRunning(input: {
 }): void {
 	for (let taskIndex = 0; taskIndex < input.group.parallel.length; taskIndex++) {
 		const flatTaskIndex = input.groupStartFlatIndex + taskIndex;
-		input.statusPayload.steps[flatTaskIndex].status = "running";
-		input.statusPayload.steps[flatTaskIndex].startedAt = input.groupStartTime;
-		input.statusPayload.steps[flatTaskIndex].lastActivityAt = input.groupStartTime;
+		input.statusPayload.steps[flatTaskIndex].status = "pending";
+		input.statusPayload.steps[flatTaskIndex].startedAt = undefined;
+		input.statusPayload.steps[flatTaskIndex].endedAt = undefined;
+		input.statusPayload.steps[flatTaskIndex].durationMs = undefined;
+		input.statusPayload.steps[flatTaskIndex].lastActivityAt = undefined;
+		input.statusPayload.steps[flatTaskIndex].activityState = undefined;
+		input.statusPayload.steps[flatTaskIndex].error = undefined;
 	}
 	input.statusPayload.currentStep = input.groupStartFlatIndex;
 	input.statusPayload.activityState = undefined;
@@ -847,6 +869,17 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 	let previousCumulativeTokens: TokenUsage = { input: 0, output: 0, total: 0 };
 	let latestSessionFile: string | undefined;
 
+	const parallelGroups: Array<{ start: number; count: number; stepIndex: number }> = [];
+	let flatStepCount = 0;
+	for (let stepIndex = 0; stepIndex < steps.length; stepIndex++) {
+		const step = steps[stepIndex]!;
+		if (isParallelGroup(step)) {
+			parallelGroups.push({ start: flatStepCount, count: step.parallel.length, stepIndex });
+			flatStepCount += step.parallel.length;
+		} else {
+			flatStepCount++;
+		}
+	}
 	const flatSteps = flattenSteps(steps);
 	const sessionEnabled = Boolean(config.sessionDir)
 		|| shareEnabled
@@ -861,6 +894,8 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 		pid: process.pid,
 		cwd,
 		currentStep: 0,
+		chainStepCount: steps.length,
+		parallelGroups,
 		steps: flatSteps.map((step) => ({
 			agent: step.agent,
 			status: "pending",
@@ -876,32 +911,38 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 	fs.mkdirSync(asyncDir, { recursive: true });
 	writeJson(statusPath, statusPayload);
 
-	const currentStepAgent = () => statusPayload.steps[statusPayload.currentStep]?.agent ?? flatSteps[statusPayload.currentStep]?.agent ?? "subagent";
-	const currentOutputActivityAt = (): number => {
-		const runningIndexes = statusPayload.steps
-			.map((step, index) => step.status === "running" ? index : -1)
-			.filter((index) => index >= 0);
-		let lastActivityAt = statusPayload.steps[statusPayload.currentStep]?.startedAt ?? overallStartTime;
-		for (const index of runningIndexes.length > 0 ? runningIndexes : [statusPayload.currentStep]) {
-			try {
-				lastActivityAt = Math.max(lastActivityAt, fs.statSync(path.join(asyncDir, `output-${index}.log`)).mtimeMs);
-			} catch {
-				// Missing output files are normal before a child writes its first line.
+	const stepOutputActivityAt = (index: number): number => {
+		const step = statusPayload.steps[index];
+		let lastActivityAt = step?.lastActivityAt ?? step?.startedAt ?? overallStartTime;
+		const outputPath = path.join(asyncDir, `output-${index}.log`);
+		try {
+			lastActivityAt = Math.max(lastActivityAt, fs.statSync(outputPath).mtimeMs);
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+				console.error(`Failed to inspect async output file '${outputPath}':`, error);
 			}
 		}
 		return lastActivityAt;
 	};
 	const emittedControlEventKeys = new Set<string>();
+	const activeLongRunningSteps = new Set<number>();
+	const mutatingFailureStates = flatSteps.map(() => createMutatingFailureState());
+	const pendingToolResults: Array<{ tool: string; path?: string; mutates: boolean; startedAt?: number } | undefined> = [];
+	const mutatingFailureWindowMs = 5 * 60_000;
 	const appendControlEvent = (event: ReturnType<typeof buildControlEvent>) => {
-		const childIntercomTarget = config.childIntercomTargets?.[statusPayload.currentStep];
-		if (controlConfig.notifyChannels.length === 0 || !claimControlNotification(controlConfig, event, emittedControlEventKeys, childIntercomTarget)) return;
+		if (!controlConfig.enabled) return;
+		const childIntercomTarget = config.childIntercomTargets?.[event.index ?? statusPayload.currentStep];
+		const channels = event.type === "active_long_running"
+			? controlConfig.notifyChannels.filter((channel) => channel !== "intercom")
+			: controlConfig.notifyChannels;
+		if (channels.length === 0 || !claimControlNotification(controlConfig, event, emittedControlEventKeys, childIntercomTarget)) return;
 		appendJsonl(eventsPath, JSON.stringify({
 			type: "subagent.control",
 			event,
-			channels: controlConfig.notifyChannels,
+			channels,
 			childIntercomTarget,
 			noticeText: formatControlNoticeMessage(event, childIntercomTarget),
-			...(config.controlIntercomTarget && controlConfig.notifyChannels.includes("intercom") ? {
+			...(config.controlIntercomTarget && channels.includes("intercom") ? {
 				intercom: {
 					to: config.controlIntercomTarget,
 					message: formatControlIntercomMessage(event, childIntercomTarget),
@@ -909,40 +950,185 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 			} : {}),
 		}));
 	};
-	const updateRunnerActivityState = (now: number): boolean => {
-		const lastActivityAt = currentOutputActivityAt();
-		const next = deriveActivityState({
-			config: controlConfig,
-			startedAt: overallStartTime,
-			lastActivityAt,
+	const syncTopLevelCurrentTool = (): void => {
+		const activeStep = statusPayload.steps
+			.filter((step) => step.status === "running" && typeof step.currentTool === "string" && step.currentTool.length > 0)
+			.sort((left, right) => (right.currentToolStartedAt ?? 0) - (left.currentToolStartedAt ?? 0))[0];
+		statusPayload.currentTool = activeStep?.currentTool;
+		statusPayload.currentToolStartedAt = activeStep?.currentToolStartedAt;
+		statusPayload.currentPath = activeStep?.currentPath;
+	};
+	const maybeEmitActiveLongRunning = (flatIndex: number, now: number): boolean => {
+		if (!controlConfig.enabled || activeLongRunningSteps.has(flatIndex)) return false;
+		const step = statusPayload.steps[flatIndex];
+		if (!step || step.status !== "running" || step.activityState === "needs_attention") return false;
+		const reason = nextLongRunningTrigger(controlConfig, {
+			startedAt: step.startedAt ?? overallStartTime,
 			now,
+			turns: step.turnCount ?? 0,
+			tokens: step.tokens?.total ?? 0,
 		});
-		if (next === currentActivityState && statusPayload.lastActivityAt === lastActivityAt) return false;
-		const previous = currentActivityState;
-		currentActivityState = next;
-		statusPayload.activityState = next;
-		statusPayload.lastActivityAt = lastActivityAt;
-		for (const step of statusPayload.steps) {
-			if (step.status === "running") {
-				step.activityState = next;
+		if (!reason) return false;
+		activeLongRunningSteps.add(flatIndex);
+		const previous = step.activityState;
+		step.activityState = "active_long_running";
+		statusPayload.activityState = statusPayload.activityState === "needs_attention" ? "needs_attention" : "active_long_running";
+		const event = buildControlEvent({
+			type: "active_long_running",
+			from: previous,
+			to: "active_long_running",
+			runId: id,
+			agent: step.agent,
+			index: flatIndex,
+			ts: now,
+			message: `${step.agent} is still active but long-running`,
+			reason,
+			turns: step.turnCount,
+			tokens: step.tokens?.total,
+			toolCount: step.toolCount,
+			currentTool: step.currentTool,
+			currentToolDurationMs: step.currentToolStartedAt ? Math.max(0, now - step.currentToolStartedAt) : undefined,
+			currentPath: step.currentPath,
+			elapsedMs: now - (step.startedAt ?? overallStartTime),
+		});
+		appendControlEvent(event);
+		return true;
+	};
+	const updateStepFromChildEvent = (flatIndex: number, event: ChildEvent): void => {
+		const step = statusPayload.steps[flatIndex];
+		if (!step) return;
+		const now = Date.now();
+		statusPayload.currentStep = flatIndex;
+		if (event.type === "tool_execution_start" && event.toolName) {
+			const mutates = isMutatingTool(event.toolName, event.args);
+			const currentPath = resolveCurrentPath(event.toolName, event.args);
+			step.toolCount = (step.toolCount ?? 0) + 1;
+			step.currentTool = event.toolName;
+			step.currentToolStartedAt = now;
+			step.currentPath = currentPath;
+			pendingToolResults[flatIndex] = { tool: event.toolName, path: currentPath, mutates, startedAt: now };
+			statusPayload.toolCount = (statusPayload.toolCount ?? 0) + 1;
+			syncTopLevelCurrentTool();
+		} else if (event.type === "tool_execution_end") {
+			step.currentTool = undefined;
+			step.currentToolStartedAt = undefined;
+			step.currentPath = undefined;
+			syncTopLevelCurrentTool();
+		} else if (event.type === "tool_result_end" && event.message) {
+			const toolSnapshot = pendingToolResults[flatIndex];
+			pendingToolResults[flatIndex] = undefined;
+			const resultText = extractTextFromContent(event.message.content);
+			if (toolSnapshot?.mutates && didMutatingToolFail(resultText)) {
+				const state = mutatingFailureStates[flatIndex]!;
+				recordMutatingFailure(state, {
+					tool: toolSnapshot.tool,
+					path: toolSnapshot.path,
+					error: resultText.split("\n").find((line) => line.trim())?.trim().slice(0, 180) ?? "mutating tool failed",
+					ts: now,
+				}, mutatingFailureWindowMs);
+				if (controlConfig.enabled && shouldEscalateMutatingFailures(state, controlConfig.failedToolAttemptsBeforeAttention) && step.activityState !== "needs_attention") {
+					const previous = step.activityState;
+					step.activityState = "needs_attention";
+					statusPayload.activityState = "needs_attention";
+					appendControlEvent(buildControlEvent({
+						type: "needs_attention",
+						from: previous,
+						to: "needs_attention",
+						runId: id,
+						agent: step.agent,
+						index: flatIndex,
+						ts: now,
+						message: `${step.agent} needs attention after repeated mutating tool failures`,
+						reason: "tool_failures",
+						turns: step.turnCount,
+						tokens: step.tokens?.total,
+						toolCount: step.toolCount,
+						currentTool: toolSnapshot.tool,
+						currentToolDurationMs: toolSnapshot.startedAt ? Math.max(0, now - toolSnapshot.startedAt) : undefined,
+						currentPath: toolSnapshot.path,
+						recentFailureSummary: summarizeRecentMutatingFailures(state),
+					}));
+				}
+			} else if (toolSnapshot?.mutates) {
+				resetMutatingFailureState(mutatingFailureStates[flatIndex]!);
+			}
+		} else if (event.type === "message_end" && event.message?.role === "assistant") {
+			step.turnCount = (step.turnCount ?? 0) + 1;
+			const usage = event.message.usage;
+			if (usage) {
+				const input = usage.input ?? usage.inputTokens ?? 0;
+				const output = usage.output ?? usage.outputTokens ?? 0;
+				const previousInput = step.tokens?.input ?? 0;
+				const previousOutput = step.tokens?.output ?? 0;
+				step.tokens = { input: previousInput + input, output: previousOutput + output, total: previousInput + previousOutput + input + output };
+				const totalInput = statusPayload.totalTokens?.input ?? 0;
+				const totalOutput = statusPayload.totalTokens?.output ?? 0;
+				statusPayload.totalTokens = { input: totalInput + input, output: totalOutput + output, total: totalInput + totalOutput + input + output };
+			}
+			statusPayload.turnCount = Math.max(statusPayload.turnCount ?? 0, step.turnCount);
+		}
+		syncTopLevelCurrentTool();
+		step.lastActivityAt = now;
+		statusPayload.lastActivityAt = now;
+		statusPayload.lastUpdate = now;
+		maybeEmitActiveLongRunning(flatIndex, now);
+		writeJson(statusPath, statusPayload);
+	};
+	const updateRunnerActivityState = (now: number): boolean => {
+		if (!controlConfig.enabled) return false;
+		let changed = false;
+		let runLastActivityAt = statusPayload.lastActivityAt ?? overallStartTime;
+		for (let index = 0; index < statusPayload.steps.length; index++) {
+			const step = statusPayload.steps[index]!;
+			if (step.status !== "running") continue;
+			const lastActivityAt = stepOutputActivityAt(index);
+			runLastActivityAt = Math.max(runLastActivityAt, lastActivityAt);
+			if (step.lastActivityAt !== lastActivityAt) {
 				step.lastActivityAt = lastActivityAt;
+				changed = true;
+			}
+			const idleState = deriveActivityState({
+				config: controlConfig,
+				startedAt: step.startedAt ?? overallStartTime,
+				lastActivityAt,
+				now,
+			});
+			if (idleState === "needs_attention") {
+				const previous = step.activityState;
+				step.activityState = "needs_attention";
+				if (previous !== "needs_attention") {
+					appendControlEvent(buildControlEvent({
+						from: previous,
+						to: "needs_attention",
+						runId: id,
+						agent: step.agent,
+						index,
+						ts: now,
+						lastActivityAt,
+					}));
+					changed = true;
+				}
+			} else if (maybeEmitActiveLongRunning(index, now)) {
+				changed = true;
 			}
 		}
-		statusPayload.lastUpdate = now;
-		if (shouldEmitControlEvent(controlConfig, previous, next)) {
-			const event = buildControlEvent({
-				from: previous,
-				to: next,
-				runId: id,
-				agent: currentStepAgent(),
-				index: statusPayload.currentStep,
-				ts: now,
-				lastActivityAt,
-			});
-			appendControlEvent(event);
+		if (statusPayload.lastActivityAt !== runLastActivityAt) {
+			statusPayload.lastActivityAt = runLastActivityAt;
+			changed = true;
 		}
-		writeJson(statusPath, statusPayload);
-		return true;
+		const nextRunState = statusPayload.steps.some((step) => step.activityState === "needs_attention")
+			? "needs_attention"
+			: statusPayload.steps.some((step) => step.activityState === "active_long_running")
+				? "active_long_running"
+				: undefined;
+		if (nextRunState !== currentActivityState) {
+			currentActivityState = nextRunState;
+			statusPayload.activityState = nextRunState;
+			changed = true;
+		}
+		statusPayload.lastUpdate = now;
+		if (changed) writeJson(statusPath, statusPayload);
+		return changed;
 	};
 	if (controlConfig.enabled) {
 		activityTimer = setInterval(() => {
@@ -961,11 +1147,14 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 		currentActivityState = undefined;
 		statusPayload.activityState = undefined;
 		statusPayload.lastUpdate = now;
-		const current = statusPayload.steps[statusPayload.currentStep];
-		if (current?.status === "running") {
-			current.activityState = undefined;
-			current.endedAt = now;
-			current.durationMs = current.startedAt ? now - current.startedAt : undefined;
+		for (const step of statusPayload.steps) {
+			if (step.status === "running") {
+				step.status = "paused";
+				step.activityState = undefined;
+				step.endedAt = now;
+				step.durationMs = step.startedAt ? now - step.startedAt : undefined;
+				step.lastActivityAt = now;
+			}
 		}
 		writeJson(statusPath, statusPayload);
 		appendJsonl(eventsPath, JSON.stringify({
@@ -1067,12 +1256,37 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 					group.parallel,
 					concurrency,
 					async (task, taskIdx) => {
+						const fi = groupStartFlatIndex + taskIdx;
 						if (aborted && failFast) {
+							const skippedAt = Date.now();
+							statusPayload.steps[fi].status = "failed";
+							statusPayload.steps[fi].error = "Skipped due to fail-fast";
+							statusPayload.steps[fi].startedAt = skippedAt;
+							statusPayload.steps[fi].endedAt = skippedAt;
+							statusPayload.steps[fi].durationMs = 0;
+							statusPayload.steps[fi].exitCode = -1;
+							statusPayload.steps[fi].activityState = undefined;
+							statusPayload.lastUpdate = skippedAt;
+							writeJson(statusPath, statusPayload);
+							appendJsonl(eventsPath, JSON.stringify({
+								type: "subagent.step.failed", ts: skippedAt, runId: id, stepIndex: fi, agent: task.agent, exitCode: -1, durationMs: 0,
+							}));
 							return { agent: task.agent, output: "(skipped — fail-fast)", exitCode: -1 as number | null, skipped: true };
 						}
 
-						const fi = groupStartFlatIndex + taskIdx;
 						const taskStartTime = Date.now();
+						statusPayload.currentStep = fi;
+						statusPayload.steps[fi].status = "running";
+						statusPayload.steps[fi].error = undefined;
+						statusPayload.steps[fi].activityState = undefined;
+						statusPayload.steps[fi].startedAt = taskStartTime;
+						statusPayload.steps[fi].endedAt = undefined;
+						statusPayload.steps[fi].durationMs = undefined;
+						statusPayload.steps[fi].lastActivityAt = taskStartTime;
+						statusPayload.outputFile = path.join(asyncDir, `output-${fi}.log`);
+						statusPayload.lastActivityAt = taskStartTime;
+						statusPayload.lastUpdate = taskStartTime;
+						writeJson(statusPath, statusPayload);
 
 						appendJsonl(eventsPath, JSON.stringify({
 							type: "subagent.step.started", ts: taskStartTime, runId: id, stepIndex: fi, agent: task.agent,
@@ -1095,6 +1309,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 							registerInterrupt: (interrupt) => {
 								activeChildInterrupt = interrupt;
 							},
+							onChildEvent: (event) => updateStepFromChildEvent(fi, event),
 						});
 						if (task.sessionFile) {
 							latestSessionFile = task.sessionFile;
@@ -1119,6 +1334,19 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 							ts: taskEndTime, runId: id, stepIndex: fi, agent: task.agent,
 							exitCode: singleResult.exitCode, durationMs: taskDuration,
 						}));
+						if (singleResult.completionGuardTriggered) {
+							const event = buildControlEvent({
+								from: statusPayload.steps[fi].activityState,
+								to: "needs_attention",
+								runId: id,
+								agent: task.agent,
+								index: fi,
+								ts: taskEndTime,
+								message: `${task.agent} completed without making edits for an implementation task`,
+								reason: "completion_guard",
+							});
+							appendControlEvent(event);
+						}
 
 						if (singleResult.exitCode !== 0 && failFast) aborted = true;
 						return { ...singleResult, skipped: false };
@@ -1149,6 +1377,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 					results.push({
 						agent: pr.agent,
 						output: pr.output,
+						error: pr.error,
 						success: pr.exitCode === 0,
 						skipped: pr.skipped,
 						intercomTarget: pr.intercomTarget,
@@ -1220,6 +1449,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 				registerInterrupt: (interrupt) => {
 					activeChildInterrupt = interrupt;
 				},
+				onChildEvent: (event) => updateStepFromChildEvent(flatIndex, event),
 			});
 			if (seqStep.sessionFile) {
 				latestSessionFile = seqStep.sessionFile;
@@ -1229,6 +1459,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 			results.push({
 				agent: singleResult.agent,
 				output: singleResult.output,
+				error: singleResult.error,
 				success: singleResult.exitCode === 0,
 				intercomTarget: singleResult.intercomTarget,
 				model: singleResult.model,
@@ -1284,6 +1515,19 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 				durationMs: stepEndTime - stepStartTime,
 				tokens: stepTokens,
 			}));
+			if (singleResult.completionGuardTriggered) {
+				const event = buildControlEvent({
+					from: statusPayload.steps[flatIndex].activityState,
+					to: "needs_attention",
+					runId: id,
+					agent: seqStep.agent,
+					index: flatIndex,
+					ts: stepEndTime,
+					message: `${seqStep.agent} completed without making edits for an implementation task`,
+					reason: "completion_guard",
+				});
+				appendControlEvent(event);
+			}
 
 			flatIndex++;
 			if (singleResult.exitCode !== 0) {
@@ -1399,6 +1643,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 			results: results.map((r) => ({
 				agent: r.agent,
 				output: r.output,
+				error: r.error,
 				success: r.success,
 				skipped: r.skipped || undefined,
 				intercomTarget: r.intercomTarget,

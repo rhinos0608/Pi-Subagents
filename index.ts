@@ -209,7 +209,7 @@ class SubagentControlNoticeComponent implements Component {
 	render(width: number): string[] {
 		const eventLabel = this.details.event.type.replaceAll("_", " ");
 		if (width < 3) return [truncateToWidth(`Subagent ${eventLabel}`, width)];
-		const bodyWidth = Math.max(1, Math.min(width - 2, 68));
+		const bodyWidth = Math.max(1, width - 2);
 		const borderChar = "─";
 		const header = ` ⚠ Subagent ${eventLabel}: ${this.details.event.agent} `;
 		const headerText = truncateToWidth(header, bodyWidth, "");
@@ -491,7 +491,7 @@ DIAGNOSTICS:
 	globalStore[controlNoticeSeenStoreKey] = visibleControlNotices;
 	const controlEventHandler = (payload: unknown) => {
 		const details = payload as SubagentControlMessageDetails;
-		if (!details?.event) return;
+		if (!details?.event || details.event.type === "active_long_running") return;
 		const childIntercomTarget = controlNoticeTarget(details);
 		const key = controlNotificationKey(details.event, childIntercomTarget);
 		if (visibleControlNotices.has(key)) return;

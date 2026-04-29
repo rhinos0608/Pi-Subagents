@@ -40,13 +40,17 @@ export interface TokenUsage {
 	total: number;
 }
 
-export type ActivityState = "needs_attention";
-export type ControlEventType = "needs_attention";
+export type ActivityState = "active_long_running" | "needs_attention";
+export type ControlEventType = "active_long_running" | "needs_attention";
 export type ControlNotificationChannel = "event" | "async" | "intercom";
 
 export interface ControlConfig {
 	enabled?: boolean;
 	needsAttentionAfterMs?: number;
+	activeNoticeAfterMs?: number;
+	activeNoticeAfterTurns?: number;
+	activeNoticeAfterTokens?: number;
+	failedToolAttemptsBeforeAttention?: number;
 	notifyOn?: ControlEventType[];
 	notifyChannels?: ControlNotificationChannel[];
 }
@@ -54,6 +58,10 @@ export interface ControlConfig {
 export interface ResolvedControlConfig {
 	enabled: boolean;
 	needsAttentionAfterMs: number;
+	activeNoticeAfterMs: number;
+	activeNoticeAfterTurns: number;
+	activeNoticeAfterTokens: number;
+	failedToolAttemptsBeforeAttention: number;
 	notifyOn: ControlEventType[];
 	notifyChannels: ControlNotificationChannel[];
 }
@@ -67,6 +75,15 @@ export interface ControlEvent {
 	index?: number;
 	runId: string;
 	message: string;
+	reason?: "idle" | "completion_guard" | "active_long_running" | "tool_failures" | "time_threshold" | "turn_threshold" | "token_threshold";
+	turns?: number;
+	tokens?: number;
+	toolCount?: number;
+	currentTool?: string;
+	currentToolDurationMs?: number;
+	currentPath?: string;
+	elapsedMs?: number;
+	recentFailureSummary?: string;
 }
 
 export type SubagentResultStatus = "completed" | "failed" | "paused" | "detached";
@@ -115,9 +132,11 @@ export interface AgentProgress {
 	currentTool?: string;
 	currentToolArgs?: string;
 	currentToolStartedAt?: number;
+	currentPath?: string;
 	recentTools: Array<{ tool: string; args: string; endMs: number }>;
 	recentOutput: string[];
 	toolCount: number;
+	turnCount?: number;
 	tokens: number;
 	durationMs: number;
 	error?: string;
@@ -223,6 +242,22 @@ export interface ArtifactConfig {
 // Async Execution
 // ============================================================================
 
+export interface AsyncParallelGroupStatus {
+	start: number;
+	count: number;
+	stepIndex: number;
+}
+
+export interface AsyncStartedEvent {
+	id?: string;
+	asyncDir?: string;
+	agent?: string;
+	agents?: string[];
+	chain?: string[];
+	chainStepCount?: number;
+	parallelGroups?: AsyncParallelGroupStatus[];
+}
+
 export interface AsyncStatus {
 	runId: string;
 	mode: "single" | "chain";
@@ -231,22 +266,31 @@ export interface AsyncStatus {
 	lastActivityAt?: number;
 	currentTool?: string;
 	currentToolStartedAt?: number;
+	currentPath?: string;
+	turnCount?: number;
+	toolCount?: number;
 	startedAt: number;
 	endedAt?: number;
 	lastUpdate?: number;
 	pid?: number;
 	cwd?: string;
 	currentStep?: number;
+	chainStepCount?: number;
+	parallelGroups?: AsyncParallelGroupStatus[];
 	steps?: Array<{
 		agent: string;
-		status: string;
+		status: "pending" | "running" | "complete" | "completed" | "failed" | "paused";
 		activityState?: ActivityState;
 		lastActivityAt?: number;
 		currentTool?: string;
 		currentToolStartedAt?: number;
+		currentPath?: string;
+		turnCount?: number;
+		toolCount?: number;
 		startedAt?: number;
 		endedAt?: number;
 		durationMs?: number;
+		exitCode?: number | null;
 		tokens?: TokenUsage;
 		skills?: string[];
 		model?: string;
@@ -268,10 +312,17 @@ export interface AsyncJobState {
 	lastActivityAt?: number;
 	currentTool?: string;
 	currentToolStartedAt?: number;
+	currentPath?: string;
+	turnCount?: number;
+	toolCount?: number;
 	mode?: "single" | "chain";
 	agents?: string[];
 	currentStep?: number;
 	stepsTotal?: number;
+	runningSteps?: number;
+	completedSteps?: number;
+	hasParallelGroups?: boolean;
+	activeParallelGroup?: boolean;
 	startedAt?: number;
 	updatedAt?: number;
 	sessionDir?: string;
@@ -296,6 +347,10 @@ export interface SubagentState {
 		lastActivityAt?: number;
 		currentTool?: string;
 		currentToolStartedAt?: number;
+		currentPath?: string;
+		turnCount?: number;
+		tokens?: number;
+		toolCount?: number;
 		interrupt?: () => boolean;
 	}>;
 	lastForegroundControlId: string | null;
