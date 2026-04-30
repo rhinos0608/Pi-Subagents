@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- Express flexible tool schema fields as `anyOf` unions without parent-level `type` arrays, avoiding schema shapes rejected by strict providers such as Moonshot/opencode-go.
+
 ## [0.21.1] - 2026-04-30
 
 ### Changed

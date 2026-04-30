@@ -122,9 +122,12 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 		assert.ok(taskCountSchema, "tasks[].count schema should exist");
 		assert.equal(taskCountSchema.minimum, 1);
 		assert.match(String(taskCountSchema.description ?? ""), /repeat/i);
-		assert.deepEqual(taskSchema?.output?.type, ["string", "boolean"]);
+		const outputSchema = taskSchema?.output as JsonSchemaNode | undefined;
+		assert.equal(outputSchema?.type, undefined);
+		assert.equal(hasAnyOfType(outputSchema, "string"), true);
+		assert.equal(hasAnyOfType(outputSchema, "boolean"), true);
 		const readsSchema = taskSchema?.reads as JsonSchemaNode | undefined;
-		assert.deepEqual(readsSchema?.type, ["array", "boolean"]);
+		assert.equal(readsSchema?.type, undefined);
 		assert.equal(hasAnyOfArrayWithStringItems(readsSchema), true);
 		assert.equal(hasAnyOfType(readsSchema, "boolean"), true);
 		assert.equal(taskSchema?.progress?.type, "boolean");
@@ -183,7 +186,7 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 				if (!current.value || typeof current.value !== "object") continue;
 
 				const node = current.value as JsonSchemaNode;
-				if (Object.hasOwn(node, "description") && !Object.hasOwn(node, "type")) {
+				if (Object.hasOwn(node, "description") && !Object.hasOwn(node, "type") && !Object.hasOwn(node, "anyOf")) {
 					descriptionOnlyPaths.push(current.path);
 				}
 
@@ -211,8 +214,7 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 				if (!current.value || typeof current.value !== "object") continue;
 
 				const node = current.value as JsonSchemaNode;
-				const types = Array.isArray(node.type) ? node.type : [node.type];
-				if (types.includes("array") && !Object.hasOwn(node, "items") && !hasAnyOfArrayWithStringItems(node)) {
+				if (node.type === "array" && !Object.hasOwn(node, "items")) {
 					missingItemsPaths.push(current.path);
 				}
 
@@ -230,22 +232,56 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 		assert.deepEqual(missingItemsPaths, []);
 	});
 
-	it("uses explicit types for flexible fields and chain items", () => {
+	it("does not emit provider-rejected union schema shapes", () => {
+		const rejectedPaths: string[] = [];
+
+		for (const [name, schema] of Object.entries(schemas)) {
+			const stack: Array<{ path: string; value: unknown }> = [{ path: name, value: schema }];
+			while (stack.length > 0) {
+				const current = stack.pop()!;
+				if (!current.value || typeof current.value !== "object") continue;
+
+				const node = current.value as JsonSchemaNode;
+				if (Array.isArray(node.type)) {
+					rejectedPaths.push(`${current.path}.type`);
+				}
+				if (Object.hasOwn(node, "anyOf") && Object.hasOwn(node, "type")) {
+					rejectedPaths.push(`${current.path}.type+anyOf`);
+				}
+
+				if (Array.isArray(current.value)) {
+					current.value.forEach((value, index) => stack.push({ path: `${current.path}[${index}]`, value }));
+					continue;
+				}
+
+				for (const [key, value] of Object.entries(node)) {
+					stack.push({ path: `${current.path}.${key}`, value });
+				}
+			}
+		}
+
+		assert.deepEqual(rejectedPaths, []);
+	});
+
+	it("uses provider-friendly anyOf unions for flexible fields and chain items", () => {
 		const skillSchema = SubagentParams?.properties?.skill;
 		assert.ok(skillSchema, "skill schema should exist");
-		assert.deepEqual(skillSchema.type, ["string", "array", "boolean"]);
+		assert.equal(skillSchema.type, undefined);
 		assert.equal(hasAnyOfArrayWithStringItems(skillSchema), true);
 		assert.equal(hasAnyOfType(skillSchema, "boolean"), true);
 		assert.equal(hasAnyOfType(skillSchema, "string"), true);
 
 		const outputSchema = SubagentParams?.properties?.output;
 		assert.ok(outputSchema, "output schema should exist");
-		assert.deepEqual(outputSchema.type, ["string", "boolean"]);
+		assert.equal(outputSchema.type, undefined);
+		assert.equal(hasAnyOfType(outputSchema, "string"), true);
+		assert.equal(hasAnyOfType(outputSchema, "boolean"), true);
 
 		const configSchema = SubagentParams?.properties?.config;
 		assert.ok(configSchema, "config schema should exist");
-		assert.deepEqual(configSchema.type, ["object", "string"]);
-		assert.equal(configSchema.additionalProperties, true);
+		assert.equal(configSchema.type, undefined);
+		assert.equal(anyOfBranches(configSchema).some((branch) => branch.type === "object" && branch.additionalProperties === true), true);
+		assert.equal(hasAnyOfType(configSchema, "string"), true);
 
 		const chainItem = SubagentParams?.properties?.chain?.items;
 		assert.ok(chainItem, "chain item schema should exist");
@@ -254,10 +290,27 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 		assert.equal(chainItem.oneOf, undefined);
 		assert.equal(chainItem.properties?.agent?.type, "string");
 		assert.equal(chainItem.properties?.parallel?.type, "array");
-		assert.equal((chainItem.properties?.parallel?.items as { properties?: Record<string, JsonSchemaNode> } | undefined)?.properties?.agent?.type, "string");
-		assert.deepEqual(chainItem.properties?.output?.type, ["string", "boolean"]);
+		const chainParallelTask = (chainItem.properties?.parallel?.items as { properties?: Record<string, JsonSchemaNode> } | undefined)?.properties;
+		assert.equal(chainParallelTask?.agent?.type, "string");
+		const chainParallelOutputSchema = chainParallelTask?.output;
+		assert.equal(chainParallelOutputSchema?.type, undefined);
+		assert.equal(hasAnyOfType(chainParallelOutputSchema, "string"), true);
+		assert.equal(hasAnyOfType(chainParallelOutputSchema, "boolean"), true);
+		const chainParallelReadsSchema = chainParallelTask?.reads;
+		assert.equal(chainParallelReadsSchema?.type, undefined);
+		assert.equal(hasAnyOfArrayWithStringItems(chainParallelReadsSchema), true);
+		assert.equal(hasAnyOfType(chainParallelReadsSchema, "boolean"), true);
+		const chainParallelSkillSchema = chainParallelTask?.skill;
+		assert.equal(chainParallelSkillSchema?.type, undefined);
+		assert.equal(hasAnyOfArrayWithStringItems(chainParallelSkillSchema), true);
+		assert.equal(hasAnyOfType(chainParallelSkillSchema, "boolean"), true);
+		assert.equal(hasAnyOfType(chainParallelSkillSchema, "string"), true);
+		const chainOutputSchema = chainItem.properties?.output as JsonSchemaNode | undefined;
+		assert.equal(chainOutputSchema?.type, undefined);
+		assert.equal(hasAnyOfType(chainOutputSchema, "string"), true);
+		assert.equal(hasAnyOfType(chainOutputSchema, "boolean"), true);
 		const chainReadsSchema = chainItem.properties?.reads as JsonSchemaNode | undefined;
-		assert.deepEqual(chainReadsSchema?.type, ["array", "boolean"]);
+		assert.equal(chainReadsSchema?.type, undefined);
 		assert.equal(hasAnyOfArrayWithStringItems(chainReadsSchema), true);
 		assert.equal(hasAnyOfType(chainReadsSchema, "boolean"), true);
 	});
@@ -277,8 +330,20 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 			{ chain: [{ agent: "reviewer", skill: "review" }] },
 			{ chain: [{ agent: "reviewer", skill: false }] },
 			{ chain: [{ parallel: [{ agent: "reviewer", reads: false, skill: false }] }] },
+			{ chain: [{ parallel: [{ agent: "reviewer", output: "review.md", reads: ["input.md"], skill: "review" }] }] },
 			{ config: { name: "reviewer", description: "Review things" } },
 			{ config: JSON.stringify({ name: "reviewer", description: "Review things" }) },
+		];
+		const invalidValues = [
+			{ skill: 123 },
+			{ skill: [123] },
+			{ output: 123 },
+			{ tasks: [{ agent: "reviewer", task: "check this", reads: "input.md" }] },
+			{ chain: [{ parallel: [{ agent: "reviewer", output: 123 }] }] },
+			{ chain: [{ parallel: [{ agent: "reviewer", reads: "input.md" }] }] },
+			{ chain: [{ parallel: [{ agent: "reviewer", skill: 123 }] }] },
+			{ config: [] },
+			{ config: null },
 		];
 
 		for (const value of validValues) {
@@ -288,6 +353,9 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 				true,
 				`${JSON.stringify(value)} should validate: ${[...validator.Errors(value)].map((error) => error.message).join(", ")}`,
 			);
+		}
+		for (const value of invalidValues) {
+			assert.equal(validator.Check(value), false, `${JSON.stringify(value)} should not validate`);
 		}
 	});
 });
