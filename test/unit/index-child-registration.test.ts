@@ -9,8 +9,8 @@ const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "
 describe("subagent extension child mode", () => {
 	it("returns before registering parent tools, slash commands, renderers, or event handlers", () => {
 		const script = String.raw`
-			import registerSubagentExtension from "./index.ts";
-			import { SUBAGENT_CHILD_ENV } from "./pi-args.ts";
+			import registerSubagentExtension from "./src/extension/index.ts";
+			import { SUBAGENT_CHILD_ENV } from "./src/runs/shared/pi-args.ts";
 			process.env[SUBAGENT_CHILD_ENV] = "1";
 			const calls = [];
 			const fakePi = new Proxy({}, {

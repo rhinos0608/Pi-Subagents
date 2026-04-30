@@ -8,7 +8,7 @@ import registerSubagentPromptRuntime, {
 	stripParentOnlySubagentMessages,
 	stripProjectContext,
 	stripSubagentOrchestrationSkill,
-} from "../../subagent-prompt-runtime.ts";
+} from "../../src/runs/shared/subagent-prompt-runtime.ts";
 
 const envSnapshot = {
 	PI_SUBAGENT_INHERIT_PROJECT_CONTEXT: process.env.PI_SUBAGENT_INHERIT_PROJECT_CONTEXT,

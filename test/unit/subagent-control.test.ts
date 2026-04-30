@@ -9,7 +9,7 @@ import {
 	formatControlNoticeMessage,
 	resolveControlConfig,
 	shouldNotifyControlEvent,
-} from "../../subagent-control.ts";
+} from "../../src/runs/shared/subagent-control.ts";
 
 const config = resolveControlConfig(undefined, {
 	needsAttentionAfterMs: 300,
@@ -139,7 +139,7 @@ describe("subagent control attention state", () => {
 			tokens: 160000,
 			toolCount: 42,
 			currentTool: "edit",
-			currentPath: "async-status.ts",
+			currentPath: "src/runs/background/async-status.ts",
 			reason: "turn_threshold",
 		});
 
@@ -149,7 +149,7 @@ describe("subagent control attention state", () => {
 		assert.match(message, /Inspect status/);
 		assert.match(message, /15 turns/);
 		assert.match(message, /160000 tokens/);
-		assert.match(message, /path async-status\.ts/);
+		assert.match(message, /path src\/runs\/background\/async-status\.ts/);
 		assert.doesNotMatch(message, /Subagent needs attention/);
 	});
 

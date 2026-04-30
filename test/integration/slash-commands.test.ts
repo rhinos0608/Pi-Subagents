@@ -43,9 +43,9 @@ interface RegisterSlashCommandsModule {
 }
 
 interface SlashLiveStateModule {
-	clearSlashSnapshots?: typeof import("../../slash-live-state.ts").clearSlashSnapshots;
-	getSlashRenderableSnapshot?: typeof import("../../slash-live-state.ts").getSlashRenderableSnapshot;
-	resolveSlashMessageDetails?: typeof import("../../slash-live-state.ts").resolveSlashMessageDetails;
+	clearSlashSnapshots?: typeof import("../../src/slash/slash-live-state.ts").clearSlashSnapshots;
+	getSlashRenderableSnapshot?: typeof import("../../src/slash/slash-live-state.ts").getSlashRenderableSnapshot;
+	resolveSlashMessageDetails?: typeof import("../../src/slash/slash-live-state.ts").resolveSlashMessageDetails;
 }
 
 let registerSlashCommands: RegisterSlashCommandsModule["registerSlashCommands"];
@@ -54,8 +54,8 @@ let getSlashRenderableSnapshot: SlashLiveStateModule["getSlashRenderableSnapshot
 let resolveSlashMessageDetails: SlashLiveStateModule["resolveSlashMessageDetails"];
 let available = true;
 try {
-	({ registerSlashCommands } = await import("../../slash-commands.ts") as RegisterSlashCommandsModule);
-	({ clearSlashSnapshots, getSlashRenderableSnapshot, resolveSlashMessageDetails } = await import("../../slash-live-state.ts") as SlashLiveStateModule);
+	({ registerSlashCommands } = await import("../../src/slash/slash-commands.ts") as RegisterSlashCommandsModule);
+	({ clearSlashSnapshots, getSlashRenderableSnapshot, resolveSlashMessageDetails } = await import("../../src/slash/slash-live-state.ts") as SlashLiveStateModule);
 } catch {
 	available = false;
 }

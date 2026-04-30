@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
-import { formatAsyncRunList, listAsyncRuns, listAsyncRunsForOverlay } from "../../async-status.ts";
+import { formatAsyncRunList, listAsyncRuns, listAsyncRunsForOverlay } from "../../src/runs/background/async-status.ts";
 
 function createAsyncDir(root: string, id: string, status: Record<string, unknown>): string {
 	const dir = path.join(root, id);
@@ -171,6 +171,37 @@ describe("async status helpers", () => {
 				() => listAsyncRuns(root),
 				/Failed to parse async status file/,
 			);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("repairs stale running runs before listing active async runs", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-async-stale-list-"));
+		const resultsDir = path.join(root, "results");
+		try {
+			const asyncDir = createAsyncDir(root, "run-stale", {
+				runId: "run-stale",
+				mode: "single",
+				state: "running",
+				pid: 12345,
+				startedAt: 100,
+				lastUpdate: 100,
+				steps: [{ agent: "scout", status: "running", startedAt: 100 }],
+			});
+
+			const active = listAsyncRuns(root, {
+				states: ["running"],
+				resultsDir,
+				kill: () => { const error = new Error("missing") as NodeJS.ErrnoException; error.code = "ESRCH"; throw error; },
+				now: () => 200,
+			});
+			assert.equal(active.length, 0);
+			const failed = listAsyncRuns(root, { states: ["failed"], resultsDir, reconcile: false });
+			assert.equal(failed[0]?.id, "run-stale");
+			assert.equal(failed[0]?.steps[0]?.status, "failed");
+			assert.equal(fs.existsSync(path.join(resultsDir, "run-stale.json")), true);
+			assert.match(fs.readFileSync(path.join(asyncDir, "events.jsonl"), "utf-8"), /repaired_stale/);
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
 		}

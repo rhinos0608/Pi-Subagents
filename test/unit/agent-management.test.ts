@@ -3,8 +3,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
-import { handleCreate, handleUpdate } from "../../agent-management.ts";
-import { createEditState, handleEditInput } from "../../agent-manager-edit.ts";
+import { handleCreate, handleUpdate } from "../../src/agents/agent-management.ts";
+import { createEditState, handleEditInput } from "../../src/manager-ui/agent-manager-edit.ts";
 
 let tempDir = "";
 

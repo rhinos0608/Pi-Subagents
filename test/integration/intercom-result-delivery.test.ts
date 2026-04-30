@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { after, afterEach, before, beforeEach, describe, it } from "node:test";
+import { ASYNC_DIR } from "../../src/shared/types.ts";
 import type { MockPi } from "../support/helpers.ts";
 import {
 	createMockPi,
@@ -34,7 +35,7 @@ interface ExecutorModule {
 	};
 }
 
-const executorMod = await tryImport<ExecutorModule>("./subagent-executor.ts");
+const executorMod = await tryImport<ExecutorModule>("./src/runs/foreground/subagent-executor.ts");
 const available = !!executorMod?.createSubagentExecutor;
 const createSubagentExecutor = executorMod?.createSubagentExecutor;
 
@@ -256,6 +257,39 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 		assert.match(String(payload.message ?? ""), /3\. c — completed/);
 		assert.match(result.content[0]?.text ?? "", /Delivered chain subagent results via intercom\./);
 		assert.equal(result.details?.results?.every((entry) => entry.finalOutput === undefined), true);
+	});
+
+	it("resume action sends a follow-up to a live async child when the target is registered", async () => {
+		const runId = `resume-live-${Date.now()}`;
+		const asyncDir = path.join(ASYNC_DIR, runId);
+		try {
+			fs.mkdirSync(asyncDir, { recursive: true });
+			fs.writeFileSync(path.join(asyncDir, "status.json"), JSON.stringify({
+				runId,
+				mode: "single",
+				state: "running",
+				startedAt: 100,
+				lastUpdate: 100,
+				steps: [{ agent: "worker", status: "running" }],
+			}, null, 2), "utf-8");
+			const { executor, events } = makeExecutor();
+
+			const result = await executor.execute(
+				"resume-live",
+				{ action: "resume", id: runId, message: "Can you clarify the last change?" },
+				new AbortController().signal,
+				undefined,
+				makeMinimalCtx(tempDir),
+			);
+
+			assert.equal(result.isError, undefined);
+			assert.match(result.content[0]?.text ?? "", /Delivered follow-up to live async child/);
+			const payload = events.emitted.find((entry) => entry.channel === "subagent:result-intercom")?.payload as { to?: string; message?: string } | undefined;
+			assert.equal(payload?.to, `subagent-worker-${runId}-1`);
+			assert.match(payload?.message ?? "", /Can you clarify the last change\?/);
+		} finally {
+			fs.rmSync(asyncDir, { recursive: true, force: true });
+		}
 	});
 
 	it("mixed foreground outcomes produce failed grouped status and receipt counts", async () => {

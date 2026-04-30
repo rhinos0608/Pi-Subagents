@@ -5,7 +5,7 @@ import {
 	formatSubagentResultReceipt,
 	resolveSubagentResultStatus,
 	stripDetailsOutputsForIntercomReceipt,
-} from "../../result-intercom.ts";
+} from "../../src/intercom/result-intercom.ts";
 
 describe("result intercom formatter", () => {
 	it("builds one grouped intercom payload with status counts and child sections", () => {
@@ -48,6 +48,37 @@ describe("result intercom formatter", () => {
 		assert.match(payload.message, /2\. reviewer-b — failed/);
 		assert.match(payload.message, /Output artifact: \/tmp\/a\.md/);
 		assert.match(payload.message, /Session: \/tmp\/a-session\.jsonl/);
+	});
+
+	it("advertises async revive only for single-child results with a session", () => {
+		const payload = buildSubagentResultIntercomPayload({
+			to: "chat",
+			runId: "run-single",
+			mode: "single",
+			source: "async",
+			asyncId: "run-single",
+			children: [{ agent: "worker", status: "completed", summary: "done", sessionPath: "/tmp/session.jsonl" }],
+		});
+
+		assert.match(payload.message, /Revive: subagent\(\{ action: "resume", id: "run-single", message: "\.\.\." \}\)/);
+		assert.doesNotMatch(payload.message, /unsupported for multi-child/);
+	});
+
+	it("does not advertise revive for multi-child async results", () => {
+		const payload = buildSubagentResultIntercomPayload({
+			to: "chat",
+			runId: "run-multi",
+			mode: "parallel",
+			source: "async",
+			asyncId: "run-multi",
+			children: [
+				{ agent: "a", status: "completed", summary: "done", sessionPath: "/tmp/a.jsonl" },
+				{ agent: "b", status: "completed", summary: "done", sessionPath: "/tmp/b.jsonl" },
+			],
+		});
+
+		assert.doesNotMatch(payload.message, /Revive: subagent/);
+		assert.match(payload.message, /Resume: unsupported for multi-child async runs/);
 	});
 
 	it("keeps full child summaries inside grouped payloads", () => {

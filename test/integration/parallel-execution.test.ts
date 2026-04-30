@@ -25,9 +25,9 @@ import {
 } from "../support/helpers.ts";
 
 // Top-level await: try importing pi-dependent modules
-const utils = await tryImport<any>("./utils.ts");
-const execution = await tryImport<any>("./execution.ts");
-const executorMod = await tryImport<any>("./subagent-executor.ts");
+const utils = await tryImport<any>("./src/shared/utils.ts");
+const execution = await tryImport<any>("./src/runs/foreground/execution.ts");
+const executorMod = await tryImport<any>("./src/runs/foreground/subagent-executor.ts");
 const piAvailable = !!(execution && utils);
 
 const runSync = execution?.runSync;

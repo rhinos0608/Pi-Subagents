@@ -3,8 +3,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
-import { serializeAgent } from "../../agent-serializer.ts";
-import { discoverAgents, discoverAgentsAll, type AgentConfig } from "../../agents.ts";
+import { serializeAgent } from "../../src/agents/agent-serializer.ts";
+import { discoverAgents, discoverAgentsAll, type AgentConfig } from "../../src/agents/agents.ts";
 
 const tempDirs: string[] = [];
 

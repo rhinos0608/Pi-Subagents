@@ -9,7 +9,13 @@ interface AsyncJobTrackerModule {
 		pi: { events: { emit(channel: string, data: unknown): void } },
 		state: Record<string, unknown>,
 		asyncDirRoot: string,
-		options?: { completionRetentionMs?: number; pollIntervalMs?: number },
+		options?: {
+			completionRetentionMs?: number;
+			pollIntervalMs?: number;
+			resultsDir?: string;
+			kill?: (pid: number, signal?: NodeJS.Signals | 0) => boolean;
+			now?: () => number;
+		},
 	): {
 		resetJobs(ctx?: unknown): void;
 		handleStarted(data: unknown): void;
@@ -17,7 +23,7 @@ interface AsyncJobTrackerModule {
 	};
 }
 
-const trackerMod = await tryImport<AsyncJobTrackerModule>("./async-job-tracker.ts");
+const trackerMod = await tryImport<AsyncJobTrackerModule>("./src/runs/background/async-job-tracker.ts");
 const available = !!trackerMod;
 
 function createState() {
@@ -50,6 +56,12 @@ function createEventRecorder() {
 		},
 		events,
 	};
+}
+
+function pidGone(): never {
+	const error = new Error("missing") as NodeJS.ErrnoException;
+	error.code = "ESRCH";
+	throw error;
 }
 
 function createUiContext() {
@@ -165,6 +177,100 @@ describe("async job tracker", { skip: !available ? "pi packages not available" :
 		}
 	});
 
+	it("repairs stale running jobs during polling", async () => {
+		const asyncRoot = createTempDir("pi-async-job-stale-");
+		try {
+			const resultsDir = path.join(asyncRoot, "results");
+			const runDir = path.join(asyncRoot, "run-stale");
+			fs.mkdirSync(runDir, { recursive: true });
+			fs.writeFileSync(path.join(runDir, "status.json"), JSON.stringify({
+				runId: "run-stale",
+				mode: "single",
+				state: "running",
+				pid: 12345,
+				startedAt: Date.now() - 1000,
+				lastUpdate: Date.now() - 1000,
+				steps: [{ agent: "worker", status: "running", startedAt: Date.now() - 1000 }],
+			}), "utf-8");
+
+			const state = createState();
+			const ui = createUiContext();
+			const recorder = createEventRecorder();
+			const tracker = trackerMod!.createAsyncJobTracker(recorder.pi, state as never, asyncRoot, {
+				completionRetentionMs: 5,
+				pollIntervalMs: 10,
+				resultsDir,
+				kill: pidGone,
+				now: () => Date.now(),
+			});
+			tracker.resetJobs(ui.ctx as never);
+			tracker.handleStarted({ id: "run-stale", asyncDir: runDir, agent: "worker" });
+
+			await new Promise((resolve) => setTimeout(resolve, 80));
+
+			assert.equal(state.asyncJobs.size, 0);
+			assert.equal(JSON.parse(fs.readFileSync(path.join(runDir, "status.json"), "utf-8")).state, "failed");
+			assert.equal(JSON.parse(fs.readFileSync(path.join(resultsDir, "run-stale.json"), "utf-8")).success, false);
+			assert.ok(ui.renderRequests > 0, "expected stale repair cleanup to request a rerender");
+		} finally {
+			removeTempDir(asyncRoot);
+		}
+	});
+
+	it("repairs started jobs whose runner dies before writing status", async () => {
+		const asyncRoot = createTempDir("pi-async-job-no-status-");
+		try {
+			const resultsDir = path.join(asyncRoot, "results");
+			const runDir = path.join(asyncRoot, "run-no-status");
+			const state = createState();
+			const ui = createUiContext();
+			const recorder = createEventRecorder();
+			const tracker = trackerMod!.createAsyncJobTracker(recorder.pi, state as never, asyncRoot, {
+				completionRetentionMs: 5,
+				pollIntervalMs: 10,
+				resultsDir,
+				kill: pidGone,
+				now: () => Date.now() + 2000,
+			});
+			tracker.resetJobs(ui.ctx as never);
+			tracker.handleStarted({ id: "run-no-status", asyncDir: runDir, agent: "worker", pid: 12345 });
+
+			await new Promise((resolve) => setTimeout(resolve, 80));
+
+			assert.equal(state.asyncJobs.size, 0);
+			assert.equal(JSON.parse(fs.readFileSync(path.join(runDir, "status.json"), "utf-8")).state, "failed");
+			assert.equal(JSON.parse(fs.readFileSync(path.join(resultsDir, "run-no-status.json"), "utf-8")).success, false);
+			assert.ok(ui.renderRequests > 0, "expected startup-crash repair cleanup to request a rerender");
+		} finally {
+			removeTempDir(asyncRoot);
+		}
+	});
+
+	it("cleans up jobs when status polling hits a terminal read error", async () => {
+		const asyncRoot = createTempDir("pi-async-job-bad-status-");
+		try {
+			const runDir = path.join(asyncRoot, "run-bad-status");
+			fs.mkdirSync(runDir, { recursive: true });
+			fs.writeFileSync(path.join(runDir, "status.json"), "{", "utf-8");
+			const state = createState();
+			const ui = createUiContext();
+			const recorder = createEventRecorder();
+			const tracker = trackerMod!.createAsyncJobTracker(recorder.pi, state as never, asyncRoot, {
+				completionRetentionMs: 5,
+				pollIntervalMs: 10,
+			});
+			tracker.resetJobs(ui.ctx as never);
+			tracker.handleStarted({ id: "run-bad-status", asyncDir: runDir, agent: "worker" });
+
+			await new Promise((resolve) => setTimeout(resolve, 80));
+
+			assert.equal(state.asyncJobs.size, 0);
+			assert.ok(ui.renderRequests > 0, "expected malformed status cleanup to request a rerender");
+		} finally {
+			removeTempDir(asyncRoot);
+		}
+	});
+
 	it("keeps incomplete async control event lines for the next poll", async () => {
 		const asyncRoot = createTempDir("pi-async-job-tracker-");
 		try {
@@ -224,7 +330,7 @@ describe("async job tracker", { skip: !available ? "pi packages not available" :
 				lastUpdate: Date.now(),
 				currentTool: "edit",
 				currentToolStartedAt: Date.now() - 100,
-				currentPath: "subagent-runner.ts",
+				currentPath: "src/runs/background/subagent-runner.ts",
 				steps: [{ agent: "worker", status: "running" }],
 			}), "utf-8");
 
@@ -238,7 +344,7 @@ describe("async job tracker", { skip: !available ? "pi packages not available" :
 			await new Promise((resolve) => setTimeout(resolve, 30));
 			let job = state.asyncJobs.get("run-clear-tool");
 			assert.equal(job?.currentTool, "edit");
-			assert.equal(job?.currentPath, "subagent-runner.ts");
+			assert.equal(job?.currentPath, "src/runs/background/subagent-runner.ts");
 
 			fs.writeFileSync(path.join(runDir, "status.json"), JSON.stringify({
 				runId: "run-clear-tool",

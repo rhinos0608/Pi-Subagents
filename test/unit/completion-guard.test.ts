@@ -7,7 +7,7 @@ import {
 	evaluateCompletionMutationGuard,
 	expectsImplementationMutation,
 	hasMutationToolCall,
-} from "../../completion-guard.ts";
+} from "../../src/runs/shared/completion-guard.ts";
 
 function assistantToolCall(name: string, args: Record<string, unknown> = {}): Message {
 	return {

@@ -38,6 +38,7 @@ interface SubagentParamsSchema {
 		};
 		action?: {
 			type?: string;
+			enum?: string[];
 			description?: string;
 		};
 		control?: {
@@ -89,7 +90,7 @@ let schemas: Record<string, JsonSchemaNode> = {};
 let SubagentParams: SubagentParamsSchema | undefined;
 let schemasAvailable = true;
 try {
-	schemas = await import("../../schemas.ts") as Record<string, JsonSchemaNode>;
+	schemas = await import("../../src/extension/schemas.ts") as Record<string, JsonSchemaNode>;
 	SubagentParams = schemas.SubagentParams as SubagentParamsSchema;
 } catch (error) {
 	if (missingPackageName(error) !== "typebox") throw error;
@@ -138,13 +139,14 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 		assert.match(String(concurrencySchema.description ?? ""), /parallel/i);
 	});
 
-	it("includes diagnostics action documentation", () => {
+	it("uses an enum for management and control actions", () => {
 		const actionSchema = SubagentParams?.properties?.action;
 		assert.ok(actionSchema, "action schema should exist");
 		assert.equal(actionSchema.type, "string");
+		assert.deepEqual(actionSchema.enum, ["list", "get", "create", "update", "delete", "status", "interrupt", "resume", "doctor"]);
 		const description = String(actionSchema.description ?? "");
-		assert.match(description, /doctor/);
-		assert.match(description, /diagnostics/i);
+		assert.match(description, /Management\/control action/);
+		assert.match(description, /Omit for execution mode/);
 		assert.doesNotMatch(description, /orchestration\./);
 	});
 

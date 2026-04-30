@@ -4,8 +4,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { visibleWidth } from "@mariozechner/pi-tui";
-import { AgentManagerComponent, type AgentData, type AgentManagerOptions, type ManagerResult } from "../../agent-manager.ts";
-import { discoverAgentsAll, type AgentConfig, type ChainConfig } from "../../agents.ts";
+import { AgentManagerComponent, type AgentData, type AgentManagerOptions, type ManagerResult } from "../../src/manager-ui/agent-manager.ts";
+import { discoverAgentsAll, type AgentConfig, type ChainConfig } from "../../src/agents/agents.ts";
 
 const tempDirs: string[] = [];
 

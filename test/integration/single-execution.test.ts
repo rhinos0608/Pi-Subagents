@@ -24,7 +24,7 @@ import {
 	events,
 	tryImport,
 } from "../support/helpers.ts";
-import { INTERCOM_DETACH_REQUEST_EVENT, INTERCOM_DETACH_RESPONSE_EVENT } from "../../types.ts";
+import { INTERCOM_DETACH_REQUEST_EVENT, INTERCOM_DETACH_RESPONSE_EVENT } from "../../src/shared/types.ts";
 
 interface ModelAttempt {
 	success?: boolean;
@@ -87,8 +87,8 @@ interface UtilsModule {
 	getFinalOutput(messages: unknown[]): string;
 }
 
-const execution = await tryImport<ExecutionModule>("./execution.ts");
-const utils = await tryImport<UtilsModule>("./utils.ts");
+const execution = await tryImport<ExecutionModule>("./src/runs/foreground/execution.ts");
+const utils = await tryImport<UtilsModule>("./src/shared/utils.ts");
 const available = !!(execution && utils);
 
 const runSync = execution?.runSync;
@@ -256,13 +256,13 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 	it("escalates repeated mutating tool failures to needs attention", async () => {
 		mockPi.onCall({
 			jsonl: [
-				events.toolStart("edit", { path: "async-status.ts" }),
+				events.toolStart("edit", { path: "src/runs/background/async-status.ts" }),
 				events.toolEnd("edit"),
 				events.toolResult("edit", "No exact match found for async-status.ts", true),
-				events.toolStart("edit", { path: "async-status.ts" }),
+				events.toolStart("edit", { path: "src/runs/background/async-status.ts" }),
 				events.toolEnd("edit"),
 				events.toolResult("edit", "No exact match found for async-status.ts", true),
-				events.toolStart("edit", { path: "async-status.ts" }),
+				events.toolStart("edit", { path: "src/runs/background/async-status.ts" }),
 				events.toolEnd("edit"),
 				events.toolResult("edit", "No exact match found for async-status.ts", true),
 				events.assistantMessage("I need to retry the same edit."),
@@ -280,7 +280,7 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		assert.equal(result.exitCode, 0);
 		const failureEvent = controlEvents.find((event) => event.reason === "tool_failures");
 		assert.equal(failureEvent?.type, "needs_attention");
-		assert.equal(failureEvent?.currentPath, "async-status.ts");
+		assert.equal(failureEvent?.currentPath, "src/runs/background/async-status.ts");
 		assert.match(failureEvent?.recentFailureSummary ?? "", /No exact match/);
 		assert.equal(result.progress.activityState, "needs_attention");
 	});
@@ -678,7 +678,7 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		assert.equal(result.exitCode, 0);
 		const args = readCallArgs();
 		const extensionArgs = args.filter((arg, index) => args[index - 1] === "--extension");
-		assert.ok(extensionArgs.some((arg) => arg.endsWith("subagent-prompt-runtime.ts")));
+		assert.ok(extensionArgs.some((arg) => arg.endsWith("src/runs/shared/subagent-prompt-runtime.ts")));
 		assert.ok(extensionArgs.includes("./custom-tool.ts"));
 		assert.ok(extensionArgs.includes("./allowed-ext.ts"));
 	});
@@ -695,13 +695,14 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		const result = await runSync(tempDir, agents, "echo", "Task", {});
 		const elapsed = Date.now() - start;
 
-		assert.ok(elapsed < 9000, `should force-drain instead of hanging, took ${elapsed}ms`);
+		assert.ok(elapsed < 4000, `should clean up shortly after terminal stop, took ${elapsed}ms`);
 		assert.equal(result.exitCode, 0);
 		assert.equal(result.error, undefined);
 		assert.equal(result.finalOutput, "done-before-drain");
+		assert.ok(!(result.progress?.recentOutput ?? []).some((line) => line.includes("Forcing termination")));
 	});
 
-	it("keeps forced drain after empty assistant output as failure", async () => {
+	it("treats forced drain after empty terminal assistant output as cleanup success", async () => {
 		mockPi.onCall({
 			jsonl: [{
 				type: "message_end",
@@ -717,10 +718,40 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		});
 		const agents = makeAgentConfigs(["echo"]);
 
+		const start = Date.now();
+		const result = await runSync(tempDir, agents, "echo", "Task", {});
+		const elapsed = Date.now() - start;
+
+		assert.ok(elapsed < 4000, `should clean up shortly after empty terminal stop, took ${elapsed}ms`);
+		assert.equal(result.exitCode, 0);
+		assert.equal(result.error, undefined);
+		assert.equal(result.finalOutput, "");
+		assert.equal(result.progress.status, "completed");
+		assert.ok(!(result.progress?.recentOutput ?? []).some((line) => line.includes("Forcing termination")));
+	});
+
+	it("keeps explicit assistant errors as failures during final-drain cleanup", async () => {
+		mockPi.onCall({
+			jsonl: [{
+				type: "message_end",
+				message: {
+					role: "assistant",
+					content: [{ type: "text", text: "failed" }],
+					model: "mock/test-model",
+					stopReason: "stop",
+					errorMessage: "provider exploded",
+					usage: { input: 100, output: 0, cacheRead: 0, cacheWrite: 0, cost: { total: 0.001 } },
+				},
+			}],
+			keepAliveAfterFinalMessageMs: 10000,
+		});
+		const agents = makeAgentConfigs(["echo"]);
+
 		const result = await runSync(tempDir, agents, "echo", "Task", {});
 
 		assert.equal(result.exitCode, 1);
-		assert.match(result.error ?? "", /did not exit within 5000ms after its final message/);
+		assert.equal(result.error, "provider exploded");
+		assert.equal(result.progress.status, "failed");
 	});
 
 	it("handles abort signal (completes faster than delay)", async () => {

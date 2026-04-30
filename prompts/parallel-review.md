@@ -37,4 +37,8 @@ While reviewers run, do your own narrow inspection if useful. After they return,
 
 Do not blindly apply every reviewer suggestion. Ask before applying fixes unless I already told you to address review feedback.
 
+Additional review target or focus from the slash command invocation:
+
 $@
+
+If the invocation provides a URL, issue link, file path, plan path, or freeform focus, treat it as the primary review scope. Read or fetch that target before assigning reviewer angles, and pass the target explicitly into each reviewer task.

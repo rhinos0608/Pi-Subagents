@@ -4,8 +4,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { MockPi } from "../support/helpers.ts";
 import { createEventBus, createMockPi, createTempDir, events, removeTempDir, tryImport } from "../support/helpers.ts";
-import { discoverAgents } from "../../agents.ts";
-import { INTERCOM_DETACH_REQUEST_EVENT } from "../../types.ts";
+import { discoverAgents } from "../../src/agents/agents.ts";
+import { INTERCOM_DETACH_REQUEST_EVENT } from "../../src/shared/types.ts";
 
 interface ExecutorModule {
 	createSubagentExecutor?: (...args: unknown[]) => {
@@ -36,8 +36,8 @@ interface ProgressUpdate {
 	};
 }
 
-const executorMod = await tryImport<ExecutorModule>("./subagent-executor.ts");
-const asyncExecutionMod = await tryImport<AsyncExecutionModule>("./async-execution.ts");
+const executorMod = await tryImport<ExecutorModule>("./src/runs/foreground/subagent-executor.ts");
+const asyncExecutionMod = await tryImport<AsyncExecutionModule>("./src/runs/background/async-execution.ts");
 const available = !!executorMod;
 const createSubagentExecutor = executorMod?.createSubagentExecutor;
 const asyncAvailable = asyncExecutionMod?.isAsyncAvailable?.() === true;

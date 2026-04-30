@@ -3,8 +3,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
-import { SubagentsStatusComponent } from "../../subagents-status.ts";
-import type { AsyncRunOverlayData } from "../../async-status.ts";
+import { SubagentsStatusComponent } from "../../src/tui/subagents-status.ts";
+import type { AsyncRunOverlayData } from "../../src/runs/background/async-status.ts";
 
 type StatusTui = ConstructorParameters<typeof SubagentsStatusComponent>[0];
 type StatusTheme = ConstructorParameters<typeof SubagentsStatusComponent>[1];

@@ -23,7 +23,7 @@ import {
 	tryImport,
 	events,
 } from "../support/helpers.ts";
-import { INTERCOM_DETACH_REQUEST_EVENT } from "../../types.ts";
+import { INTERCOM_DETACH_REQUEST_EVENT } from "../../src/shared/types.ts";
 
 interface TestSequentialStep {
 	agent: string;
@@ -78,7 +78,7 @@ interface ChainExecutionModule {
 	executeChain(params: Record<string, unknown>): Promise<ChainExecutionResult>;
 }
 
-const chainMod = await tryImport<ChainExecutionModule>("./chain-execution.ts");
+const chainMod = await tryImport<ChainExecutionModule>("./src/runs/foreground/chain-execution.ts");
 const available = !!chainMod;
 const executeChain = chainMod?.executeChain;
 

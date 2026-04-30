@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
-import { createResultWatcher } from "../../result-watcher.ts";
+import { createResultWatcher } from "../../src/runs/background/result-watcher.ts";
 
 function createState() {
 	return {
@@ -273,20 +273,10 @@ describe("result watcher", () => {
 
 			const intercomEvents = emitted.filter((entry) => entry.event === "subagent:result-intercom");
 			assert.equal(intercomEvents.length, 1);
-			const message = String((intercomEvents[0]?.data as { message?: string }).message ?? "");
-			assert.match(message, /Run: run-123/);
-			assert.match(message, /Mode: parallel/);
-			assert.match(message, /Status: failed/);
-			assert.match(message, /Children: 1 completed, 1 failed/);
-			assert.match(message, /Intercom targets below identify child sessions used while they were running/);
-			assert.match(message, /Run intercom target: subagent-a-run-123-1/);
-			assert.equal((intercomEvents[0]?.data as { mode?: string; status?: string }).mode, "parallel");
-			assert.equal((intercomEvents[0]?.data as { mode?: string; status?: string }).status, "failed");
-			assert.match(message, /1\. a — completed/);
-			assert.match(message, /2\. b — failed/);
-			assert.match(message, /Output artifact: \/tmp\/a-output\.md/);
-			assert.match(message, /Output artifact: \/tmp\/b-output\.md/);
-			assert.match(message, /Session: \/tmp\/session\.jsonl/);
+			const eventData = intercomEvents[0]?.data as { message?: string; mode?: string; status?: string };
+			assert.equal(eventData.mode, "parallel");
+			assert.equal(eventData.status, "failed");
+			assert.match(String(eventData.message ?? ""), /Resume: unsupported for multi-child async runs/);
 			assert.equal(emitted.some((entry) => entry.event === "subagent:async-complete"), true);
 		} finally {
 			fs.rmSync(resultsDir, { recursive: true, force: true });

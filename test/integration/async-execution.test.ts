@@ -62,10 +62,10 @@ interface ExecutorModule {
 	};
 }
 
-const asyncMod = await tryImport<AsyncExecutionModule>("./async-execution.ts");
-const utils = await tryImport<UtilsModule>("./utils.ts");
-const typesMod = await tryImport<TypesModule>("./types.ts");
-const executorMod = await tryImport<ExecutorModule>("./subagent-executor.ts");
+const asyncMod = await tryImport<AsyncExecutionModule>("./src/runs/background/async-execution.ts");
+const utils = await tryImport<UtilsModule>("./src/shared/utils.ts");
+const typesMod = await tryImport<TypesModule>("./src/shared/types.ts");
+const executorMod = await tryImport<ExecutorModule>("./src/runs/foreground/subagent-executor.ts");
 const available = !!(asyncMod && utils && typesMod);
 
 const isAsyncAvailable = asyncMod?.isAsyncAvailable;
@@ -857,6 +857,7 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		const resultPath = path.join(RESULTS_DIR, `${id}.json`);
 		const sessionRoot = path.join(tempDir, "sessions");
 
+		const start = Date.now();
 		executeAsyncSingle(id, {
 			agent: "worker",
 			task: "Do work",
@@ -883,11 +884,92 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 			await new Promise((resolve) => setTimeout(resolve, 100));
 		}
 
+		const elapsed = Date.now() - start;
 		const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8"));
+		assert.ok(elapsed < 4000, `should clean up async child shortly after terminal stop, took ${elapsed}ms`);
 		assert.equal(payload.success, true);
 		assert.equal(payload.exitCode, 0);
 		assert.equal(payload.results[0].success, true);
 		assert.equal(payload.results[0].output, "async-done-before-drain");
+	});
+
+	it("background forced drain after empty terminal assistant output is cleanup success", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
+		mockPi.onCall({
+			jsonl: [events.assistantMessage("")],
+			keepAliveAfterFinalMessageMs: 10000,
+		});
+
+		const id = `async-final-drain-empty-${Date.now().toString(36)}`;
+		const resultPath = path.join(RESULTS_DIR, `${id}.json`);
+
+		const start = Date.now();
+		executeAsyncSingle(id, {
+			agent: "scout",
+			task: "Inspect something",
+			agentConfig: makeAgent("scout"),
+			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
+			artifactConfig: { enabled: false, includeInput: false, includeOutput: false, includeJsonl: false, includeMetadata: false, cleanupDays: 7 },
+			shareEnabled: false,
+			sessionRoot: path.join(tempDir, "sessions"),
+			maxSubagentDepth: 2,
+		});
+
+		const deadline = Date.now() + 10_000;
+		while (!fs.existsSync(resultPath)) {
+			if (Date.now() > deadline) assert.fail(`Timed out waiting for async result file: ${resultPath}`);
+			await new Promise((resolve) => setTimeout(resolve, 100));
+		}
+
+		const elapsed = Date.now() - start;
+		const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8"));
+		assert.ok(elapsed < 4000, `should clean up async child shortly after empty terminal stop, took ${elapsed}ms`);
+		assert.equal(payload.success, true);
+		assert.equal(payload.exitCode, 0);
+		assert.equal(payload.results[0].success, true);
+		assert.equal(payload.results[0].output, "");
+	});
+
+	it("background final-drain cleanup preserves explicit assistant errors", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
+		mockPi.onCall({
+			jsonl: [{
+				type: "message_end",
+				message: {
+					role: "assistant",
+					content: [{ type: "text", text: "failed" }],
+					model: "mock/test-model",
+					stopReason: "stop",
+					errorMessage: "provider exploded",
+					usage: { input: 100, output: 0, cacheRead: 0, cacheWrite: 0, cost: { total: 0.001 } },
+				},
+			}],
+			keepAliveAfterFinalMessageMs: 10000,
+		});
+
+		const id = `async-final-drain-error-${Date.now().toString(36)}`;
+		const resultPath = path.join(RESULTS_DIR, `${id}.json`);
+
+		executeAsyncSingle(id, {
+			agent: "worker",
+			task: "Do work",
+			agentConfig: makeAgent("worker"),
+			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
+			artifactConfig: { enabled: false, includeInput: false, includeOutput: false, includeJsonl: false, includeMetadata: false, cleanupDays: 7 },
+			shareEnabled: false,
+			sessionRoot: path.join(tempDir, "sessions"),
+			maxSubagentDepth: 2,
+		});
+
+		const deadline = Date.now() + 10_000;
+		while (!fs.existsSync(resultPath)) {
+			if (Date.now() > deadline) assert.fail(`Timed out waiting for async result file: ${resultPath}`);
+			await new Promise((resolve) => setTimeout(resolve, 100));
+		}
+
+		const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8"));
+		assert.equal(payload.success, false);
+		assert.equal(payload.exitCode, 1);
+		assert.equal(payload.results[0].success, false);
+		assert.equal(payload.results[0].error, "provider exploded");
 	});
 
 	it("background runs emit active-long-running control events from child turns", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
@@ -950,9 +1032,9 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 	it("background runs escalate repeated mutating tool failures", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
 		mockPi.onCall({
 			steps: [
-				{ jsonl: [events.toolStart("edit", { path: "subagent-runner.ts" }), events.toolEnd("edit"), events.toolResult("edit", "No exact match found for subagent-runner.ts", true)] },
-				{ jsonl: [events.toolStart("edit", { path: "subagent-runner.ts" }), events.toolEnd("edit"), events.toolResult("edit", "No exact match found for subagent-runner.ts", true)] },
-				{ jsonl: [events.toolStart("edit", { path: "subagent-runner.ts" }), events.toolEnd("edit"), events.toolResult("edit", "No exact match found for subagent-runner.ts", true)] },
+				{ jsonl: [events.toolStart("edit", { path: "src/runs/background/subagent-runner.ts" }), events.toolEnd("edit"), events.toolResult("edit", "No exact match found for subagent-runner.ts", true)] },
+				{ jsonl: [events.toolStart("edit", { path: "src/runs/background/subagent-runner.ts" }), events.toolEnd("edit"), events.toolResult("edit", "No exact match found for subagent-runner.ts", true)] },
+				{ jsonl: [events.toolStart("edit", { path: "src/runs/background/subagent-runner.ts" }), events.toolEnd("edit"), events.toolResult("edit", "No exact match found for subagent-runner.ts", true)] },
 				{ delay: 500, jsonl: [events.assistantMessage("I need another attempt.")] },
 			],
 		});

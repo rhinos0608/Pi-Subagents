@@ -1,0 +1,340 @@
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { formatDuration, formatTokens, shortenPath } from "../../shared/formatters.ts";
+import { type ActivityState, type AsyncParallelGroupStatus, type AsyncStatus, type TokenUsage } from "../../shared/types.ts";
+import { DEFAULT_CONTROL_CONFIG, deriveActivityState } from "../shared/subagent-control.ts";
+import { readStatus } from "../../shared/utils.ts";
+import { reconcileAsyncRun } from "./stale-run-reconciler.ts";
+
+interface AsyncRunStepSummary {
+	index: number;
+	agent: string;
+	status: string;
+	activityState?: ActivityState;
+	lastActivityAt?: number;
+	currentTool?: string;
+	currentToolStartedAt?: number;
+	currentPath?: string;
+	turnCount?: number;
+	toolCount?: number;
+	durationMs?: number;
+	tokens?: TokenUsage;
+	skills?: string[];
+	model?: string;
+	attemptedModels?: string[];
+	error?: string;
+}
+
+export interface AsyncRunSummary {
+	id: string;
+	asyncDir: string;
+	state: "queued" | "running" | "complete" | "failed" | "paused";
+	activityState?: ActivityState;
+	lastActivityAt?: number;
+	currentTool?: string;
+	currentToolStartedAt?: number;
+	currentPath?: string;
+	turnCount?: number;
+	toolCount?: number;
+	mode: "single" | "chain";
+	cwd?: string;
+	startedAt: number;
+	lastUpdate?: number;
+	endedAt?: number;
+	currentStep?: number;
+	chainStepCount?: number;
+	parallelGroups?: AsyncParallelGroupStatus[];
+	steps: AsyncRunStepSummary[];
+	sessionDir?: string;
+	outputFile?: string;
+	totalTokens?: TokenUsage;
+	sessionFile?: string;
+}
+
+function isValidParallelGroup(group: AsyncParallelGroupStatus, stepCount: number, chainStepCount: number): boolean {
+	return Number.isInteger(group.start)
+		&& Number.isInteger(group.count)
+		&& Number.isInteger(group.stepIndex)
+		&& group.start >= 0
+		&& group.count > 0
+		&& group.stepIndex >= 0
+		&& group.stepIndex < chainStepCount
+		&& group.start + group.count <= stepCount;
+}
+
+function normalizeParallelGroups(groups: AsyncParallelGroupStatus[] | undefined, stepCount: number, chainStepCount: number): AsyncParallelGroupStatus[] {
+	if (!groups?.length) return [];
+	return groups.filter((group) => isValidParallelGroup(group, stepCount, chainStepCount));
+}
+
+function flatToLogicalStepIndex(flatIndex: number, chainStepCount: number, parallelGroups: AsyncParallelGroupStatus[]): number {
+	let logicalIndex = 0;
+	let cursor = 0;
+	for (const group of parallelGroups) {
+		while (logicalIndex < chainStepCount && cursor < group.start) {
+			if (flatIndex === cursor) return logicalIndex;
+			logicalIndex++;
+			cursor++;
+		}
+		if (flatIndex >= group.start && flatIndex < group.start + group.count) return group.stepIndex;
+		logicalIndex = Math.max(logicalIndex, group.stepIndex + 1);
+		cursor = group.start + group.count;
+	}
+	while (logicalIndex < chainStepCount) {
+		if (flatIndex === cursor) return logicalIndex;
+		logicalIndex++;
+		cursor++;
+	}
+	return Math.max(0, chainStepCount - 1);
+}
+
+interface AsyncRunListOptions {
+	states?: Array<AsyncRunSummary["state"]>;
+	limit?: number;
+	resultsDir?: string;
+	kill?: (pid: number, signal?: NodeJS.Signals | 0) => boolean;
+	now?: () => number;
+	reconcile?: boolean;
+}
+
+export interface AsyncRunOverlayData {
+	active: AsyncRunSummary[];
+	recent: AsyncRunSummary[];
+}
+
+function getErrorMessage(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}
+
+function isNotFoundError(error: unknown): boolean {
+	return typeof error === "object"
+		&& error !== null
+		&& "code" in error
+		&& (error as NodeJS.ErrnoException).code === "ENOENT";
+}
+
+function isAsyncRunDir(root: string, entry: string): boolean {
+	const entryPath = path.join(root, entry);
+	try {
+		return fs.statSync(entryPath).isDirectory();
+	} catch (error) {
+		if (isNotFoundError(error)) return false;
+		throw new Error(`Failed to inspect async run path '${entryPath}': ${getErrorMessage(error)}`, {
+			cause: error instanceof Error ? error : undefined,
+		});
+	}
+}
+
+function outputFileMtime(outputFile: string | undefined): number | undefined {
+	if (!outputFile) return undefined;
+	try {
+		return fs.statSync(outputFile).mtimeMs;
+	} catch (error) {
+		if (isNotFoundError(error)) return undefined;
+		throw new Error(`Failed to inspect async output file '${outputFile}': ${getErrorMessage(error)}`, {
+			cause: error instanceof Error ? error : undefined,
+		});
+	}
+}
+
+function deriveAsyncActivityState(asyncDir: string, status: AsyncStatus): { activityState?: ActivityState; lastActivityAt?: number } {
+	if (status.state !== "running") return { activityState: status.activityState, lastActivityAt: status.lastActivityAt };
+	const outputPath = status.outputFile ? (path.isAbsolute(status.outputFile) ? status.outputFile : path.join(asyncDir, status.outputFile)) : undefined;
+	const currentStep = typeof status.currentStep === "number" ? status.steps?.[status.currentStep] : undefined;
+	const lastActivityAt = status.lastActivityAt ?? outputFileMtime(outputPath) ?? currentStep?.lastActivityAt ?? currentStep?.startedAt ?? status.startedAt;
+	return {
+		lastActivityAt,
+		activityState: status.activityState ?? deriveActivityState({
+			config: DEFAULT_CONTROL_CONFIG,
+			startedAt: status.startedAt,
+			lastActivityAt,
+		}),
+	};
+}
+
+function statusToSummary(asyncDir: string, status: AsyncStatus & { cwd?: string }): AsyncRunSummary {
+	const { activityState, lastActivityAt } = deriveAsyncActivityState(asyncDir, status);
+	const steps = status.steps ?? [];
+	const chainStepCount = status.chainStepCount ?? steps.length;
+	const parallelGroups = normalizeParallelGroups(status.parallelGroups, steps.length, chainStepCount);
+	return {
+		id: status.runId || path.basename(asyncDir),
+		asyncDir,
+		state: status.state,
+		activityState,
+		lastActivityAt,
+		currentTool: status.currentTool,
+		currentToolStartedAt: status.currentToolStartedAt,
+		currentPath: status.currentPath,
+		turnCount: status.turnCount,
+		toolCount: status.toolCount,
+		mode: status.mode,
+		cwd: status.cwd,
+		startedAt: status.startedAt,
+		lastUpdate: status.lastUpdate,
+		endedAt: status.endedAt,
+		currentStep: status.currentStep,
+		...(status.chainStepCount !== undefined ? { chainStepCount: status.chainStepCount } : {}),
+		...(parallelGroups.length ? { parallelGroups } : {}),
+		steps: steps.map((step, index) => {
+			const stepActivityState = step.activityState;
+			const stepLastActivityAt = step.lastActivityAt;
+			return {
+				index,
+				agent: step.agent,
+				status: step.status,
+				...(stepActivityState ? { activityState: stepActivityState } : {}),
+				...(stepLastActivityAt ? { lastActivityAt: stepLastActivityAt } : {}),
+				...(step.currentTool ? { currentTool: step.currentTool } : {}),
+				...(step.currentToolStartedAt ? { currentToolStartedAt: step.currentToolStartedAt } : {}),
+				...(step.currentPath ? { currentPath: step.currentPath } : {}),
+				...(step.turnCount !== undefined ? { turnCount: step.turnCount } : {}),
+				...(step.toolCount !== undefined ? { toolCount: step.toolCount } : {}),
+				...(step.durationMs !== undefined ? { durationMs: step.durationMs } : {}),
+				...(step.tokens ? { tokens: step.tokens } : {}),
+				...(step.skills ? { skills: step.skills } : {}),
+				...(step.model ? { model: step.model } : {}),
+				...(step.attemptedModels ? { attemptedModels: step.attemptedModels } : {}),
+				...(step.error ? { error: step.error } : {}),
+			};
+		}),
+		...(status.sessionDir ? { sessionDir: status.sessionDir } : {}),
+		...(status.outputFile ? { outputFile: status.outputFile } : {}),
+		...(status.totalTokens ? { totalTokens: status.totalTokens } : {}),
+		...(status.sessionFile ? { sessionFile: status.sessionFile } : {}),
+	};
+}
+
+function sortRuns(runs: AsyncRunSummary[]): AsyncRunSummary[] {
+	const rank = (state: AsyncRunSummary["state"]): number => {
+		switch (state) {
+			case "running": return 0;
+			case "queued": return 1;
+		case "failed": return 2;
+		case "paused": return 2;
+		case "complete": return 3;
+		}
+	};
+	return [...runs].sort((a, b) => {
+		const byState = rank(a.state) - rank(b.state);
+		if (byState !== 0) return byState;
+		const aTime = a.lastUpdate ?? a.endedAt ?? a.startedAt;
+		const bTime = b.lastUpdate ?? b.endedAt ?? b.startedAt;
+		return bTime - aTime;
+	});
+}
+
+export function listAsyncRuns(asyncDirRoot: string, options: AsyncRunListOptions = {}): AsyncRunSummary[] {
+	let entries: string[];
+	try {
+		entries = fs.readdirSync(asyncDirRoot).filter((entry) => isAsyncRunDir(asyncDirRoot, entry));
+	} catch (error) {
+		if (isNotFoundError(error)) return [];
+		throw new Error(`Failed to list async runs in '${asyncDirRoot}': ${getErrorMessage(error)}`, {
+			cause: error instanceof Error ? error : undefined,
+		});
+	}
+
+	const allowedStates = options.states ? new Set(options.states) : undefined;
+	const runs: AsyncRunSummary[] = [];
+	for (const entry of entries) {
+		const asyncDir = path.join(asyncDirRoot, entry);
+		const reconciliation = options.reconcile === false
+			? undefined
+			: reconcileAsyncRun(asyncDir, { resultsDir: options.resultsDir, kill: options.kill, now: options.now });
+		const status = (reconciliation?.status ?? readStatus(asyncDir)) as (AsyncStatus & { cwd?: string }) | null;
+		if (!status) continue;
+		const summary = statusToSummary(asyncDir, status);
+		if (allowedStates && !allowedStates.has(summary.state)) continue;
+		runs.push(summary);
+	}
+
+	const sorted = sortRuns(runs);
+	return options.limit !== undefined ? sorted.slice(0, options.limit) : sorted;
+}
+
+export function listAsyncRunsForOverlay(asyncDirRoot: string, recentLimit = 5): AsyncRunOverlayData {
+	const all = listAsyncRuns(asyncDirRoot);
+	const recent = all
+		.filter((run) => run.state === "complete" || run.state === "failed" || run.state === "paused")
+		.sort((a, b) => (b.lastUpdate ?? b.endedAt ?? b.startedAt) - (a.lastUpdate ?? a.endedAt ?? a.startedAt))
+		.slice(0, recentLimit);
+	return {
+		active: all.filter((run) => run.state === "queued" || run.state === "running"),
+		recent,
+	};
+}
+
+function formatActivityFacts(input: { activityState?: ActivityState; lastActivityAt?: number; currentTool?: string; currentToolStartedAt?: number; currentPath?: string; turnCount?: number; toolCount?: number }): string | undefined {
+	const facts: string[] = [];
+	if (input.currentTool && input.currentToolStartedAt) facts.push(`tool ${input.currentTool} ${formatDuration(Math.max(0, Date.now() - input.currentToolStartedAt))}`);
+	else if (input.currentTool) facts.push(`tool ${input.currentTool}`);
+	if (input.currentPath) facts.push(shortenPath(input.currentPath));
+	if (input.turnCount !== undefined) facts.push(`${input.turnCount} turns`);
+	if (input.toolCount !== undefined) facts.push(`${input.toolCount} tools`);
+	if (!input.lastActivityAt) {
+		if (input.activityState === "needs_attention") return ["needs attention", ...facts].join(" | ");
+		if (input.activityState === "active_long_running") return ["active but long-running", ...facts].join(" | ");
+		return facts.length ? facts.join(" | ") : undefined;
+	}
+	const elapsed = formatDuration(Math.max(0, Date.now() - input.lastActivityAt));
+	if (input.activityState === "needs_attention") return [`no activity for ${elapsed}`, ...facts].join(" | ");
+	if (input.activityState === "active_long_running") return [`active but long-running; last activity ${elapsed} ago`, ...facts].join(" | ");
+	return [`active ${elapsed} ago`, ...facts].join(" | ");
+}
+
+function formatStepLine(step: AsyncRunStepSummary): string {
+	const parts = [`${step.index + 1}. ${step.agent}`, step.status];
+	const activity = formatActivityFacts(step);
+	if (activity) parts.push(activity);
+	if (step.model) parts.push(step.model);
+	if (step.durationMs !== undefined) parts.push(formatDuration(step.durationMs));
+	if (step.tokens) parts.push(`${formatTokens(step.tokens.total)} tok`);
+	return parts.join(" | ");
+}
+
+export function formatAsyncRunProgressLabel(run: Pick<AsyncRunSummary, "mode" | "state" | "currentStep" | "chainStepCount" | "parallelGroups" | "steps">): string {
+	const stepCount = run.steps.length || 1;
+	const chainStepCount = run.chainStepCount ?? stepCount;
+	const groups = normalizeParallelGroups(run.parallelGroups, run.steps.length, chainStepCount);
+	const activeGroup = run.currentStep !== undefined
+		? groups.find((group) => run.currentStep! >= group.start && run.currentStep! < group.start + group.count)
+		: undefined;
+	if (run.mode === "chain" && activeGroup) {
+		const groupSteps = run.steps.slice(activeGroup.start, activeGroup.start + activeGroup.count);
+		const running = groupSteps.filter((step) => step.status === "running").length;
+		const done = groupSteps.filter((step) => step.status === "complete" || step.status === "completed").length;
+		const runningLabel = running === 1 ? "1 agent running" : `${running} agents running`;
+		const groupLabel = run.state === "running"
+			? `parallel group: ${runningLabel} · ${done}/${activeGroup.count} done`
+			: `parallel group: ${done}/${activeGroup.count} done`;
+		return `step ${activeGroup.stepIndex + 1}/${chainStepCount} · ${groupLabel}`;
+	}
+	if (run.mode === "chain" && run.currentStep !== undefined && groups.length > 0) {
+		const logicalStep = flatToLogicalStepIndex(run.currentStep, chainStepCount, groups);
+		return `step ${logicalStep + 1}/${chainStepCount}`;
+	}
+	return run.currentStep !== undefined ? `step ${run.currentStep + 1}/${stepCount}` : `steps ${stepCount}`;
+}
+
+function formatRunHeader(run: AsyncRunSummary): string {
+	const stepLabel = formatAsyncRunProgressLabel(run);
+	const cwd = run.cwd ? shortenPath(run.cwd) : shortenPath(run.asyncDir);
+	const activity = formatActivityFacts(run);
+	return `${run.id} | ${run.state}${activity ? ` | ${activity}` : ""} | ${run.mode} | ${stepLabel} | ${cwd}`;
+}
+
+export function formatAsyncRunList(runs: AsyncRunSummary[], heading = "Active async runs"): string {
+	if (runs.length === 0) return `No ${heading.toLowerCase()}.`;
+
+	const lines = [`${heading}: ${runs.length}`, ""];
+	for (const run of runs) {
+		lines.push(`- ${formatRunHeader(run)}`);
+		for (const step of run.steps) {
+			lines.push(`  ${formatStepLine(step)}`);
+		}
+		if (run.sessionFile) lines.push(`  session: ${shortenPath(run.sessionFile)}`);
+		lines.push("");
+	}
+	return lines.join("\n").trimEnd();
+}

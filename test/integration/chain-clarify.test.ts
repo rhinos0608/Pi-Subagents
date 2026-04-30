@@ -21,7 +21,7 @@ interface ClarifyTestModule {
 	ChainClarifyComponent: new (...args: unknown[]) => ClarifyTestComponent;
 }
 
-const clarifyMod = await tryImport<ClarifyTestModule>("./chain-clarify.ts");
+const clarifyMod = await tryImport<ClarifyTestModule>("./src/runs/foreground/chain-clarify.ts");
 const available = !!clarifyMod;
 const ChainClarifyComponent = clarifyMod?.ChainClarifyComponent;
 

@@ -26,8 +26,7 @@
     "pi-subagents": "install.mjs"
   },
   "files": [
-    "*.ts",
-    "!*.test.ts",
+    "src/**/*.ts",
     "*.mjs",
     "agents/",
     "skills/**/*",
@@ -43,7 +42,7 @@
   },
   "pi": {
     "extensions": [
-      "./index.ts"
+      "./src/extension/index.ts"
     ],
     "skills": [
       "./skills"

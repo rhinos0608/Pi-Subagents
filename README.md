@@ -1,5 +1,5 @@
 <p>
-  <img src="banner.png" alt="pi-subagents" width="1100">
+  <img src="https://raw.githubusercontent.com/nicobailon/pi-subagents/main/banner.png" alt="pi-subagents" width="1100">
 </p>
 
 # pi-subagents
@@ -196,6 +196,8 @@ The package includes reusable prompt templates for common workflows. You do not 
 |--------|------------|
 | `/parallel-review` | Launch fresh-context reviewers with distinct angles, then synthesize what to fix. |
 | `/parallel-research` | Combine `researcher` and `scout` for external evidence, local code context, and practical tradeoffs. |
+| `/parallel-context-build` | Run `context-builder` agents in parallel to produce planning handoff context and meta-prompts. |
+| `/parallel-handoff-plan` | Combine external research and `context-builder` passes into an implementation handoff plan and meta-prompt. |
 | `/gather-context-and-clarify` | Scout/research first, then ask the user the clarification questions that matter. |
 | `/parallel-cleanup` | Run review-only cleanup passes after implementation. |
 
@@ -618,6 +620,20 @@ Injected skills use this shape:
 
 Missing skills do not fail execution. The result summary shows a warning.
 
+### Bundled skill
+
+The package bundles a `pi-subagents` skill that is automatically available to the parent agent when the extension is installed. It is for the orchestrating parent only: child subagents never receive it, and their context is explicitly filtered to strip parent-only orchestration instructions.
+
+What the bundled skill covers:
+- **Delegation patterns**: when to launch which agent, whether to use single, parallel, chain, or async mode, and whether to use fresh or forked context
+- **Prompt workflow recipes**: how to apply the packaged techniques directly with `subagent(...)` when the user describes the workflow in natural language instead of invoking a slash command. This includes parallel review, parallel research, parallel context-build, parallel handoff-plan, gather-context-and-clarify, and parallel cleanup
+- **GPT-5.5 prompting guidance**: compact contract prompts instead of long scripts, what to include in role-specific meta prompts, and retrieval budgets for researchers
+- **Safety boundaries**: child agents must not run subagents, must not invent intercom targets, and must escalate unapproved decisions
+- **Intercom conventions**: when to ask vs send, and how parent-side result delivery works with `pi-intercom`
+- **Control and diagnostics**: attention signals, soft interrupts, status, and the `doctor` action
+
+If you are writing an agent that orchestrates subagents, the bundled skill helps it behave correctly without guessing the patterns. If you are a human user, you do not need to read it directly; the README and prompt shortcuts encode the same workflows in user-facing form.
+
 ## Programmatic tool usage
 
 These are the parameters the LLM passes when it calls the `subagent` tool. Most users ask naturally or use slash commands instead.
@@ -719,7 +735,7 @@ Agent definitions are not loaded into context by default. Management actions let
 |-------|------|---------|-------------|
 | `agent` | string | - | Agent name for single mode, or target for management actions. |
 | `task` | string | - | Task string for single mode. |
-| `action` | string | - | `list`, `get`, `create`, `update`, `delete`, `status`, `interrupt`, or `doctor`. |
+| `action` | string | - | `list`, `get`, `create`, `update`, `delete`, `status`, `interrupt`, `resume`, or `doctor`. |
 | `chainName` | string | - | Chain name for management actions. |
 | `config` | object/string | - | Agent or chain config for create/update. |
 | `output` | `string \| false` | agent default | Override single-agent output file. |
@@ -751,8 +767,11 @@ Status and control actions:
 subagent({ action: "status" })
 subagent({ action: "status", id: "<run-id>" })
 subagent({ action: "interrupt", id: "<run-id>" })
+subagent({ action: "resume", id: "<async-run-id>", message: "follow-up question" })
 subagent({ action: "doctor" })
 ```
+
+`resume` sends the follow-up directly when the async child is still reachable over intercom. After completion, it starts a new async child from the stored single-child session file.
 
 ## Worktree isolation
 
@@ -971,7 +990,7 @@ Intercom delivery events:
 - `subagent:control-intercom`
 - `subagent:result-intercom`
 
-The result watcher emits `subagent:async-complete`; `index.ts` registers the notification handler that consumes it. Control/attention events are surfaced as visible parent notices and persisted for async runs. With `pi-intercom`, needs-attention notices and grouped parent-side subagent result deliveries can reach the orchestrator over intercom.
+The result watcher emits `subagent:async-complete`; `src/extension/index.ts` registers the notification handler that consumes it. Control/attention events are surfaced as visible parent notices and persisted for async runs. With `pi-intercom`, needs-attention notices and grouped parent-side subagent result deliveries can reach the orchestrator over intercom.
 
 ## Prompt-template integration
 
@@ -999,17 +1018,17 @@ The main runtime files are:
 
 | File | Purpose |
 |------|---------|
-| `index.ts` | Extension registration, tool registration, message/render wiring. |
-| `agents.ts` | Agent and chain discovery, frontmatter parsing. |
-| `subagent-executor.ts` | Main execution routing for single, parallel, chain, management, status, interrupt, and doctor actions. |
-| `execution.ts` | Core foreground `runSync` handling. |
-| `subagent-runner.ts` | Detached async runner. |
-| `async-execution.ts` | Background launch support. |
-| `async-status.ts` / `subagents-status.ts` | Status discovery and overlay UI. |
-| `chain-execution.ts` / `chain-serializer.ts` | Chain orchestration and `.chain.md` parsing. |
-| `agent-manager*.ts` | Agents Manager screens and editing flows. |
-| `settings.ts` | Chain behavior, instructions, and config helpers. |
-| `worktree.ts` | Git worktree isolation. |
-| `intercom-bridge.ts` | Runtime intercom bridge instructions and diagnostics. |
-| `schemas.ts` / `types.ts` | Tool schemas, shared types, and event constants. |
+| `src/extension/index.ts` | Extension registration, tool registration, message/render wiring. |
+| `src/agents/agents.ts` | Agent and chain discovery, frontmatter parsing. |
+| `src/runs/foreground/subagent-executor.ts` | Main execution routing for single, parallel, chain, management, status, interrupt, and doctor actions. |
+| `src/runs/foreground/execution.ts` | Core foreground `runSync` handling. |
+| `src/runs/background/subagent-runner.ts` | Detached async runner. |
+| `src/runs/background/async-execution.ts` | Background launch support. |
+| `src/runs/background/async-status.ts` / `src/tui/subagents-status.ts` | Status discovery and overlay UI. |
+| `src/runs/foreground/chain-execution.ts` / `src/agents/chain-serializer.ts` | Chain orchestration and `.chain.md` parsing. |
+| `src/manager-ui/agent-manager*.ts` | Agents Manager screens and editing flows. |
+| `src/shared/settings.ts` | Chain behavior, instructions, and config helpers. |
+| `src/runs/shared/worktree.ts` | Git worktree isolation. |
+| `src/intercom/intercom-bridge.ts` | Runtime intercom bridge instructions and diagnostics. |
+| `src/extension/schemas.ts` / `src/shared/types.ts` | Tool schemas, shared types, and event constants. |
 | `test/unit/` / `test/integration/` | Unit and loader-based integration tests. |

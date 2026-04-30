@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
-import { applyThinkingSuffix, buildPiArgs } from "../../pi-args.ts";
+import { applyThinkingSuffix, buildPiArgs } from "../../src/runs/shared/pi-args.ts";
 
 describe("buildPiArgs session wiring", () => {
 	it("uses --session when sessionFile is provided", () => {
@@ -135,7 +135,7 @@ describe("buildPiArgs system prompt mode wiring", () => {
 		});
 
 		const extensionArgs = args.filter((arg, index) => args[index - 1] === "--extension");
-		assert.ok(extensionArgs.some((arg) => arg.endsWith("subagent-prompt-runtime.ts")));
+		assert.ok(extensionArgs.some((arg) => arg.endsWith("src/runs/shared/subagent-prompt-runtime.ts")));
 		assert.equal(env.PI_SUBAGENT_CHILD, "1");
 		assert.equal(env.PI_SUBAGENT_INHERIT_PROJECT_CONTEXT, "0");
 		assert.equal(env.PI_SUBAGENT_INHERIT_SKILLS, "1");
@@ -166,7 +166,7 @@ describe("buildPiArgs system prompt mode wiring", () => {
 		});
 
 		const extensionArgs = args.filter((arg, index) => args[index - 1] === "--extension");
-		assert.ok(extensionArgs.some((arg) => arg.endsWith("subagent-prompt-runtime.ts")));
+		assert.ok(extensionArgs.some((arg) => arg.endsWith("src/runs/shared/subagent-prompt-runtime.ts")));
 		assert.ok(extensionArgs.includes("./custom-tool.ts"));
 		assert.ok(extensionArgs.includes("./allowed-ext.ts"));
 	});

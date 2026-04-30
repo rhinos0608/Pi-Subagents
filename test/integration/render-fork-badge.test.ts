@@ -18,7 +18,7 @@ type RenderSubagentResult = (
 ) => { render(width: number): string[] };
 
 let renderSubagentResult: RenderSubagentResult | undefined;
-({ renderSubagentResult } = await import("../../render.ts") as {
+({ renderSubagentResult } = await import("../../src/tui/render.ts") as {
 	renderSubagentResult?: RenderSubagentResult;
 });
 

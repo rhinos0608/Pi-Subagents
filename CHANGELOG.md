@@ -2,7 +2,17 @@
 
 ## [Unreleased]
 
+### Added
+- Added a packaged `/parallel-context-build` prompt for parallel `context-builder` handoff passes.
+- Added a packaged `/parallel-handoff-plan` prompt for external-reference research plus local `context-builder` passes that produce an implementation handoff meta-prompt.
+
+### Changed
+- Strengthened `context-builder` guidance so handoffs require reading all relevant files and doing needed tool-available research before summarizing.
+- Expanded the bundled `pi-subagents` skill with tool-level recipes for the packaged prompt workflows, including context-build and handoff-plan patterns that parent agents can apply without slash commands.
+- Updated `README.md` to explain the bundled `pi-subagents` skill, what it covers, and how it helps the orchestrating agent.
+
 ### Fixed
+- Treat cleanup after a clean terminal assistant stop as success even when the final assistant text is empty, using a short grace period before terminating lingering child processes without surfacing scary final-drain warnings.
 - Express flexible tool schema fields as `anyOf` unions without parent-level `type` arrays, avoiding schema shapes rejected by strict providers such as Moonshot/opencode-go.
 
 ## [0.21.1] - 2026-04-30
