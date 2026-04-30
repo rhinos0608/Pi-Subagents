@@ -10,6 +10,7 @@ import {
 	resolveControlConfig,
 	shouldNotifyControlEvent,
 } from "../../src/runs/shared/subagent-control.ts";
+import { nextLongRunningTrigger } from "../../src/runs/shared/long-running-guard.ts";
 
 const config = resolveControlConfig(undefined, {
 	needsAttentionAfterMs: 300,
@@ -75,6 +76,44 @@ describe("subagent control attention state", () => {
 		assert.equal(shouldNotifyControlEvent(config, activeEvent), true);
 		assert.deepEqual(config.notifyOn, ["active_long_running", "needs_attention"]);
 		assert.deepEqual(config.notifyChannels, ["event", "async", "intercom"]);
+	});
+
+	it("defaults active-long-running notices to elapsed time only", () => {
+		const defaults = resolveControlConfig();
+
+		assert.equal(defaults.activeNoticeAfterMs, 240_000);
+		assert.equal(defaults.activeNoticeAfterTurns, undefined);
+		assert.equal(defaults.activeNoticeAfterTokens, undefined);
+		assert.equal(nextLongRunningTrigger(defaults, {
+			startedAt: 0,
+			now: 77_000,
+			turns: 50,
+			tokens: 800_000,
+		}), undefined);
+		assert.equal(nextLongRunningTrigger(defaults, {
+			startedAt: 0,
+			now: 240_000,
+			turns: 1,
+			tokens: 1,
+		}), "time_threshold");
+	});
+
+	it("supports opt-in turn and token long-running thresholds", () => {
+		const tokenBudget = resolveControlConfig(undefined, { activeNoticeAfterMs: 999_999, activeNoticeAfterTokens: 500_000 });
+		const turnBudget = resolveControlConfig(undefined, { activeNoticeAfterMs: 999_999, activeNoticeAfterTurns: 5 });
+
+		assert.equal(nextLongRunningTrigger(tokenBudget, {
+			startedAt: 0,
+			now: 77_000,
+			turns: 1,
+			tokens: 500_000,
+		}), "token_threshold");
+		assert.equal(nextLongRunningTrigger(turnBudget, {
+			startedAt: 0,
+			now: 77_000,
+			turns: 5,
+			tokens: 1,
+		}), "turn_threshold");
 	});
 
 	it("resolves custom notification config", () => {

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.21.2] - 2026-04-30
+
 ### Added
 - Added a packaged `/parallel-context-build` prompt for parallel `context-builder` handoff passes.
 - Added a packaged `/parallel-handoff-plan` prompt for external-reference research plus local `context-builder` passes that produce an implementation handoff meta-prompt.
@@ -12,6 +14,8 @@
 - Updated `README.md` to explain the bundled `pi-subagents` skill, what it covers, and how it helps the orchestrating agent.
 
 ### Fixed
+- Make active-long-running notices time-based by default, with turn and token thresholds available only as explicit opt-in budget guards.
+- Stop async status listing from inventing `needs_attention` with default thresholds when the runner has not persisted a control state.
 - Treat string `"false"` output settings as disabled output so parallel reviewers do not collide on a `/false` output path, including chain-parallel agent defaults.
 - Wrap long `/subagents-status` detail output/event lines instead of truncating them with ellipses.
 - Treat cleanup after a clean terminal assistant stop as success even when the final assistant text is empty, using a short grace period before terminating lingering child processes without surfacing scary final-drain warnings.

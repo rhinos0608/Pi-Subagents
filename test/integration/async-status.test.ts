@@ -104,6 +104,29 @@ describe("async status helpers", () => {
 		}
 	});
 
+	it("does not infer attention state when the runner has not persisted one", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-async-no-derived-attention-"));
+		try {
+			const now = Date.now();
+			createAsyncDir(root, "run-running", {
+				runId: "run-running",
+				mode: "single",
+				state: "running",
+				lastActivityAt: now - 90_000,
+				startedAt: now - 120_000,
+				lastUpdate: now,
+				steps: [{ agent: "worker", status: "running", lastActivityAt: now - 90_000 }],
+			});
+
+			const runs = listAsyncRuns(root, { states: ["running"] });
+			assert.equal(runs[0]?.activityState, undefined);
+			assert.equal(runs[0]?.steps[0]?.activityState, undefined);
+			assert.match(formatAsyncRunList(runs, "Active async runs"), /worker \| running \| active/);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("does not smear run-level attention state across running siblings when step metadata exists", () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-async-step-attention-"));
 		try {

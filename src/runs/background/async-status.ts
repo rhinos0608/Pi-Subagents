@@ -2,7 +2,6 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { formatDuration, formatTokens, shortenPath } from "../../shared/formatters.ts";
 import { type ActivityState, type AsyncParallelGroupStatus, type AsyncStatus, type TokenUsage } from "../../shared/types.ts";
-import { DEFAULT_CONTROL_CONFIG, deriveActivityState } from "../shared/subagent-control.ts";
 import { readStatus } from "../../shared/utils.ts";
 import { reconcileAsyncRun } from "./stale-run-reconciler.ts";
 
@@ -141,14 +140,9 @@ function deriveAsyncActivityState(asyncDir: string, status: AsyncStatus): { acti
 	if (status.state !== "running") return { activityState: status.activityState, lastActivityAt: status.lastActivityAt };
 	const outputPath = status.outputFile ? (path.isAbsolute(status.outputFile) ? status.outputFile : path.join(asyncDir, status.outputFile)) : undefined;
 	const currentStep = typeof status.currentStep === "number" ? status.steps?.[status.currentStep] : undefined;
-	const lastActivityAt = status.lastActivityAt ?? outputFileMtime(outputPath) ?? currentStep?.lastActivityAt ?? currentStep?.startedAt ?? status.startedAt;
 	return {
-		lastActivityAt,
-		activityState: status.activityState ?? deriveActivityState({
-			config: DEFAULT_CONTROL_CONFIG,
-			startedAt: status.startedAt,
-			lastActivityAt,
-		}),
+		activityState: status.activityState,
+		lastActivityAt: status.lastActivityAt ?? outputFileMtime(outputPath) ?? currentStep?.lastActivityAt ?? currentStep?.startedAt ?? status.startedAt,
 	};
 }
 

@@ -119,8 +119,8 @@ export function nextLongRunningTrigger(
 	metrics: LongRunningNoticeMetrics,
 ): LongRunningTriggerReason | undefined {
 	if (metrics.now - metrics.startedAt >= config.activeNoticeAfterMs) return "time_threshold";
-	if (metrics.turns >= config.activeNoticeAfterTurns) return "turn_threshold";
-	if (metrics.tokens >= config.activeNoticeAfterTokens) return "token_threshold";
+	if (config.activeNoticeAfterTurns !== undefined && metrics.turns >= config.activeNoticeAfterTurns) return "turn_threshold";
+	if (config.activeNoticeAfterTokens !== undefined && metrics.tokens >= config.activeNoticeAfterTokens) return "token_threshold";
 	return undefined;
 }
 

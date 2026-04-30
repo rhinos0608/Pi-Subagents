@@ -14,9 +14,7 @@ const DEFAULT_NOTIFY_ON: ControlEventType[] = ["active_long_running", "needs_att
 export const DEFAULT_CONTROL_CONFIG: ResolvedControlConfig = {
 	enabled: true,
 	needsAttentionAfterMs: 60_000,
-	activeNoticeAfterMs: 300_000,
-	activeNoticeAfterTurns: 15,
-	activeNoticeAfterTokens: 150_000,
+	activeNoticeAfterMs: 240_000,
 	failedToolAttemptsBeforeAttention: 3,
 	notifyOn: DEFAULT_NOTIFY_ON,
 	notifyChannels: CONTROL_NOTIFICATION_CHANNELS,
@@ -48,11 +46,9 @@ export function resolveControlConfig(
 		?? parsePositiveInt(globalConfig?.activeNoticeAfterMs)
 		?? DEFAULT_CONTROL_CONFIG.activeNoticeAfterMs;
 	const activeNoticeAfterTurns = parsePositiveInt(override?.activeNoticeAfterTurns)
-		?? parsePositiveInt(globalConfig?.activeNoticeAfterTurns)
-		?? DEFAULT_CONTROL_CONFIG.activeNoticeAfterTurns;
+		?? parsePositiveInt(globalConfig?.activeNoticeAfterTurns);
 	const activeNoticeAfterTokens = parsePositiveInt(override?.activeNoticeAfterTokens)
-		?? parsePositiveInt(globalConfig?.activeNoticeAfterTokens)
-		?? DEFAULT_CONTROL_CONFIG.activeNoticeAfterTokens;
+		?? parsePositiveInt(globalConfig?.activeNoticeAfterTokens);
 	const failedToolAttemptsBeforeAttention = parsePositiveInt(override?.failedToolAttemptsBeforeAttention)
 		?? parsePositiveInt(globalConfig?.failedToolAttemptsBeforeAttention)
 		?? DEFAULT_CONTROL_CONFIG.failedToolAttemptsBeforeAttention;

@@ -59,8 +59,8 @@ export interface ResolvedControlConfig {
 	enabled: boolean;
 	needsAttentionAfterMs: number;
 	activeNoticeAfterMs: number;
-	activeNoticeAfterTurns: number;
-	activeNoticeAfterTokens: number;
+	activeNoticeAfterTurns?: number;
+	activeNoticeAfterTokens?: number;
 	failedToolAttemptsBeforeAttention: number;
 	notifyOn: ControlEventType[];
 	notifyChannels: ControlNotificationChannel[];
