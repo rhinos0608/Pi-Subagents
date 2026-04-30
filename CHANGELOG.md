@@ -6,6 +6,7 @@
 - Changed the `/agents` new-agent shortcut from `Alt+N` to `Shift+Ctrl+N`, and added `agentManager.newShortcut` config for overriding it.
 
 ### Fixed
+- Fall back to polling async result files when native result watching is unavailable due to `EMFILE` or `ENOSPC`.
 - Treat forced final-drain termination after a valid final assistant output as cleanup success instead of failing the subagent run.
 - Hide disabled builtin agents from `subagent({ action: "list" })` output so agent-facing choices match executable runtime discovery.
 - Resolve intercom bridge default paths at runtime so tests and isolated environments that change `HOME` use the correct `pi-intercom` location.
