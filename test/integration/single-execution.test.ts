@@ -69,6 +69,8 @@ interface RunSyncResult {
 	detached?: boolean;
 	detachedReason?: string;
 	savedOutputPath?: string;
+	outputMode?: "inline" | "file-only";
+	outputReference?: { path: string; bytes: number; lines: number; message: string };
 	outputSaveError?: string;
 	sessionFile?: string;
 }
@@ -616,6 +618,44 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		assert.equal(result.exitCode, 0);
 		assert.equal(result.finalOutput, "fresh assistant output");
 		assert.equal(fs.readFileSync(outputPath, "utf-8"), "fresh assistant output");
+	});
+
+	it("rejects file-only mode without an output path before spawning", async () => {
+		const agents = makeAgentConfigs(["echo"]);
+
+		const result = await runSync(tempDir, agents, "echo", "Task", {
+			runId: "output-file-only-missing-path",
+			outputMode: "file-only",
+		});
+
+		assert.equal(result.exitCode, 1);
+		assert.match(result.error ?? "", /outputMode: "file-only"/);
+		assert.equal(mockPi.callCount(), 0);
+	});
+
+	it("returns only a saved-output reference in file-only mode", async () => {
+		const outputPath = path.join(tempDir, "file-only-report.md");
+		const artifactsDir = path.join(tempDir, "file-only-artifacts");
+		mockPi.onCall({ output: "full saved output\nwith details" });
+		const agents = makeAgentConfigs(["echo"]);
+
+		const result = await runSync(tempDir, agents, "echo", "Task", {
+			runId: "output-file-only",
+			outputPath,
+			outputMode: "file-only",
+			artifactsDir,
+		});
+
+		assert.equal(result.exitCode, 0);
+		assert.equal(result.outputMode, "file-only");
+		assert.equal(result.savedOutputPath, outputPath);
+		assert.equal(result.outputReference?.path, outputPath);
+		assert.match(result.finalOutput ?? "", /^Output saved to:/);
+		assert.match(result.finalOutput ?? "", /2 lines/);
+		assert.doesNotMatch(result.finalOutput ?? "", /full saved output/);
+		assert.equal(fs.readFileSync(outputPath, "utf-8"), "full saved output\nwith details");
+		assert.ok(result.artifactPaths, "should have artifact paths");
+		assert.equal(fs.readFileSync(result.artifactPaths.outputPath, "utf-8"), "full saved output\nwith details");
 	});
 
 	it("passes maxSubagentDepth through to child execution env", async () => {

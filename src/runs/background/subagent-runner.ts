@@ -7,7 +7,7 @@ import type { Message } from "@mariozechner/pi-ai";
 import { writeAtomicJson } from "../../shared/atomic-json.ts";
 import { appendJsonl, getArtifactPaths } from "../../shared/artifacts.ts";
 import { getPiSpawnCommand } from "../shared/pi-spawn.ts";
-import { captureSingleOutputSnapshot, resolveSingleOutput } from "../shared/single-output.ts";
+import { captureSingleOutputSnapshot, finalizeSingleOutput, formatSavedOutputReference, resolveSingleOutput } from "../shared/single-output.ts";
 import {
 	type ActivityState,
 	type ArtifactConfig,
@@ -662,19 +662,21 @@ async function runSingleStep(
 		? resolveSingleOutput(step.outputPath, rawOutput, outputSnapshot)
 		: { fullOutput: rawOutput };
 	const output = resolvedOutput.fullOutput;
+	const outputReference = resolvedOutput.savedPath ? formatSavedOutputReference(resolvedOutput.savedPath, output) : undefined;
 	let outputForSummary = output;
 	if (attemptNotes.length > 0) {
 		outputForSummary = `${attemptNotes.join("\n")}\n\n${outputForSummary}`.trim();
 	}
-	if (resolvedOutput.savedPath) {
-		outputForSummary = outputForSummary
-			? `${outputForSummary}\n\nOutput saved to: ${resolvedOutput.savedPath}`
-			: `Output saved to: ${resolvedOutput.savedPath}`;
-	} else if (resolvedOutput.saveError && step.outputPath && finalResult?.exitCode === 0) {
-		outputForSummary = outputForSummary
-			? `${outputForSummary}\n\nFailed to save output to: ${step.outputPath}\n${resolvedOutput.saveError}`
-			: `Failed to save output to: ${step.outputPath}\n${resolvedOutput.saveError}`;
-	}
+	const finalizedOutput = finalizeSingleOutput({
+		fullOutput: outputForSummary,
+		outputPath: step.outputPath,
+		outputMode: step.outputMode,
+		exitCode: finalResult?.exitCode ?? 1,
+		savedPath: resolvedOutput.savedPath,
+		outputReference,
+		saveError: resolvedOutput.saveError,
+	});
+	outputForSummary = finalizedOutput.displayOutput;
 
 	if (artifactPaths && ctx.artifactConfig?.enabled !== false) {
 		if (ctx.artifactConfig?.includeOutput !== false) {

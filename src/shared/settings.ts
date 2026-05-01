@@ -6,7 +6,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentConfig } from "../agents/agents.ts";
 import { normalizeSkillInput } from "../agents/skills.ts";
-import { CHAIN_RUNS_DIR } from "./types.ts";
+import { CHAIN_RUNS_DIR, type OutputMode } from "./types.ts";
 const CHAIN_DIR_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
 const INITIAL_PROGRESS_CONTENT = "# Progress\n\n## Status\nIn Progress\n\n## Tasks\n\n## Files Changed\n\n## Notes\n";
 
@@ -16,6 +16,7 @@ const INITIAL_PROGRESS_CONTENT = "# Progress\n\n## Status\nIn Progress\n\n## Tas
 
 export interface ResolvedStepBehavior {
 	output: string | false;
+	outputMode: OutputMode;
 	reads: string[] | false;
 	progress: boolean;
 	skills: string[] | false;
@@ -24,6 +25,7 @@ export interface ResolvedStepBehavior {
 
 export interface StepOverrides {
 	output?: string | false;
+	outputMode?: OutputMode;
 	reads?: string[] | false;
 	progress?: boolean;
 	skills?: string[] | false;
@@ -44,6 +46,7 @@ export interface SequentialStep {
 	task?: string;
 	cwd?: string;
 	output?: string | false;
+	outputMode?: OutputMode;
 	reads?: string[] | false;
 	progress?: boolean;
 	skill?: string | string[] | false;
@@ -57,6 +60,7 @@ interface ParallelTaskItem {
 	cwd?: string;
 	count?: number;
 	output?: string | false;
+	outputMode?: OutputMode;
 	reads?: string[] | false;
 	progress?: boolean;
 	skill?: string | string[] | false;
@@ -211,8 +215,9 @@ export function resolveStepBehavior(
 		}
 	}
 
+	const outputMode = stepOverrides.outputMode ?? "inline";
 	const model = stepOverrides.model ?? agentConfig.model;
-	return { output, reads, progress, skills, model };
+	return { output, outputMode, reads, progress, skills, model };
 }
 
 // =============================================================================
@@ -348,8 +353,9 @@ export function resolveParallelBehaviors(
 			}
 		}
 
+		const outputMode = task.outputMode ?? "inline";
 		const model = task.model ?? config.model;
-		return { output, reads, progress, skills, model };
+		return { output, outputMode, reads, progress, skills, model };
 	});
 }
 

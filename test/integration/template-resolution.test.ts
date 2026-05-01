@@ -149,6 +149,14 @@ describe("resolveStepBehavior", { skip: !available ? "pi packages not available"
 		assert.equal(behavior.output, "custom.md");
 	});
 
+	it("defaults outputMode to inline unless a step overrides it", () => {
+		const inlineBehavior = resolveStepBehavior({ name: "test", output: "report.md" }, {});
+		assert.equal(inlineBehavior.outputMode, "inline");
+
+		const stepOverrideBehavior = resolveStepBehavior({ name: "test", output: "report.md" }, { outputMode: "file-only" });
+		assert.equal(stepOverrideBehavior.outputMode, "file-only");
+	});
+
 	it("false disables output", () => {
 		const config = { name: "test", output: "report.md" };
 		const behavior = resolveStepBehavior(config, { output: false });
@@ -184,7 +192,7 @@ describe("resolveParallelBehaviors", { skip: !available ? "pi packages not avail
 
 describe("buildChainInstructions", { skip: !available ? "pi packages not available" : undefined }, () => {
 	it("adds [Read from:] prefix for reads", () => {
-		const behavior = { reads: ["context.md"], output: false, progress: false, skills: undefined };
+		const behavior = { reads: ["context.md"], output: false, outputMode: "inline", progress: false, skills: undefined };
 		const dir = createTempDir("chain-test-");
 		try {
 			const { prefix } = buildChainInstructions(behavior, dir, false);
@@ -196,7 +204,7 @@ describe("buildChainInstructions", { skip: !available ? "pi packages not availab
 	});
 
 	it("adds [Write to:] prefix for output", () => {
-		const behavior = { reads: undefined, output: "output.md", progress: false, skills: undefined };
+		const behavior = { reads: undefined, output: "output.md", outputMode: "inline", progress: false, skills: undefined };
 		const dir = createTempDir("chain-test-");
 		try {
 			const { prefix } = buildChainInstructions(behavior, dir, false);
@@ -208,7 +216,7 @@ describe("buildChainInstructions", { skip: !available ? "pi packages not availab
 	});
 
 	it("adds progress instructions in suffix for first progress step", () => {
-		const behavior = { reads: undefined, output: false, progress: true, skills: undefined };
+		const behavior = { reads: undefined, output: false, outputMode: "inline", progress: true, skills: undefined };
 		const dir = createTempDir("chain-test-");
 		try {
 			const { suffix } = buildChainInstructions(behavior, dir, true);
@@ -226,7 +234,7 @@ describe("buildChainInstructions", { skip: !available ? "pi packages not availab
 	});
 
 	it("includes previous output in suffix when not in template", () => {
-		const behavior = { reads: undefined, output: false, progress: false, skills: undefined };
+		const behavior = { reads: undefined, output: false, outputMode: "inline", progress: false, skills: undefined };
 		const dir = createTempDir("chain-test-");
 		try {
 			const { suffix } = buildChainInstructions(behavior, dir, false, "Previous step output here");
@@ -240,7 +248,7 @@ describe("buildChainInstructions", { skip: !available ? "pi packages not availab
 	});
 
 	it("returns empty prefix/suffix when no behavior configured", () => {
-		const behavior = { reads: undefined, output: false, progress: false, skills: undefined };
+		const behavior = { reads: undefined, output: false, outputMode: "inline", progress: false, skills: undefined };
 		const dir = createTempDir("chain-test-");
 		try {
 			const { prefix, suffix } = buildChainInstructions(behavior, dir, false);

@@ -167,6 +167,10 @@ function parseStepList(raw: unknown): { steps?: ChainStepConfig[]; error?: strin
 			else if (typeof s.output === "string") step.output = s.output;
 			else return { error: `config.steps[${i}].output must be a string or false.` };
 		}
+		if (hasKey(s, "outputMode")) {
+			if (s.outputMode === "inline" || s.outputMode === "file-only") step.outputMode = s.outputMode;
+			else return { error: `config.steps[${i}].outputMode must be 'inline' or 'file-only'.` };
+		}
 		if (hasKey(s, "reads")) {
 			if (s.reads === false) step.reads = false;
 			else if (Array.isArray(s.reads)) step.reads = s.reads.filter((v): v is string => typeof v === "string").map((v) => v.trim()).filter(Boolean);
@@ -363,6 +367,7 @@ function formatChainDetail(chain: ChainConfig): string {
 		if (s.task.trim()) lines.push(`   Task: ${s.task}`);
 		if (s.output === false) lines.push("   Output: false");
 		else if (s.output) lines.push(`   Output: ${s.output}`);
+		if (s.outputMode) lines.push(`   Output mode: ${s.outputMode}`);
 		if (s.reads === false) lines.push("   Reads: false");
 		else if (Array.isArray(s.reads) && s.reads.length > 0) lines.push(`   Reads: ${s.reads.join(", ")}`);
 		if (s.model) lines.push(`   Model: ${s.model}`);

@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import type { OutputMode, SavedOutputReference } from "../../shared/types.ts";
 
 export interface SingleOutputSnapshot {
 	exists: boolean;
@@ -23,6 +24,43 @@ export function resolveSingleOutputPath(
 export function injectSingleOutputInstruction(task: string, outputPath: string | undefined): string {
 	if (!outputPath) return task;
 	return `${task}\n\n---\n**Output:** Write your findings to: ${outputPath}`;
+}
+
+function countLines(text: string): number {
+	if (!text) return 0;
+	const newlineMatches = text.match(/\r\n|\r|\n/g);
+	return (newlineMatches?.length ?? 0) + (/[\r\n]$/.test(text) ? 0 : 1);
+}
+
+function formatByteSize(bytes: number): string {
+	if (bytes < 1024) return `${bytes} B`;
+	const units = ["KB", "MB", "GB", "TB"];
+	let value = bytes / 1024;
+	let unitIndex = 0;
+	while (value >= 1024 && unitIndex < units.length - 1) {
+		value /= 1024;
+		unitIndex++;
+	}
+	return `${value.toFixed(1)} ${units[unitIndex]}`;
+}
+
+export function formatSavedOutputReference(savedPath: string, fullOutput: string): SavedOutputReference {
+	const absolutePath = path.resolve(savedPath);
+	const bytes = Buffer.byteLength(fullOutput, "utf-8");
+	const lines = countLines(fullOutput);
+	return {
+		path: absolutePath,
+		bytes,
+		lines,
+		message: `Output saved to: ${absolutePath} (${formatByteSize(bytes)}, ${lines} ${lines === 1 ? "line" : "lines"}). Read this file if needed.`,
+	};
+}
+
+export function validateFileOnlyOutputMode(outputMode: OutputMode | undefined, outputPath: string | undefined, context: string): string | undefined {
+	if (outputMode === "file-only" && !outputPath) {
+		return `${context} sets outputMode: "file-only" but does not configure an output file. Set output to a path or use outputMode: "inline".`;
+	}
+	return undefined;
 }
 
 export function captureSingleOutputSnapshot(outputPath: string | undefined): SingleOutputSnapshot | undefined {
@@ -78,14 +116,20 @@ export function finalizeSingleOutput(params: {
 	fullOutput: string;
 	truncatedOutput?: string;
 	outputPath?: string;
+	outputMode?: OutputMode;
 	exitCode: number;
 	savedPath?: string;
+	outputReference?: SavedOutputReference;
 	saveError?: string;
-}): { displayOutput: string; savedPath?: string; saveError?: string } {
+}): { displayOutput: string; savedPath?: string; outputReference?: SavedOutputReference; saveError?: string } {
 	let displayOutput = params.truncatedOutput || params.fullOutput;
 	if (params.exitCode === 0 && params.savedPath) {
-		displayOutput += `\n\nOutput saved to: ${params.savedPath}`;
-		return { displayOutput, savedPath: params.savedPath };
+		const outputReference = params.outputReference ?? formatSavedOutputReference(params.savedPath, params.fullOutput);
+		if (params.outputMode === "file-only") {
+			return { displayOutput: outputReference.message, savedPath: params.savedPath, outputReference };
+		}
+		displayOutput += `\n\n${outputReference.message}`;
+		return { displayOutput, savedPath: params.savedPath, outputReference };
 	}
 	if (params.exitCode === 0 && params.saveError && params.outputPath) {
 		displayOutput += `\n\nFailed to save output to: ${params.outputPath}\n${params.saveError}`;

@@ -6,6 +6,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import type { OutputMode } from "../shared/types.ts";
 import { KNOWN_FIELDS } from "./agent-serializer.ts";
 import { parseChain } from "./chain-serializer.ts";
 import { mergeAgentsForScope } from "./agent-selection.ts";
@@ -102,6 +103,7 @@ export interface ChainStepConfig {
 	agent: string;
 	task: string;
 	output?: string | false;
+	outputMode?: OutputMode;
 	reads?: string[] | false;
 	model?: string;
 	skills?: string[] | false;

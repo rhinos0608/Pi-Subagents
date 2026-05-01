@@ -55,6 +55,7 @@ import {
 	resolveChildMaxSubagentDepth,
 } from "../../shared/types.ts";
 import { resolveModelCandidate } from "../shared/model-fallback.ts";
+import { validateFileOnlyOutputMode } from "../shared/single-output.ts";
 
 interface ChainExecutionDetailsInput {
 	results: SingleResult[];
@@ -234,6 +235,7 @@ async function runParallelChainTasks(input: ParallelChainRunInput): Promise<Sing
 				artifactsDir: input.artifactConfig.enabled ? input.artifactsDir : undefined,
 				artifactConfig: input.artifactConfig,
 				outputPath,
+				outputMode: behavior.outputMode,
 				maxSubagentDepth,
 				controlConfig: input.controlConfig,
 				onControlEvent: input.onControlEvent,
@@ -412,6 +414,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 
 		const stepOverrides: StepOverrides[] = seqSteps.map((step) => ({
 			output: step.output,
+			outputMode: step.outputMode,
 			reads: step.reads,
 			progress: step.progress,
 			skills: normalizeSkillInput(step.skill),
@@ -462,6 +465,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 					task: result.templates[i]!,
 					...(override?.model ? { model: override.model } : {}),
 					...(override?.output !== undefined ? { output: override.output } : {}),
+					...("outputMode" in step && step.outputMode !== undefined ? { outputMode: step.outputMode } : {}),
 					...(override?.reads !== undefined ? { reads: override.reads } : {}),
 					...(override?.progress !== undefined ? { progress: override.progress } : {}),
 					...(override?.skills !== undefined ? { skill: override.skills } : {}),
@@ -533,6 +537,23 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 			try {
 				const agentNames = step.parallel.map((task) => task.agent);
 				const parallelBehaviors = resolveParallelBehaviors(step.parallel, agents, stepIndex, chainSkills);
+				for (let taskIndex = 0; taskIndex < step.parallel.length; taskIndex++) {
+					const behavior = parallelBehaviors[taskIndex]!;
+					const outputPath = typeof behavior.output === "string"
+						? (path.isAbsolute(behavior.output) ? behavior.output : path.join(chainDir, behavior.output))
+						: undefined;
+					const validationError = validateFileOnlyOutputMode(behavior.outputMode, outputPath, `Parallel chain step ${stepIndex + 1} task ${taskIndex + 1} (${step.parallel[taskIndex]!.agent})`);
+					if (validationError) return buildChainExecutionErrorResult(validationError, {
+						results,
+						includeProgress,
+						allProgress,
+						allArtifactPaths,
+						artifactsDir,
+						chainAgents,
+						totalSteps,
+						currentStepIndex: stepIndex,
+					});
+				}
 				progressCreated = ensureParallelProgressFile(chainDir, progressCreated, parallelBehaviors);
 				createParallelDirs(chainDir, stepIndex, step.parallel.length, agentNames);
 
@@ -664,6 +685,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 			const tuiOverride = tuiBehaviorOverrides?.[stepIndex];
 			const stepOverride: StepOverrides = {
 				output: tuiOverride?.output !== undefined ? tuiOverride.output : seqStep.output,
+				outputMode: seqStep.outputMode,
 				reads: tuiOverride?.reads !== undefined ? tuiOverride.reads : seqStep.reads,
 				progress: tuiOverride?.progress !== undefined ? tuiOverride.progress : seqStep.progress,
 				skills:
@@ -701,6 +723,19 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 			const outputPath = typeof behavior.output === "string"
 				? (path.isAbsolute(behavior.output) ? behavior.output : path.join(chainDir, behavior.output))
 				: undefined;
+			const validationError = validateFileOnlyOutputMode(behavior.outputMode, outputPath, `Chain step ${stepIndex + 1} (${seqStep.agent})`);
+			if (validationError) {
+				return buildChainExecutionErrorResult(validationError, {
+					results,
+					includeProgress,
+					allProgress,
+					allArtifactPaths,
+					artifactsDir,
+					chainAgents,
+					totalSteps,
+					currentStepIndex: stepIndex,
+				});
+			}
 			const maxSubagentDepth = resolveChildMaxSubagentDepth(params.maxSubagentDepth, agentConfig.maxSubagentDepth);
 			const interruptController = new AbortController();
 			if (foregroundControl) {
@@ -731,6 +766,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 				artifactsDir: artifactConfig.enabled ? artifactsDir : undefined,
 				artifactConfig,
 				outputPath,
+				outputMode: behavior.outputMode,
 				maxSubagentDepth,
 				controlConfig,
 				onControlEvent,

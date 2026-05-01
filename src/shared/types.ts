@@ -17,6 +17,15 @@ export interface MaxOutputConfig {
 	lines?: number;
 }
 
+export type OutputMode = "inline" | "file-only";
+
+export interface SavedOutputReference {
+	path: string;
+	bytes: number;
+	lines: number;
+	message: string;
+}
+
 interface TruncationResult {
 	text: string;
 	truncated: boolean;
@@ -189,7 +198,9 @@ export interface SingleResult {
 	artifactPaths?: ArtifactPaths;
 	truncation?: TruncationResult;
 	finalOutput?: string;
+	outputMode?: OutputMode;
 	savedOutputPath?: string;
+	outputReference?: SavedOutputReference;
 	outputSaveError?: string;
 }
 
@@ -425,6 +436,7 @@ export interface RunSyncOptions {
 	sessionFile?: string;
 	share?: boolean;
 	outputPath?: string;
+	outputMode?: OutputMode;
 	maxSubagentDepth?: number;
 	/** Override the agent's default model (format: "provider/id" or just "id") */
 	modelOverride?: string;

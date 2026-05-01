@@ -240,6 +240,7 @@ export class ChainClarifyComponent implements Component {
 
 		return {
 			output: override.output !== undefined ? override.output : base.output,
+			outputMode: base.outputMode,
 			reads: override.reads !== undefined ? override.reads : base.reads,
 			progress: override.progress !== undefined ? override.progress : base.progress,
 			skills: override.skills !== undefined ? override.skills : base.skills,
@@ -277,6 +278,7 @@ export class ChainClarifyComponent implements Component {
 			const template = this.templates[i] ?? "";
 			const step: ChainStepConfig = { agent: agent.name, task: template };
 			if (override?.output !== undefined) step.output = behavior.output;
+			if (behavior.outputMode !== "inline") step.outputMode = behavior.outputMode;
 			if (override?.reads !== undefined) step.reads = behavior.reads;
 			if (override?.model !== undefined) step.model = behavior.model;
 			if (override?.skills !== undefined) step.skills = behavior.skills;

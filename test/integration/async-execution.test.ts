@@ -25,7 +25,8 @@ interface AsyncExecutionResult {
 interface AsyncResultPayload {
 	success: boolean;
 	mode?: string;
-	results: Array<unknown>;
+	summary?: string;
+	results: Array<{ output?: string; model?: string; attemptedModels?: string[]; modelAttempts?: unknown[] }>;
 }
 
 interface AsyncStatusPayload {
@@ -371,6 +372,48 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		assert.ok(statusPayload.steps[0].tokens.total > 0);
 		assert.match(fs.readFileSync(path.join(asyncDir, "output-0.log"), "utf-8"), /Recovered asynchronously/);
 		assert.equal(mockPi.callCount(), 2);
+	});
+
+	it("background file-only runs write full output but return only a file reference", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
+		mockPi.onCall({ output: "async full output\nwith details" });
+		const id = `async-file-only-${Date.now().toString(36)}`;
+		const resultPath = path.join(RESULTS_DIR, `${id}.json`);
+		const outputPath = path.join(tempDir, "async-file-only.md");
+		const run = executeAsyncSingle(id, {
+			agent: "worker",
+			task: "Do work",
+			agentConfig: makeAgent("worker"),
+			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
+			artifactConfig: {
+				enabled: false,
+				includeInput: false,
+				includeOutput: false,
+				includeJsonl: false,
+				includeMetadata: false,
+				cleanupDays: 7,
+			},
+			shareEnabled: false,
+			sessionRoot: path.join(tempDir, "sessions"),
+			output: outputPath,
+			outputMode: "file-only",
+			maxSubagentDepth: 2,
+		});
+
+		assert.equal(run.details.asyncId, id);
+		const deadline = Date.now() + 10_000;
+		while (!fs.existsSync(resultPath)) {
+			if (Date.now() > deadline) assert.fail(`Timed out waiting for async result file: ${resultPath}`);
+			await new Promise((resolve) => setTimeout(resolve, 100));
+		}
+
+		const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8")) as AsyncResultPayload;
+		assert.equal(payload.success, true);
+		assert.match(payload.summary ?? "", /Output saved to:/);
+		assert.match(payload.summary ?? "", /2 lines/);
+		assert.doesNotMatch(payload.summary ?? "", /async full output/);
+		assert.match(payload.results[0]?.output ?? "", /Output saved to:/);
+		assert.doesNotMatch(payload.results[0]?.output ?? "", /async full output/);
+		assert.equal(fs.readFileSync(outputPath, "utf-8"), "async full output\nwith details");
 	});
 
 	it("background runs detect hidden tool failures even when the child exits 0", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {

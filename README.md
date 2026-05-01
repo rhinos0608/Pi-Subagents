@@ -298,12 +298,13 @@ Append `[key=value,...]` to an agent name to override defaults for that step:
 | Key | Example | Description |
 |-----|---------|-------------|
 | `output` | `output=context.md` | Write results to a file. For `/chain` and `/parallel`, relative paths live under the chain directory; for `/run`, relative paths resolve against cwd. |
+| `outputMode` | `outputMode=file-only` | Return only a concise file reference for saved output instead of the full saved content. Requires `output`; default is `inline`. |
 | `reads` | `reads=a.md+b.md` | Read files before executing. `+` separates multiple paths. |
 | `model` | `model=anthropic/claude-sonnet-4` | Override model for this step. |
 | `skills` | `skills=planning+review` | Override injected skills. `+` separates multiple skills. |
 | `progress` | `progress` | Enable progress tracking. |
 
-Set `output=false`, `reads=false`, or `skills=false` to disable that behavior explicitly.
+Set `output=false`, `reads=false`, or `skills=false` to disable that behavior explicitly. Do not use `output=false` for file-only returns; use `outputMode=file-only` with an `output` path.
 
 ### Background and forked runs
 
@@ -556,9 +557,9 @@ progress: true
 Create an implementation plan based on {previous}
 ```
 
-Each `## agent-name` section is a step. Config lines such as `output`, `reads`, `model`, `skills`, and `progress` go immediately after the header. A blank line separates config from task text.
+Each `## agent-name` section is a step. Config lines such as `output`, `outputMode`, `reads`, `model`, `skills`, and `progress` go immediately after the header. A blank line separates config from task text.
 
-Chains support three-state behavior: omitted inherits from the agent, a value overrides, and `false` disables.
+For `output`, `reads`, `skills`, and `progress`, chain behavior is three-state: omitted inherits from the agent, a value overrides, and `false` disables.
 
 Create chains from the Agents Manager template picker, save them from the chain-clarify TUI, or write them by hand. Run them with natural language, `/agents`, or:
 
@@ -645,6 +646,7 @@ These are the parameters the LLM passes when it calls the `subagent` tool. Most 
 { agent: "worker", task: "refactor auth" }
 { agent: "scout", task: "find todos", maxOutput: { lines: 1000 } }
 { agent: "scout", task: "investigate", output: false }
+{ agent: "scout", task: "write a large report", output: "reports/scout.md", outputMode: "file-only" }
 
 // Forked context
 { agent: "worker", task: "continue this thread", context: "fork" }
@@ -739,9 +741,10 @@ Agent definitions are not loaded into context by default. Management actions let
 | `chainName` | string | - | Chain name for management actions. |
 | `config` | object/string | - | Agent or chain config for create/update. |
 | `output` | `string \| false` | agent default | Override single-agent output file. |
+| `outputMode` | `"inline" \| "file-only"` | `inline` | Return saved output inline or as a concise saved-file reference. `file-only` requires an `output` path. |
 | `skill` | `string \| string[] \| false` | agent default | Override skills or disable all. |
 | `model` | string | agent default | Override model. |
-| `tasks` | array | - | Top-level parallel tasks. Supports `agent`, `task`, `cwd`, `count`, `output`, `reads`, `progress`, `skill`, and `model`. |
+| `tasks` | array | - | Top-level parallel tasks. Supports `agent`, `task`, `cwd`, `count`, `output`, `outputMode`, `reads`, `progress`, `skill`, and `model`. |
 | `concurrency` | number | config or `4` | Top-level parallel concurrency. |
 | `worktree` | boolean | false | Create isolated git worktrees for parallel tasks. |
 | `chain` | array | - | Sequential and parallel chain steps. |
@@ -759,7 +762,9 @@ Agent definitions are not loaded into context by default. Management actions let
 
 `context: "fork"` fails fast when the parent session is not persisted, the current leaf is missing, or the branched child session cannot be created. It never silently downgrades to `fresh`. In multi-agent runs, if any requested agent has `defaultContext: fork` and the launch omits `context`, the whole invocation uses forked context; pass `context: "fresh"` when you intentionally want a fresh run.
 
-Sequential and parallel chain tasks accept `agent`, `task`, `cwd`, `output`, `reads`, `progress`, `skill`, and `model`. Parallel tasks also accept `count`. Parallel step groups accept `parallel`, `concurrency`, `failFast`, and `worktree`.
+Use `outputMode: "file-only"` when a saved output may be large and the parent only needs a pointer. The returned text is a compact reference like `Output saved to: /abs/report.md (48.2 KB, 2847 lines). Read this file if needed.` Failed runs and save errors still return normal inline output for debugging. In chains, later `{previous}` steps receive the same compact reference when the prior step used file-only mode.
+
+Sequential and parallel chain tasks accept `agent`, `task`, `cwd`, `output`, `outputMode`, `reads`, `progress`, `skill`, and `model`. Parallel tasks also accept `count`. Parallel step groups accept `parallel`, `concurrency`, `failFast`, and `worktree`.
 
 Status and control actions:
 

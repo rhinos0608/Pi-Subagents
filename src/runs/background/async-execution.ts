@@ -11,7 +11,7 @@ import { createRequire } from "node:module";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { AgentConfig } from "../../agents/agents.ts";
 import { applyThinkingSuffix } from "../shared/pi-args.ts";
-import { injectSingleOutputInstruction, resolveSingleOutputPath } from "../shared/single-output.ts";
+import { injectSingleOutputInstruction, resolveSingleOutputPath, validateFileOnlyOutputMode } from "../shared/single-output.ts";
 import { buildChainInstructions, isParallelStep, resolveStepBehavior, writeInitialProgressFile, type ChainStep, type ResolvedStepBehavior, type SequentialStep, type StepOverrides } from "../../shared/settings.ts";
 import type { RunnerStep } from "../shared/parallel-utils.ts";
 import { resolvePiPackageRoot } from "../shared/pi-spawn.ts";
@@ -98,6 +98,7 @@ interface AsyncSingleParams {
 	sessionFile?: string;
 	skills?: string[];
 	output?: string | false;
+	outputMode?: "inline" | "file-only";
 	modelOverride?: string;
 	availableModels?: AvailableModelInfo[];
 	maxSubagentDepth: number;
@@ -170,6 +171,7 @@ function formatAsyncStartError(mode: "single" | "chain", message: string): Async
 const UNAVAILABLE_SUBAGENT_SKILL_ERROR = "Skills not found: pi-subagents";
 
 class UnavailableSubagentSkillError extends Error {}
+class AsyncStartValidationError extends Error {}
 
 /**
  * Execute a chain asynchronously
@@ -232,6 +234,7 @@ export function executeAsyncChain(
 		const stepSkillInput = normalizeSkillInput(s.skill);
 		return {
 			...(s.output !== undefined ? { output: s.output } : {}),
+			...(s.outputMode !== undefined ? { outputMode: s.outputMode } : {}),
 			...(s.reads !== undefined ? { reads: s.reads } : {}),
 			...(s.progress !== undefined ? { progress: s.progress } : {}),
 			...(stepSkillInput !== undefined ? { skills: stepSkillInput } : {}),
@@ -258,6 +261,8 @@ export function executeAsyncChain(
 		if (behavior.progress) progressInstructionCreated = true;
 		const progressInstructions = buildChainInstructions({ ...behavior, output: false, reads: false }, runnerCwd, isFirstProgressAgent);
 		const outputPath = resolveSingleOutputPath(behavior.output, ctx.cwd, instructionCwd);
+		const validationError = validateFileOnlyOutputMode(behavior.outputMode, outputPath, `Async step (${s.agent})`);
+		if (validationError) throw new AsyncStartValidationError(validationError);
 		const task = injectSingleOutputInstruction(`${readInstructions.prefix}${s.task ?? "{previous}"}${progressInstructions.suffix}`, outputPath);
 
 		const primaryModel = resolveModelCandidate(behavior.model ?? a.model, availableModels, ctx.currentModelProvider);
@@ -278,6 +283,7 @@ export function executeAsyncChain(
 			inheritSkills: a.inheritSkills,
 			skills: resolvedSkills.map((r) => r.name),
 			outputPath,
+			outputMode: behavior.outputMode,
 			sessionFile,
 			maxSubagentDepth: resolveChildMaxSubagentDepth(maxSubagentDepth, a.maxSubagentDepth),
 		};
@@ -323,7 +329,7 @@ export function executeAsyncChain(
 			return buildSeqStep(s as SequentialStep, nextSessionFile());
 		});
 	} catch (error) {
-		if (error instanceof UnavailableSubagentSkillError) return formatAsyncStartError("chain", error.message);
+		if (error instanceof UnavailableSubagentSkillError || error instanceof AsyncStartValidationError) return formatAsyncStartError("chain", error.message);
 		throw error;
 	}
 	let childTargetIndex = 0;
@@ -470,6 +476,9 @@ export function executeAsyncSingle(
 	}
 
 	const outputPath = resolveSingleOutputPath(params.output, ctx.cwd, runnerCwd);
+	const outputMode = params.outputMode ?? "inline";
+	const validationError = validateFileOnlyOutputMode(outputMode, outputPath, `Async single run (${agent})`);
+	if (validationError) return formatAsyncStartError("single", validationError);
 	const taskWithOutputInstruction = injectSingleOutputInstruction(task, outputPath);
 	let spawnResult: { pid?: number; error?: string } = {};
 	try {
@@ -494,6 +503,7 @@ export function executeAsyncSingle(
 						inheritSkills: agentConfig.inheritSkills,
 						skills: resolvedSkills.map((r) => r.name),
 						outputPath,
+						outputMode,
 						sessionFile,
 						maxSubagentDepth: resolveChildMaxSubagentDepth(maxSubagentDepth, agentConfig.maxSubagentDepth),
 					},

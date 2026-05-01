@@ -31,7 +31,7 @@ import { executeAsyncChain, executeAsyncSingle, isAsyncAvailable } from "../back
 import { createForkContextResolver } from "../../shared/fork-context.ts";
 import { applyIntercomBridgeToAgent, INTERCOM_BRIDGE_MARKER, resolveIntercomBridge, resolveIntercomSessionTarget, resolveSubagentIntercomTarget, type IntercomBridgeState } from "../../intercom/intercom-bridge.ts";
 import { formatControlIntercomMessage, formatControlNoticeMessage, resolveControlConfig, shouldNotifyControlEvent } from "../shared/subagent-control.ts";
-import { finalizeSingleOutput, injectSingleOutputInstruction, resolveSingleOutputPath } from "../shared/single-output.ts";
+import { finalizeSingleOutput, injectSingleOutputInstruction, resolveSingleOutputPath, validateFileOnlyOutputMode } from "../shared/single-output.ts";
 import { compactForegroundDetails, getSingleResultOutput, mapConcurrent, readStatus, resolveChildCwd } from "../../shared/utils.ts";
 import {
 	buildSubagentResultIntercomPayload,
@@ -86,6 +86,7 @@ interface TaskParam {
 	cwd?: string;
 	count?: number;
 	output?: string | boolean;
+	outputMode?: "inline" | "file-only";
 	reads?: string[] | boolean;
 	progress?: boolean;
 	model?: string;
@@ -118,6 +119,7 @@ export interface SubagentParamsLike {
 	model?: string;
 	skill?: string | string[] | boolean;
 	output?: string | boolean;
+	outputMode?: "inline" | "file-only";
 	agentScope?: unknown;
 	chainDir?: string;
 }
@@ -801,6 +803,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 			...(modelOverrides[index] ? { model: modelOverrides[index] } : {}),
 			...(skillOverrides[index] !== undefined ? { skill: skillOverrides[index] } : {}),
 			...(task.output === true ? (agentConfigs[index]?.output ? { output: agentConfigs[index]!.output } : {}) : task.output !== undefined ? { output: task.output } : {}),
+			...(task.outputMode !== undefined ? { outputMode: task.outputMode } : {}),
 			...(task.reads !== undefined && task.reads !== true ? { reads: task.reads } : {}),
 			...(task.progress !== undefined ? { progress: task.progress } : {}),
 		}));
@@ -868,6 +871,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 		}
 		const rawOutput = params.output !== undefined ? params.output : a.output;
 		const effectiveOutput: string | false | undefined = rawOutput === true ? a.output : (rawOutput as string | false | undefined);
+		const effectiveOutputMode = params.outputMode ?? "inline";
 		const normalizedSkills = normalizeSkillInput(params.skill);
 		const skills = normalizedSkills === false ? [] : normalizedSkills;
 		const maxSubagentDepth = resolveChildMaxSubagentDepth(currentMaxSubagentDepth, a.maxSubagentDepth);
@@ -887,6 +891,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 			sessionFile: sessionFileForIndex(0),
 			skills,
 			output: effectiveOutput,
+			outputMode: effectiveOutputMode,
 			modelOverride,
 			maxSubagentDepth,
 			worktreeSetupHook: deps.config.worktreeSetupHook,
@@ -1191,6 +1196,7 @@ async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Pr
 			artifactConfig: input.artifactConfig,
 			maxOutput: input.maxOutput,
 			outputPath,
+			outputMode: behavior?.outputMode,
 			maxSubagentDepth: input.maxSubagentDepths[index],
 			controlConfig: input.controlConfig,
 			onControlEvent: input.onControlEvent,
@@ -1310,6 +1316,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 	);
 	const behaviorOverrides: StepOverrides[] = tasks.map((task, index) => ({
 		...(task.output !== undefined ? { output: task.output === true ? agentConfigs[index]?.output ?? false : task.output } : {}),
+		...(task.outputMode !== undefined ? { outputMode: task.outputMode } : {}),
 		...(task.reads !== undefined && task.reads !== true ? { reads: task.reads } : {}),
 		...(task.progress !== undefined ? { progress: task.progress } : {}),
 		...(skillOverrides[index] !== undefined ? { skills: skillOverrides[index] } : {}),
@@ -1385,6 +1392,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 				...(modelOverrides[i] ? { model: modelOverrides[i] } : {}),
 				...(skillOverrides[i] !== undefined ? { skill: skillOverrides[i] } : {}),
 				...(behaviorOverrides[i]?.output !== undefined ? { output: behaviorOverrides[i]!.output } : {}),
+				...(behaviorOverrides[i]?.outputMode !== undefined ? { outputMode: behaviorOverrides[i]!.outputMode } : {}),
 				...(behaviorOverrides[i]?.reads !== undefined ? { reads: behaviorOverrides[i]!.reads } : {}),
 				...(behaviorOverrides[i]?.progress !== undefined ? { progress: behaviorOverrides[i]!.progress } : {}),
 			}));
@@ -1436,6 +1444,12 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 			worktreeSetup,
 		});
 		if (duplicateOutputError) return buildParallelModeError(duplicateOutputError);
+		for (let index = 0; index < tasks.length; index++) {
+			const taskCwd = resolveParallelTaskCwd(tasks[index]!, effectiveCwd, worktreeSetup, index);
+			const outputPath = resolveSingleOutputPath(behaviors[index]?.output, ctx.cwd, taskCwd);
+			const validationError = validateFileOnlyOutputMode(behaviors[index]?.outputMode, outputPath, `Parallel task ${index + 1} (${tasks[index]!.agent})`);
+			if (validationError) return buildParallelModeError(validationError);
+		}
 
 		const parallelProgressPrecreated = firstProgressIndex !== -1;
 		if (parallelProgressPrecreated) writeInitialProgressFile(effectiveCwd);
@@ -1586,6 +1600,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 	let skillOverride: string[] | false | undefined = normalizeSkillInput(params.skill);
 	const rawOutput = params.output !== undefined ? params.output : agentConfig.output;
 	let effectiveOutput: string | false | undefined = rawOutput === true ? agentConfig.output : (rawOutput as string | false | undefined);
+	const effectiveOutputMode = params.outputMode ?? "inline";
 	const currentMaxSubagentDepth = resolveCurrentMaxSubagentDepth(deps.config.maxSubagentDepth);
 	const maxSubagentDepth = resolveChildMaxSubagentDepth(currentMaxSubagentDepth, agentConfig.maxSubagentDepth);
 
@@ -1651,6 +1666,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 				sessionFile: sessionFileForIndex(0),
 				skills: skillOverride === false ? [] : skillOverride,
 				output: effectiveOutput,
+				outputMode: effectiveOutputMode,
 				modelOverride,
 				maxSubagentDepth,
 				worktreeSetupHook: deps.config.worktreeSetupHook,
@@ -1667,6 +1683,10 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 	}
 	const cleanTask = task;
 	const outputPath = resolveSingleOutputPath(effectiveOutput, ctx.cwd, effectiveCwd);
+	const validationError = validateFileOnlyOutputMode(effectiveOutputMode, outputPath, `Single run (${params.agent})`);
+	if (validationError) {
+		return { content: [{ type: "text", text: validationError }], isError: true, details: { mode: "single", results: [] } };
+	}
 	task = injectSingleOutputInstruction(task, outputPath);
 
 	let effectiveSkills: string[] | undefined;
@@ -1725,6 +1745,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 		artifactConfig,
 		maxOutput: params.maxOutput,
 		outputPath,
+		outputMode: effectiveOutputMode,
 		maxSubagentDepth,
 		onUpdate: forwardSingleUpdate,
 		controlConfig,
@@ -1758,8 +1779,10 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 		fullOutput,
 		truncatedOutput: r.truncation?.text,
 		outputPath,
+		outputMode: r.outputMode,
 		exitCode: r.exitCode,
 		savedPath: r.savedOutputPath,
+		outputReference: r.outputReference,
 		saveError: r.outputSaveError,
 	});
 	const details = compactForegroundDetails({

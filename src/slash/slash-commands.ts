@@ -30,6 +30,7 @@ import {
 
 interface InlineConfig {
 	output?: string | false;
+	outputMode?: "inline" | "file-only";
 	reads?: string[] | false;
 	model?: string;
 	skill?: string[] | false;
@@ -50,6 +51,7 @@ const parseInlineConfig = (raw: string): InlineConfig => {
 		const val = trimmed.slice(eq + 1).trim();
 		switch (key) {
 			case "output": config.output = val === "false" ? false : val; break;
+			case "outputMode": if (val === "inline" || val === "file-only") config.outputMode = val; break;
 			case "reads": config.reads = val === "false" ? false : val.split("+").filter(Boolean); break;
 			case "model": config.model = val || undefined; break;
 			case "skill": case "skills": config.skill = val === "false" ? false : val.split("+").filter(Boolean); break;
@@ -131,6 +133,7 @@ const mapSavedChainSteps = (chain: ChainConfig, worktree = false): ChainStep[] =
 			agent: step.agent,
 			task: step.task || undefined,
 			output: step.output,
+			outputMode: step.outputMode,
 			reads: step.reads,
 			progress: step.progress,
 			skill: step.skill ?? step.skills,
@@ -479,6 +482,7 @@ export function registerSlashCommands(
 			}
 			const params: SubagentParamsLike = { agent: agentName, task: finalTask, clarify: false, agentScope: "both" };
 			if (inline.output !== undefined) params.output = inline.output;
+			if (inline.outputMode !== undefined) params.outputMode = inline.outputMode;
 			if (inline.skill !== undefined) params.skill = inline.skill;
 			if (inline.model) params.model = inline.model;
 			if (bg) params.async = true;
@@ -498,6 +502,7 @@ export function registerSlashCommands(
 				agent: name,
 				...(stepTask ? { task: stepTask } : i === 0 && parsed.task ? { task: parsed.task } : {}),
 				...(config.output !== undefined ? { output: config.output } : {}),
+				...(config.outputMode !== undefined ? { outputMode: config.outputMode } : {}),
 				...(config.reads !== undefined ? { reads: config.reads } : {}),
 				...(config.model ? { model: config.model } : {}),
 				...(config.skill !== undefined ? { skill: config.skill } : {}),
@@ -550,6 +555,7 @@ export function registerSlashCommands(
 				agent: name,
 				task: stepTask ?? parsed.task,
 				...(config.output !== undefined ? { output: config.output } : {}),
+				...(config.outputMode !== undefined ? { outputMode: config.outputMode } : {}),
 				...(config.reads !== undefined ? { reads: config.reads } : {}),
 				...(config.model ? { model: config.model } : {}),
 				...(config.skill !== undefined ? { skill: config.skill } : {}),

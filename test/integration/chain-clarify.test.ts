@@ -12,6 +12,7 @@ interface ClarifyTestComponent {
 	modelSelectedIndex: number;
 	filteredModels: ClarifyTestModel[];
 	getEffectiveModel(stepIndex: number): string;
+	buildChainConfig(name: string): { steps: Array<{ outputMode?: string }> };
 	applyThinkingLevel(level: "high"): void;
 	enterModelSelector(): void;
 	handleModelSelectorInput(data: string): void;
@@ -44,7 +45,7 @@ describe("chain clarify model display", { skip: !available ? "pi packages not av
 			["Task"],
 			"Task",
 			undefined,
-			[{ output: false, reads: false, progress: false, skills: [], model: "gpt-5-mini" }],
+			[{ output: false, outputMode: "inline", reads: false, progress: false, skills: [], model: "gpt-5-mini" }],
 			[
 				{ provider: "openai", id: "gpt-5-mini", fullId: "openai/gpt-5-mini" },
 				{ provider: "github-copilot", id: "gpt-5-mini", fullId: "github-copilot/gpt-5-mini" },
@@ -59,6 +60,34 @@ describe("chain clarify model display", { skip: !available ? "pi packages not av
 		component.editingStep = 0;
 		component.applyThinkingLevel("high");
 		assert.equal(component.getEffectiveModel(0), "github-copilot/gpt-5-mini:high");
+	});
+
+	it("preserves file-only output mode when saving a chain", () => {
+		const component = new ChainClarifyComponent(
+			{ requestRender() {} },
+			{ fg(_key: string, text: string) { return text; } },
+			[{
+				name: "worker",
+				description: "",
+				systemPrompt: "",
+				systemPromptMode: "replace",
+				inheritProjectContext: false,
+				inheritSkills: false,
+				source: "user",
+				filePath: "worker.md",
+			}],
+			["Task"],
+			"Task",
+			undefined,
+			[{ output: "report.md", outputMode: "file-only", reads: false, progress: false, skills: [], model: undefined }],
+			[],
+			undefined,
+			[],
+			() => {},
+			"single",
+		);
+
+		assert.equal(component.buildChainConfig("saved").steps[0]?.outputMode, "file-only");
 	});
 
 	it("keeps the current model selected and preserves thinking when switching models", () => {
@@ -79,7 +108,7 @@ describe("chain clarify model display", { skip: !available ? "pi packages not av
 			["Task"],
 			"Task",
 			undefined,
-			[{ output: false, reads: false, progress: false, skills: [], model: "gpt-5-mini" }],
+			[{ output: false, outputMode: "inline", reads: false, progress: false, skills: [], model: "gpt-5-mini" }],
 			[
 				{ provider: "openai", id: "gpt-5-mini", fullId: "openai/gpt-5-mini" },
 				{ provider: "openai", id: "gpt-5", fullId: "openai/gpt-5" },

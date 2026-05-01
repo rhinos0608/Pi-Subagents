@@ -397,7 +397,7 @@ describe("slash command custom message delivery", { skip: !available ? "slash-co
 		assert.equal((visibleSnapshot.result.content[0] as { text?: string }).text, "Subagent failed");
 	});
 
-	it("/parallel forwards inline output, reads, and progress config", async () => {
+	it("/parallel forwards inline output behavior config", async () => {
 		const commands = new Map<string, { handler(args: string, ctx: unknown): Promise<void> }>();
 		const events = createEventBus();
 		let requestedParams: unknown;
@@ -425,10 +425,10 @@ describe("slash command custom message delivery", { skip: !available ? "slash-co
 		};
 
 		registerSlashCommands!(pi, createState(process.cwd()));
-		await commands.get("parallel")!.handler("scout[output=x.md,reads=a.md+b.md,progress] -- Review", createCommandContext());
+		await commands.get("parallel")!.handler("scout[output=x.md,outputMode=file-only,reads=a.md+b.md,progress] -- Review", createCommandContext());
 
 		assert.deepEqual(requestedParams, {
-			tasks: [{ agent: "scout", task: "Review", output: "x.md", reads: ["a.md", "b.md"], progress: true }],
+			tasks: [{ agent: "scout", task: "Review", output: "x.md", outputMode: "file-only", reads: ["a.md", "b.md"], progress: true }],
 			clarify: false,
 			agentScope: "both",
 		});
@@ -653,6 +653,7 @@ description: Field flow
 
 ## scout
 output: context.md
+outputMode: file-only
 reads: input.md, notes.md
 model: openai/gpt-5.5
 skills: research, audit
@@ -667,6 +668,7 @@ Gather context
 				agent: "scout",
 				task: "Gather context",
 				output: "context.md",
+				outputMode: "file-only",
 				reads: ["input.md", "notes.md"],
 				progress: true,
 				skill: ["research", "audit"],

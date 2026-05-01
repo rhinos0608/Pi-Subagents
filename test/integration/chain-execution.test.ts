@@ -30,6 +30,7 @@ interface TestSequentialStep {
 	task?: string;
 	model?: string;
 	output?: string | false;
+	outputMode?: "inline" | "file-only";
 	reads?: string[] | false;
 	skill?: string | string[] | false;
 	progress?: boolean;
@@ -41,6 +42,7 @@ interface TestParallelTask {
 	task?: string;
 	model?: string;
 	output?: string | false;
+	outputMode?: "inline" | "file-only";
 	reads?: string[] | false;
 	skill?: string | string[] | false;
 	progress?: boolean;
@@ -59,6 +61,7 @@ interface ChainResultItem {
 	agent: string;
 	exitCode: number;
 	finalOutput?: string;
+	task?: string;
 	detached?: boolean;
 	attemptedModels?: string[];
 	skills?: string[];
@@ -125,6 +128,15 @@ describe("chain execution — sequential", { skip: !available ? "pi packages not
 		};
 	}
 
+	function readCallArgs(index: number): string[] {
+		const callFiles = fs.readdirSync(mockPi.dir)
+			.filter((name) => name.startsWith("call-") && name.endsWith(".json"))
+			.sort();
+		const callFile = callFiles[index];
+		assert.ok(callFile, `expected call ${index}`);
+		return JSON.parse(fs.readFileSync(path.join(mockPi.dir, callFile), "utf-8")).args as string[];
+	}
+
 	function writePackageSkill(packageRoot: string, skillName: string): void {
 		const skillDir = path.join(packageRoot, "skills", skillName);
 		fs.mkdirSync(skillDir, { recursive: true });
@@ -155,6 +167,30 @@ describe("chain execution — sequential", { skip: !available ? "pi packages not
 		assert.equal(result.details.results.length, 2);
 		assert.equal(result.details.results[0].agent, "analyst");
 		assert.equal(result.details.results[1].agent, "reporter");
+	});
+
+	it("passes file-only saved-output references through {previous}", async () => {
+		mockPi.onCall({ output: "full chain output\nwith details" });
+		const agents = [makeAgent("analyst"), makeAgent("reporter")];
+
+		const result = await executeChain(
+			makeChainParams(
+				[
+					{ agent: "analyst", task: "Analyze", output: "analysis.md", outputMode: "file-only" },
+					{ agent: "reporter" },
+				],
+				agents,
+				{ chainDir: tempDir },
+			),
+		);
+
+		assert.ok(!result.isError, `chain should succeed: ${JSON.stringify(result.content)}`);
+		assert.match(result.details.results[0]?.finalOutput ?? "", /Output saved to:/);
+		assert.doesNotMatch(result.details.results[0]?.finalOutput ?? "", /full chain output/);
+		const secondTaskArg = readCallArgs(1).at(-1) ?? "";
+		assert.match(secondTaskArg, /Output saved to:/);
+		assert.match(secondTaskArg, /2 lines/);
+		assert.doesNotMatch(secondTaskArg, /full chain output/);
 	});
 
 	it("retries chain steps with fallback models on retryable provider failures", async () => {
@@ -450,6 +486,15 @@ describe("chain execution — parallel steps", { skip: !available ? "pi packages
 		};
 	}
 
+	function readCallArgs(index: number): string[] {
+		const callFiles = fs.readdirSync(mockPi.dir)
+			.filter((name) => name.startsWith("call-") && name.endsWith(".json"))
+			.sort();
+		const callFile = callFiles[index];
+		assert.ok(callFile, `expected call ${index}`);
+		return JSON.parse(fs.readFileSync(path.join(mockPi.dir, callFile), "utf-8")).args as string[];
+	}
+
 	it("runs parallel tasks within a chain step", async () => {
 		mockPi.onCall({ output: "Parallel task done" });
 		const agents = [makeAgent("reviewer-a"), makeAgent("reviewer-b")];
@@ -502,6 +547,56 @@ describe("chain execution — parallel steps", { skip: !available ? "pi packages
 			synthTask.includes("=== Parallel Task 2 (reviewer-b) ==="),
 			"synthesizer should include reviewer-b output block",
 		);
+	});
+
+	it("aggregates file-only parallel outputs as file references for the next step", async () => {
+		mockPi.onCall({ output: "full parallel chain output\nwith details" });
+		const agents = [makeAgent("reviewer-a"), makeAgent("reviewer-b"), makeAgent("synthesizer")];
+
+		const result = await executeChain(
+			makeChainParams(
+				[
+					{
+						parallel: [
+							{ agent: "reviewer-a", task: "Review A", output: "a.md", outputMode: "file-only" },
+							{ agent: "reviewer-b", task: "Review B", output: "b.md", outputMode: "file-only" },
+						],
+					},
+					{ agent: "synthesizer" },
+				],
+				agents,
+				{ chainDir: tempDir },
+			),
+		);
+
+		assert.ok(!result.isError, `should succeed: ${JSON.stringify(result.content)}`);
+		assert.doesNotMatch(result.details.results[0]?.finalOutput ?? "", /full parallel chain output/);
+		assert.doesNotMatch(result.details.results[1]?.finalOutput ?? "", /full parallel chain output/);
+		const synthTaskArg = readCallArgs(2).at(-1) ?? "";
+		assert.match(synthTaskArg, /Output saved to:/);
+		assert.match(synthTaskArg, /2 lines/);
+		assert.doesNotMatch(synthTaskArg, /full parallel chain output/);
+	});
+
+	it("rejects chain parallel file-only output without spawning siblings", async () => {
+		const agents = [makeAgent("reviewer-a"), makeAgent("reviewer-b")];
+
+		const result = await executeChain(
+			makeChainParams(
+				[{
+					parallel: [
+						{ agent: "reviewer-a", task: "Review A", outputMode: "file-only" },
+						{ agent: "reviewer-b", task: "Review B", output: "b.md" },
+					],
+				}],
+				agents,
+				{ chainDir: tempDir },
+			),
+		);
+
+		assert.equal(result.isError, true);
+		assert.match(result.content[0]?.text ?? "", /outputMode: "file-only"/);
+		assert.equal(mockPi.callCount(), 0);
 	});
 
 	it("detaches parallel chain children cleanly on intercom handoff", async () => {

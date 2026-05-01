@@ -46,7 +46,7 @@ import { getPiSpawnCommand } from "../shared/pi-spawn.ts";
 import { createJsonlWriter } from "../../shared/jsonl-writer.ts";
 import { attachPostExitStdioGuard, trySignalChild } from "../../shared/post-exit-stdio-guard.ts";
 import { applyThinkingSuffix, buildPiArgs, cleanupTempDir } from "../shared/pi-args.ts";
-import { captureSingleOutputSnapshot, resolveSingleOutput, type SingleOutputSnapshot } from "../shared/single-output.ts";
+import { captureSingleOutputSnapshot, formatSavedOutputReference, resolveSingleOutput, validateFileOnlyOutputMode, type SingleOutputSnapshot } from "../shared/single-output.ts";
 import {
 	buildModelCandidates,
 	formatModelAttemptNote,
@@ -63,6 +63,8 @@ import {
 	shouldEscalateMutatingFailures,
 	summarizeRecentMutatingFailures,
 } from "../shared/long-running-guard.ts";
+
+const artifactOutputByResult = new WeakMap<SingleResult, string>();
 
 function emptyUsage(): Usage {
 	return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 };
@@ -97,7 +99,7 @@ function snapshotProgress(progress: AgentProgress): AgentProgress {
 function snapshotResult(result: SingleResult, progress: AgentProgress): SingleResult {
 	return {
 		...result,
-		messages: result.messages ? [...result.messages] : undefined,
+		messages: result.outputMode === "file-only" && result.savedOutputPath ? undefined : result.messages ? [...result.messages] : undefined,
 		usage: { ...result.usage },
 		skills: result.skills ? [...result.skills] : undefined,
 		attemptedModels: result.attemptedModels ? [...result.attemptedModels] : undefined,
@@ -112,6 +114,7 @@ function snapshotResult(result: SingleResult, progress: AgentProgress): SingleRe
 		progressSummary: result.progressSummary ? { ...result.progressSummary } : undefined,
 		artifactPaths: result.artifactPaths ? { ...result.artifactPaths } : undefined,
 		truncation: result.truncation ? { ...result.truncation } : undefined,
+		outputReference: result.outputReference ? { ...result.outputReference } : undefined,
 	};
 }
 
@@ -676,8 +679,15 @@ async function runSingleAttempt(
 		fullOutput = resolvedOutput.fullOutput;
 		result.savedOutputPath = resolvedOutput.savedPath;
 		result.outputSaveError = resolvedOutput.saveError;
+		if (resolvedOutput.savedPath) {
+			result.outputReference = formatSavedOutputReference(resolvedOutput.savedPath, fullOutput);
+		}
 	}
-	result.finalOutput = fullOutput;
+	artifactOutputByResult.set(result, fullOutput);
+	result.outputMode = options.outputMode ?? "inline";
+	result.finalOutput = options.outputMode === "file-only" && result.savedOutputPath && result.outputReference
+		? result.outputReference.message
+		: fullOutput;
 	result.controlEvents = allControlEvents.length ? allControlEvents : undefined;
 	if (options.onUpdate) {
 		const finalText = result.finalOutput || result.error || "(no output)";
@@ -715,6 +725,18 @@ export async function runSync(
 			messages: [],
 			usage: emptyUsage(),
 			error: `Unknown agent: ${agentName}`,
+		};
+	}
+	const outputModeValidationError = validateFileOnlyOutputMode(options.outputMode, options.outputPath, `Single run (${agentName})`);
+	if (outputModeValidationError) {
+		return {
+			agent: agentName,
+			task,
+			exitCode: 1,
+			messages: [],
+			usage: emptyUsage(),
+			outputMode: options.outputMode,
+			error: outputModeValidationError,
 		};
 	}
 
@@ -829,7 +851,7 @@ export async function runSync(
 	if (artifactPathsResult && options.artifactConfig?.enabled !== false) {
 		result.artifactPaths = artifactPathsResult;
 		if (options.artifactConfig?.includeOutput !== false) {
-			writeArtifact(artifactPathsResult.outputPath, result.finalOutput ?? "");
+			writeArtifact(artifactPathsResult.outputPath, artifactOutputByResult.get(result) ?? result.finalOutput ?? "");
 		}
 		if (options.artifactConfig?.includeMetadata !== false) {
 			writeMetadata(artifactPathsResult.metadataPath, {

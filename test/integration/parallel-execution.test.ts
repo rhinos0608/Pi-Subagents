@@ -189,6 +189,45 @@ describe("parallel agent execution", { skip: !piAvailable ? "pi packages not ava
 		assert.equal(result.details?.results?.[0]?.savedOutputPath, outputPath);
 	});
 
+	it("top-level parallel file-only output aggregates concise file references", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		mockPi.onCall({ output: "Parallel full report\nwith details" });
+		const executor = makeExecutor();
+
+		const result = await executor.execute(
+			"parallel-file-only-output",
+			{ tasks: [{ agent: "echo", task: "Write report", output: "parallel-file-only.md", outputMode: "file-only" }] },
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+
+		const outputPath = path.join(tempDir, "parallel-file-only.md");
+		const text = result.content[0]?.text ?? "";
+		assert.equal(result.isError, undefined);
+		assert.match(text, /Output saved to:/);
+		assert.match(text, /2 lines/);
+		assert.doesNotMatch(text, /Parallel full report/);
+		assert.match(result.details?.results?.[0]?.finalOutput ?? "", /Output saved to:/);
+		assert.doesNotMatch(result.details?.results?.[0]?.finalOutput ?? "", /Parallel full report/);
+		assert.equal(fs.readFileSync(outputPath, "utf-8"), "Parallel full report\nwith details");
+	});
+
+	it("rejects top-level parallel file-only output without an output path", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		const executor = makeExecutor();
+
+		const result = await executor.execute(
+			"parallel-file-only-missing-output",
+			{ tasks: [{ agent: "echo", task: "Write report", outputMode: "file-only" }] },
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+
+		assert.equal(result.isError, true);
+		assert.match(result.content[0]?.text ?? "", /outputMode: "file-only"/);
+		assert.equal(mockPi.callCount(), 0);
+	});
+
 	it("rejects duplicate top-level parallel output paths", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
 		const executor = makeExecutor();
 

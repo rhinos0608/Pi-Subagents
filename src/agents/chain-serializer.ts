@@ -19,6 +19,10 @@ function parseStepBody(agent: string, sectionBody: string): ChainStepConfig {
 			else if (rawValue) step.output = rawValue;
 			continue;
 		}
+		if (key === "outputmode") {
+			if (rawValue === "inline" || rawValue === "file-only") step.outputMode = rawValue;
+			continue;
+		}
 		if (key === "reads") {
 			if (rawValue === "false") {
 				step.reads = false;
@@ -109,6 +113,7 @@ export function serializeChain(config: ChainConfig): string {
 		lines.push(`## ${step.agent}`);
 		if (step.output === false) lines.push("output: false");
 		else if (step.output) lines.push(`output: ${step.output}`);
+		if (step.outputMode) lines.push(`outputMode: ${step.outputMode}`);
 		if (step.reads === false) lines.push("reads: false");
 		else if (Array.isArray(step.reads) && step.reads.length > 0) lines.push(`reads: ${step.reads.join(", ")}`);
 		if (step.model) lines.push(`model: ${step.model}`);
