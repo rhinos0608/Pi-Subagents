@@ -5,6 +5,9 @@
 ### Added
 - Added `outputMode: "inline" | "file-only"` for saved subagent outputs. `inline` remains the default, while `file-only` returns a concise saved-file reference instead of injecting full saved output back into the parent context.
 
+### Fixed
+- Marked Pi runtime peer dependencies as optional so npm package installs do not auto-install duplicate Pi packages or emit unrelated transitive dependency warnings.
+
 ## [0.21.3] - 2026-04-30
 
 ### Fixed
