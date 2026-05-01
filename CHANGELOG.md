@@ -4,6 +4,7 @@
 
 ### Fixed
 - Declared the Pi TUI package as a direct dev dependency and added a manifest guard so CI installs do not rely on transitive optional peer dependencies for tests.
+- Made prompt-runtime extension path assertions portable on Windows.
 
 ## [0.21.4] - 2026-05-01
 

@@ -135,7 +135,7 @@ describe("buildPiArgs system prompt mode wiring", () => {
 		});
 
 		const extensionArgs = args.filter((arg, index) => args[index - 1] === "--extension");
-		assert.ok(extensionArgs.some((arg) => arg.endsWith("src/runs/shared/subagent-prompt-runtime.ts")));
+		assert.ok(extensionArgs.some((arg) => arg.endsWith(path.join("src", "runs", "shared", "subagent-prompt-runtime.ts"))));
 		assert.equal(env.PI_SUBAGENT_CHILD, "1");
 		assert.equal(env.PI_SUBAGENT_INHERIT_PROJECT_CONTEXT, "0");
 		assert.equal(env.PI_SUBAGENT_INHERIT_SKILLS, "1");
@@ -166,7 +166,7 @@ describe("buildPiArgs system prompt mode wiring", () => {
 		});
 
 		const extensionArgs = args.filter((arg, index) => args[index - 1] === "--extension");
-		assert.ok(extensionArgs.some((arg) => arg.endsWith("src/runs/shared/subagent-prompt-runtime.ts")));
+		assert.ok(extensionArgs.some((arg) => arg.endsWith(path.join("src", "runs", "shared", "subagent-prompt-runtime.ts"))));
 		assert.ok(extensionArgs.includes("./custom-tool.ts"));
 		assert.ok(extensionArgs.includes("./allowed-ext.ts"));
 	});
