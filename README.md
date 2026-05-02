@@ -211,7 +211,7 @@ The package includes reusable prompt templates for common workflows. You do not 
 pi install npm:pi-intercom
 ```
 
-Most users do not call `intercom` directly. After `pi-intercom` is installed, `pi-subagents` can automatically give child agents a private coordination channel back to the parent session.
+Most users do not call `intercom` directly. After `pi-intercom` is installed, `pi-subagents` can automatically give child agents a private coordination channel back to the parent session. The bridge recognizes the normal `pi install npm:pi-intercom` package install as well as legacy local extension checkouts.
 
 Use it for work where the child might need a decision instead of guessing:
 
@@ -895,7 +895,7 @@ Fields:
 - `mode`: default `always`; use `fork-only` to inject only for forked runs, or `off` to disable the bridge.
 - `instructionFile`: optional Markdown template replacing the default bridge instructions. `{orchestratorTarget}` is interpolated. Relative paths resolve from `~/.pi/agent/extensions/subagent/`.
 
-Bridge activation also requires `pi-intercom` to be installed and enabled, a targetable current session name or fallback alias, and `pi-intercom` in any explicit agent `extensions` allowlist.
+Bridge activation also requires `pi-intercom` to be installed and enabled through `pi install npm:pi-intercom` or a legacy local extension checkout, a targetable current session name or fallback alias, and `pi-intercom` in any explicit agent `extensions` allowlist.
 
 The default injected guidance tells children to use `contact_supervisor` with `reason: "need_decision"` when blocked or needing a decision, `reason: "progress_update"` only for meaningful blocked/progress updates, generic `intercom` as fallback plumbing, and avoid routine completion handoffs.
 

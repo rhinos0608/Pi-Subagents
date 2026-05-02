@@ -71,6 +71,27 @@ function withMalformedIntercomConfig<T>(fn: (paths: { extensionDir: string; conf
 	}
 }
 
+function withPackagedIntercom<T>(fn: (paths: { agentDir: string; cwd: string; globalNpmRoot: string; packageDir: string; legacyDir: string; configPath: string }) => T): T {
+	const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-intercom-package-test-"));
+	const agentDir = path.join(tempDir, "agent");
+	const cwd = path.join(tempDir, "workspace");
+	const globalNpmRoot = path.join(tempDir, "global-node_modules");
+	const packageDir = path.join(globalNpmRoot, "pi-intercom");
+	const legacyDir = path.join(agentDir, "extensions", "pi-intercom");
+	const configPath = path.join(agentDir, "intercom", "config.json");
+	fs.mkdirSync(packageDir, { recursive: true });
+	fs.mkdirSync(path.dirname(configPath), { recursive: true });
+	fs.mkdirSync(cwd, { recursive: true });
+	fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify({ packages: ["npm:pi-intercom"] }, null, 2));
+	fs.writeFileSync(path.join(packageDir, "package.json"), JSON.stringify({ name: "pi-intercom", pi: { extensions: ["./index.ts"] } }, null, 2));
+	fs.writeFileSync(configPath, JSON.stringify({ enabled: true }));
+	try {
+		return fn({ agentDir, cwd, globalNpmRoot, packageDir, legacyDir, configPath });
+	} finally {
+		fs.rmSync(tempDir, { recursive: true, force: true });
+	}
+}
+
 describe("diagnoseIntercomBridge", () => {
 	it("reports inactive and unavailable when pi-intercom is missing", () => {
 		const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-intercom-diagnostic-test-"));
@@ -89,6 +110,24 @@ describe("diagnoseIntercomBridge", () => {
 		} finally {
 			fs.rmSync(tempDir, { recursive: true, force: true });
 		}
+	});
+
+	it("finds npm-installed pi-intercom packages without the legacy extension directory", () => {
+		withPackagedIntercom(({ agentDir, cwd, globalNpmRoot, packageDir, legacyDir, configPath }) => {
+			const diagnostic = diagnoseIntercomBridge({
+				config: { mode: "always" },
+				context: "fresh",
+				orchestratorTarget: "main",
+				agentDir,
+				cwd,
+				globalNpmRoot,
+				extensionDir: legacyDir,
+				configPath,
+			});
+			assert.equal(diagnostic.active, true);
+			assert.equal(diagnostic.piIntercomAvailable, true);
+			assert.equal(diagnostic.extensionDir, path.resolve(packageDir));
+		});
 	});
 
 	it("preserves malformed intercom config errors while matching runtime enabled behavior", () => {
@@ -143,6 +182,24 @@ describe("resolveIntercomBridge", () => {
 		} finally {
 			fs.rmSync(tempDir, { recursive: true, force: true });
 		}
+	});
+
+	it("activates from an npm-installed pi-intercom package", () => {
+		withPackagedIntercom(({ agentDir, cwd, globalNpmRoot, packageDir, legacyDir, configPath }) => {
+			const bridge = resolveIntercomBridge({
+				config: { mode: "always" },
+				context: "fresh",
+				orchestratorTarget: "main",
+				agentDir,
+				cwd,
+				globalNpmRoot,
+				extensionDir: legacyDir,
+				configPath,
+			});
+			assert.equal(bridge.active, true);
+			assert.equal(bridge.extensionDir, path.resolve(packageDir));
+			assert.equal(bridge.orchestratorTarget, "main");
+		});
 	});
 
 	it("stays inactive when intercom config is disabled", () => {

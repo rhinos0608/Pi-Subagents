@@ -1,19 +1,27 @@
+import { execSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentConfig } from "../agents/agents.ts";
 import type { ExtensionConfig, IntercomBridgeConfig, IntercomBridgeMode } from "../shared/types.ts";
 
-function defaultIntercomExtensionDir(): string {
-	return path.join(os.homedir(), ".pi", "agent", "extensions", "pi-intercom");
+const PI_INTERCOM_PACKAGE_NAME = "pi-intercom";
+const CONFIG_DIR = ".pi";
+
+function defaultAgentDir(): string {
+	return path.join(os.homedir(), ".pi", "agent");
 }
 
-function defaultIntercomConfigPath(): string {
-	return path.join(os.homedir(), ".pi", "agent", "intercom", "config.json");
+function defaultIntercomExtensionDir(agentDir = defaultAgentDir()): string {
+	return path.join(agentDir, "extensions", PI_INTERCOM_PACKAGE_NAME);
 }
 
-function defaultSubagentConfigDir(): string {
-	return path.join(os.homedir(), ".pi", "agent", "extensions", "subagent");
+function defaultIntercomConfigPath(agentDir = defaultAgentDir()): string {
+	return path.join(agentDir, "intercom", "config.json");
+}
+
+function defaultSubagentConfigDir(agentDir = defaultAgentDir()): string {
+	return path.join(agentDir, "extensions", "subagent");
 }
 
 const DEFAULT_INTERCOM_TARGET_PREFIX = "subagent-chat";
@@ -56,6 +64,9 @@ interface ResolveIntercomBridgeInput {
 	extensionDir?: string;
 	configPath?: string;
 	settingsDir?: string;
+	cwd?: string;
+	agentDir?: string;
+	globalNpmRoot?: string | null;
 }
 
 export function resolveIntercomSessionTarget(sessionName: string | undefined, sessionId: string): string {
@@ -102,6 +113,119 @@ function intercomConfigStatus(configPath: string): { enabled: boolean; error?: u
 	}
 }
 
+function readJsonBestEffort(filePath: string): unknown {
+	try {
+		return JSON.parse(fs.readFileSync(filePath, "utf-8"));
+	} catch {
+		return null;
+	}
+}
+
+function packageHasPiExtension(packageRoot: string): boolean {
+	if (!fs.existsSync(packageRoot)) return false;
+	const pkg = readJsonBestEffort(path.join(packageRoot, "package.json"));
+	if (pkg && typeof pkg === "object" && !Array.isArray(pkg)) {
+		const pi = (pkg as { pi?: unknown }).pi;
+		if (pi && typeof pi === "object" && !Array.isArray(pi)) {
+			const extensions = (pi as { extensions?: unknown }).extensions;
+			return Array.isArray(extensions) && extensions.some((entry) => typeof entry === "string" && entry.trim() !== "");
+		}
+	}
+	return fs.existsSync(path.join(packageRoot, "extensions"));
+}
+
+function isSafePackagePath(value: string): boolean {
+	return value.length > 0
+		&& !path.isAbsolute(value)
+		&& value.split(/[\\/]/).every((part) => part.length > 0 && part !== "." && part !== "..");
+}
+
+function parseNpmPackageName(source: string): string | undefined {
+	const spec = source.slice(4).trim();
+	if (!spec) return undefined;
+	const match = spec.match(/^(@?[^@]+(?:\/[^@]+)?)(?:@(.+))?$/);
+	const packageName = match?.[1] ?? spec;
+	return isSafePackagePath(packageName) ? packageName : undefined;
+}
+
+function packageEntrySource(entry: unknown): string | undefined {
+	if (typeof entry === "string") return entry;
+	if (entry && typeof entry === "object" && !Array.isArray(entry) && typeof (entry as { source?: unknown }).source === "string") {
+		return (entry as { source: string }).source;
+	}
+	return undefined;
+}
+
+function packageEntryAllowsExtensions(entry: unknown): boolean {
+	if (!entry || typeof entry !== "object" || Array.isArray(entry)) return true;
+	const extensions = (entry as { extensions?: unknown }).extensions;
+	return !Array.isArray(extensions) || extensions.length > 0;
+}
+
+function findNearestProjectConfigDir(cwd: string): string | undefined {
+	let current = path.resolve(cwd);
+	while (true) {
+		const configDir = path.join(current, CONFIG_DIR);
+		if (fs.existsSync(path.join(configDir, "settings.json"))) return configDir;
+		const parent = path.dirname(current);
+		if (parent === current) return undefined;
+		current = parent;
+	}
+}
+
+let cachedGlobalNpmRoot: string | null | undefined;
+
+function getGlobalNpmRoot(): string | null {
+	if (cachedGlobalNpmRoot !== undefined) return cachedGlobalNpmRoot;
+	try {
+		cachedGlobalNpmRoot = execSync("npm root -g", { encoding: "utf-8", timeout: 5000 }).trim();
+		return cachedGlobalNpmRoot;
+	} catch {
+		cachedGlobalNpmRoot = null;
+		return null;
+	}
+}
+
+function configuredPiIntercomPackageDir(input: ResolveIntercomBridgeInput, agentDir: string): string | undefined {
+	const cwd = path.resolve(input.cwd ?? process.cwd());
+	const projectConfigDir = findNearestProjectConfigDir(cwd);
+	const settingsFiles = [
+		...(projectConfigDir ? [{ file: path.join(projectConfigDir, "settings.json"), configDir: projectConfigDir, scope: "project" as const }] : []),
+		{ file: path.join(agentDir, "settings.json"), configDir: agentDir, scope: "user" as const },
+	];
+	const globalNpmRoot = input.globalNpmRoot === undefined ? getGlobalNpmRoot() : input.globalNpmRoot;
+
+	for (const { file, configDir, scope } of settingsFiles) {
+		const settings = readJsonBestEffort(file);
+		if (!settings || typeof settings !== "object" || Array.isArray(settings)) continue;
+		const packages = (settings as { packages?: unknown }).packages;
+		if (!Array.isArray(packages)) continue;
+
+		for (const entry of packages) {
+			if (!packageEntryAllowsExtensions(entry)) continue;
+			const source = packageEntrySource(entry)?.trim();
+			if (!source?.startsWith("npm:")) continue;
+			const packageName = parseNpmPackageName(source);
+			if (packageName !== PI_INTERCOM_PACKAGE_NAME) continue;
+			const candidates = scope === "project"
+				? [path.join(configDir, "npm", "node_modules", packageName)]
+				: [
+					...(globalNpmRoot ? [path.join(globalNpmRoot, packageName)] : []),
+					path.join(agentDir, "npm", "node_modules", packageName),
+				];
+			const packageRoot = candidates.find(packageHasPiExtension);
+			if (packageRoot) return path.resolve(packageRoot);
+		}
+	}
+	return undefined;
+}
+
+function resolveIntercomExtensionDir(input: ResolveIntercomBridgeInput, agentDir: string): string {
+	const legacyDir = path.resolve(input.extensionDir ?? defaultIntercomExtensionDir(agentDir));
+	if (fs.existsSync(legacyDir)) return legacyDir;
+	return configuredPiIntercomPackageDir(input, agentDir) ?? legacyDir;
+}
+
 function extensionSandboxAllowsIntercom(extensions: string[] | undefined, extensionDir: string): boolean {
 	if (extensions === undefined) return true;
 
@@ -145,9 +269,10 @@ ${instruction}`;
 export function diagnoseIntercomBridge(input: ResolveIntercomBridgeInput): IntercomBridgeDiagnostic {
 	const config = resolveIntercomBridgeConfig(input.config);
 	const mode = config.mode;
-	const extensionDir = path.resolve(input.extensionDir ?? defaultIntercomExtensionDir());
+	const agentDir = path.resolve(input.agentDir ?? defaultAgentDir());
+	const extensionDir = resolveIntercomExtensionDir(input, agentDir);
 	const orchestratorTarget = input.orchestratorTarget?.trim();
-	const configPath = path.resolve(input.configPath ?? defaultIntercomConfigPath());
+	const configPath = path.resolve(input.configPath ?? defaultIntercomConfigPath(agentDir));
 	const wantsIntercom = mode !== "off" && !(mode === "fork-only" && input.context !== "fork");
 	const piIntercomAvailable = fs.existsSync(extensionDir);
 	let configStatus: ReturnType<typeof intercomConfigStatus> | undefined;
@@ -183,9 +308,10 @@ export function diagnoseIntercomBridge(input: ResolveIntercomBridgeInput): Inter
 export function resolveIntercomBridge(input: ResolveIntercomBridgeInput): IntercomBridgeState {
 	const config = resolveIntercomBridgeConfig(input.config);
 	const mode = config.mode;
-	const extensionDir = path.resolve(input.extensionDir ?? defaultIntercomExtensionDir());
+	const agentDir = path.resolve(input.agentDir ?? defaultAgentDir());
+	const extensionDir = resolveIntercomExtensionDir(input, agentDir);
 	const orchestratorTarget = input.orchestratorTarget?.trim();
-	const settingsDir = path.resolve(input.settingsDir ?? defaultSubagentConfigDir());
+	const settingsDir = path.resolve(input.settingsDir ?? defaultSubagentConfigDir(agentDir));
 	const defaultInstruction = buildIntercomBridgeInstruction(
 		orchestratorTarget || "{orchestratorTarget}",
 		DEFAULT_INTERCOM_BRIDGE_TEMPLATE,
@@ -204,7 +330,7 @@ export function resolveIntercomBridge(input: ResolveIntercomBridgeInput): Interc
 		return { active: false, mode, extensionDir, instruction: defaultInstruction };
 	}
 
-	const configPath = path.resolve(input.configPath ?? defaultIntercomConfigPath());
+	const configPath = path.resolve(input.configPath ?? defaultIntercomConfigPath(agentDir));
 	const intercomStatus = intercomConfigStatus(configPath);
 	if (intercomStatus.error) console.warn(`Failed to parse intercom config at '${configPath}'. Assuming enabled.`, intercomStatus.error);
 	if (!intercomStatus.enabled) {

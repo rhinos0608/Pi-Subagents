@@ -344,6 +344,7 @@ async function resumeAsyncRun(input: {
 		config: input.deps.config.intercomBridge,
 		context: input.params.context,
 		orchestratorTarget: sessionName,
+		cwd: effectiveCwd,
 	});
 	const agents = intercomBridge.active
 		? discoveredAgents.map((agent) => applyIntercomBridgeToAgent(agent, intercomBridge))
@@ -1962,6 +1963,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			config: deps.config.intercomBridge,
 			context: effectiveParams.context,
 			orchestratorTarget: sessionName,
+			cwd: effectiveCwd,
 		});
 		const agents = intercomBridge.active
 			? discoveredAgents.map((agent) => applyIntercomBridgeToAgent(agent, intercomBridge))
