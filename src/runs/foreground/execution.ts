@@ -153,6 +153,10 @@ async function runSingleAttempt(
 		mcpDirectTools: agent.mcpDirectTools,
 		promptFileStem: agent.name,
 		intercomSessionName: options.intercomSessionName,
+		orchestratorIntercomTarget: options.orchestratorIntercomTarget,
+		runId: options.runId,
+		childAgentName: agent.name,
+		childIndex: options.index ?? 0,
 	});
 
 	const result: SingleResult = {

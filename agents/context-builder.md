@@ -42,5 +42,5 @@ When running in a chain, expect to generate two files in the chain directory:
 
 The goal is to hand the planner or another role subagent exactly enough code and requirement context to act without rediscovering the same ground. Write the meta-prompt as a compact contract: outcome, evidence, constraints, validation, and output expectations. Avoid long procedural scripts unless each step is a real requirement.
 
-## Pi-intercom handoff
-If `intercom` is available and runtime bridge instructions or the task name a safe orchestrator target, send your completed context summary back with a blocking `intercom({ action: "ask", ... })` before finishing. Keep the message concise, include the output path, and ask whether the orchestrator wants clarification or deeper context. If no safe target is available, do not guess; return normally.
+## Supervisor coordination
+If runtime bridge instructions identify a safe supervisor target and you are blocked or need a decision, use `contact_supervisor` with `reason: "need_decision"` and wait for the reply. Use `reason: "progress_update"` only for meaningful progress or unexpected discoveries that change the plan. Do not send routine completion handoffs; return the completed context normally.

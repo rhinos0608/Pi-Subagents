@@ -944,6 +944,7 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 		onControlEvent,
 		controlConfig,
 		childIntercomTarget: childIntercomTarget ? (agent, index) => childIntercomTarget(runId, agent, index) : undefined,
+		orchestratorIntercomTarget: data.intercomBridge.active ? data.intercomBridge.orchestratorTarget : undefined,
 		foregroundControl,
 		chainSkills,
 		chainDir: params.chainDir,
@@ -1034,6 +1035,7 @@ interface ForegroundParallelRunInput {
 	controlConfig: ResolvedControlConfig;
 	onControlEvent?: (event: ControlEvent) => void;
 	childIntercomTarget?: (agent: string, index: number) => string | undefined;
+	orchestratorIntercomTarget?: string;
 	foregroundControl?: SubagentState["foregroundControls"] extends Map<string, infer T> ? T : never;
 	concurrencyLimit: number;
 	liveResults: (SingleResult | undefined)[];
@@ -1192,6 +1194,7 @@ async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Pr
 			controlConfig: input.controlConfig,
 			onControlEvent: input.onControlEvent,
 			intercomSessionName: input.childIntercomTarget?.(task.agent, index),
+			orchestratorIntercomTarget: input.orchestratorIntercomTarget,
 			modelOverride: input.modelOverrides[index],
 			availableModels: input.availableModels,
 			preferredModelProvider: input.ctx.model?.provider,
@@ -1469,6 +1472,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 			controlConfig,
 			onControlEvent,
 			childIntercomTarget: childIntercomTarget ? (agent, index) => childIntercomTarget(runId, agent, index) : undefined,
+			orchestratorIntercomTarget: data.intercomBridge.active ? data.intercomBridge.orchestratorTarget : undefined,
 			foregroundControl,
 			concurrencyLimit: parallelConcurrency,
 			maxSubagentDepths,
@@ -1734,6 +1738,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 		controlConfig,
 		onControlEvent,
 		intercomSessionName: childIntercomTarget,
+		orchestratorIntercomTarget: data.intercomBridge.active ? data.intercomBridge.orchestratorTarget : undefined,
 		index: 0,
 		modelOverride,
 		availableModels,

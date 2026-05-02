@@ -538,6 +538,7 @@ interface SingleStepContext {
 	piArgv1?: string;
 	registerInterrupt?: (interrupt: (() => void) | undefined) => void;
 	childIntercomTarget?: string;
+	orchestratorIntercomTarget?: string;
 	onChildEvent?: (event: ChildEvent) => void;
 }
 
@@ -604,6 +605,10 @@ async function runSingleStep(
 			mcpDirectTools: step.mcpDirectTools,
 			promptFileStem: step.agent,
 			intercomSessionName: ctx.childIntercomTarget,
+			orchestratorIntercomTarget: ctx.orchestratorIntercomTarget,
+			runId: ctx.id,
+			childAgentName: step.agent,
+			childIndex: ctx.flatIndex,
 		});
 		const run = await runPiStreaming(
 			args,
@@ -1299,6 +1304,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 							piPackageRoot: config.piPackageRoot,
 							piArgv1: config.piArgv1,
 							childIntercomTarget: config.childIntercomTargets?.[fi],
+							orchestratorIntercomTarget: config.controlIntercomTarget,
 							registerInterrupt: (interrupt) => {
 								activeChildInterrupt = interrupt;
 							},
@@ -1439,6 +1445,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 				piPackageRoot: config.piPackageRoot,
 				piArgv1: config.piArgv1,
 				childIntercomTarget: config.childIntercomTargets?.[flatIndex],
+				orchestratorIntercomTarget: config.controlIntercomTarget,
 				registerInterrupt: (interrupt) => {
 					activeChildInterrupt = interrupt;
 				},

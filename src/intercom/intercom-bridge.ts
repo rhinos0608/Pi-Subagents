@@ -18,14 +18,15 @@ function defaultSubagentConfigDir(): string {
 
 const DEFAULT_INTERCOM_TARGET_PREFIX = "subagent-chat";
 export const INTERCOM_BRIDGE_MARKER = "Intercom orchestration channel:";
-const DEFAULT_INTERCOM_BRIDGE_TEMPLATE = `The inherited thread is reference-only. Do not continue that conversation or send questions, status updates, or completion handoffs to the orchestrator in normal assistant text.
+const DEFAULT_INTERCOM_BRIDGE_TEMPLATE = `The inherited thread is reference-only. Do not continue that conversation or send questions, status updates, or completion handoffs to the supervisor in normal assistant text.
 
-Use intercom only for coordination with the orchestrator session "{orchestratorTarget}".
-- Need a decision or blocked: intercom({ action: "ask", to: "{orchestratorTarget}", message: "<question>" })
-- After intercom ask, stay alive and continue only after the reply arrives. Do not finish your final response with a choose-one question.
-- Non-blocking progress update: intercom({ action: "send", to: "{orchestratorTarget}", message: "UPDATE: <summary>" })
+Use contact_supervisor first. It resolves the supervisor session "{orchestratorTarget}" and run metadata automatically.
+- Need a decision, blocked, approval, or product/API/scope ambiguity: contact_supervisor({ reason: "need_decision", message: "<question>" })
+- After contact_supervisor with reason "need_decision", stay alive and continue only after the reply arrives. Do not finish your final response with a choose-one question.
+- Meaningful progress or unexpected discoveries that change the plan: contact_supervisor({ reason: "progress_update", message: "UPDATE: <summary>" })
+- Generic intercom is lower-level plumbing/fallback only: intercom({ action: "ask", to: "{orchestratorTarget}", message: "<question>" })
 
-Do not send routine completion handoffs through intercom. If no coordination is needed, return a focused task result.`;
+Do not use contact_supervisor or intercom for routine completion handoffs. If no coordination is needed, return a focused task result.`;
 
 export interface IntercomBridgeState {
 	active: boolean;
@@ -228,8 +229,9 @@ export function applyIntercomBridgeToAgent(agent: AgentConfig, bridge: IntercomB
 	if (!bridge.active || !bridge.orchestratorTarget) return agent;
 	if (!extensionSandboxAllowsIntercom(agent.extensions, bridge.extensionDir)) return agent;
 
-	const tools = agent.tools && !agent.tools.includes("intercom")
-		? [...agent.tools, "intercom"]
+	const bridgeTools = ["intercom", "contact_supervisor"];
+	const tools = agent.tools
+		? [...agent.tools, ...bridgeTools.filter((tool) => !agent.tools?.includes(tool))]
 		: agent.tools;
 	const instruction = bridge.instruction;
 	const trimmedPrompt = agent.systemPrompt?.trim() || "";

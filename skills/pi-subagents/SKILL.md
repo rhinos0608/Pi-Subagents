@@ -375,7 +375,7 @@ prefer a single-writer pattern instead.
 The intended oracle loop is:
 1. the main agent forks to `oracle`
 2. `oracle` reviews direction, drift, assumptions, and risks
-3. `oracle` can coordinate back to the orchestrator via `intercom`
+3. `oracle` can coordinate back through `contact_supervisor` when the bridge injects it
 4. the main agent decides what direction to approve
 5. only then should `worker` implement
 
@@ -401,25 +401,28 @@ history as a baseline contract.
 
 `pi-subagents` works without `pi-intercom`. When `pi-intercom` is installed and enabled, the intercom bridge can automatically give child agents a private coordination channel back to the parent session.
 
-Most agents should not call `intercom` directly unless bridge instructions provide a target. Do not invent a target. Use the target from the injected bridge instructions or from a visible needs-attention notice.
+Most agents should not call generic `intercom` directly unless bridge instructions provide a target and `contact_supervisor` is unavailable. Do not invent a target. Prefer the tool from the injected bridge instructions.
 
-Use `intercom` when:
+Use `contact_supervisor` with `reason: "need_decision"` when:
 - a subagent is blocked on a decision
 - a child needs clarification instead of guessing
-- a detached or async child needs to coordinate without waiting for normal tool return flow
-- an advisory agent was explicitly asked to send a concise progress update
+- an approval, product, API, or scope choice is required before continuing safely
+
+Use `contact_supervisor` with `reason: "progress_update"` when:
+- a child is explicitly asked for progress
+- a meaningful discovery changes the plan
+- a long-running child needs to report a blocked/progress checkpoint without waiting for normal tool return flow
 
 Message conventions:
-- `ask` means the child needs a decision or clarification from the parent session.
-- `send` means a short blocked/progress update, only when blocked or explicitly asked.
+- `reason: "need_decision"` waits for the parent reply and returns it to the child.
+- `reason: "progress_update"` is non-blocking and should stay concise.
 - Child-side routine completion handoffs are not expected. With the intercom bridge active, parent-side `pi-subagents` sends grouped completion results through `pi-intercom`: one grouped message per foreground parent run and one per completed async result file. Acknowledged foreground delivery returns a compact receipt with artifact/session paths; if unacknowledged, the normal full output is preserved. Grouped messages include child intercom targets and full child summaries.
 
-If a bridge target is available, a child can ask:
+If bridge instructions provide the child-facing tool, a child can ask:
 
 ```typescript
-intercom({
-  action: "ask",
-  to: "<bridge-provided-target>",
+contact_supervisor({
+  reason: "need_decision",
   message: "Should I optimize for readability or performance here?"
 })
 ```

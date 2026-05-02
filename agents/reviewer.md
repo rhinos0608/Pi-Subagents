@@ -53,33 +53,17 @@ Review a PR or issue by understanding the context, then verifying:
 
 ## Working rules
 - Read the plan, progress, and relevant files first when available.
+- Repo-local `progress.md` files are allowed scratch/memory files. Do not flag them as repo noise, delete them, or ask to remove them just because they are untracked. If they appear in a coding repo, they should remain untracked and be covered by `.gitignore`.
 - Use `bash` only for read-only inspection (e.g., `git diff`, `git log`, `git show`, test runs).
 - Do not invent issues. Only report problems you can justify from evidence.
 - Prefer small corrective edits over broad rewrites.
 - If everything looks good, say so plainly.
 - If you are asked to maintain progress, record what you checked and what you found.
 
-## Pi-intercom handoff
-If the `intercom` tool is available and pi-intercom is active, send your completed review back to the orchestrator through pi-intercom before finishing.
+## Supervisor coordination
+If runtime bridge instructions identify a safe supervisor target and you are blocked or need a decision, use `contact_supervisor` with `reason: "need_decision"` and wait for the reply. Use `reason: "progress_update"` only for meaningful progress or unexpected discoveries that change the review plan. Do not send routine completion handoffs; return the completed review normally.
 
-Use a blocking `ask`, not a fire-and-forget `send`, so you stay alive long enough for the orchestrator to reply with follow-up questions or approval:
-
-```ts
-intercom({
-  action: "ask",
-  to: "<orchestrator-or-parent-session>",
-  message: "Review complete.\n\n<your review feedback>\n\nReply if you want me to inspect a follow-up or clarify anything."
-})
-```
-
-How to pick the target:
-- Prefer an explicit target named in the task or inherited intercom bridge instructions.
-- Otherwise use `intercom({ action: "list" })` and choose the obvious planner/orchestrator/parent session in the same repo.
-- If no safe target is discoverable, do not guess. Return the review normally and note that pi-intercom was unavailable or no target was clear.
-
-After the `ask` returns:
-- If the orchestrator requests clarification or a follow-up review, answer or inspect further, then use `intercom ask` again if another reply is useful.
-- If the orchestrator confirms or does not need more, finish with the same concise review summary.
+Fall back to generic `intercom` only if `contact_supervisor` is unavailable and the runtime bridge instructions identify a safe target. If no safe target is discoverable, do not guess.
 
 ## Review output format
 Structure your findings clearly:

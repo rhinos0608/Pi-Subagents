@@ -232,6 +232,9 @@ describe("resolveIntercomBridge", () => {
 			assert.equal(bridge.active, true);
 			assert.match(bridge.instruction, /reference-only/i);
 			assert.match(bridge.instruction, /normal assistant text/i);
+			assert.match(bridge.instruction, /contact_supervisor/);
+			assert.match(bridge.instruction, /need_decision/);
+			assert.match(bridge.instruction, /progress_update/);
 			assert.match(bridge.instruction, /focused task result/i);
 		} finally {
 			fs.rmSync(tempDir, { recursive: true, force: true });
@@ -245,20 +248,21 @@ describe("applyIntercomBridgeToAgent", () => {
 		mode: "always",
 		orchestratorTarget: "main",
 		extensionDir: "/Users/test/.pi/agent/extensions/pi-intercom",
-		instruction: "Intercom orchestration channel:\n- Need a decision or blocked: intercom({ action: \"ask\", to: \"main\", message: \"<question>\" })\n- Blocked/update: intercom({ action: \"send\", to: \"main\", message: \"UPDATE: <summary>\" })",
+		instruction: "Intercom orchestration channel:\n- Need a decision or blocked: contact_supervisor({ reason: \"need_decision\", message: \"<question>\" })\n- Blocked/update: contact_supervisor({ reason: \"progress_update\", message: \"UPDATE: <summary>\" })",
 	};
 
 	it("injects intercom tool and prompt instructions", () => {
 		const updated = applyIntercomBridgeToAgent(makeAgent({ tools: ["read", "bash"] }), activeBridge);
-		assert.deepEqual(updated.tools, ["read", "bash", "intercom"]);
+		assert.deepEqual(updated.tools, ["read", "bash", "intercom", "contact_supervisor"]);
 		assert.match(updated.systemPrompt, /Intercom orchestration channel:/);
-		assert.match(updated.systemPrompt, /action: "ask"/);
+		assert.match(updated.systemPrompt, /contact_supervisor/);
 	});
 
 	it("is idempotent", () => {
 		const first = applyIntercomBridgeToAgent(makeAgent({ tools: ["read"] }), activeBridge);
 		const second = applyIntercomBridgeToAgent(first, activeBridge);
 		assert.equal(second.tools?.filter((tool) => tool === "intercom").length, 1);
+		assert.equal(second.tools?.filter((tool) => tool === "contact_supervisor").length, 1);
 		assert.equal(second.systemPrompt, first.systemPrompt);
 	});
 

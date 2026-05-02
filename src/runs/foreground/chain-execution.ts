@@ -94,6 +94,7 @@ interface ParallelChainRunInput {
 	onControlEvent?: (event: ControlEvent) => void;
 	controlConfig: ResolvedControlConfig;
 	childIntercomTarget?: (agent: string, index: number) => string | undefined;
+	orchestratorIntercomTarget?: string;
 	foregroundControl?: {
 		updatedAt: number;
 		currentAgent?: string;
@@ -241,6 +242,7 @@ async function runParallelChainTasks(input: ParallelChainRunInput): Promise<Sing
 				controlConfig: input.controlConfig,
 				onControlEvent: input.onControlEvent,
 				intercomSessionName: input.childIntercomTarget?.(task.agent, input.globalTaskIndex + taskIndex),
+				orchestratorIntercomTarget: input.orchestratorIntercomTarget,
 				modelOverride: effectiveModel,
 				availableModels: input.availableModels,
 				preferredModelProvider: input.ctx.model?.provider,
@@ -314,6 +316,7 @@ interface ChainExecutionParams {
 	onControlEvent?: (event: ControlEvent) => void;
 	controlConfig: ResolvedControlConfig;
 	childIntercomTarget?: (agent: string, index: number) => string | undefined;
+	orchestratorIntercomTarget?: string;
 	foregroundControl?: {
 		updatedAt: number;
 		currentAgent?: string;
@@ -364,6 +367,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 		onControlEvent,
 		controlConfig,
 		childIntercomTarget,
+		orchestratorIntercomTarget,
 		foregroundControl,
 		intercomEvents,
 		chainSkills: chainSkillsParam,
@@ -583,6 +587,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 					controlConfig,
 					onControlEvent,
 					childIntercomTarget,
+					orchestratorIntercomTarget,
 					foregroundControl,
 					worktreeSetup,
 					maxSubagentDepth: params.maxSubagentDepth,
@@ -768,6 +773,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 				controlConfig,
 				onControlEvent,
 				intercomSessionName: childIntercomTarget?.(seqStep.agent, globalTaskIndex),
+				orchestratorIntercomTarget,
 				modelOverride: effectiveModel,
 				availableModels,
 				preferredModelProvider: ctx.model?.provider,

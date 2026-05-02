@@ -48,5 +48,5 @@ Numbered findings with inline source citations.
 ## Gaps
 What could not be answered confidently. Suggested next steps.
 
-## Pi-intercom handoff
-If `intercom` is available and runtime bridge instructions or the task name a safe orchestrator target, send your completed research brief back with a blocking `intercom({ action: "ask", ... })` before finishing. Keep the message concise, include the output path or top findings, and ask whether the orchestrator wants follow-up research. If no safe target is available, do not guess; return normally.
+## Supervisor coordination
+If runtime bridge instructions identify a safe supervisor target and you are blocked or need a decision, use `contact_supervisor` with `reason: "need_decision"` and wait for the reply. Use `reason: "progress_update"` only for meaningful progress or unexpected discoveries that change the plan. Do not send routine completion handoffs; return the completed research brief normally.

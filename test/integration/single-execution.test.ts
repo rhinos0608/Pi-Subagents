@@ -704,6 +704,33 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		});
 	});
 
+	it("passes supervisor metadata through to child execution", async () => {
+		mockPi.onCall({ echoEnv: [
+			"PI_SUBAGENT_INTERCOM_SESSION_NAME",
+			"PI_SUBAGENT_ORCHESTRATOR_TARGET",
+			"PI_SUBAGENT_RUN_ID",
+			"PI_SUBAGENT_CHILD_AGENT",
+			"PI_SUBAGENT_CHILD_INDEX",
+		] });
+		const agents = makeAgentConfigs(["echo"]);
+
+		const result = await runSync(tempDir, agents, "echo", "Task", {
+			runId: "78f659a3",
+			index: 2,
+			intercomSessionName: "subagent-echo-78f659a3-3",
+			orchestratorIntercomTarget: "subagent-chat-parent",
+		});
+
+		assert.equal(result.exitCode, 0);
+		assert.deepEqual(JSON.parse(result.finalOutput ?? "{}"), {
+			PI_SUBAGENT_INTERCOM_SESSION_NAME: "subagent-echo-78f659a3-3",
+			PI_SUBAGENT_ORCHESTRATOR_TARGET: "subagent-chat-parent",
+			PI_SUBAGENT_RUN_ID: "78f659a3",
+			PI_SUBAGENT_CHILD_AGENT: "echo",
+			PI_SUBAGENT_CHILD_INDEX: "2",
+		});
+	});
+
 	it("passes custom tool extensions through even when explicit extensions are allowlisted", async () => {
 		mockPi.onCall({ output: "Done" });
 		const agents = [makeAgent("echo", {

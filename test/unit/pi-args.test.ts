@@ -141,7 +141,7 @@ describe("buildPiArgs system prompt mode wiring", () => {
 		assert.equal(env.PI_SUBAGENT_INHERIT_SKILLS, "1");
 	});
 
-	it("passes a child intercom session name through env", () => {
+	it("passes child intercom and orchestrator metadata through env", () => {
 		const { env } = buildPiArgs({
 			baseArgs: ["-p"],
 			task: "hello",
@@ -149,9 +149,31 @@ describe("buildPiArgs system prompt mode wiring", () => {
 			inheritProjectContext: true,
 			inheritSkills: true,
 			intercomSessionName: "subagent-worker-78f659a3",
+			orchestratorIntercomTarget: "subagent-chat-parent",
+			runId: "78f659a3",
+			childAgentName: "worker",
+			childIndex: 2,
 		});
 
 		assert.equal(env.PI_SUBAGENT_INTERCOM_SESSION_NAME, "subagent-worker-78f659a3");
+		assert.equal(env.PI_SUBAGENT_ORCHESTRATOR_TARGET, "subagent-chat-parent");
+		assert.equal(env.PI_SUBAGENT_RUN_ID, "78f659a3");
+		assert.equal(env.PI_SUBAGENT_CHILD_AGENT, "worker");
+		assert.equal(env.PI_SUBAGENT_CHILD_INDEX, "2");
+	});
+
+	it("emits explicit builtin tool allowlists", () => {
+		const { args } = buildPiArgs({
+			baseArgs: ["-p"],
+			task: "hello",
+			sessionEnabled: false,
+			inheritProjectContext: false,
+			inheritSkills: false,
+			tools: ["read", "grep", "find", "ls", "bash", "edit", "write", "contact_supervisor"],
+		});
+
+		const toolsArg = args[args.indexOf("--tools") + 1];
+		assert.equal(toolsArg, "read,grep,find,ls,bash,edit,write,contact_supervisor");
 	});
 
 	it("keeps tool extension paths when explicit extensions are allowlisted", () => {

@@ -51,5 +51,5 @@ Anything likely to go wrong, need clarification, or need careful verification.
 
 Keep the plan concrete. Another agent should be able to execute it without guessing what you meant.
 
-## Pi-intercom handoff
-If `intercom` is available and runtime bridge instructions or the task name a safe orchestrator target, send the completed plan back with a blocking `intercom({ action: "ask", ... })` before finishing. Include the plan path or concise plan summary and ask whether the orchestrator wants clarification, revisions, or approval to proceed. If no safe target is available, do not guess; return normally.
+## Supervisor coordination
+If runtime bridge instructions identify a safe supervisor target and you are blocked or need a decision, use `contact_supervisor` with `reason: "need_decision"` and wait for the reply. Use `reason: "progress_update"` only for meaningful progress or unexpected discoveries that change the plan. Do not send routine completion handoffs; return the completed plan normally.

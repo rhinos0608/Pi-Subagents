@@ -223,10 +223,9 @@ Run this implementation in the background. If the worker gets blocked or needs a
 Ask oracle to review this plan. If it sees a decision I need to make, have it ask me instead of assuming.
 ```
 
-The child can use two kinds of coordination messages:
+The child can use one dedicated coordination tool:
 
-- `ask`: the child needs a decision or clarification from the parent session
-- `send`: the child sends a short update when blocked or explicitly asked for progress
+- `contact_supervisor`: the child contacts the parent/supervisor session that delegated the task. Use `reason: "need_decision"` for blocking decisions or clarification, and `reason: "progress_update"` for short non-blocking updates when a discovery changes the plan.
 
 Child-side routine completion handoffs are still not expected. With the intercom bridge active, parent-side `pi-subagents` sends grouped completion results through `pi-intercom`: one grouped message per foreground parent `subagent` run and one per completed async result file. Acknowledged foreground delivery returns a compact receipt with artifact/session paths; if unacknowledged, the normal full output is preserved. Grouped messages include child intercom targets and full child summaries.
 
@@ -887,7 +886,7 @@ Sets the `/agents` list shortcut for opening the new agent/chain template picker
 }
 ```
 
-Controls whether subagents receive runtime intercom coordination instructions and whether `intercom` is auto-added to their tool allowlist when needed.
+Controls whether subagents receive runtime intercom coordination instructions and whether `intercom` and `contact_supervisor` are auto-added to their tool allowlist when needed.
 
 Fields:
 
@@ -896,7 +895,7 @@ Fields:
 
 Bridge activation also requires `pi-intercom` to be installed and enabled, a targetable current session name or fallback alias, and `pi-intercom` in any explicit agent `extensions` allowlist.
 
-The default injected guidance tells children to use intercom only for coordination: ask when blocked or needing a decision, send updates only when blocked or explicitly asked, and avoid routine completion handoffs.
+The default injected guidance tells children to use `contact_supervisor` with `reason: "need_decision"` when blocked or needing a decision, `reason: "progress_update"` only for meaningful blocked/progress updates, generic `intercom` as fallback plumbing, and avoid routine completion handoffs.
 
 ### `worktreeSetupHook`
 
