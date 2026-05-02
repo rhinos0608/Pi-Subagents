@@ -626,8 +626,9 @@ function foregroundStyleWidgetStepLines(
 	expanded: boolean,
 	width: number,
 ): string[] {
+	const status = widgetStepStatus(step.status, theme);
 	const stats = widgetStepStats(theme, step);
-	const lines = [`  ${widgetStepGlyph(step.status, theme)} ${itemTitle} ${index}/${total}: ${themeBold(theme, step.agent)}${stats ? ` ${theme.fg("dim", "·")} ${stats}` : ""}`];
+	const lines = [`  ${widgetStepGlyph(step.status, theme)} ${itemTitle} ${index}/${total}: ${themeBold(theme, step.agent)} ${theme.fg("dim", "·")} ${status}${stats ? ` ${theme.fg("dim", "·")} ${stats}` : ""}`];
 	const activity = widgetStepActivityLine(step, width, expanded);
 	if (activity) lines.push(`    ${theme.fg("dim", `⎿  ${activity}`)}`);
 	if (step.status === "running") {
@@ -683,10 +684,11 @@ function compactSingleWidgetLines(job: AsyncJobState, theme: Theme, width: numbe
 	const itemTitle = job.mode === "parallel" || job.activeParallelGroup ? "Agent" : "Step";
 	const lines = fullLines.slice(0, 2);
 	for (const [index, step] of job.steps.entries()) {
-		const stepStats = widgetStepStats(theme, step);
+		const status = widgetStepStatus(step.status, theme);
 		const activity = widgetStepActivityLine(step, width, false);
+		const stepStats = widgetStepStats(theme, step);
 		const activitySuffix = activity ? ` ${theme.fg("dim", "·")} ${theme.fg("dim", activity)}` : "";
-		lines.push(`  ${widgetStepGlyph(step.status, theme)} ${itemTitle} ${index + 1}/${total}: ${themeBold(theme, step.agent)}${stepStats ? ` ${theme.fg("dim", "·")} ${stepStats}` : ""}${activitySuffix}`);
+		lines.push(`  ${widgetStepGlyph(step.status, theme)} ${itemTitle} ${index + 1}/${total}: ${themeBold(theme, step.agent)} ${theme.fg("dim", "·")} ${status}${activitySuffix}${stepStats ? ` ${theme.fg("dim", "·")} ${stepStats}` : ""}`);
 	}
 	if (job.steps.some((step) => step.status === "running")) lines.push(theme.fg("accent", "  Press Ctrl+O for live detail · /subagents-status for output paths"));
 	return lines.map((line) => truncLine(line, width));

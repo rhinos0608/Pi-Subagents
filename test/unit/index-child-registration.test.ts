@@ -7,6 +7,58 @@ import { describe, it } from "node:test";
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 describe("subagent extension child mode", () => {
+	it("collapses tool detail before direct subagent tool execution", () => {
+		const script = String.raw`
+			import registerSubagentExtension from "./src/extension/index.ts";
+			const events = { on() { return () => {}; }, emit() {} };
+			let registeredTool;
+			const fakePi = new Proxy({
+				events,
+				registerTool(tool) { registeredTool = tool; },
+				registerCommand() {},
+				registerShortcut() {},
+				registerMessageRenderer() {},
+				sendMessage() {},
+				getSessionName() { return undefined; },
+			}, {
+				get(target, prop) {
+					if (prop in target) return target[prop];
+					return () => undefined;
+				},
+			});
+			registerSubagentExtension(fakePi);
+			if (!registeredTool) throw new Error("tool not registered");
+			const calls = [];
+			const ctx = {
+				cwd: process.cwd(),
+				hasUI: true,
+				ui: {
+					setToolsExpanded(value) { calls.push(value); },
+					setWidget() {},
+					requestRender() {},
+					theme: { fg(_name, text) { return text; }, bg(_name, text) { return text; }, bold(text) { return text; } },
+				},
+				sessionManager: { getSessionId() { return "session-test"; }, getSessionFile() { return null; } },
+				modelRegistry: { getAvailable() { return []; } },
+			};
+			await registeredTool.execute("collapse-check", { action: "list" }, new AbortController().signal, undefined, ctx);
+			if (calls[0] !== false) throw new Error("expected setToolsExpanded(false), got " + JSON.stringify(calls));
+		`;
+
+		execFileSync(
+			process.execPath,
+			[
+				"--experimental-transform-types",
+				"--import",
+				"./test/support/register-loader.mjs",
+				"--input-type=module",
+				"--eval",
+				script,
+			],
+			{ cwd: projectRoot, stdio: "pipe" },
+		);
+	});
+
 	it("returns before registering parent tools, slash commands, renderers, or event handlers", () => {
 		const script = String.raw`
 			import registerSubagentExtension from "./src/extension/index.ts";

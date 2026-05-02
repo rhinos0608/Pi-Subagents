@@ -116,7 +116,7 @@ export const SubagentParams = Type.Object({
 		description: "Async run directory for action='status' or action='resume'."
 	})),
 	index: Type.Optional(Type.Integer({ minimum: 0, description: "Zero-based child index for actions that target a specific child." })),
-	message: Type.Optional(Type.String({ description: "Follow-up message for action='resume'." })),
+	message: Type.Optional(Type.String({ description: "Follow-up message for action='resume'. Use index to choose a child from multi-child runs." })),
 	// Chain identifier for management (can't reuse 'chain' — that's the execution array)
 	chainName: Type.Optional(Type.String({
 		description: "Chain name for get/update/delete management actions"

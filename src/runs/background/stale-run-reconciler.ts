@@ -76,6 +76,7 @@ interface ResultChildOutcome {
 	agent?: string;
 	success?: boolean;
 	error?: string;
+	sessionFile?: string;
 	model?: string;
 	attemptedModels?: string[];
 	modelAttempts?: NonNullable<AsyncStatus["steps"]>[number]["modelAttempts"];
@@ -119,6 +120,7 @@ function terminalStatusFromResult(status: AsyncStatus, resultPath: string, now: 
 			durationMs: step.startedAt !== undefined && step.durationMs === undefined ? Math.max(0, now - step.startedAt) : step.durationMs,
 			exitCode: step.exitCode ?? (state === "complete" || state === "paused" ? 0 : 1),
 			error: state === "failed" ? step.error ?? child?.error : step.error,
+			sessionFile: step.sessionFile ?? child?.sessionFile,
 			model: step.model ?? child?.model,
 			attemptedModels: step.attemptedModels ?? child?.attemptedModels,
 			modelAttempts: step.modelAttempts ?? child?.modelAttempts,
@@ -204,6 +206,7 @@ function buildFailedRepair(status: AsyncStatus, asyncDir: string, now: number, r
 				model: step.model,
 				attemptedModels: step.attemptedModels,
 				modelAttempts: step.modelAttempts,
+				sessionFile: step.sessionFile,
 			})),
 			exitCode: 1,
 			timestamp: now,

@@ -35,7 +35,7 @@ describe("async run status inspection", () => {
 				lastUpdate: 100,
 				currentStep: 0,
 				sessionFile,
-				steps: [{ agent: "scout", status: "running", startedAt: 100 }],
+				steps: [{ agent: "scout", status: "running", startedAt: 100, sessionFile }],
 			}, null, 2), "utf-8");
 
 			const result = inspectSubagentStatus({ id: "run-stale" }, {
@@ -54,6 +54,7 @@ describe("async run status inspection", () => {
 			assert.match(text, /Revive: subagent\(\{ action: "resume", id: "run-stale", message: "\.\.\." \}\)/);
 			const resultJson = JSON.parse(fs.readFileSync(path.join(resultsDir, "run-stale.json"), "utf-8"));
 			assert.equal(resultJson.success, false);
+			assert.equal(resultJson.results[0].sessionFile, sessionFile);
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
 		}
@@ -96,6 +97,68 @@ describe("async run status inspection", () => {
 			assert.match(text, /Agent 2\/3: reviewer running/);
 			assert.match(text, /Agent 3\/3: reviewer pending/);
 			assert.doesNotMatch(text, /Step 1: reviewer/);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("shows indexed revive guidance for completed multi-child async runs with child sessions", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-run-status-multi-resume-"));
+		try {
+			const asyncRoot = path.join(root, "runs");
+			const asyncDir = path.join(asyncRoot, "run-multi");
+			const firstSession = path.join(root, "a.jsonl");
+			const secondSession = path.join(root, "b.jsonl");
+			fs.mkdirSync(asyncDir, { recursive: true });
+			fs.writeFileSync(firstSession, "", "utf-8");
+			fs.writeFileSync(secondSession, "", "utf-8");
+			fs.writeFileSync(path.join(asyncDir, "status.json"), JSON.stringify({
+				runId: "run-multi",
+				mode: "parallel",
+				state: "complete",
+				startedAt: 100,
+				lastUpdate: 200,
+				steps: [
+					{ agent: "a", status: "complete", sessionFile: firstSession },
+					{ agent: "b", status: "complete", sessionFile: secondSession },
+				],
+			}, null, 2), "utf-8");
+
+			const result = inspectSubagentStatus({ id: "run-multi" }, {
+				asyncDirRoot: asyncRoot,
+				resultsDir: path.join(root, "results"),
+			});
+
+			const text = textContent(result);
+			assert.match(text, /Revive child: subagent\(\{ action: "resume", id: "run-multi", index: 0, message: "\.\.\." \}\)/);
+			assert.doesNotMatch(text, /unsupported for multi-child/);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("uses original child indexes when result metadata contains invalid children", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-run-status-original-index-"));
+		try {
+			const asyncRoot = path.join(root, "runs");
+			const resultsDir = path.join(root, "results");
+			const sessionFile = path.join(root, "b.jsonl");
+			fs.mkdirSync(resultsDir, { recursive: true });
+			fs.writeFileSync(sessionFile, "", "utf-8");
+			fs.writeFileSync(path.join(resultsDir, "run-result-index.json"), JSON.stringify({
+				id: "run-result-index",
+				success: false,
+				state: "failed",
+				results: [
+					{ output: "missing agent", sessionFile: path.join(root, "a.jsonl") },
+					{ agent: "b", success: false, sessionFile },
+				],
+			}, null, 2), "utf-8");
+
+			const result = inspectSubagentStatus({ id: "run-result-index" }, { asyncDirRoot: asyncRoot, resultsDir });
+
+			const text = textContent(result);
+			assert.match(text, /Revive child: subagent\(\{ action: "resume", id: "run-result-index", index: 1, message: "\.\.\." \}\)/);
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
 		}
@@ -202,6 +265,37 @@ describe("async run status inspection", () => {
 
 			assert.equal(result.isError, true);
 			assert.match(textContent(result), /id must be an async run id or prefix, not a path/);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("does not advertise revive for result fallback with only a top-level session file", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-run-status-result-no-child-"));
+		try {
+			const asyncRoot = path.join(root, "runs");
+			const resultsDir = path.join(root, "results");
+			fs.mkdirSync(path.join(asyncRoot, "run-session-only"), { recursive: true });
+			fs.mkdirSync(resultsDir, { recursive: true });
+			const sessionFile = path.join(root, "session.jsonl");
+			fs.writeFileSync(sessionFile, "", "utf-8");
+			fs.writeFileSync(path.join(resultsDir, "run-session-only.json"), JSON.stringify({
+				id: "run-session-only",
+				success: false,
+				state: "failed",
+				sessionFile,
+				summary: "missing child metadata",
+			}, null, 2), "utf-8");
+
+			const result = inspectSubagentStatus({ id: "run-session-only" }, {
+				asyncDirRoot: asyncRoot,
+				resultsDir,
+			});
+
+			const text = textContent(result);
+			assert.equal(result.isError, undefined);
+			assert.match(text, /Resume: unavailable/);
+			assert.doesNotMatch(text, /Revive:/);
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
 		}

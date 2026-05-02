@@ -89,13 +89,15 @@ describe("async stale-run reconciliation", () => {
 					{ agent: "worker", status: "running", startedAt: 1100 },
 				],
 			});
+			const scoutSession = path.join(root, "scout.jsonl");
+			const workerSession = path.join(root, "worker.jsonl");
 			fs.writeFileSync(path.join(resultsDir, "run-mixed.json"), JSON.stringify({
 				id: "run-mixed",
 				success: false,
 				state: "failed",
 				results: [
-					{ agent: "scout", success: true, model: "fast" },
-					{ agent: "worker", success: false, error: "boom", model: "careful" },
+					{ agent: "scout", success: true, sessionFile: scoutSession, model: "fast" },
+					{ agent: "worker", success: false, error: "boom", sessionFile: workerSession, model: "careful" },
 				],
 			}, null, 2), "utf-8");
 
@@ -110,10 +112,12 @@ describe("async stale-run reconciliation", () => {
 			assert.equal(result.status?.steps?.[0]?.status, "complete");
 			assert.equal(result.status?.steps?.[0]?.exitCode, 0);
 			assert.equal(result.status?.steps?.[0]?.model, "fast");
+			assert.equal(result.status?.steps?.[0]?.sessionFile, scoutSession);
 			assert.equal(result.status?.steps?.[1]?.status, "failed");
 			assert.equal(result.status?.steps?.[1]?.exitCode, 1);
 			assert.equal(result.status?.steps?.[1]?.error, "boom");
 			assert.equal(result.status?.steps?.[1]?.model, "careful");
+			assert.equal(result.status?.steps?.[1]?.sessionFile, workerSession);
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
 		}

@@ -21,6 +21,8 @@ const resolveChainTemplates = settings?.resolveChainTemplates;
 const buildChainInstructions = settings?.buildChainInstructions;
 const resolveStepBehavior = settings?.resolveStepBehavior;
 const resolveParallelBehaviors = settings?.resolveParallelBehaviors;
+const suppressProgressForReadOnlyTask = settings?.suppressProgressForReadOnlyTask;
+const taskDisallowsFileUpdates = settings?.taskDisallowsFileUpdates;
 const isParallelStep = settings?.isParallelStep;
 const createChainDir = settings?.createChainDir;
 const normalizeSkillInput = skills?.normalizeSkillInput;
@@ -187,6 +189,19 @@ describe("resolveParallelBehaviors", { skip: !available ? "pi packages not avail
 		);
 
 		assert.equal(behaviors[0]?.output, false);
+	});
+});
+
+describe("read-only progress suppression", { skip: !available ? "pi packages not available" : undefined }, () => {
+	it("suppresses progress for review-only or no-edit tasks", () => {
+		const behavior = { reads: undefined, output: false, outputMode: "inline", progress: true, skills: undefined };
+
+		assert.equal(taskDisallowsFileUpdates("Review-only. Do not edit files."), true);
+		assert.equal(taskDisallowsFileUpdates("Implement read-only mode for config files."), false);
+		assert.equal(taskDisallowsFileUpdates("This task is not read-only; edit files."), false);
+		assert.equal(suppressProgressForReadOnlyTask(behavior, "Review-only. Do not edit files.").progress, false);
+		assert.equal(suppressProgressForReadOnlyTask(behavior, "{task}", "Review-only. Do not edit files.").progress, false);
+		assert.equal(suppressProgressForReadOnlyTask(behavior, "Implement the approved fix.").progress, true);
 	});
 });
 

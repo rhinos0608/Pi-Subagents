@@ -76,6 +76,7 @@ export function createResultWatcher(
 					output?: string;
 					error?: string;
 					success?: boolean;
+					sessionFile?: string;
 					artifactPaths?: { outputPath?: string };
 					intercomTarget?: string;
 				}>;
@@ -120,6 +121,7 @@ export function createResultWatcher(
 						const summary = result.success === false && result.error
 							? `${result.error}${hasRealOutput ? `\n\nOutput:\n${baseOutput}` : ""}`
 							: output;
+						const sessionPath = result.sessionFile ?? (childResults.length === 1 ? data.sessionFile : undefined);
 						return {
 							agent: result.agent ?? data.agent ?? `step-${index + 1}`,
 							status: resolveSubagentResultStatus({
@@ -129,7 +131,7 @@ export function createResultWatcher(
 							summary,
 							index,
 							artifactPath: result.artifactPaths?.outputPath,
-							sessionPath: data.sessionFile,
+							...(typeof sessionPath === "string" && fsApi.existsSync(sessionPath) ? { sessionPath } : {}),
 							intercomTarget: result.intercomTarget,
 						};
 					}),

@@ -105,7 +105,7 @@ Use this at the start of non-trivial work. Launch `scout` for local context and 
 
 ### Parallel cleanup technique
 
-Use this after implementation when the user wants cleanup review or when a final pass would reduce AI-slop. Launch two fresh-context `reviewer` tasks with `output: false`: one deslop pass and one verbosity pass. If the `deslop` or `verbosity-cleaner` skills are available, pass the relevant skill to that reviewer; otherwise inline the criteria. Both reviewers are review-only and should flag concrete issues with severity, file/line references, and smallest safe fixes. The parent decides what to apply and asks before making changes unless cleanup was already authorized.
+Use this after implementation when the user wants cleanup review or when a final pass would reduce AI-slop. Launch two fresh-context `reviewer` tasks with `output: false` and `progress: false`: one deslop pass and one verbosity pass. If the `deslop` or `verbosity-cleaner` skills are available, pass the relevant skill to that reviewer; otherwise inline the criteria. Both reviewers are review-only and should flag concrete issues with severity, file/line references, and smallest safe fixes. Review-only/no-edit beats progress-writing or artifact-writing instructions. The parent decides what to apply and asks before making changes unless cleanup was already authorized.
 
 ## Builtin Agents
 
@@ -290,6 +290,21 @@ const run = subagent({
 
 Inspect async runs with `subagent({ action: "status", id: "..." })`, `subagent({ action: "status" })` for active runs, or the `/subagents-status` slash command.
 
+Use `resume` for follow-up work after a delegated run:
+
+```typescript
+subagent({ action: "resume", id: "run-id", message: "Follow up on this point." })
+subagent({ action: "resume", id: "run-id", index: 1, message: "Continue reviewer 2." })
+```
+
+Resume behavior:
+- If an async child is still running and reachable, `resume` sends the follow-up to that live child over intercom.
+- If an async child has completed, `resume` revives it by starting a new async child from the persisted child session file.
+- Multi-child async runs require `index` unless only one running child is selectable.
+- Completed foreground single, parallel, and chain runs can also be revived by `index` while their run metadata remains in extension state.
+- Revive starts a new child process from the old session context; it does not restart the same OS process.
+- If the chosen child has no persisted `.jsonl` session file, resume fails and reports that directly.
+
 Use diagnostics when setup or child startup looks wrong:
 
 ```typescript
@@ -408,6 +423,8 @@ Use `contact_supervisor` with `reason: "need_decision"` when:
 - a subagent is blocked on a decision
 - a child needs clarification instead of guessing
 - an approval, product, API, or scope choice is required before continuing safely
+
+Do not use `contact_supervisor` just to resolve review-only/no-edit versus progress-writing or artifact-writing instructions. No-edit wins, and the child should return review findings without touching files.
 
 Use `contact_supervisor` with `reason: "progress_update"` when:
 - a child is explicitly asked for progress

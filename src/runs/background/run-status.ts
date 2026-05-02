@@ -28,8 +28,24 @@ function activityText(activityState: unknown, lastActivityAt: unknown): string |
 	return activityState === "needs_attention" ? `no activity for ${seconds}s` : `active ${seconds}s ago`;
 }
 
-function canShowRevive(stepCount: number, sessionFile: unknown): sessionFile is string {
-	return stepCount === 1 && typeof sessionFile === "string" && fs.existsSync(sessionFile);
+function hasExistingSessionFile(value: unknown): value is string {
+	return typeof value === "string" && fs.existsSync(value);
+}
+
+function formatResumeGuidance(runId: string | undefined, children: Array<{ agent?: unknown; sessionFile?: unknown }>, fallbackSessionFile?: unknown): string {
+	const knownChildren = children
+		.map((child, index) => ({ child, index }))
+		.filter(({ child }) => typeof child.agent === "string");
+	if (!runId || knownChildren.length === 0) return "Resume: unavailable; no child session file was persisted.";
+	const singleSessionFile = knownChildren[0]?.child.sessionFile ?? fallbackSessionFile;
+	if (children.length === 1 && knownChildren.length === 1 && hasExistingSessionFile(singleSessionFile)) {
+		return `Revive: subagent({ action: "resume", id: "${runId}", message: "..." })`;
+	}
+	const childWithSession = knownChildren.find(({ child }) => hasExistingSessionFile(child.sessionFile));
+	if (childWithSession) {
+		return `Revive child: subagent({ action: "resume", id: "${runId}", index: ${childWithSession.index}, message: "..." })`;
+	}
+	return "Resume: unavailable; no child session file was persisted.";
 }
 
 function stepLineLabel(status: AsyncStatus, index: number): string {
@@ -137,14 +153,7 @@ export function inspectSubagentStatus(params: RunStatusParams, deps: RunStatusDe
 			}
 			if (status.sessionFile) lines.push(`Session: ${status.sessionFile}`);
 			if (status.state !== "running") {
-				const stepCount = status.steps?.length ?? 0;
-				if (canShowRevive(stepCount, status.sessionFile)) {
-					lines.push(`Revive: subagent({ action: "resume", id: "${status.runId}", message: "..." })`);
-				} else if (stepCount > 1) {
-					lines.push("Resume: unsupported for multi-child async runs until per-child session files are persisted.");
-				} else {
-					lines.push("Resume: unavailable; no single child session file was persisted.");
-				}
+				lines.push(formatResumeGuidance(status.runId, status.steps ?? [], status.sessionFile));
 			}
 			if (fs.existsSync(logPath)) lines.push(`Log: ${logPath}`);
 			if (fs.existsSync(eventsPath)) lines.push(`Events: ${eventsPath}`);
@@ -156,18 +165,12 @@ export function inspectSubagentStatus(params: RunStatusParams, deps: RunStatusDe
 	if (resultPath) {
 		try {
 			const raw = fs.readFileSync(resultPath, "utf-8");
-			const data = JSON.parse(raw) as { id?: string; runId?: string; agent?: string; success?: boolean; summary?: string; exitCode?: number; state?: string; sessionFile?: string; results?: Array<{ agent?: string }> };
+			const data = JSON.parse(raw) as { id?: string; runId?: string; agent?: string; success?: boolean; summary?: string; exitCode?: number; state?: string; sessionFile?: string; results?: Array<{ agent?: string; sessionFile?: string }> };
 			const status = data.success ? "complete" : data.state === "paused" || data.exitCode === 0 ? "paused" : "failed";
 			const runId = data.runId ?? data.id ?? resolvedId;
 			const lines = [`Run: ${runId}`, `State: ${status}`, `Result: ${resultPath}`];
-			const stepCount = Array.isArray(data.results) ? data.results.length : data.agent ? 1 : 0;
-			if (runId && canShowRevive(stepCount, data.sessionFile)) {
-				lines.push(`Revive: subagent({ action: "resume", id: "${runId}", message: "..." })`);
-			} else if (stepCount > 1) {
-				lines.push("Resume: unsupported for multi-child async runs until per-child session files are persisted.");
-			} else {
-				lines.push("Resume: unavailable; no single child session file was persisted.");
-			}
+			const children = Array.isArray(data.results) ? data.results : data.agent ? [{ agent: data.agent, sessionFile: data.sessionFile }] : [];
+			lines.push(formatResumeGuidance(runId, children, data.sessionFile));
 			if (data.summary) lines.push("", data.summary);
 			return { content: [{ type: "text", text: lines.join("\n") }], details: { mode: "single", results: [] } };
 		} catch (error) {

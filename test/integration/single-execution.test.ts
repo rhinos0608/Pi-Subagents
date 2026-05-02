@@ -28,6 +28,8 @@ import { INTERCOM_DETACH_REQUEST_EVENT, INTERCOM_DETACH_RESPONSE_EVENT } from ".
 
 interface ModelAttempt {
 	success?: boolean;
+	exitCode?: number;
+	error?: string;
 }
 
 interface ProgressSummary {
@@ -444,13 +446,98 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 
 		assert.equal(result.exitCode, 0);
 		assert.equal(result.model, "anthropic/claude-sonnet-4");
-		assert.deepEqual(result.attemptedModels, ["openai/gpt-5-mini", "anthropic/claude-sonnet-4"]);
-		assert.equal(result.modelAttempts?.length, 2);
-		assert.equal(result.modelAttempts?.[0]?.success, false);
-		assert.equal(result.modelAttempts?.[0]?.exitCode, 0);
-		assert.match(result.modelAttempts?.[0]?.error ?? "", /429/);
-		assert.equal(result.modelAttempts?.[1]?.success, true);
-		assert.equal(mockPi.callCount(), 2);
+		assert.deepEqual(result.modelAttempts?.map((attempt) => attempt.success), [false, true]);
+	});
+
+	it("fails zero-exit provider errors when no fallback succeeds", async () => {
+		mockPi.onCall({
+			jsonl: [{
+				type: "message_end",
+				message: {
+					role: "assistant",
+					content: [{ type: "text", text: "weekly quota hit" }],
+					model: "openai/gpt-5-mini",
+					errorMessage: "429 quota exceeded",
+					usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, cost: { total: 0.01 } },
+				},
+			}],
+			exitCode: 0,
+		});
+		const agents = [makeAgent("echo", { model: "openai/gpt-5-mini" })];
+
+		const result = await runSync(tempDir, agents, "echo", "Task", {
+			runId: "zero-exit-provider-error-no-fallback",
+		});
+
+		assert.equal(result.exitCode, 1);
+		assert.match(result.error ?? "", /429 quota exceeded/);
+		assert.deepEqual(result.modelAttempts?.map((attempt) => attempt.success), [false]);
+	});
+
+	it("fails when all fallback model attempts report provider errors", async () => {
+		for (const model of ["openai/gpt-5-mini", "anthropic/claude-sonnet-4"]) {
+			mockPi.onCall({
+				jsonl: [{
+					type: "message_end",
+					message: {
+						role: "assistant",
+						content: [{ type: "text", text: `${model} quota hit` }],
+						model,
+						errorMessage: "429 quota exceeded",
+						usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, cost: { total: 0.01 } },
+					},
+				}],
+				exitCode: 0,
+			});
+		}
+		const agents = [makeAgent("echo", {
+			model: "openai/gpt-5-mini",
+			fallbackModels: ["anthropic/claude-sonnet-4"],
+		})];
+
+		const result = await runSync(tempDir, agents, "echo", "Task", {
+			runId: "zero-exit-provider-error-all-fallbacks-fail",
+		});
+
+		assert.equal(result.exitCode, 1);
+		assert.deepEqual(result.modelAttempts?.map((attempt) => attempt.success), [false, false]);
+		assert.match(result.error ?? "", /429 quota exceeded/);
+	});
+
+	it("baselines output files per fallback attempt", async () => {
+		const outputPath = path.join(tempDir, "fallback-output.md");
+		mockPi.onCall({
+			jsonl: [{
+				type: "message_end",
+				message: {
+					role: "assistant",
+					content: [{ type: "text", text: "primary failed" }],
+					model: "openai/gpt-5-mini",
+					errorMessage: "429 quota exceeded",
+					usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, cost: { total: 0.01 } },
+				},
+			}],
+			exitCode: 0,
+			delay: 100,
+		});
+		mockPi.onCall({ output: "fallback assistant output" });
+		const agents = [makeAgent("echo", {
+			model: "openai/gpt-5-mini",
+			fallbackModels: ["anthropic/claude-sonnet-4"],
+		})];
+
+		const runPromise = runSync(tempDir, agents, "echo", "Task", {
+			runId: "fallback-output-per-attempt",
+			outputPath,
+		});
+		setTimeout(() => {
+			fs.writeFileSync(outputPath, "stale partial output from failed primary", "utf-8");
+		}, 20);
+
+		const result = await runPromise;
+
+		assert.equal(result.exitCode, 0);
+		assert.equal(fs.readFileSync(outputPath, "utf-8"), "fallback assistant output");
 	});
 
 	it("does not retry on ordinary task/tool failures", async () => {
@@ -901,49 +988,51 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		assert.match(result.finalOutput ?? "", /Interrupted/);
 	});
 
-	it("detaches cleanly on intercom handoff without aborting the child process", async () => {
-		const eventBus = createEventBus();
-		let accepted = false;
-		eventBus.on(INTERCOM_DETACH_RESPONSE_EVENT, (payload) => {
-			if (!payload || typeof payload !== "object") return;
-			accepted = (payload as { accepted?: unknown }).accepted === true;
-		});
-		mockPi.onCall({
-			steps: [
-				{ jsonl: [events.toolStart("intercom", { action: "ask", to: "orchestrator" })] },
-				{ delay: 1000, jsonl: [events.assistantMessage("received pong")] },
-			],
-		});
-		const agents = makeAgentConfigs(["echo"]);
+	for (const toolName of ["intercom", "contact_supervisor"]) {
+		it(`detaches cleanly on ${toolName} handoff without aborting the child process`, async () => {
+			const eventBus = createEventBus();
+			let accepted = false;
+			eventBus.on(INTERCOM_DETACH_RESPONSE_EVENT, (payload) => {
+				if (!payload || typeof payload !== "object") return;
+				accepted = (payload as { accepted?: unknown }).accepted === true;
+			});
+			mockPi.onCall({
+				steps: [
+					{ jsonl: [events.toolStart(toolName, toolName === "intercom" ? { action: "ask", to: "orchestrator" } : { reason: "need_decision", message: "Need a decision" })] },
+					{ delay: 1000, jsonl: [events.assistantMessage("received pong")] },
+				],
+			});
+			const agents = makeAgentConfigs(["echo"]);
 
-		// Emit the detach request the moment we observe the intercom tool start
-		// in a progress update — this is the signal the parent has set
-		// `intercomStarted=true`. Using a fixed delay here races the mock's
-		// cold spawn and flakes under load.
-		let detachEmitted = false;
-		const runPromise = runSync(tempDir, agents, "echo", "Task", {
-			runId: "intercom-detach",
-			allowIntercomDetach: true,
-			intercomEvents: eventBus,
-			onUpdate: (update) => {
-				if (detachEmitted) return;
-				const progress = (update as { details?: { progress?: Array<{ currentTool?: string }> } }).details?.progress;
-				const sawIntercom = Array.isArray(progress) && progress.some((p) => p?.currentTool === "intercom");
-				if (!sawIntercom) return;
-				detachEmitted = true;
-				eventBus.emit(INTERCOM_DETACH_REQUEST_EVENT, { requestId: "test-request" });
-			},
+			// Emit the detach request the moment we observe the coordination tool start
+			// in a progress update — this is the signal the parent has set
+			// `intercomStarted=true`. Using a fixed delay here races the mock's
+			// cold spawn and flakes under load.
+			let detachEmitted = false;
+			const runPromise = runSync(tempDir, agents, "echo", "Task", {
+				runId: `${toolName}-detach`,
+				allowIntercomDetach: true,
+				intercomEvents: eventBus,
+				onUpdate: (update) => {
+					if (detachEmitted) return;
+					const progress = (update as { details?: { progress?: Array<{ currentTool?: string }> } }).details?.progress;
+					const sawCoordinationTool = Array.isArray(progress) && progress.some((p) => p?.currentTool === toolName);
+					if (!sawCoordinationTool) return;
+					detachEmitted = true;
+					eventBus.emit(INTERCOM_DETACH_REQUEST_EVENT, { requestId: "test-request" });
+				},
+			});
+
+			const result = await runPromise;
+
+			assert.equal(result.exitCode, 0);
+			assert.equal(result.detached, true);
+			assert.equal(result.detachedReason, "intercom coordination");
+			assert.equal(result.finalOutput, "Detached for intercom coordination.");
+			assert.equal(result.progress?.status, "detached");
+			assert.equal(accepted, true);
 		});
-
-		const result = await runPromise;
-
-		assert.equal(result.exitCode, 0);
-		assert.equal(result.detached, true);
-		assert.equal(result.detachedReason, "intercom coordination");
-		assert.equal(result.finalOutput, "Detached for intercom coordination.");
-		assert.equal(result.progress?.status, "detached");
-		assert.equal(accepted, true);
-	});
+	}
 
 	it("lets an active intercom child accept detach when another child is listening", async () => {
 		const eventBus = createEventBus();

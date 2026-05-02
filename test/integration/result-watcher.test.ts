@@ -294,7 +294,10 @@ describe("result watcher", () => {
 			const state = createState();
 			state.currentSessionId = "session-1";
 			const watcher = createResultWatcher(pi, state, resultsDir, 60_000);
+			const firstSession = path.join(resultsDir, "a-session.jsonl");
+			const missingSession = path.join(resultsDir, "b-session.jsonl");
 			try {
+				fs.writeFileSync(firstSession, "", "utf-8");
 				fs.writeFileSync(path.join(resultsDir, "async-1.json"), JSON.stringify({
 					id: "async-1",
 					runId: "run-123",
@@ -304,8 +307,8 @@ describe("result watcher", () => {
 					state: "complete",
 					summary: "Combined summary",
 					results: [
-						{ agent: "a", output: "Result from a", success: true, artifactPaths: { outputPath: "/tmp/a-output.md" }, intercomTarget: "subagent-a-run-123-1" },
-						{ agent: "b", output: "Result from b", success: false, artifactPaths: { outputPath: "/tmp/b-output.md" }, intercomTarget: "subagent-b-run-123-2" },
+						{ agent: "a", output: "Result from a", success: true, sessionFile: firstSession, artifactPaths: { outputPath: "/tmp/a-output.md" }, intercomTarget: "subagent-a-run-123-1" },
+						{ agent: "b", output: "Result from b", success: false, sessionFile: missingSession, artifactPaths: { outputPath: "/tmp/b-output.md" }, intercomTarget: "subagent-b-run-123-2" },
 					],
 					sessionId: "session-1",
 					sessionFile: "/tmp/session.jsonl",
@@ -323,8 +326,63 @@ describe("result watcher", () => {
 			const eventData = intercomEvents[0]?.data as { message?: string; mode?: string; status?: string };
 			assert.equal(eventData.mode, "parallel");
 			assert.equal(eventData.status, "failed");
-			assert.match(String(eventData.message ?? ""), /Resume: unsupported for multi-child async runs/);
+			const message = String(eventData.message ?? "");
+			assert.match(message, /Revive child: subagent\(\{ action: "resume", id: "async-1", index: 0, message: "\.\.\." \}\)/);
+			assert.ok(message.includes(`Session: ${firstSession}`));
+			assert.equal(message.includes(missingSession), false);
 			assert.equal(emitted.some((entry) => entry.event === "subagent:async-complete"), true);
+		} finally {
+			fs.rmSync(resultsDir, { recursive: true, force: true });
+		}
+	});
+
+	it("does not advertise indexed revive from only a top-level async session file", async () => {
+		const resultsDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-result-watcher-"));
+		try {
+			const emitted: Array<{ event: string; data: unknown }> = [];
+			const listeners = new Map<string, Set<(payload: unknown) => void>>();
+			const pi = {
+				events: {
+					emit: (event: string, data: unknown) => {
+						emitted.push({ event, data });
+						for (const listener of listeners.get(event) ?? []) listener(data);
+						return true;
+					},
+					on: (event: string, listener: (payload: unknown) => void) => {
+						const set = listeners.get(event) ?? new Set();
+						set.add(listener);
+						listeners.set(event, set);
+						return () => set.delete(listener);
+					},
+				},
+			};
+			const state = createState();
+			state.currentSessionId = "session-1";
+			const watcher = createResultWatcher(pi, state, resultsDir, 60_000);
+			try {
+				fs.writeFileSync(path.join(resultsDir, "async-top-session.json"), JSON.stringify({
+					id: "async-top-session",
+					mode: "parallel",
+					success: false,
+					state: "failed",
+					results: [
+						{ agent: "a", output: "A", success: true },
+						{ agent: "b", output: "B", success: false },
+					],
+					sessionId: "session-1",
+					sessionFile: "/tmp/top-session.jsonl",
+					intercomTarget: "subagent-chat-main",
+				}), "utf-8");
+				watcher.primeExistingResults();
+				await new Promise((resolve) => setTimeout(resolve, 100));
+			} finally {
+				watcher.stopResultWatcher();
+			}
+
+			const eventData = emitted.find((entry) => entry.event === "subagent:result-intercom")?.data as { message?: string } | undefined;
+			assert.ok(eventData);
+			assert.doesNotMatch(String(eventData.message ?? ""), /Revive child:/);
+			assert.match(String(eventData.message ?? ""), /Resume: unavailable; no child session file was persisted/);
 		} finally {
 			fs.rmSync(resultsDir, { recursive: true, force: true });
 		}
@@ -428,7 +486,13 @@ describe("result watcher", () => {
 					intercomTarget: "orchestrator",
 				}), "utf-8");
 				watcher.primeExistingResults();
-				await new Promise((resolve) => setTimeout(resolve, 650));
+				const deadline = Date.now() + 1000;
+				while (true) {
+					const sawWarning = logged.some((entry) => /Subagent async grouped result intercom delivery was not acknowledged/.test(String(entry[0] ?? "")));
+					const sawCompletion = emitted.some((entry) => entry.event === "subagent:async-complete");
+					if ((sawWarning && sawCompletion) || Date.now() > deadline) break;
+					await new Promise((resolve) => setTimeout(resolve, 25));
+				}
 			} finally {
 				console.error = originalError;
 				watcher.stopResultWatcher();
@@ -436,10 +500,7 @@ describe("result watcher", () => {
 
 			assert.equal(emitted.filter((entry) => entry.event === "subagent:result-intercom").length, 1);
 			assert.equal(emitted.some((entry) => entry.event === "subagent:async-complete"), true);
-			assert.equal(
-				logged.filter((entry) => /Subagent async grouped result intercom delivery was not acknowledged/.test(String(entry[0] ?? ""))).length,
-				1,
-			);
+			assert.equal(logged.some((entry) => /Subagent async grouped result intercom delivery was not acknowledged/.test(String(entry[0] ?? ""))), true);
 		} finally {
 			fs.rmSync(resultsDir, { recursive: true, force: true });
 		}

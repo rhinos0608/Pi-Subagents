@@ -207,6 +207,7 @@ export interface SingleResult {
 
 export interface Details {
 	mode: SubagentRunMode | "management";
+	runId?: string;
 	context?: "fresh" | "fork";
 	results: SingleResult[];
 	controlEvents?: ControlEvent[];
@@ -296,6 +297,7 @@ export interface AsyncStatus {
 	steps?: Array<{
 		agent: string;
 		status: "pending" | "running" | "complete" | "completed" | "failed" | "paused";
+		sessionFile?: string;
 		activityState?: ActivityState;
 		lastActivityAt?: number;
 		currentTool?: string;
@@ -360,10 +362,26 @@ export interface AsyncJobState {
 	controlEventCursor?: number;
 }
 
+export interface ForegroundResumeChild {
+	agent: string;
+	index: number;
+	sessionFile?: string;
+	status: SubagentResultStatus;
+}
+
+export interface ForegroundResumeRun {
+	runId: string;
+	mode: SubagentRunMode;
+	cwd: string;
+	updatedAt: number;
+	children: ForegroundResumeChild[];
+}
+
 export interface SubagentState {
 	baseCwd: string;
 	currentSessionId: string | null;
 	asyncJobs: Map<string, AsyncJobState>;
+	foregroundRuns?: Map<string, ForegroundResumeRun>;
 	foregroundControls: Map<string, {
 		runId: string;
 		mode: SubagentRunMode;

@@ -69,6 +69,7 @@ export function captureSingleOutputSnapshot(outputPath: string | undefined): Sin
 		const stat = fs.statSync(outputPath);
 		return { exists: true, mtimeMs: stat.mtimeMs, size: stat.size };
 	} catch {
+		// The snapshot is advisory; resolveSingleOutput reports concrete read/write failures.
 		return { exists: false };
 	}
 }
@@ -94,18 +95,32 @@ export function resolveSingleOutput(
 ): { fullOutput: string; savedPath?: string; saveError?: string } {
 	if (!outputPath) return { fullOutput: fallbackOutput };
 
+	let changedSinceStart = false;
 	try {
 		const stat = fs.statSync(outputPath);
-		const changedSinceStart = !beforeRun?.exists
+		changedSinceStart = !beforeRun?.exists
 			|| stat.mtimeMs !== beforeRun.mtimeMs
 			|| stat.size !== beforeRun.size;
-		if (changedSinceStart) {
+	} catch (error) {
+		const code = error && typeof error === "object" && "code" in error ? (error as { code?: unknown }).code : undefined;
+		if (code !== "ENOENT" && code !== "ENOTDIR") {
 			return {
-				fullOutput: fs.readFileSync(outputPath, "utf-8"),
-				savedPath: outputPath,
+				fullOutput: fallbackOutput,
+				saveError: `Failed to inspect output file: ${error instanceof Error ? error.message : String(error)}`,
 			};
 		}
-	} catch {}
+	}
+
+	if (changedSinceStart) {
+		try {
+			return { fullOutput: fs.readFileSync(outputPath, "utf-8"), savedPath: outputPath };
+		} catch (error) {
+			return {
+				fullOutput: fallbackOutput,
+				saveError: `Failed to read changed output file: ${error instanceof Error ? error.message : String(error)}`,
+			};
+		}
+	}
 
 	const save = persistSingleOutput(outputPath, fallbackOutput);
 	if (save.savedPath) return { fullOutput: fallbackOutput, savedPath: save.savedPath };
@@ -132,7 +147,7 @@ export function finalizeSingleOutput(params: {
 		return { displayOutput, savedPath: params.savedPath, outputReference };
 	}
 	if (params.exitCode === 0 && params.saveError && params.outputPath) {
-		displayOutput += `\n\nFailed to save output to: ${params.outputPath}\n${params.saveError}`;
+		displayOutput += `\n\nOutput file error: ${params.outputPath}\n${params.saveError}`;
 		return { displayOutput, saveError: params.saveError };
 	}
 	return { displayOutput };

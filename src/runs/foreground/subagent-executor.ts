@@ -22,6 +22,8 @@ import {
 	getStepAgents,
 	isParallelStep,
 	resolveStepBehavior,
+	suppressProgressForReadOnlyTask,
+	taskDisallowsFileUpdates,
 	type ChainStep,
 	type ResolvedStepBehavior,
 	type SequentialStep,
@@ -206,6 +208,115 @@ function foregroundStatusResult(control: SubagentState["foregroundControls"] ext
 	return { content: [{ type: "text", text: lines.join("\n") }], details: { mode: "management", results: [] } };
 }
 
+function rememberForegroundRun(state: SubagentState, input: { runId: string; mode: "single" | "parallel" | "chain"; cwd: string; results: SingleResult[] }): void {
+	state.foregroundRuns ??= new Map();
+	state.foregroundRuns.set(input.runId, {
+		runId: input.runId,
+		mode: input.mode,
+		cwd: input.cwd,
+		updatedAt: Date.now(),
+		children: input.results.map((result, index) => ({
+			agent: result.agent,
+			index,
+			status: resolveSubagentResultStatus({ exitCode: result.exitCode, interrupted: result.interrupted, detached: result.detached }),
+			...(result.sessionFile ? { sessionFile: result.sessionFile } : {}),
+		})),
+	});
+	while (state.foregroundRuns.size > 50) {
+		const oldest = [...state.foregroundRuns.values()].sort((left, right) => left.updatedAt - right.updatedAt)[0];
+		if (!oldest) break;
+		state.foregroundRuns.delete(oldest.runId);
+	}
+}
+
+function resolveForegroundResumeTarget(params: SubagentParamsLike, state: SubagentState): { runId: string; mode: "single" | "parallel" | "chain"; state: "complete"; agent: string; index: number; intercomTarget: string; cwd: string; sessionFile: string } | undefined {
+	const requested = (params.id ?? params.runId)?.trim();
+	if (!requested || !state.foregroundRuns?.size) return undefined;
+	const direct = state.foregroundRuns.get(requested);
+	const matches = direct ? [direct] : [...state.foregroundRuns.values()].filter((run) => run.runId.startsWith(requested));
+	if (matches.length === 0) return undefined;
+	if (matches.length > 1) throw new Error(`Ambiguous foreground run id prefix '${requested}' matched: ${matches.map((run) => run.runId).join(", ")}. Provide a longer id.`);
+	const run = matches[0]!;
+	if (run.children.length > 1 && params.index === undefined) throw new Error(`Foreground run '${run.runId}' has ${run.children.length} children. Provide index to choose one.`);
+	const index = params.index ?? 0;
+	if (!Number.isInteger(index)) throw new Error(`Foreground run '${run.runId}' index must be an integer.`);
+	if (index < 0 || index >= run.children.length) throw new Error(`Foreground run '${run.runId}' has ${run.children.length} children. Index ${index} is out of range.`);
+	const child = run.children[index]!;
+	if (child.status === "detached") throw new Error(`Foreground run '${run.runId}' child ${index} is detached for intercom coordination and cannot be revived safely from the remembered foreground state. Reply to the supervisor request first; after the child exits, start a fresh follow-up if needed.`);
+	if (!child.sessionFile) throw new Error(`Foreground run '${run.runId}' child ${index} does not have a persisted session file to resume from.`);
+	if (path.extname(child.sessionFile) !== ".jsonl") throw new Error(`Foreground run '${run.runId}' child ${index} session file must be a .jsonl file: ${child.sessionFile}`);
+	const sessionFile = path.resolve(child.sessionFile);
+	if (!fs.existsSync(sessionFile)) throw new Error(`Foreground run '${run.runId}' child ${index} session file does not exist: ${child.sessionFile}`);
+	return { runId: run.runId, mode: run.mode, state: "complete", agent: child.agent, index, intercomTarget: resolveSubagentIntercomTarget(run.runId, child.agent, index), cwd: run.cwd, sessionFile };
+}
+
+type AsyncResumeSourceTarget = ReturnType<typeof resolveAsyncResumeTarget> & { source: "async" };
+type ForegroundResumeSourceTarget = NonNullable<ReturnType<typeof resolveForegroundResumeTarget>> & { kind: "revive"; source: "foreground" };
+type ResumeSourceTarget = AsyncResumeSourceTarget | ForegroundResumeSourceTarget;
+
+function isAsyncRunNotFound(error: unknown): boolean {
+	return error instanceof Error && error.message.startsWith("Async run not found.");
+}
+
+function isResumeAmbiguity(error: unknown): boolean {
+	return error instanceof Error && /Ambiguous .*run id prefix/.test(error.message);
+}
+
+function resumeTargetExact(target: { runId: string } | undefined, requested: string): boolean {
+	return target?.runId === requested;
+}
+
+function escapeRegExp(value: string): string {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function isExactResumeError(error: unknown, source: "async" | "foreground", requested: string): boolean {
+	if (!(error instanceof Error) || !requested) return false;
+	return new RegExp(`\\b${source} run '${escapeRegExp(requested)}'`, "i").test(error.message);
+}
+
+function resolveResumeTarget(params: SubagentParamsLike, state: SubagentState): ResumeSourceTarget {
+	const requested = (params.id ?? params.runId)?.trim() ?? "";
+	let foregroundTarget: ForegroundResumeSourceTarget | undefined;
+	let foregroundError: unknown;
+	let asyncTarget: AsyncResumeSourceTarget | undefined;
+	let asyncError: unknown;
+
+	try {
+		const target = resolveForegroundResumeTarget(params, state);
+		if (target) foregroundTarget = { kind: "revive", source: "foreground", ...target };
+	} catch (error) {
+		foregroundError = error;
+	}
+	try {
+		asyncTarget = { source: "async", ...resolveAsyncResumeTarget(params) };
+	} catch (error) {
+		asyncError = error;
+	}
+
+	if (foregroundTarget && asyncTarget) {
+		const foregroundExact = resumeTargetExact(foregroundTarget, requested);
+		const asyncExact = resumeTargetExact(asyncTarget, requested);
+		if (foregroundExact && !asyncExact) return foregroundTarget;
+		if (asyncExact && !foregroundExact) return asyncTarget;
+		throw new Error(`Resume id '${requested}' is ambiguous between foreground run '${foregroundTarget.runId}' and async run '${asyncTarget.runId}'. Provide a full run id.`);
+	}
+	if (foregroundTarget) {
+		if (isExactResumeError(asyncError, "async", requested)) throw asyncError;
+		if (isResumeAmbiguity(asyncError) && !resumeTargetExact(foregroundTarget, requested)) throw asyncError;
+		return foregroundTarget;
+	}
+	if (asyncTarget) {
+		if (isExactResumeError(foregroundError, "foreground", requested)) throw foregroundError;
+		if (isResumeAmbiguity(foregroundError) && !resumeTargetExact(asyncTarget, requested)) throw foregroundError;
+		return asyncTarget;
+	}
+	if (foregroundError && !isAsyncRunNotFound(asyncError)) throw foregroundError;
+	if (foregroundError) throw foregroundError;
+	if (asyncError) throw asyncError;
+	throw new Error("Run not found. Provide id or runId.");
+}
+
 function getAsyncInterruptTarget(state: SubagentState, runId: string | undefined): { asyncId: string; asyncDir: string } | undefined {
 	if (runId) {
 		const direct = state.asyncJobs.get(runId);
@@ -296,9 +407,9 @@ async function resumeAsyncRun(input: {
 		};
 	}
 
-	let target: ReturnType<typeof resolveAsyncResumeTarget>;
+	let target: ResumeSourceTarget;
 	try {
-		target = resolveAsyncResumeTarget(input.params);
+		target = resolveResumeTarget(input.params, input.deps.state);
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		return { content: [{ type: "text", text: message }], isError: true, details: { mode: "management", results: [] } };
@@ -352,7 +463,7 @@ async function resumeAsyncRun(input: {
 	const agentConfig = agents.find((agent) => agent.name === target.agent);
 	if (!agentConfig) {
 		return {
-			content: [{ type: "text", text: `Unknown agent for async resume: ${target.agent}` }],
+			content: [{ type: "text", text: `Unknown agent for resume: ${target.agent}` }],
 			isError: true,
 			details: { mode: "management", results: [] },
 		};
@@ -390,8 +501,9 @@ async function resumeAsyncRun(input: {
 
 	const revivedId = result.details.asyncId ?? runId;
 	const revivedTarget = intercomBridge.active ? resolveSubagentIntercomTarget(revivedId, target.agent, 0) : undefined;
+	const sourceLabel = target.source === "foreground" ? "foreground" : "async";
 	const lines = [
-		`Revived async subagent from ${target.runId}.`,
+		`Revived ${sourceLabel} subagent from ${target.runId}.`,
 		`Revived run: ${revivedId}`,
 		`Agent: ${target.agent}`,
 		`Session: ${target.sessionFile}`,
@@ -836,6 +948,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 		const chain = wrapChainTasksForFork(params.chain as ChainStep[], params.context);
 		return executeAsyncChain(id, {
 			chain,
+			task: params.task,
 			agents,
 			ctx: asyncCtx,
 			availableModels,
@@ -972,6 +1085,7 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 		const asyncChain = wrapChainTasksForFork(chainResult.requestedAsync.chain, params.context);
 		return executeAsyncChain(id, {
 			chain: asyncChain,
+			task: params.task,
 			agents,
 			ctx: asyncCtx,
 			availableModels: ctx.modelRegistry.getAvailable().map(toModelInfo),
@@ -992,8 +1106,9 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 		});
 	}
 
-	const chainDetails = chainResult.details ? compactForegroundDetails(chainResult.details) : undefined;
-	const intercomReceipt = chainDetails && !chainDetails.results.some((result) => result.interrupted)
+	const chainDetails = chainResult.details ? compactForegroundDetails({ ...chainResult.details, runId }) : undefined;
+	if (chainDetails) rememberForegroundRun(deps.state, { runId, mode: "chain", cwd: effectiveCwd, results: chainDetails.results });
+	const intercomReceipt = chainDetails && !chainDetails.results.some((result) => result.interrupted || result.detached)
 		? await maybeBuildForegroundIntercomReceipt({
 			pi: deps.pi,
 			intercomBridge: data.intercomBridge,
@@ -1010,7 +1125,7 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 		};
 	}
 
-	return chainResult;
+	return chainDetails ? { ...chainResult, details: chainDetails } : chainResult;
 }
 
 interface ForegroundParallelRunInput {
@@ -1376,17 +1491,21 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 				currentSessionId: deps.state.currentSessionId!,
 				currentModelProvider: ctx.model?.provider,
 			};
-			const parallelTasks = tasks.map((t, i) => ({
-				agent: t.agent,
-				task: params.context === "fork" ? wrapForkTask(taskTexts[i]!) : taskTexts[i]!,
-				cwd: t.cwd,
-				...(modelOverrides[i] ? { model: modelOverrides[i] } : {}),
-				...(skillOverrides[i] !== undefined ? { skill: skillOverrides[i] } : {}),
-				...(behaviorOverrides[i]?.output !== undefined ? { output: behaviorOverrides[i]!.output } : {}),
-				...(behaviorOverrides[i]?.outputMode !== undefined ? { outputMode: behaviorOverrides[i]!.outputMode } : {}),
-				...(behaviorOverrides[i]?.reads !== undefined ? { reads: behaviorOverrides[i]!.reads } : {}),
-				...(behaviorOverrides[i]?.progress !== undefined ? { progress: behaviorOverrides[i]!.progress } : {}),
-			}));
+			const parallelTasks = tasks.map((t, i) => {
+				const taskText = params.context === "fork" ? wrapForkTask(taskTexts[i]!) : taskTexts[i]!;
+				const progress = taskDisallowsFileUpdates(taskText) ? false : behaviorOverrides[i]?.progress;
+				return {
+					agent: t.agent,
+					task: taskText,
+					cwd: t.cwd,
+					...(modelOverrides[i] ? { model: modelOverrides[i] } : {}),
+					...(skillOverrides[i] !== undefined ? { skill: skillOverrides[i] } : {}),
+					...(behaviorOverrides[i]?.output !== undefined ? { output: behaviorOverrides[i]!.output } : {}),
+					...(behaviorOverrides[i]?.outputMode !== undefined ? { outputMode: behaviorOverrides[i]!.outputMode } : {}),
+					...(behaviorOverrides[i]?.reads !== undefined ? { reads: behaviorOverrides[i]!.reads } : {}),
+					...(progress !== undefined ? { progress } : {}),
+				};
+			});
 			return executeAsyncChain(id, {
 				chain: [{ parallel: parallelTasks, concurrency: parallelConcurrency, worktree: params.worktree }],
 				resultMode: "parallel",
@@ -1411,7 +1530,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 		}
 	}
 
-	const behaviors = agentConfigs.map((config, index) => resolveStepBehavior(config, behaviorOverrides[index]!));
+	const behaviors = agentConfigs.map((config, index) => suppressProgressForReadOnlyTask(resolveStepBehavior(config, behaviorOverrides[index]!), taskTexts[index]));
 	const firstProgressIndex = behaviors.findIndex((behavior) => behavior.progress);
 	const liveResults: (SingleResult | undefined)[] = new Array(tasks.length).fill(undefined);
 	const liveProgress: (AgentProgress | undefined)[] = new Array(tasks.length).fill(undefined);
@@ -1495,13 +1614,23 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 		const interrupted = results.find((result) => result.interrupted);
 		const details = compactForegroundDetails({
 			mode: "parallel",
+			runId,
 			results,
 			progress: params.includeProgress ? allProgress : undefined,
 			artifacts: allArtifactPaths.length ? { dir: artifactsDir, files: allArtifactPaths } : undefined,
 		});
+		rememberForegroundRun(deps.state, { runId, mode: "parallel", cwd: effectiveCwd, results: details.results });
 		if (interrupted) {
 			return {
 				content: [{ type: "text", text: `Parallel run paused after interrupt (${interrupted.agent}). Waiting for explicit next action.` }],
+				details,
+			};
+		}
+		const detachedIndex = results.findIndex((result) => result.detached);
+		const detached = detachedIndex >= 0 ? results[detachedIndex] : undefined;
+		if (detached) {
+			return {
+				content: [{ type: "text", text: `Parallel run detached for intercom coordination (${detached.agent}). Reply to the supervisor request first. After the child exits, start a fresh follow-up if needed.` }],
 				details,
 			};
 		}
@@ -1776,11 +1905,13 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 	});
 	const details = compactForegroundDetails({
 		mode: "single",
+		runId,
 		results: [r],
 		progress: params.includeProgress ? allProgress : undefined,
 		artifacts: allArtifactPaths.length ? { dir: artifactsDir, files: allArtifactPaths } : undefined,
 		truncation: r.truncation,
 	});
+	rememberForegroundRun(deps.state, { runId, mode: "single", cwd: effectiveCwd, results: details.results });
 
 	if (!r.detached && !r.interrupted) {
 		const intercomReceipt = await maybeBuildForegroundIntercomReceipt({
@@ -1801,7 +1932,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 
 	if (r.detached) {
 		return {
-			content: [{ type: "text", text: `Detached for intercom coordination: ${params.agent}` }],
+			content: [{ type: "text", text: `Detached for intercom coordination: ${params.agent}. Reply to the supervisor request first. After the child exits, start a fresh follow-up if needed.` }],
 			details,
 		};
 	}
@@ -1842,6 +1973,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		ctx: ExtensionContext,
 	): Promise<AgentToolResult<Details>> => {
 		deps.state.baseCwd = ctx.cwd;
+		deps.state.foregroundRuns ??= new Map();
 		deps.state.foregroundControls ??= new Map();
 		deps.state.lastForegroundControlId ??= null;
 		const requestCwd = resolveRequestedCwd(ctx.cwd, params.cwd);

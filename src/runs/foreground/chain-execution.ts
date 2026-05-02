@@ -18,6 +18,7 @@ import {
 	buildChainInstructions,
 	writeInitialProgressFile,
 	createParallelDirs,
+	suppressProgressForReadOnlyTask,
 	aggregateParallelOutputs,
 	isParallelStep,
 	type StepOverrides,
@@ -178,8 +179,8 @@ async function runParallelChainTasks(input: ParallelChainRunInput): Promise<Sing
 				} as SingleResult;
 			}
 
-			const behavior = input.parallelBehaviors[taskIndex]!;
 			const taskTemplate = input.parallelTemplates[taskIndex] ?? "{previous}";
+			const behavior = suppressProgressForReadOnlyTask(input.parallelBehaviors[taskIndex]!, taskTemplate, input.originalTask);
 			const templateHasPrevious = taskTemplate.includes("{previous}");
 			const { prefix, suffix } = buildChainInstructions(
 				behavior,
@@ -537,7 +538,8 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 
 			try {
 				const agentNames = step.parallel.map((task) => task.agent);
-				const parallelBehaviors = resolveParallelBehaviors(step.parallel, agents, stepIndex, chainSkills);
+				const parallelBehaviors = resolveParallelBehaviors(step.parallel, agents, stepIndex, chainSkills)
+					.map((behavior, taskIndex) => suppressProgressForReadOnlyTask(behavior, parallelTemplates[taskIndex] ?? step.parallel[taskIndex]?.task, originalTask));
 				for (let taskIndex = 0; taskIndex < step.parallel.length; taskIndex++) {
 					const behavior = parallelBehaviors[taskIndex]!;
 					const outputPath = typeof behavior.output === "string"
@@ -604,6 +606,23 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 				if (interrupted) {
 					return {
 						content: [{ type: "text", text: `Chain paused after interrupt at step ${stepIndex + 1} (${interrupted.agent}). Waiting for explicit next action.` }],
+						details: buildChainExecutionDetails({
+							results,
+							includeProgress,
+							allProgress,
+							allArtifactPaths,
+							artifactsDir,
+							chainAgents,
+							totalSteps,
+							currentStepIndex: stepIndex,
+						}),
+					};
+				}
+				const detachedIndexInStep = parallelResults.findIndex((result) => result.detached);
+				const detached = detachedIndexInStep >= 0 ? parallelResults[detachedIndexInStep] : undefined;
+				if (detached) {
+					return {
+						content: [{ type: "text", text: `Chain detached for intercom coordination at step ${stepIndex + 1} (${detached.agent}). Reply to the supervisor request first. After the child exits, start a fresh follow-up if needed.` }],
 						details: buildChainExecutionDetails({
 							results,
 							includeProgress,
@@ -695,7 +714,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 						? tuiOverride.skills
 						: normalizeSkillInput(seqStep.skill),
 			};
-			const behavior = resolveStepBehavior(agentConfig, stepOverride, chainSkills);
+			const behavior = suppressProgressForReadOnlyTask(resolveStepBehavior(agentConfig, stepOverride, chainSkills), stepTemplate, originalTask);
 
 			const isFirstProgress = behavior.progress && !progressCreated;
 			if (isFirstProgress) {
@@ -822,27 +841,24 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 			if (r.progress) allProgress.push(r.progress);
 			if (r.artifactPaths) allArtifactPaths.push(r.artifactPaths);
 
-			if (behavior.output && r.exitCode === 0) {
-				try {
-					const expectedPath = path.isAbsolute(behavior.output)
-						? behavior.output
-						: path.join(chainDir, behavior.output);
-					if (!fs.existsSync(expectedPath)) {
-						const dirFiles = fs.readdirSync(chainDir);
-						const mdFiles = dirFiles.filter((file) => file.endsWith(".md") && file !== "progress.md");
-						const warning = mdFiles.length > 0
-							? `Agent wrote to different file(s): ${mdFiles.join(", ")} instead of ${behavior.output}`
-							: `Agent did not create expected output file: ${behavior.output}`;
-						r.error = r.error ? `${r.error}\n${warning}` : warning;
-					}
-				} catch {
-					// Ignore validation errors - this is just a diagnostic
-				}
-			}
-
 			if (r.interrupted) {
 				return {
 					content: [{ type: "text", text: `Chain paused after interrupt at step ${stepIndex + 1} (${r.agent}). Waiting for explicit next action.` }],
+					details: buildChainExecutionDetails({
+						results,
+						includeProgress,
+						allProgress,
+						allArtifactPaths,
+						artifactsDir,
+						chainAgents,
+						totalSteps,
+						currentStepIndex: stepIndex,
+					}),
+				};
+			}
+			if (r.detached) {
+				return {
+					content: [{ type: "text", text: `Chain detached for intercom coordination at step ${stepIndex + 1} (${r.agent}). Reply to the supervisor request first. After the child exits, start a fresh follow-up if needed.` }],
 					details: buildChainExecutionDetails({
 						results,
 						includeProgress,
@@ -875,6 +891,24 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 					}),
 					isError: true,
 				};
+			}
+
+			if (behavior.output) {
+				try {
+					const expectedPath = path.isAbsolute(behavior.output)
+						? behavior.output
+						: path.join(chainDir, behavior.output);
+					if (!fs.existsSync(expectedPath)) {
+						const dirFiles = fs.readdirSync(chainDir);
+						const mdFiles = dirFiles.filter((file) => file.endsWith(".md") && file !== "progress.md");
+						const warning = mdFiles.length > 0
+							? `Agent wrote to different file(s): ${mdFiles.join(", ")} instead of ${behavior.output}`
+							: `Agent did not create expected output file: ${behavior.output}`;
+						r.error = r.error ? `${r.error}\n${warning}` : warning;
+					}
+				} catch {
+					// Ignore validation errors; this diagnostic should not mask successful chain output.
+				}
 			}
 
 			prev = getSingleResultOutput(r);

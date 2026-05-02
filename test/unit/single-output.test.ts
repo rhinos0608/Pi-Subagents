@@ -81,6 +81,20 @@ describe("resolveSingleOutput", () => {
 		assert.equal(result.savedPath, outputPath);
 		assert.equal(fs.readFileSync(outputPath, "utf-8"), "fresh assistant output");
 	});
+
+	it("preserves read errors from changed output paths", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-output-test-"));
+		tempDirs.push(dir);
+		const outputPath = path.join(dir, "review.md");
+		const before = captureSingleOutputSnapshot(outputPath);
+
+		fs.mkdirSync(outputPath);
+		const result = resolveSingleOutput(outputPath, "fallback output", before);
+
+		assert.equal(result.fullOutput, "fallback output");
+		assert.equal(result.savedPath, undefined);
+		assert.match(result.saveError ?? "", /Failed to read changed output file/);
+	});
 });
 
 describe("formatSavedOutputReference", () => {

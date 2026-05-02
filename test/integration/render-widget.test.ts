@@ -121,9 +121,9 @@ describe("subagent async widget rendering", () => {
 			const lines = (widget as (_tui: unknown, widgetTheme: typeof theme) => { render(width: number): string[] })(undefined, theme).render(180).map((line) => line.trimEnd());
 			const text = lines.join("\n");
 			assert.match(text, /async subagent parallel \(3\) · background · \/subagents-status/);
-			assert.match(text, /Agent 1\/3: reviewer · 5 turns · 18 tool uses · 44k token · active now/);
-			assert.match(text, /Agent 2\/3: reviewer · 4 turns · 13 tool uses · 22k token · active 2s ago/);
-			assert.match(text, /Agent 3\/3: reviewer · 3 turns · 11 tool uses · 19k token · grep \| 1\.0s/);
+			assert.match(text, /Agent 1\/3: reviewer · running · active now · 5 turns · 18 tool uses · 44k token/);
+			assert.match(text, /Agent 2\/3: reviewer · running · active 2s ago · 4 turns · 13 tool uses · 22k token/);
+			assert.match(text, /Agent 3\/3: reviewer · running · grep \| 1\.0s · 3 turns · 11 tool uses · 19k token/);
 			assert.match(text, /Press Ctrl\+O for live detail · \/subagents-status for output paths/);
 			assert.doesNotMatch(text, /widget truncated/);
 			assert.ok(lines.length <= 10, "collapsed component should stay under Pi's string-widget cap even though it bypasses it");
@@ -156,11 +156,11 @@ describe("subagent async widget rendering", () => {
 		const text = lines.join("\n");
 		assert.match(text, /async subagent parallel \(3\) · background · \/subagents-status/);
 		assert.match(text, /parallel · 2 agents running · 1\/3 done/);
-		assert.match(text, /Agent 1\/3: reviewer · 2 tool uses/);
+		assert.match(text, /Agent 1\/3: reviewer · running · 2 tool uses/);
 		assert.match(text, /⎿  active now/);
-		assert.match(text, /Agent 2\/3: reviewer\n\s+⎿  read \| 2\.0s/);
+		assert.match(text, /Agent 2\/3: reviewer · running\n\s+⎿  read \| 2\.0s/);
 		assert.match(text, /Press Ctrl\+O for live detail/);
-		assert.match(text, /Agent 3\/3: reviewer · 1\.5k token/);
+		assert.match(text, /Agent 3\/3: reviewer · complete · 1\.5k token/);
 	});
 
 	it("shows inline live detail for expanded async parallel widget rows", () => {
@@ -250,7 +250,7 @@ describe("subagent async widget rendering", () => {
 		assert.match(text, /async subagent chain \(2\)/);
 		assert.match(text, /chain · step 2\/2/);
 		assert.match(text, /Step 1\/2: parallel group · 3\/3 done/);
-		assert.match(text, /Step 2\/2: writer · 1 tool use/);
+		assert.match(text, /Step 2\/2: writer · running · 1 tool use/);
 		assert.match(text, /Press Ctrl\+O for live detail/);
 		assert.match(text, /output: \/tmp\/chain\/output-3\.log/);
 		assert.doesNotMatch(text, /step 4\/4/);

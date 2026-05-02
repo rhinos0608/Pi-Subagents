@@ -256,6 +256,23 @@ describe("chain execution — sequential", { skip: !available ? "pi packages not
 		assert.deepEqual(result.details.results[0].attemptedModels, ["github-copilot/gpt-5-mini"]);
 	});
 
+	it("suppresses progress for {task} chain templates when the top-level task is review-only", async () => {
+		mockPi.onCall({ output: "Review done" });
+		const agents = [makeAgent("reviewer", { defaultProgress: true })];
+
+		await executeChain(
+			makeChainParams(
+				[{ agent: "reviewer" }],
+				agents,
+				{ task: "Review-only. Do not edit files. Return findings." },
+			),
+		);
+
+		const taskArg = readCallArgs(0).at(-1) ?? "";
+		assert.doesNotMatch(taskArg, /progress\.md/);
+		assert.equal(fs.existsSync(path.join(tempDir, "progress.md")), false);
+	});
+
 	it("passes {previous} between steps (step 2 receives step 1 output)", async () => {
 		mockPi.onCall({ output: "Step 1 unique output: MARKER_ABC_123" });
 		const agents = [makeAgent("step1"), makeAgent("step2")];
@@ -637,9 +654,51 @@ describe("chain execution — parallel steps", { skip: !available ? "pi packages
 			),
 		);
 
-		assert.ok(!result.isError, `chain should succeed: ${JSON.stringify(result.content)}`);
+		assert.equal(result.isError, undefined);
+		assert.match(result.content[0]?.text ?? "", /Chain detached for intercom coordination/);
+		assert.doesNotMatch(result.content[0]?.text ?? "", /resume/);
 		assert.equal(detachEmitted, true);
 		assert.equal(result.details.results.some((entry) => entry.detached === true && entry.exitCode === 0), true);
+	});
+
+	it("stops a sequential chain when a child detaches for intercom coordination", async () => {
+		mockPi.onCall({
+			steps: [
+				{ jsonl: [events.toolStart("contact_supervisor", { reason: "need_decision", message: "Need a decision" })] },
+				{ delay: 1000, jsonl: [events.assistantMessage("after reply")] },
+			],
+		});
+		const agents = [
+			makeAgent("a", { systemPrompt: "Intercom orchestration channel:" }),
+			makeAgent("b"),
+		];
+		const intercomEvents = createEventBus();
+		let detachEmitted = false;
+
+		const result = await executeChain(
+			makeChainParams(
+				[
+					{ agent: "a", task: "Ask supervisor" },
+					{ agent: "b", task: "Must not run yet" },
+				],
+				agents,
+				{
+					intercomEvents,
+					onUpdate(update: { details?: { progress?: Array<{ currentTool?: string }> } }) {
+						if (detachEmitted) return;
+						if (!update.details?.progress?.some((entry) => entry.currentTool === "contact_supervisor")) return;
+						detachEmitted = true;
+						intercomEvents.emit(INTERCOM_DETACH_REQUEST_EVENT, { requestId: "chain-sequential-detach" });
+					},
+				},
+			),
+		);
+
+		assert.equal(result.isError, undefined);
+		assert.match(result.content[0]?.text ?? "", /Chain detached for intercom coordination/);
+		assert.doesNotMatch(result.content[0]?.text ?? "", /resume/);
+		assert.equal(detachEmitted, true);
+		assert.equal(mockPi.callCount(), 1);
 	});
 
 	it("fails chain on parallel step failure", async () => {

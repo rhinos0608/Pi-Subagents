@@ -305,4 +305,21 @@ Inspect`);
 		assert.ok((args.at(-1) ?? "").includes(`Update progress at: ${path.join(tempDir, "progress.md")}`));
 		assert.equal(fs.existsSync(path.join(tempDir, "progress.md")), true);
 	});
+
+	it("top-level parallel suppresses progress when the task is review-only", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		mockPi.onCall({ output: "Review done" });
+		const executor = makeExecutor([makeAgent("reviewer", { defaultProgress: true })]);
+
+		await executor.execute(
+			"parallel-read-only-progress",
+			{ tasks: [{ agent: "reviewer", task: "Review-only. Do not edit files. Return findings." }] },
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+
+		const taskArg = readLastCallArgs().at(-1) ?? "";
+		assert.doesNotMatch(taskArg, /progress\.md/);
+		assert.equal(fs.existsSync(path.join(tempDir, "progress.md")), false);
+	});
 });

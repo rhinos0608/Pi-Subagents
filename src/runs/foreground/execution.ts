@@ -421,7 +421,7 @@ async function runSingleAttempt(
 				const toolArgs = evt.args && typeof evt.args === "object" && !Array.isArray(evt.args)
 					? evt.args as Record<string, unknown>
 					: {};
-				if (options.allowIntercomDetach && evt.toolName === "intercom") {
+				if (options.allowIntercomDetach && (evt.toolName === "intercom" || evt.toolName === "contact_supervisor")) {
 					intercomStarted = true;
 				}
 				progress.toolCount++;
@@ -633,7 +633,10 @@ async function runSingleAttempt(
 		return result;
 	}
 
-	if (exitCode === 0 && !result.error) {
+	if (result.error && result.exitCode === 0) {
+		result.exitCode = 1;
+	}
+	if (result.exitCode === 0 && !result.error) {
 		const errInfo = detectSubagentError(result.messages);
 		if (errInfo.hasError) {
 			result.exitCode = errInfo.exitCode ?? 1;
@@ -746,7 +749,6 @@ export async function runSync(
 
 	const shareEnabled = options.share === true;
 	const sessionEnabled = Boolean(options.sessionFile || options.sessionDir) || shareEnabled;
-	const outputSnapshot = captureSingleOutputSnapshot(options.outputPath);
 	const skillNames = options.skills ?? agent.skills ?? [];
 	const skillCwd = options.cwd ?? runtimeCwd;
 	const { resolved: resolvedSkills, missing: missingSkills } = resolveSkillsWithFallback(skillNames, skillCwd, runtimeCwd);
@@ -797,6 +799,7 @@ export async function runSync(
 	for (let i = 0; i < modelsToTry.length; i++) {
 		const candidate = modelsToTry[i];
 		if (candidate) attemptedModels.push(candidate);
+		const outputSnapshot = captureSingleOutputSnapshot(options.outputPath);
 		const result = await runSingleAttempt(runtimeCwd, agent, task, candidate, options, {
 			sessionEnabled,
 			systemPrompt,

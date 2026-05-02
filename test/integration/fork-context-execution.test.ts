@@ -752,6 +752,7 @@ describe("fork context execution wiring", { skip: !available ? "subagent executo
 		);
 
 		assert.equal(result.isError, undefined);
+		assert.match(result.content[0]?.text ?? "", /Parallel run detached for intercom coordination/);
 		assert.equal(detachEmitted, true);
 		assert.equal(result.details?.results?.some((entry) => entry.detached === true && entry.exitCode === 0), true);
 	});

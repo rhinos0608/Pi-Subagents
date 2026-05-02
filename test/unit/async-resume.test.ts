@@ -121,12 +121,12 @@ describe("async resume lookup", () => {
 				agent: "worker",
 				success: true,
 				state: "complete",
-				sessionFile: { path: "session.jsonl" },
+				results: [{ agent: "worker", sessionFile: { path: "session.jsonl" } }],
 			});
 
 			assert.throws(
 				() => resolveAsyncResumeTarget({ id: "run-result" }, { asyncDirRoot: path.join(root, "runs"), resultsDir }),
-				/sessionFile must be a string/,
+				/results\[0\].sessionFile must be a string/,
 			);
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
@@ -177,26 +177,89 @@ describe("async resume lookup", () => {
 		}
 	});
 
-	it("rejects multi-child completed runs until per-child sessions are persisted", () => {
+	it("revives a completed child by index while a sibling async child is still running", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-async-resume-partial-"));
+		try {
+			const asyncRoot = path.join(root, "runs");
+			const sessionFile = path.join(root, "done.jsonl");
+			fs.writeFileSync(sessionFile, "", "utf-8");
+			writeJson(path.join(asyncRoot, "run-partial", "status.json"), {
+				runId: "run-partial",
+				mode: "parallel",
+				state: "running",
+				startedAt: 100,
+				lastUpdate: 200,
+				steps: [
+					{ agent: "done", status: "complete", sessionFile },
+					{ agent: "active", status: "running" },
+				],
+			});
+
+			const target = resolveAsyncResumeTarget({ id: "run-partial", index: 0 }, { asyncDirRoot: asyncRoot, resultsDir: path.join(root, "results") });
+			assert.equal(target.kind, "revive");
+			assert.equal(target.agent, "done");
+			assert.equal(target.sessionFile, sessionFile);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("rejects pending indexed children in still-running async runs", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-async-resume-pending-"));
+		try {
+			const asyncRoot = path.join(root, "runs");
+			const sessionFile = path.join(root, "pending.jsonl");
+			fs.writeFileSync(sessionFile, "", "utf-8");
+			writeJson(path.join(asyncRoot, "run-pending", "status.json"), {
+				runId: "run-pending",
+				mode: "chain",
+				state: "running",
+				startedAt: 100,
+				lastUpdate: 200,
+				steps: [
+					{ agent: "active", status: "running" },
+					{ agent: "later", status: "pending", sessionFile },
+				],
+			});
+
+			assert.throws(
+				() => resolveAsyncResumeTarget({ id: "run-pending", index: 1 }, { asyncDirRoot: asyncRoot, resultsDir: path.join(root, "results") }),
+				/pending and has not started yet/,
+			);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("resolves a completed multi-child run when an index and per-child session file are available", () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-async-resume-multi-"));
 		try {
 			const asyncRoot = path.join(root, "runs");
-			const sessionFile = path.join(root, "session.jsonl");
-			fs.writeFileSync(sessionFile, "", "utf-8");
+			const firstSession = path.join(root, "a.jsonl");
+			const secondSession = path.join(root, "b.jsonl");
+			fs.writeFileSync(firstSession, "", "utf-8");
+			fs.writeFileSync(secondSession, "", "utf-8");
 			writeJson(path.join(asyncRoot, "run-multi", "status.json"), {
 				runId: "run-multi",
 				mode: "chain",
 				state: "complete",
 				startedAt: 100,
 				lastUpdate: 200,
-				sessionFile,
-				steps: [{ agent: "a", status: "complete" }, { agent: "b", status: "complete" }],
+				steps: [
+					{ agent: "a", status: "complete", sessionFile: firstSession },
+					{ agent: "b", status: "complete", sessionFile: secondSession },
+				],
 			});
 
 			assert.throws(
 				() => resolveAsyncResumeTarget({ id: "run-multi" }, { asyncDirRoot: asyncRoot, resultsDir: path.join(root, "results") }),
-				/per-child session files are not persisted/,
+				/Provide index to choose one/,
 			);
+			const target = resolveAsyncResumeTarget({ id: "run-multi", index: 1 }, { asyncDirRoot: asyncRoot, resultsDir: path.join(root, "results") });
+			assert.equal(target.kind, "revive");
+			assert.equal(target.agent, "b");
+			assert.equal(target.index, 1);
+			assert.equal(target.sessionFile, secondSession);
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
 		}
@@ -213,7 +276,8 @@ describe("async resume lookup", () => {
 			sessionFile: "/tmp/session.jsonl",
 		}, "What changed?");
 
-		assert.match(task, /Original async run: run-old/);
+		assert.match(task, /Original run: run-old/);
+		assert.doesNotMatch(task, /async subagent conversation/);
 		assert.match(task, /Original agent: worker/);
 		assert.match(task, /Original session file: \/tmp\/session\.jsonl/);
 		assert.match(task, /Follow-up:\nWhat changed\?/);

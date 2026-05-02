@@ -27,7 +27,7 @@ interface AsyncResultPayload {
 	sessionId?: string;
 	mode?: string;
 	summary?: string;
-	results: Array<{ output?: string; model?: string; attemptedModels?: string[]; modelAttempts?: unknown[] }>;
+	results: Array<{ output?: string; success?: boolean; error?: string; model?: string; attemptedModels?: string[]; modelAttempts?: Array<{ success?: boolean; error?: string }> }>;
 }
 
 interface AsyncStatusPayload {
@@ -35,11 +35,14 @@ interface AsyncStatusPayload {
 	activityState?: string;
 	currentTool?: string;
 	currentPath?: string;
+	state?: string;
 	steps?: Array<{
 		skills?: string[];
 		activityState?: string;
 		currentTool?: string;
 		status?: string;
+		exitCode?: number;
+		error?: string;
 	}>;
 }
 
@@ -114,6 +117,16 @@ function writePackageSkill(packageRoot: string, skillName: string): void {
 	);
 }
 
+async function waitForAsyncResultFile(id: string, timeoutMs = 15_000): Promise<string> {
+	const resultPath = path.join(RESULTS_DIR, `${id}.json`);
+	const deadline = Date.now() + timeoutMs;
+	while (!fs.existsSync(resultPath)) {
+		if (Date.now() > deadline) assert.fail(`Timed out waiting for async result file: ${resultPath}`);
+		await new Promise((resolve) => setTimeout(resolve, 100));
+	}
+	return resultPath;
+}
+
 describe("async execution utilities", { skip: !available ? "pi packages not available" : undefined }, () => {
 	let tempDir: string;
 	let mockPi: MockPi;
@@ -183,15 +196,6 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 			shareEnabled: false,
 			maxSubagentDepth: 2,
 		};
-		const waitForResult = async (id: string) => {
-			const resultPath = path.join(RESULTS_DIR, `${id}.json`);
-			const deadline = Date.now() + 10_000;
-			while (!fs.existsSync(resultPath)) {
-				if (Date.now() > deadline) assert.fail(`Timed out waiting for async result file: ${resultPath}`);
-				await new Promise((resolve) => setTimeout(resolve, 50));
-			}
-		};
-
 		mockPi.onCall({ output: "single done" });
 		const singleId = `async-handoff-single-${Date.now().toString(36)}`;
 		const singleResult = executeAsyncSingle(singleId, {
@@ -203,7 +207,7 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		assert.match(singleResult.content[0]?.text ?? "", /Async: worker \[/);
 		assert.match(singleResult.content[0]?.text ?? "", /Do not run sleep timers or polling loops/);
 		assert.match(singleResult.content[0]?.text ?? "", /end your turn now/);
-		await waitForResult(singleId);
+		await waitForAsyncResultFile(singleId, 10_000);
 
 		mockPi.onCall({ output: "parallel one done" });
 		mockPi.onCall({ output: "parallel two done" });
@@ -217,7 +221,10 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		assert.match(parallelResult.content[0]?.text ?? "", /Async parallel:/);
 		assert.match(parallelResult.content[0]?.text ?? "", /Do not run sleep timers or polling loops/);
 		assert.match(parallelResult.content[0]?.text ?? "", /Pi will deliver the completion/);
-		await waitForResult(parallelId);
+		const parallelResultPath = await waitForAsyncResultFile(parallelId, 10_000);
+		const parallelPayload = JSON.parse(fs.readFileSync(parallelResultPath, "utf-8")) as { agent?: string; mode?: string };
+		assert.equal(parallelPayload.mode, "parallel");
+		assert.equal(parallelPayload.agent, "parallel:worker+reviewer");
 
 		mockPi.onCall({ output: "chain done" });
 		const chainId = `async-handoff-chain-${Date.now().toString(36)}`;
@@ -228,7 +235,7 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		});
 		assert.match(chainResult.content[0]?.text ?? "", /Async chain:/);
 		assert.match(chainResult.content[0]?.text ?? "", /Do not run sleep timers or polling loops/);
-		await waitForResult(chainId);
+		await waitForAsyncResultFile(chainId, 10_000);
 	});
 
 	it("top-level async parallel conversion preserves output, reads, and progress", { skip: !isAsyncAvailable() || !createSubagentExecutor ? "jiti or executor not available" : undefined }, async () => {
@@ -288,6 +295,47 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		assert.ok(taskArg.includes(`Update progress at: ${path.join(tempDir, "progress.md")}`));
 		assert.ok(taskArg.includes(`Write your findings to: ${outputPath}`));
 		assert.equal(fs.existsSync(path.join(tempDir, "progress.md")), true);
+	});
+
+	it("top-level async chain suppresses progress for {task} review-only tasks", { skip: !isAsyncAvailable() || !createSubagentExecutor ? "jiti or executor not available" : undefined }, async () => {
+		mockPi.onCall({ output: "Async review" });
+		const executor = createSubagentExecutor!({
+			pi: { events: createEventBus(), getSessionName: () => undefined },
+			state: { baseCwd: tempDir, currentSessionId: null, asyncJobs: new Map(), foregroundControls: new Map(), lastForegroundControlId: null },
+			config: {},
+			asyncByDefault: false,
+			tempArtifactsDir: tempDir,
+			getSubagentSessionRoot: () => tempDir,
+			expandTilde: (p: string) => p,
+			discoverAgents: () => ({ agents: [makeAgent("reviewer", { defaultProgress: true })] }),
+		});
+
+		const result = await executor.execute(
+			"async-chain-read-only-progress",
+			{
+				chain: [{ agent: "reviewer" }],
+				task: "Review-only. Do not edit files. Return findings.",
+				async: true,
+				clarify: false,
+			},
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+
+		const asyncId = result.details?.asyncId;
+		assert.ok(asyncId, "expected asyncId");
+		const resultPath = path.join(RESULTS_DIR, `${asyncId}.json`);
+		const deadline = Date.now() + 10_000;
+		while (!fs.existsSync(resultPath)) {
+			if (Date.now() > deadline) assert.fail(`Timed out waiting for async result file: ${resultPath}`);
+			await new Promise((resolve) => setTimeout(resolve, 100));
+		}
+		const callFile = fs.readdirSync(mockPi.dir).find((name) => name.startsWith("call-"));
+		assert.ok(callFile, "expected a recorded mock pi call");
+		const args = JSON.parse(fs.readFileSync(path.join(mockPi.dir, callFile), "utf-8")).args as string[];
+		assert.doesNotMatch(args.at(-1) ?? "", /progress\.md/);
+		assert.equal(fs.existsSync(path.join(tempDir, "progress.md")), false);
 	});
 
 	it("top-level async worktree parallel resolves reads and output against the worktree cwd", { skip: !isAsyncAvailable() || !createSubagentExecutor ? "jiti or executor not available" : undefined }, async () => {
@@ -441,6 +489,48 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		assert.ok(statusPayload.steps[0].tokens.total > 0);
 		assert.match(fs.readFileSync(path.join(asyncDir, "output-0.log"), "utf-8"), /Recovered asynchronously/);
 		assert.equal(mockPi.callCount(), 2);
+	});
+
+	it("background runs fail zero-exit provider errors when no fallback succeeds", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
+		mockPi.onCall({
+			jsonl: [{
+				type: "message_end",
+				message: {
+					role: "assistant",
+					content: [{ type: "text", text: "quota hit" }],
+					model: "openai/gpt-5-mini",
+					errorMessage: "429 quota exceeded",
+					usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, cost: { total: 0.01 } },
+				},
+			}],
+			exitCode: 0,
+		});
+		const id = `async-zero-exit-provider-error-${Date.now().toString(36)}`;
+		const asyncDir = path.join(ASYNC_DIR, id);
+		executeAsyncSingle(id, {
+			agent: "worker",
+			task: "Do work",
+			agentConfig: makeAgent("worker", { model: "openai/gpt-5-mini" }),
+			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
+			artifactConfig: {
+				enabled: false,
+				includeInput: false,
+				includeOutput: false,
+				includeJsonl: false,
+				includeMetadata: false,
+				cleanupDays: 7,
+			},
+			shareEnabled: false,
+			maxSubagentDepth: 2,
+		});
+
+		const resultPath = await waitForAsyncResultFile(id);
+		const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8")) as AsyncResultPayload;
+		assert.equal(payload.success, false);
+		assert.match(payload.results[0]?.error ?? "", /429 quota exceeded/);
+		const statusPayload = JSON.parse(fs.readFileSync(path.join(asyncDir, "status.json"), "utf-8")) as AsyncStatusPayload;
+		assert.equal(statusPayload.state, "failed");
+		assert.match(statusPayload.steps?.[0]?.error ?? "", /429 quota exceeded/);
 	});
 
 	it("background file-only runs write full output but return only a file reference", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {

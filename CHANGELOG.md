@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+## [0.23.1] - 2026-05-02
+
+### Added
+- Persist async per-child session metadata and remember recent foreground child session metadata so `resume` can revive multi-child async runs and foreground children by index.
+
+### Fixed
+- Keep foreground children alive when they call `contact_supervisor` for a blocking decision by treating it as intercom coordination during parent detach, matching the generic `intercom` handoff path.
+- Pause foreground parallel and chain flows when a child detaches for intercom coordination instead of counting the child as a successful completed result and continuing the workflow, and suppress grouped completion receipts for detached chains.
+- Tighten resume/revive safety by rejecting pending async children, detached foreground children that may still be live, ambiguous foreground/async id prefixes, and exact invalid resume matches that would otherwise be masked by a prefix match in the other namespace.
+- Preserve child session metadata in stale-run repaired results and avoid advertising revive from top-level-only or missing child session files.
+- Stop builtin `reviewer` runs from writing progress by default, clarify that review-only/no-edit instructions win over progress-writing or artifact-writing instructions, and suppress automatic progress injection for explicit no-edit tasks even when chain templates use `{task}`.
+- Treat parsed provider errors as failed foreground and async subagent attempts even when the child process exits successfully, and baseline saved output files per fallback attempt.
+- Preserve output-file read and inspect errors instead of silently overwriting or falling back when a changed saved-output path cannot be read.
+- Show each active async widget row's lifecycle status (`running`, `complete`, `failed`, or `paused`) alongside activity and usage stats.
+- Start new direct, slash, prompt-template, foreground, and async subagent launches in compact view while keeping `Ctrl+O` available for live detail.
+- Label top-level async parallel completion notifications as parallel runs instead of leaking the internal chain-shaped runner plan.
+
 ## [0.23.0] - 2026-05-02
 
 ### Fixed

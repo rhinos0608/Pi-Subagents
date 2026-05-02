@@ -39,7 +39,7 @@ interface AsyncResultFile {
 	success?: boolean;
 	cwd?: string;
 	sessionFile?: string;
-	results?: Array<{ agent?: string; success?: boolean; intercomTarget?: string }>;
+	results?: Array<{ agent?: string; success?: boolean; sessionFile?: string; intercomTarget?: string }>;
 }
 
 export interface AsyncRunLocation {
@@ -59,10 +59,10 @@ function ensureObject(value: unknown, source: string): Record<string, unknown> {
 	return value as Record<string, unknown>;
 }
 
-function validateOptionalString(value: Record<string, unknown>, field: string, source: string): string | undefined {
+function validateOptionalString(value: Record<string, unknown>, field: string, source: string, displayField = field): string | undefined {
 	const fieldValue = value[field];
 	if (fieldValue === undefined) return undefined;
-	if (typeof fieldValue !== "string") throw new Error(`Invalid async result file '${source}': ${field} must be a string.`);
+	if (typeof fieldValue !== "string") throw new Error(`Invalid async result file '${source}': ${displayField} must be a string.`);
 	return fieldValue;
 }
 
@@ -74,11 +74,12 @@ function validateResultFile(value: unknown, resultPath: string): AsyncResultFile
 		if (!Array.isArray(resultsValue)) throw new Error(`Invalid async result file '${resultPath}': results must be an array.`);
 		results = resultsValue.map((entry, index) => {
 			const child = ensureObject(entry, `${resultPath} results[${index}]`);
-			const agent = validateOptionalString(child, "agent", `${resultPath} results[${index}]`);
-			const intercomTarget = validateOptionalString(child, "intercomTarget", `${resultPath} results[${index}]`);
+			const agent = validateOptionalString(child, "agent", resultPath, `results[${index}].agent`);
+			const sessionFile = validateOptionalString(child, "sessionFile", resultPath, `results[${index}].sessionFile`);
+			const intercomTarget = validateOptionalString(child, "intercomTarget", resultPath, `results[${index}].intercomTarget`);
 			const success = child.success;
 			if (success !== undefined && typeof success !== "boolean") throw new Error(`Invalid async result file '${resultPath}': results[${index}].success must be a boolean.`);
-			return { agent, intercomTarget, ...(typeof success === "boolean" ? { success } : {}) };
+			return { agent, sessionFile, intercomTarget, ...(typeof success === "boolean" ? { success } : {}) };
 		});
 	}
 	const success = data.success;
@@ -210,6 +211,7 @@ function validateStatusForResume(status: AsyncStatus | null, source: string): vo
 		status.steps.forEach((step, index) => {
 			if (!step || typeof step !== "object" || Array.isArray(step)) throw new Error(`Invalid async status '${source}': steps[${index}] must be an object.`);
 			if (typeof step.agent !== "string") throw new Error(`Invalid async status '${source}': steps[${index}].agent must be a string.`);
+			if (step.sessionFile !== undefined && typeof step.sessionFile !== "string") throw new Error(`Invalid async status '${source}': steps[${index}].sessionFile must be a string.`);
 		});
 	}
 }
@@ -243,38 +245,62 @@ export function resolveAsyncResumeTarget(params: AsyncResumeParams, deps: AsyncR
 	const resultSteps = result?.results ?? [];
 	const stepCount = statusSteps.length || resultSteps.length || (result?.agent ? 1 : 0);
 	const requestedIndex = params.index;
+	if (requestedIndex !== undefined && !Number.isInteger(requestedIndex)) throw new Error(`Async run '${runId}' index must be an integer.`);
+	const terminalStepStatuses = new Set(["complete", "completed", "failed", "paused"]);
 
 	if (state === "running") {
-		const running = statusSteps
-			.map((step, index) => ({ step, index }))
-			.filter(({ step }) => step.status === "running");
-		const selected = requestedIndex !== undefined
-			? running.find(({ index }) => index === requestedIndex)
-			: running.length === 1 ? running[0] : undefined;
-		if (!selected) {
-			throw new Error(`Async run '${runId}' has ${running.length} running children. Provide index to choose one.`);
+		if (requestedIndex !== undefined) {
+			if (requestedIndex < 0 || requestedIndex >= stepCount) throw new Error(`Async run '${runId}' has ${stepCount} children. Index ${requestedIndex} is out of range.`);
+			const selectedStep = statusSteps[requestedIndex];
+			if (selectedStep?.status === "running") {
+				return {
+					kind: "live",
+					runId,
+					asyncDir: location.asyncDir ?? undefined,
+					state,
+					agent: selectedStep.agent,
+					index: requestedIndex,
+					intercomTarget: resolveSubagentIntercomTarget(runId, selectedStep.agent, requestedIndex),
+					cwd: status?.cwd ?? result?.cwd,
+					sessionFile: selectedStep.sessionFile ?? status?.sessionFile ?? result?.sessionFile,
+				};
+			}
+			if (selectedStep?.status === "pending") throw new Error(`Async run '${runId}' child ${requestedIndex} is pending and has not started yet. Wait for it to run or complete before resuming.`);
+			if (selectedStep && !terminalStepStatuses.has(selectedStep.status)) throw new Error(`Async run '${runId}' child ${requestedIndex} is ${selectedStep.status} and cannot be revived yet.`);
+		} else {
+			const running = statusSteps
+				.map((step, index) => ({ step, index }))
+				.filter(({ step }) => step.status === "running");
+			const selected = running.length === 1 ? running[0] : undefined;
+			if (!selected) {
+				throw new Error(`Async run '${runId}' has ${running.length} running children. Provide index to choose one.`);
+			}
+			return {
+				kind: "live",
+				runId,
+				asyncDir: location.asyncDir ?? undefined,
+				state,
+				agent: selected.step.agent,
+				index: selected.index,
+				intercomTarget: resolveSubagentIntercomTarget(runId, selected.step.agent, selected.index),
+				cwd: status?.cwd ?? result?.cwd,
+				sessionFile: selected.step.sessionFile ?? status?.sessionFile ?? result?.sessionFile,
+			};
 		}
-		return {
-			kind: "live",
-			runId,
-			asyncDir: location.asyncDir ?? undefined,
-			state,
-			agent: selected.step.agent,
-			index: selected.index,
-			intercomTarget: resolveSubagentIntercomTarget(runId, selected.step.agent, selected.index),
-			cwd: status?.cwd ?? result?.cwd,
-			sessionFile: status?.sessionFile ?? result?.sessionFile,
-		};
 	}
 
-	if (stepCount !== 1) {
-		throw new Error(`Async run '${runId}' has ${stepCount} children. Resume currently supports single-child async runs because per-child session files are not persisted.`);
+	if (stepCount > 1 && requestedIndex === undefined) {
+		throw new Error(`Async run '${runId}' has ${stepCount} children. Provide index to choose one.`);
 	}
 	const index = requestedIndex ?? 0;
+	if (!Number.isInteger(index)) throw new Error(`Async run '${runId}' index must be an integer.`);
+	if (index < 0 || index >= stepCount) throw new Error(`Async run '${runId}' has ${stepCount} children. Index ${index} is out of range.`);
 	const agent = statusSteps[index]?.agent ?? resultSteps[index]?.agent ?? result?.agent;
 	if (!agent) throw new Error(`Could not determine child agent for async run '${runId}'.`);
-	const sessionFile = status?.sessionFile ?? result?.sessionFile;
-	if (!sessionFile) throw new Error(`Async run '${runId}' does not have a persisted child session file to resume from.`);
+	const sessionFile = statusSteps[index]?.sessionFile
+		?? resultSteps[index]?.sessionFile
+		?? (stepCount === 1 ? status?.sessionFile ?? result?.sessionFile : undefined);
+	if (!sessionFile) throw new Error(`Async run '${runId}' child ${index} does not have a persisted session file to resume from.`);
 	const resolvedSessionFile = validateResumeSessionFile(runId, sessionFile);
 
 	return {
@@ -292,9 +318,9 @@ export function resolveAsyncResumeTarget(params: AsyncResumeParams, deps: AsyncR
 
 export function buildRevivedAsyncTask(target: AsyncResumeTarget, message: string): string {
 	return [
-		"You are reviving a completed async subagent conversation.",
+		"You are reviving a previous subagent conversation.",
 		"",
-		`Original async run: ${target.runId}`,
+		`Original run: ${target.runId}`,
 		`Original agent: ${target.agent}`,
 		target.sessionFile ? `Original session file: ${target.sessionFile}` : undefined,
 		"",

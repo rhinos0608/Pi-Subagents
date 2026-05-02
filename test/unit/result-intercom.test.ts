@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { describe, it } from "node:test";
 import {
 	buildSubagentResultIntercomPayload,
@@ -50,35 +53,65 @@ describe("result intercom formatter", () => {
 		assert.match(payload.message, /Session: \/tmp\/a-session\.jsonl/);
 	});
 
-	it("advertises async revive only for single-child results with a session", () => {
-		const payload = buildSubagentResultIntercomPayload({
-			to: "chat",
-			runId: "run-single",
-			mode: "single",
-			source: "async",
-			asyncId: "run-single",
-			children: [{ agent: "worker", status: "completed", summary: "done", sessionPath: "/tmp/session.jsonl" }],
-		});
+	it("advertises async revive only for single-child results with an existing session", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-result-intercom-"));
+		try {
+			const sessionPath = path.join(root, "session.jsonl");
+			fs.writeFileSync(sessionPath, "", "utf-8");
+			const payload = buildSubagentResultIntercomPayload({
+				to: "chat",
+				runId: "run-single",
+				mode: "single",
+				source: "async",
+				asyncId: "run-single",
+				children: [{ agent: "worker", status: "completed", summary: "done", sessionPath }],
+			});
 
-		assert.match(payload.message, /Revive: subagent\(\{ action: "resume", id: "run-single", message: "\.\.\." \}\)/);
-		assert.doesNotMatch(payload.message, /unsupported for multi-child/);
+			assert.match(payload.message, /Revive: subagent\(\{ action: "resume", id: "run-single", message: "\.\.\." \}\)/);
+			assert.doesNotMatch(payload.message, /unsupported for multi-child/);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
 	});
 
-	it("does not advertise revive for multi-child async results", () => {
+	it("advertises indexed revive for multi-child async results with existing child sessions", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-result-intercom-"));
+		try {
+			const firstSession = path.join(root, "a.jsonl");
+			const secondSession = path.join(root, "b.jsonl");
+			fs.writeFileSync(firstSession, "", "utf-8");
+			fs.writeFileSync(secondSession, "", "utf-8");
+			const payload = buildSubagentResultIntercomPayload({
+				to: "chat",
+				runId: "run-multi",
+				mode: "parallel",
+				source: "async",
+				asyncId: "run-multi",
+				children: [
+					{ agent: "a", status: "completed", summary: "done", sessionPath: firstSession },
+					{ agent: "b", status: "completed", summary: "done", sessionPath: secondSession },
+				],
+			});
+
+			assert.match(payload.message, /Revive child: subagent\(\{ action: "resume", id: "run-multi", index: 0, message: "\.\.\." \}\)/);
+			assert.doesNotMatch(payload.message, /unsupported for multi-child/);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("does not advertise async revive for missing child session files", () => {
 		const payload = buildSubagentResultIntercomPayload({
 			to: "chat",
-			runId: "run-multi",
-			mode: "parallel",
+			runId: "run-missing-session",
+			mode: "single",
 			source: "async",
-			asyncId: "run-multi",
-			children: [
-				{ agent: "a", status: "completed", summary: "done", sessionPath: "/tmp/a.jsonl" },
-				{ agent: "b", status: "completed", summary: "done", sessionPath: "/tmp/b.jsonl" },
-			],
+			asyncId: "run-missing-session",
+			children: [{ agent: "worker", status: "failed", summary: "failed", sessionPath: path.join(os.tmpdir(), "missing-pi-session.jsonl") }],
 		});
 
-		assert.doesNotMatch(payload.message, /Revive: subagent/);
-		assert.match(payload.message, /Resume: unsupported for multi-child async runs/);
+		assert.match(payload.message, /Resume: unavailable; no child session file was persisted/);
+		assert.doesNotMatch(payload.message, /Revive:/);
 	});
 
 	it("keeps full child summaries inside grouped payloads", () => {

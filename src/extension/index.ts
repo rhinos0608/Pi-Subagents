@@ -24,7 +24,7 @@ import { resolveCurrentSessionId } from "../shared/session-identity.ts";
 import { cleanupOldChainDirs } from "../shared/settings.ts";
 import { renderWidget, renderSubagentResult, stopResultAnimations, stopWidgetAnimation, syncResultAnimation } from "../tui/render.ts";
 import { SubagentParams } from "./schemas.ts";
-import { createSubagentExecutor } from "../runs/foreground/subagent-executor.ts";
+import { createSubagentExecutor, type SubagentParamsLike } from "../runs/foreground/subagent-executor.ts";
 import { createAsyncJobTracker } from "../runs/background/async-job-tracker.ts";
 import { createResultWatcher } from "../runs/background/result-watcher.ts";
 import { registerSlashCommands } from "../slash/slash-commands.ts";
@@ -245,6 +245,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		baseCwd: process.cwd(),
 		currentSessionId: null,
 		asyncJobs: new Map(),
+		foregroundRuns: new Map(),
 		foregroundControls: new Map(),
 		lastForegroundControlId: null,
 		pendingForegroundControlNotices: new Map(),
@@ -336,11 +337,16 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		return new SubagentControlNoticeComponent({ ...details, noticeText: formatSubagentControlNotice(details, content) }, theme);
 	});
 
+	const executeSubagentCollapsed = (id: string, params: SubagentParamsLike, signal: AbortSignal, onUpdate: ((result: AgentToolResult<Details>) => void) | undefined, ctx: ExtensionContext) => {
+		if (ctx.hasUI) ctx.ui.setToolsExpanded(false);
+		return executor.execute(id, params, signal, onUpdate, ctx);
+	};
+
 	const slashBridge = registerSlashSubagentBridge({
 		events: pi.events,
 		getContext: () => state.lastUiContext,
 		execute: (id, params, signal, onUpdate, ctx) =>
-			executor.execute(id, params, signal, onUpdate, ctx),
+			executeSubagentCollapsed(id, params, signal, onUpdate, ctx),
 	});
 
 	const promptTemplateBridge = registerPromptTemplateDelegationBridge({
@@ -348,7 +354,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		getContext: () => state.lastUiContext,
 		execute: async (requestId, request, signal, ctx, onUpdate) => {
 			if (request.tasks && request.tasks.length > 0) {
-				return executor.execute(
+				return executeSubagentCollapsed(
 					requestId,
 					{
 						tasks: request.tasks,
@@ -363,7 +369,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 					ctx,
 				);
 			}
-			return executor.execute(
+			return executeSubagentCollapsed(
 				requestId,
 				{
 					agent: request.agent,
@@ -419,14 +425,14 @@ MANAGEMENT (use action field, omit agent/task/chain/tasks):
 CONTROL:
 • { action: "status", id: "..." } - inspect an async/background run by id or prefix
 • { action: "interrupt", id?: "..." } - soft-interrupt the current child turn and leave the run paused
-• { action: "resume", id: "...", message: "..." } - follow up with a live async child or revive a completed single-child async run from its session
+• { action: "resume", id: "...", message: "...", index?: 0 } - follow up with a live async child or revive a completed async/foreground child from its session
 
 DIAGNOSTICS:
 • { action: "doctor" } - read-only report for runtime paths, discovery, sessions, and intercom`,
 		parameters: SubagentParams,
 
 		execute(id, params, signal, onUpdate, ctx) {
-			return executor.execute(id, params, signal, onUpdate, ctx);
+			return executeSubagentCollapsed(id, params, signal, onUpdate, ctx);
 		},
 
 		renderCall(args, theme) {
