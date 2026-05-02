@@ -2,7 +2,7 @@
 description: Parallel research/context builders into an implementation handoff plan
 ---
 
-Use parallel subagents to understand the request, compare any external references, inspect the local codebase, and produce a grounded implementation handoff plan with a final GPT-5.5-ready meta-prompt.
+Use parallel subagents to understand the request, compare any external references, inspect the local codebase, and produce a grounded implementation handoff plan with a final implementation-ready meta-prompt.
 
 Primary request, target, or focus:
 
@@ -48,7 +48,7 @@ Implementation-strategy context-builder, when used:
 Final synthesis context-builder:
 - Read the parallel outputs and produce one concise handoff plan.
 - Include what the feature/change should do, what the external reference teaches, what the local codebase implies, the recommended approach, likely files to change, constraints, non-goals, validation, risks, and unresolved questions.
-- End with a compact GPT-5.5-ready meta-prompt for the next worker/planner.
+- End with a compact implementation-ready meta-prompt for the next worker/planner.
 
 After the chain returns, synthesize the result for me with:
 - the recommended approach;

@@ -2,7 +2,6 @@
 name: planner
 description: Creates implementation plans from context and requirements
 tools: read, grep, find, ls, write, intercom
-model: openai-codex/gpt-5.5
 thinking: high
 systemPromptMode: replace
 inheritProjectContext: true

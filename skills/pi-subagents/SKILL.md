@@ -44,7 +44,7 @@ Packaged prompt shortcuts are also available for repeatable workflows. Treat the
 - `/parallel-review` — fresh-context reviewers with distinct review angles, then synthesis
 - `/parallel-research` — combine `researcher` and `scout` for external evidence plus local code context
 - `/parallel-context-build` — parallel `context-builder` passes that produce planning handoff context and meta-prompts
-- `/parallel-handoff-plan` — external-reference research plus local `context-builder` passes, followed by a synthesis handoff plan and GPT-5.5-ready meta-prompt
+- `/parallel-handoff-plan` — external-reference research plus local `context-builder` passes, followed by a synthesis handoff plan and implementation-ready meta-prompt
 - `/gather-context-and-clarify` — scout/research first, then ask the user clarifying questions with `interview`
 - `/parallel-cleanup` — two fresh-context reviewers (deslop + verbosity passes) for an adversarial cleanup review of the current diff
 
@@ -81,7 +81,7 @@ subagent({
 
 ### Parallel handoff-plan technique
 
-Use this when the user needs a solution brief or implementation-ready handoff from an external reference plus local code context, such as “study this library behavior, inspect our codebase, then produce a GPT-5.5 worker prompt.” Run a chain with a first parallel group and a second synthesis `context-builder` step. The first group usually includes `researcher` for external projects/docs/prompt guidance and `context-builder` for local code context; add a second `context-builder` for implementation strategy only when the scope is large enough to benefit. Use distinct output paths under `handoff/`, then have the synthesis `context-builder` read those outputs and write `handoff/final-handoff-plan.md` with the recommended approach, likely files, constraints, non-goals, validation, risks, unresolved questions, and final compact GPT-5.5-ready meta-prompt.
+Use this when the user needs a solution brief or implementation-ready handoff from an external reference plus local code context, such as “study this library behavior, inspect our codebase, then produce a worker prompt.” Run a chain with a first parallel group and a second synthesis `context-builder` step. The first group usually includes `researcher` for external projects/docs/prompt guidance and `context-builder` for local code context; add a second `context-builder` for implementation strategy only when the scope is large enough to benefit. Use distinct output paths under `handoff/`, then have the synthesis `context-builder` read those outputs and write `handoff/final-handoff-plan.md` with the recommended approach, likely files, constraints, non-goals, validation, risks, unresolved questions, and final compact implementation-ready meta-prompt.
 
 Example shape:
 
@@ -93,7 +93,7 @@ subagent({
       { agent: "context-builder", task: "Build local codebase context for: ...", output: "handoff/local-context.md" },
       { agent: "context-builder", task: "Compare evidence and propose implementation strategy for: ...", output: "handoff/implementation-strategy.md" }
     ] },
-    { agent: "context-builder", task: "Read {previous} and synthesize the final handoff plan and GPT-5.5-ready meta-prompt.", output: "handoff/final-handoff-plan.md" }
+    { agent: "context-builder", task: "Read {previous} and synthesize the final handoff plan and implementation-ready meta-prompt.", output: "handoff/final-handoff-plan.md" }
   ],
   context: "fresh"
 })
@@ -114,16 +114,16 @@ and user/project agents override builtins with the same name.
 
 | Agent | Purpose | Model | Typical output / role |
 |-------|---------|-------|------------------------|
-| `scout` | Fast codebase recon | `openai-codex/gpt-5.5` | Writes `context.md` handoff material |
-| `planner` | Creates implementation plans | `openai-codex/gpt-5.5` | Writes `plan.md` |
-| `worker` | Implementation and approved oracle handoffs | `openai-codex/gpt-5.5` | Single-writer implementation with decision escalation |
-| `reviewer` | Review-and-fix specialist | `openai-codex/gpt-5.5` | Can edit/fix reviewed code |
-| `context-builder` | Requirements/codebase handoff builder | `openai-codex/gpt-5.5` | Writes structured context files |
-| `researcher` | Web research brief generator | `openai-codex/gpt-5.5` | Writes `research.md` |
-| `delegate` | Lightweight generic delegate | inherits parent model | No fixed output; generic delegated work |
-| `oracle` | Decision-consistency advisory review | `openai-codex/gpt-5.5` | Advisory review, intercom coordination |
+| `scout` | Fast codebase recon | inherits default | Writes `context.md` handoff material |
+| `planner` | Creates implementation plans | inherits default | Writes `plan.md` |
+| `worker` | Implementation and approved oracle handoffs | inherits default | Single-writer implementation with decision escalation |
+| `reviewer` | Review-and-fix specialist | inherits default | Can edit/fix reviewed code |
+| `context-builder` | Requirements/codebase handoff builder | inherits default | Writes structured context files |
+| `researcher` | Web research brief generator | inherits default | Writes `research.md` |
+| `delegate` | Lightweight generic delegate | inherits default | No fixed output; generic delegated work |
+| `oracle` | Decision-consistency advisory review | inherits default | Advisory review, intercom coordination |
 
-Override builtin defaults before copying full agent files when a small tweak is enough.
+Builtin agents inherit the current Pi default model unless a run, user setting, or project setting overrides `model`. Override builtin defaults before copying full agent files when a small tweak is enough.
 
 For one run, use inline config:
 
@@ -133,11 +133,11 @@ For one run, use inline config:
 
 For persistent tweaks, prefer `/agents`: choose the builtin, press `e`, change the model or other fields, then save a user or project override. User overrides apply everywhere. Project overrides apply only in that repo and win over user overrides.
 
-## Prompting GPT-5.5 Subagents
+## Prompting role subagents
 
-Most builtin role agents use GPT-5.5. When launching them, write the task prompt as a compact contract, not a long procedural script. Define the destination and let the role choose the efficient path.
+Builtin role agents inherit the current Pi default model unless you override them. When launching them, write the task prompt as a compact contract, not a long procedural script. Define the destination and let the role choose the efficient path.
 
-A strong GPT-5.5 subagent prompt usually includes:
+A strong subagent prompt usually includes:
 - **Goal**: the concrete outcome the child should produce.
 - **Context/evidence**: relevant plan paths, files, diffs, decisions, or user constraints already approved.
 - **Success criteria**: what must be true before the child can finish.
@@ -607,7 +607,7 @@ When the user approves launching a subagent to carry out a plan or workflow, tre
 - `/parallel-review` maps to: launch fresh-context `reviewer` agents with distinct review angles; synthesize the feedback before applying anything.
 - `/parallel-research` maps to: combine local `scout` context with external `researcher` evidence when current docs, ecosystem behavior, or API details matter.
 - `/parallel-context-build` maps to: run a chain-mode parallel group of `context-builder` agents with distinct temp output paths, then synthesize their context and meta-prompt sections.
-- `/parallel-handoff-plan` maps to: run external `researcher` plus local/strategy `context-builder` passes, then a synthesis `context-builder` that writes an implementation handoff plan and GPT-5.5-ready meta-prompt.
+- `/parallel-handoff-plan` maps to: run external `researcher` plus local/strategy `context-builder` passes, then a synthesis `context-builder` that writes an implementation handoff plan and implementation-ready meta-prompt.
 - `/parallel-cleanup` maps to: use review-only cleanup passes after implementation, especially for simplicity, verbosity, and redundant tests.
 
 For feature work, use this sequence as scaffolding for parent-agent behavior:

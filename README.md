@@ -112,12 +112,12 @@ A simple rule of thumb: use `scout` before you understand the code, `researcher`
 
 ## Changing a builtin agent's model
 
-You do not need to copy builtin agent files just to change their model.
+Builtin agents inherit your current Pi default model by default. This keeps new installs from depending on a provider you may not have configured. If you want a role to use a specific model, set an override instead of copying the bundled agent file.
 
 For one run, put the override in the command:
 
 ```text
-/run reviewer[model=anthropic/claude-sonnet-4] "Review this diff"
+/run reviewer[model=anthropic/claude-sonnet-4:high] "Review this diff"
 ```
 
 For a persistent override, use `/agents`:
@@ -128,7 +128,7 @@ For a persistent override, use `/agents`:
 
 Choose the builtin agent, press `e`, change the model or other fields, then save a user or project override. User overrides apply everywhere. Project overrides apply only in that repo and win over user overrides.
 
-You can also edit settings directly:
+You can also edit settings directly. This example pins the reviewer everywhere, adds a backup model for provider failures, and keeps the other builtins on your normal default model:
 
 ```json
 {
@@ -404,7 +404,7 @@ Agent locations, lowest to highest priority:
 
 Project discovery also reads legacy `.agents/**/*.md` files. Nested subdirectories are discovered recursively. `.chain.md` files are treated as chains, not agents. If both `.agents/` and `.pi/agents/` define the same parsed runtime agent name, `.pi/agents/` wins. Use `agentScope: "user" | "project" | "both"` to control discovery; `both` is the default and project definitions win runtime-name collisions.
 
-Builtin agents load at the lowest priority, so a user or project agent with the same name overrides them. `oracle` is an advisory reviewer that critiques direction and proposes an execution prompt without editing files. `worker` is the implementation agent for normal tasks and approved oracle handoffs.
+Builtin agents load at the lowest priority, so a user or project agent with the same name overrides them. They do not pin a provider model; they inherit your current Pi default model unless you set `subagents.agentOverrides.<name>.model`. `oracle` is an advisory reviewer that critiques direction and proposes an execution prompt without editing files. `worker` is the implementation agent for normal tasks and approved oracle handoffs.
 
 The `researcher` builtin uses `web_search`, `fetch_content`, and `get_search_content`; those require [pi-web-access](https://github.com/nicobailon/pi-web-access):
 
@@ -633,7 +633,7 @@ The package bundles a `pi-subagents` skill that is automatically available to th
 What the bundled skill covers:
 - **Delegation patterns**: when to launch which agent, whether to use single, parallel, chain, or async mode, and whether to use fresh or forked context
 - **Prompt workflow recipes**: how to apply the packaged techniques directly with `subagent(...)` when the user describes the workflow in natural language instead of invoking a slash command. This includes parallel review, parallel research, parallel context-build, parallel handoff-plan, gather-context-and-clarify, and parallel cleanup
-- **GPT-5.5 prompting guidance**: compact contract prompts instead of long scripts, what to include in role-specific meta prompts, and retrieval budgets for researchers
+- **Role-agent prompting guidance**: compact contract prompts instead of long scripts, what to include in role-specific meta prompts, and retrieval budgets for researchers
 - **Safety boundaries**: child agents must not run subagents, must not invent intercom targets, and must escalate unapproved decisions
 - **Intercom conventions**: when to ask vs send, and how parent-side result delivery works with `pi-intercom`
 - **Control and diagnostics**: attention signals, soft interrupts, status, and the `doctor` action

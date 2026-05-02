@@ -42,7 +42,7 @@ Ask each builder to produce a compact handoff file with:
 - constraints and invariants;
 - risks and unknowns;
 - validation commands or next-best checks;
-- a `meta-prompt` section for the next planner or GPT-5.5 subagent.
+- a `meta-prompt` section for the next planner or role subagent.
 
 After the builders return, synthesize their outputs into:
 - the most important context the next agent needs;

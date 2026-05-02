@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Changed
+- Builtin agents now inherit the user's configured default model instead of pinning `openai-codex/gpt-5.5`; use builtin overrides to pin a model for a role.
 - Hide unsupported thinking levels in subagent clarify and agent-manager pickers when Pi exposes per-model thinking metadata.
 
 ## [0.21.5] - 2026-05-02
