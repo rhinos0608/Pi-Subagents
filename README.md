@@ -120,15 +120,7 @@ For one run, put the override in the command:
 /run reviewer[model=anthropic/claude-sonnet-4:high] "Review this diff"
 ```
 
-For a persistent override, use `/agents`:
-
-```text
-/agents
-```
-
-Choose the builtin agent, press `e`, change the model or other fields, then save a user or project override. User overrides apply everywhere. Project overrides apply only in that repo and win over user overrides.
-
-You can also edit settings directly. This example pins the reviewer everywhere, adds a backup model for provider failures, and keeps the other builtins on your normal default model:
+For a persistent override, edit settings. This example pins the reviewer everywhere, adds a backup model for provider failures, and keeps the other builtins on your normal default model:
 
 ```json
 {
@@ -251,7 +243,6 @@ Skip this section until you want exact syntax.
 | `/chain agent1 "task1" -> agent2 "task2"` | Run agents in sequence |
 | `/parallel agent1 "task1" -> agent2 "task2"` | Run agents in parallel |
 | `/run-chain <chainName> -- <task>` | Launch a saved `.chain.md` workflow |
-| `/agents` | Open the Agents Manager overlay |
 | `/subagents-status` | Open the active/recent run overlay |
 | `/subagents-doctor` | Show read-only setup diagnostics |
 
@@ -338,7 +329,7 @@ The `oracle` and `worker` builtins are designed for an explicit decision loop. A
 
 ## Clarify and launch UI
 
-Chains open a clarify UI by default so you can preview and edit the workflow before it runs. Single and parallel tool calls can opt into the same flow with `clarify: true`; slash commands and `/agents` use their own launch screens.
+Chains open a clarify UI by default so you can preview and edit the workflow before it runs. Single and parallel tool calls can opt into the same flow with `clarify: true`; slash commands launch directly.
 
 Common clarify keys:
 
@@ -357,39 +348,6 @@ Common clarify keys:
 - `W` saves a chain configuration to `.chain.md`
 
 Picker screens use `↑↓`, `Enter`, `Esc`, and type-to-filter. The full-screen editor supports word wrapping, paste, `Esc` to save, and `Ctrl+C` to discard.
-
-## Agents Manager
-
-Press `Ctrl+Shift+A` or type `/agents` to open the Agents Manager. It is the easiest way to browse, inspect, edit, create, and launch agents and chains.
-
-Use it when you want to see what agents exist, adjust a builtin override, build a parallel run without writing slash syntax, or save a chain for later.
-
-The main screens are:
-
-| Screen | What it does |
-|--------|--------------|
-| List | Browse agents and chains with search, filters, scope badges, and selection. |
-| Detail | View resolved prompt, frontmatter fields, run history, and builtin override path. |
-| Edit | Edit models, thinking level, prompt mode, inheritance flags, skills, and prompt text. |
-| Chain Detail | Inspect saved chain steps. |
-| Parallel Builder | Build parallel slots, including repeated agents and per-slot task overrides. |
-| Task Input | Enter the shared task and launch with fork/background/worktree toggles where supported. |
-| New Agent | Create from templates such as Scout, Planner, Implementer, Code Reviewer, Blank Agent, or Blank Chain. |
-
-Useful keys:
-
-- type to search the list
-- `Enter` opens detail screens
-- `Shift+Ctrl+N` creates an agent or chain from a template
-- `Ctrl+R` launches selected agents as a run or chain
-- `Ctrl+P` opens the parallel builder
-- `Tab` selects agents in the list or toggles skip-clarify in task input
-- `Ctrl+A` adds a slot in the parallel builder
-- `e` edits an agent or builtin override
-- `Ctrl+S` saves an override; `r` resets the focused override field; `D` removes the override
-- `Ctrl+K` clones the current item
-- `Ctrl+D` or `Del` deletes the current item or removes a parallel slot
-- `Esc` backs out of the current screen
 
 ## Agents and chains
 
@@ -436,9 +394,7 @@ Example:
 
 Supported override fields are `model`, `fallbackModels`, `thinking`, `systemPromptMode`, `inheritProjectContext`, `inheritSkills`, `defaultContext`, `disabled`, `skills`, `tools`, and `systemPrompt`. Use `defaultContext: false` in builtin overrides to clear an inherited context default. Project overrides beat user overrides.
 
-You can also manage builtin overrides from `/agents`. On a builtin detail screen, press `e`, choose user or project scope if needed, and save the fields you want to override.
-
-Set `disabled: true` to hide a builtin from runtime discovery and agent-facing `subagent({ action: "list" })` output while keeping it visible in `/agents`. For bulk control, set `subagents.disableBuiltins: true` in settings. Overridden builtins show badges like `[builtin+user]` or `[builtin+project]`; disabled builtins show `off` badges in the manager.
+Set `disabled: true` to hide a builtin from runtime discovery and agent-facing `subagent({ action: "list" })` output. For bulk control, set `subagents.disableBuiltins: true` in settings.
 
 ### Prompt assembly
 
@@ -567,7 +523,7 @@ Each `## agent-name` section is a step. Config lines such as `output`, `outputMo
 
 For `output`, `reads`, `skills`, and `progress`, chain behavior is three-state: omitted inherits from the agent, a value overrides, and `false` disables.
 
-Create chains from the Agents Manager template picker, save them from the chain-clarify TUI, or write them by hand. Run them with natural language, `/agents`, or:
+Create chains by saving them from the chain-clarify TUI or writing them by hand. Run them with natural language or:
 
 ```text
 /run-chain scout-planner -- refactor authentication
@@ -866,18 +822,6 @@ Session directory precedence is: `params.sessionDir`, then `config.defaultSessio
 
 Controls nested delegation when no inherited `PI_SUBAGENT_MAX_DEPTH` is already in effect. Per-agent `maxSubagentDepth` can tighten the limit for that agent’s child runs, but cannot relax an inherited stricter limit.
 
-### `agentManager.newShortcut`
-
-```json
-{
-  "agentManager": {
-    "newShortcut": "shift+ctrl+n"
-  }
-}
-```
-
-Sets the `/agents` list shortcut for opening the new agent/chain template picker. The default is `shift+ctrl+n`; use Pi key names such as `ctrl+n` if your terminal cannot distinguish Shift for control chords.
-
 ### `intercomBridge`
 
 ```json
@@ -1040,7 +984,6 @@ The main runtime files are:
 | `src/runs/background/async-execution.ts` | Background launch support. |
 | `src/runs/background/async-status.ts` / `src/tui/subagents-status.ts` | Status discovery and overlay UI. |
 | `src/runs/foreground/chain-execution.ts` / `src/agents/chain-serializer.ts` | Chain orchestration and `.chain.md` parsing. |
-| `src/manager-ui/agent-manager*.ts` | Agents Manager screens and editing flows. |
 | `src/shared/settings.ts` | Chain behavior, instructions, and config helpers. |
 | `src/runs/shared/worktree.ts` | Git worktree isolation. |
 | `src/intercom/intercom-bridge.ts` | Runtime intercom bridge instructions and diagnostics. |

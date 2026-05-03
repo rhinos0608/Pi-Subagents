@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Removed
+- Removed the unnecessary `/agents` manager overlay, its `Ctrl+Shift+A` shortcut, and the `agentManager.newShortcut` setting to cut unnecessary UI surface area; agent and chain management remains available through tool actions, settings, and markdown files.
+
 ## [0.23.1] - 2026-05-02
 
 ### Added

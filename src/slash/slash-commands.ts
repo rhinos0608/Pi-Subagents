@@ -4,14 +4,11 @@ import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Key, matchesKey } from "@mariozechner/pi-tui";
 import { discoverAgents, discoverAgentsAll, type ChainConfig } from "../agents/agents.ts";
-import { AgentManagerComponent, type ManagerResult } from "../manager-ui/agent-manager.ts";
 import { SubagentsStatusComponent } from "../tui/subagents-status.ts";
-import { discoverAvailableSkills } from "../agents/skills.ts";
 import type { SubagentParamsLike } from "../runs/foreground/subagent-executor.ts";
 import { resolveCurrentSessionId } from "../shared/session-identity.ts";
 import { isParallelStep, type ChainStep } from "../shared/settings.ts";
 import type { SlashSubagentResponse, SlashSubagentUpdate } from "./slash-bridge.ts";
-import { toModelInfo } from "../shared/model-info.ts";
 import {
 	applySlashUpdate,
 	buildSlashInitialResult,
@@ -25,7 +22,6 @@ import {
 	SLASH_SUBAGENT_RESPONSE_EVENT,
 	SLASH_SUBAGENT_STARTED_EVENT,
 	SLASH_SUBAGENT_UPDATE_EVENT,
-	type ExtensionConfig,
 	type SingleResult,
 	type SubagentState,
 } from "../shared/types.ts";
@@ -328,49 +324,6 @@ async function runSlashSubagent(
 	}
 }
 
-async function openAgentManager(
-	pi: ExtensionAPI,
-	ctx: ExtensionContext,
-	config: ExtensionConfig = {},
-): Promise<void> {
-	const agentData = { ...discoverAgentsAll(ctx.cwd), cwd: ctx.cwd };
-	const models = ctx.modelRegistry.getAvailable().map(toModelInfo);
-	const skills = discoverAvailableSkills(ctx.cwd);
-
-	const result = await ctx.ui.custom<ManagerResult>(
-		(tui, theme, _kb, done) => new AgentManagerComponent(tui, theme, agentData, models, skills, done, { newShortcut: config.agentManager?.newShortcut, preferredModelProvider: ctx.model?.provider }),
-		{ overlay: true, overlayOptions: { anchor: "center", width: 84, maxHeight: "80%" } },
-	);
-	if (!result) return;
-
-	const launchOptions: SubagentParamsLike = {
-		clarify: !result.skipClarify && !result.background,
-		agentScope: "both",
-		...(result.fork ? { context: "fork" as const } : {}),
-		...(result.background ? { async: true } : {}),
-	};
-
-	if (result.action === "chain") {
-		const chain = result.agents.map((name, i) => ({
-			agent: name,
-			...(i === 0 ? { task: result.task } : {}),
-		}));
-		await runSlashSubagent(pi, ctx, { chain, task: result.task, ...launchOptions });
-		return;
-	}
-
-	if (result.action === "launch") {
-		await runSlashSubagent(pi, ctx, { agent: result.agent, task: result.task, ...launchOptions });
-	} else if (result.action === "launch-chain") {
-		await runSlashSubagent(pi, ctx, { chain: mapSavedChainSteps(result.chain, result.worktree), task: result.task, ...launchOptions });
-	} else if (result.action === "parallel") {
-		await runSlashSubagent(pi, ctx, {
-			tasks: result.tasks,
-			...launchOptions,
-			...(result.worktree ? { worktree: true } : {}),
-		});
-	}
-}
 
 interface ParsedStep { name: string; config: InlineConfig; task?: string }
 
@@ -452,15 +405,7 @@ const parseAgentArgs = (
 export function registerSlashCommands(
 	pi: ExtensionAPI,
 	state: SubagentState,
-	config: ExtensionConfig = {},
 ): void {
-	pi.registerCommand("agents", {
-		description: "Open the Agents Manager",
-		handler: async (_args, ctx) => {
-			await openAgentManager(pi, ctx, config);
-		},
-	});
-
 	pi.registerCommand("run", {
 		description: "Run a subagent directly: /run agent[output=file] [task] [--bg] [--fork]",
 		getArgumentCompletions: makeAgentCompletions(state, false),
@@ -587,9 +532,4 @@ export function registerSlashCommands(
 		},
 	});
 
-	pi.registerShortcut("ctrl+shift+a", {
-		handler: async (ctx) => {
-			await openAgentManager(pi, ctx, config);
-		},
-	});
 }

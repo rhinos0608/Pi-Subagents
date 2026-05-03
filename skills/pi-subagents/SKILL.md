@@ -32,7 +32,6 @@ Humans often use the slash-command layer instead:
 - `/run` — launch a single agent
 - `/chain` — launch a chain of steps
 - `/parallel` — launch top-level parallel tasks
-- `/agents` — open the agents manager TUI
 - `/run-chain` — launch a saved `.chain.md` workflow
 - `/subagents-status` — inspect active/recent async runs
 - `/subagents-doctor` — diagnose setup, discovery, async paths, and intercom bridge state
@@ -131,7 +130,7 @@ For one run, use inline config:
 /run reviewer[model=anthropic/claude-sonnet-4] "Review this diff"
 ```
 
-For persistent tweaks, prefer `/agents`: choose the builtin, press `e`, change the model or other fields, then save a user or project override. User overrides apply everywhere. Project overrides apply only in that repo and win over user overrides.
+For persistent tweaks, edit `subagents.agentOverrides` in user or project settings. User overrides apply everywhere. Project overrides apply only in that repo and win over user overrides.
 
 ## Prompting role subagents
 
@@ -364,7 +363,6 @@ subagent({
 Chains default to clarify mode unless you explicitly set `clarify: false`.
 For programmatic background launches, use `clarify: false, async: true`.
 
-The `/agents` manager also has launch toggles for forked context, background execution, and worktree-isolated parallel runs. Use it when guiding a human who wants to inspect or edit the launch before starting.
 
 ## Worktree Isolation
 
@@ -507,7 +505,7 @@ subagent({ action: "delete", agent: "code-analysis.my-agent" })
 Use management actions when the system needs to create or edit subagents on
 demand without dropping into raw file editing.
 
-Management actions create or update user/project agent files. `config.name` is the local frontmatter name; optional `config.package` registers and looks up the runtime name as `{package}.{name}`. Use the dotted runtime name for `get`, `update`, `delete`, slash commands, and chain steps. For small builtin changes such as a model swap, prefer `/agents` builtin overrides or `subagents.agentOverrides` in settings.
+Management actions create or update user/project agent files. `config.name` is the local frontmatter name; optional `config.package` registers and looks up the runtime name as `{package}.{name}`. Use the dotted runtime name for `get`, `update`, `delete`, slash commands, and chain steps. For small builtin changes such as a model swap, prefer `subagents.agentOverrides` in settings.
 
 ## Creating and Editing Agents by File
 
