@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveMcpDirectToolNames } from "./mcp-direct-tool-allowlist.ts";
 
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"];
 const TASK_ARG_LIMIT = 8000;
@@ -27,6 +28,7 @@ interface BuildPiArgsInput {
 	extensions?: string[];
 	systemPrompt?: string | null;
 	mcpDirectTools?: string[];
+	cwd?: string;
 	promptFileStem?: string;
 	intercomSessionName?: string;
 	orchestratorIntercomTarget?: string;
@@ -80,6 +82,9 @@ export function buildPiArgs(input: BuildPiArgsInput): BuildPiArgsResult {
 			}
 		}
 		if (builtinTools.length > 0) {
+			if (input.mcpDirectTools?.length) {
+				builtinTools.push(...resolveMcpDirectToolNames(input.mcpDirectTools, input.cwd));
+			}
 			args.push("--tools", builtinTools.join(","));
 		}
 	}

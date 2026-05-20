@@ -622,6 +622,7 @@ async function runSingleStep(
 			systemPrompt: step.systemPrompt,
 			systemPromptMode: step.systemPromptMode,
 			mcpDirectTools: step.mcpDirectTools,
+			cwd: step.cwd ?? ctx.cwd,
 			promptFileStem: step.agent,
 			intercomSessionName: ctx.childIntercomTarget,
 			orchestratorIntercomTarget: ctx.orchestratorIntercomTarget,
