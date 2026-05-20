@@ -14,6 +14,13 @@
 ### Added
 
 ### Fixed
+- Treat provider-coerced single-run `output: "false"` the same as boolean `false`, preventing literal `false` output files in foreground and async runs.
+- Include selected direct MCP tool names in explicit child `--tools` allowlists when metadata cache/config resolution is available.
+- Honor `PI_CODING_AGENT_DIR` for runtime config, agent/chain/settings discovery, skills, run history, artifact cleanup, and intercom defaults.
+- Hide nested child Pi process windows on Windows for both foreground and background subagent runs.
+- Avoid completion-guard false positives for declared read-only agents, and add `completionGuard: false` for bash-enabled non-implementation agents that should not be required to edit files.
+- Skip empty or whitespace-only assistant text parts when selecting subagent final output, so later meaningful text in the same or earlier assistant message is not masked.
+- Declare `@earendil-works/pi-tui` as a runtime dependency so packaged installs can load the extension without relying on dev dependencies or optional peers.
 - Treat recovered intermediate child tool/provider errors as successful when a later clean final assistant response is emitted, preventing false failed subagent results.
 - Use progress-driven spinner frames in subagent result rows and async widgets, avoiding timer-driven off-screen redraw flicker in small terminals.
 
