@@ -24,6 +24,8 @@ interface AsyncExecutionResult {
 
 interface AsyncResultPayload {
 	success: boolean;
+	state?: string;
+	exitCode?: number;
 	sessionId?: string;
 	mode?: string;
 	summary?: string;
@@ -537,6 +539,107 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		const statusPayload = JSON.parse(fs.readFileSync(path.join(asyncDir, "status.json"), "utf-8")) as AsyncStatusPayload;
 		assert.equal(statusPayload.state, "failed");
 		assert.match(statusPayload.steps?.[0]?.error ?? "", /429 quota exceeded/);
+	});
+
+	it("background runs treat recovered child errors as successful", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
+		mockPi.onCall({
+			jsonl: [
+				events.toolResult("read", "EISDIR: illegal operation on a directory", true),
+				{
+					type: "message_end",
+					message: {
+						role: "assistant",
+						content: [{ type: "text", text: "temporary provider failure" }],
+						model: "openai/gpt-5-mini",
+						stopReason: "error",
+						errorMessage: "provider transport failed",
+						usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, cost: { total: 0.01 } },
+					},
+				},
+				events.assistantMessage("Recovered asynchronously"),
+			],
+		});
+		const id = `async-recovered-child-error-${Date.now().toString(36)}`;
+		const asyncDir = path.join(ASYNC_DIR, id);
+		executeAsyncSingle(id, {
+			agent: "worker",
+			task: "Do work",
+			agentConfig: makeAgent("worker", { model: "openai/gpt-5-mini" }),
+			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
+			artifactConfig: {
+				enabled: false,
+				includeInput: false,
+				includeOutput: false,
+				includeJsonl: false,
+				includeMetadata: false,
+				cleanupDays: 7,
+			},
+			shareEnabled: false,
+			maxSubagentDepth: 2,
+		});
+
+		const resultPath = await waitForAsyncResultFile(id);
+		const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8")) as AsyncResultPayload;
+		assert.equal(payload.success, true);
+		assert.equal(payload.state, "complete");
+		assert.equal(payload.exitCode, 0);
+		assert.equal(payload.results[0]?.success, true);
+		assert.equal(payload.results[0]?.error, undefined);
+		assert.equal(payload.results[0]?.output, "Recovered asynchronously");
+		const statusPayload = JSON.parse(fs.readFileSync(path.join(asyncDir, "status.json"), "utf-8")) as AsyncStatusPayload;
+		assert.equal(statusPayload.state, "complete");
+		assert.equal(statusPayload.steps?.[0]?.status, "complete");
+		assert.equal(statusPayload.steps?.[0]?.exitCode, 0);
+	});
+
+	it("background runs keep provider errors failed when followed only by empty assistant output", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
+		mockPi.onCall({
+			jsonl: [
+				{
+					type: "message_end",
+					message: {
+						role: "assistant",
+						content: [{ type: "text", text: "temporary provider failure" }],
+						model: "openai/gpt-5-mini",
+						stopReason: "error",
+						errorMessage: "provider transport failed",
+						usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, cost: { total: 0.01 } },
+					},
+				},
+				events.assistantMessage(""),
+			],
+		});
+		const id = `async-provider-error-empty-stop-${Date.now().toString(36)}`;
+		const asyncDir = path.join(ASYNC_DIR, id);
+		executeAsyncSingle(id, {
+			agent: "worker",
+			task: "Do work",
+			agentConfig: makeAgent("worker", { model: "openai/gpt-5-mini" }),
+			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
+			artifactConfig: {
+				enabled: false,
+				includeInput: false,
+				includeOutput: false,
+				includeJsonl: false,
+				includeMetadata: false,
+				cleanupDays: 7,
+			},
+			shareEnabled: false,
+			maxSubagentDepth: 2,
+		});
+
+		const resultPath = await waitForAsyncResultFile(id);
+		const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8")) as AsyncResultPayload;
+		assert.equal(payload.success, false);
+		assert.equal(payload.state, "failed");
+		assert.equal(payload.exitCode, 1);
+		assert.equal(payload.results[0]?.success, false);
+		assert.match(payload.results[0]?.error ?? "", /provider transport failed/);
+		assert.equal(payload.results[0]?.output, "");
+		const statusPayload = JSON.parse(fs.readFileSync(path.join(asyncDir, "status.json"), "utf-8")) as AsyncStatusPayload;
+		assert.equal(statusPayload.state, "failed");
+		assert.equal(statusPayload.steps?.[0]?.status, "failed");
+		assert.equal(statusPayload.steps?.[0]?.exitCode, 1);
 	});
 
 	it("background file-only runs write full output but return only a file reference", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {

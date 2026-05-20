@@ -474,6 +474,85 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		assert.deepEqual(result.modelAttempts?.map((attempt) => attempt.success), [false]);
 	});
 
+	it("treats recovered child tool errors as successful foreground runs", async () => {
+		mockPi.onCall({
+			jsonl: [
+				events.toolResult("read", "EISDIR: illegal operation on a directory", true),
+				events.assistantMessage("Done"),
+			],
+		});
+		const agents = makeAgentConfigs(["echo"]);
+
+		const result = await runSync(tempDir, agents, "echo", "Inspect files", {
+			runId: "recovered-tool-error",
+		});
+
+		assert.equal(result.exitCode, 0);
+		assert.equal(result.error, undefined);
+		assert.equal(result.finalOutput, "Done");
+		assert.equal(getFinalOutput(result.messages), "Done");
+		assert.equal(result.progress.status, "completed");
+	});
+
+	it("treats recovered assistant provider errors as successful foreground runs", async () => {
+		mockPi.onCall({
+			jsonl: [
+				{
+					type: "message_end",
+					message: {
+						role: "assistant",
+						content: [{ type: "text", text: "temporary provider failure" }],
+						model: "openai/gpt-5-mini",
+						stopReason: "error",
+						errorMessage: "provider transport failed",
+						usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, cost: { total: 0.01 } },
+					},
+				},
+				events.assistantMessage("Recovered"),
+			],
+		});
+		const agents = makeAgentConfigs(["echo"]);
+
+		const result = await runSync(tempDir, agents, "echo", "Recover from provider error", {
+			runId: "recovered-provider-error",
+		});
+
+		assert.equal(result.exitCode, 0);
+		assert.equal(result.error, undefined);
+		assert.equal(result.finalOutput, "Recovered");
+		assert.equal(getFinalOutput(result.messages), "Recovered");
+		assert.equal(result.progress.status, "completed");
+	});
+
+	it("keeps provider errors failed when followed only by empty assistant output", async () => {
+		mockPi.onCall({
+			jsonl: [
+				{
+					type: "message_end",
+					message: {
+						role: "assistant",
+						content: [{ type: "text", text: "temporary provider failure" }],
+						model: "openai/gpt-5-mini",
+						stopReason: "error",
+						errorMessage: "provider transport failed",
+						usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, cost: { total: 0.01 } },
+					},
+				},
+				events.assistantMessage(""),
+			],
+		});
+		const agents = makeAgentConfigs(["echo"]);
+
+		const result = await runSync(tempDir, agents, "echo", "Recover from provider error", {
+			runId: "provider-error-empty-stop",
+		});
+
+		assert.equal(result.exitCode, 1);
+		assert.match(result.error ?? "", /provider transport failed/);
+		assert.equal(result.finalOutput, "");
+		assert.equal(result.progress.status, "failed");
+	});
+
 	it("fails when all fallback model attempts report provider errors", async () => {
 		for (const model of ["openai/gpt-5-mini", "anthropic/claude-sonnet-4"]) {
 			mockPi.onCall({

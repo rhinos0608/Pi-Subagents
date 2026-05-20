@@ -14,6 +14,7 @@
 ### Added
 
 ### Fixed
+- Treat recovered intermediate child tool/provider errors as successful when a later clean final assistant response is emitted, preventing false failed subagent results.
 - Use progress-driven spinner frames in subagent result rows and async widgets, avoiding timer-driven off-screen redraw flicker in small terminals.
 
 ## [0.24.2] - 2026-05-10
