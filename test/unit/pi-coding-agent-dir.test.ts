@@ -107,7 +107,7 @@ Inspect env.
 		assert.equal(worker?.override?.path, settingsPath);
 		assert.equal(worker?.override?.scope, "user");
 
-		const createdName = `created-${path.basename(tempDir).replace(/^pi-coding-agent-dir-/, "")}`;
+		const createdName = "created-env-agent";
 		const created = handleCreate(
 			{ config: { name: createdName, description: "Created in env dir", scope: "user" } },
 			{ cwd, modelRegistry: { getAvailable: () => [] } },
