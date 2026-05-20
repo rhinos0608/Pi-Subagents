@@ -773,6 +773,42 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		assert.doesNotMatch(eventsText, /Interrupt:/);
 	});
 
+	it("background bash-enabled non-implementation agents can opt out of the completion guard", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
+		mockPi.onCall({ output: "cold start test after patch" });
+
+		const id = `async-completion-guard-optout-${Date.now().toString(36)}`;
+		const sessionRoot = path.join(tempDir, "sessions");
+
+		executeAsyncSingle(id, {
+			agent: "test-runner",
+			task: "Run cold start test after patch",
+			agentConfig: makeAgent("test-runner", { tools: ["read", "grep", "bash", "ls"], completionGuard: false }),
+			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
+			artifactConfig: {
+				enabled: false,
+				includeInput: false,
+				includeOutput: false,
+				includeJsonl: false,
+				includeMetadata: false,
+				cleanupDays: 7,
+			},
+			shareEnabled: false,
+			sessionRoot,
+			maxSubagentDepth: 2,
+		});
+
+		const resultPath = await waitForAsyncResultFile(id, 10_000);
+		const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8"));
+		assert.equal(payload.success, true);
+		assert.equal(payload.exitCode, 0);
+		assert.equal(payload.results[0].success, true);
+		assert.equal(payload.results[0].output, "cold start test after patch");
+
+		const eventsPath = path.join(ASYNC_DIR, id, "events.jsonl");
+		const eventsText = fs.readFileSync(eventsPath, "utf-8");
+		assert.doesNotMatch(eventsText, /"reason":"completion_guard"/);
+	});
+
 	it("background runs prefer the parent session provider for ambiguous bare model ids", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
 		mockPi.onCall({ output: "Done asynchronously" });
 

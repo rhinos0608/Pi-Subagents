@@ -46,6 +46,7 @@ export interface BuiltinAgentOverrideBase {
 	skills?: string[];
 	tools?: string[];
 	mcpDirectTools?: string[];
+	completionGuard?: boolean;
 }
 
 interface BuiltinAgentOverrideConfig {
@@ -60,6 +61,7 @@ interface BuiltinAgentOverrideConfig {
 	systemPrompt?: string;
 	skills?: string[] | false;
 	tools?: string[] | false;
+	completionGuard?: boolean;
 }
 
 interface BuiltinAgentOverrideInfo {
@@ -92,6 +94,7 @@ export interface AgentConfig {
 	defaultProgress?: boolean;
 	interactive?: boolean;
 	maxSubagentDepth?: number;
+	completionGuard?: boolean;
 	disabled?: boolean;
 	extraFields?: Record<string, string>;
 	override?: BuiltinAgentOverrideInfo;
@@ -183,6 +186,7 @@ function cloneOverrideBase(agent: AgentConfig): BuiltinAgentOverrideBase {
 		skills: agent.skills ? [...agent.skills] : undefined,
 		tools: agent.tools ? [...agent.tools] : undefined,
 		mcpDirectTools: agent.mcpDirectTools ? [...agent.mcpDirectTools] : undefined,
+		completionGuard: agent.completionGuard,
 	};
 }
 
@@ -201,6 +205,7 @@ function cloneOverrideValue(override: BuiltinAgentOverrideConfig): BuiltinAgentO
 		...(override.systemPrompt !== undefined ? { systemPrompt: override.systemPrompt } : {}),
 		...(override.skills !== undefined ? { skills: override.skills === false ? false : [...override.skills] } : {}),
 		...(override.tools !== undefined ? { tools: override.tools === false ? false : [...override.tools] } : {}),
+		...(override.completionGuard !== undefined ? { completionGuard: override.completionGuard } : {}),
 	};
 }
 
@@ -337,6 +342,14 @@ function parseBuiltinOverrideEntry(
 		}
 	}
 
+	if ("completionGuard" in input) {
+		if (typeof input.completionGuard === "boolean") {
+			override.completionGuard = input.completionGuard;
+		} else {
+			throw new Error(`Builtin override '${name}' in '${filePath}' has invalid 'completionGuard'; expected a boolean.`);
+		}
+	}
+
 	if ("systemPrompt" in input) {
 		if (typeof input.systemPrompt === "string") override.systemPrompt = input.systemPrompt;
 		else throw new Error(`Builtin override '${name}' in '${filePath}' has invalid 'systemPrompt'; expected a string.`);
@@ -409,6 +422,7 @@ function applyBuiltinOverride(
 		next.tools = tools;
 		next.mcpDirectTools = mcpDirectTools;
 	}
+	if (override.completionGuard !== undefined) next.completionGuard = override.completionGuard;
 
 	return next;
 }
@@ -448,7 +462,7 @@ function applyBuiltinOverrides(
 
 export function buildBuiltinOverrideConfig(
 	base: BuiltinAgentOverrideBase,
-	draft: Pick<AgentConfig, "model" | "fallbackModels" | "thinking" | "systemPromptMode" | "inheritProjectContext" | "inheritSkills" | "defaultContext" | "disabled" | "systemPrompt" | "skills" | "tools" | "mcpDirectTools">,
+	draft: Pick<AgentConfig, "model" | "fallbackModels" | "thinking" | "systemPromptMode" | "inheritProjectContext" | "inheritSkills" | "defaultContext" | "disabled" | "systemPrompt" | "skills" | "tools" | "mcpDirectTools" | "completionGuard">,
 ): BuiltinAgentOverrideConfig | undefined {
 	const override: BuiltinAgentOverrideConfig = {};
 
@@ -466,6 +480,9 @@ export function buildBuiltinOverrideConfig(
 	const baseTools = joinToolList(base);
 	const draftTools = joinToolList(draft);
 	if (!arraysEqual(draftTools, baseTools)) override.tools = draftTools ? [...draftTools] : false;
+	if ((draft.completionGuard !== false) !== (base.completionGuard !== false)) {
+		override.completionGuard = draft.completionGuard !== false;
+	}
 
 	return Object.keys(override).length > 0 ? override : undefined;
 }
@@ -631,6 +648,11 @@ function loadAgentsFromDir(dir: string, source: AgentSource): AgentConfig[] {
 		}
 
 		const parsedMaxSubagentDepth = Number(frontmatter.maxSubagentDepth);
+		const completionGuard = frontmatter.completionGuard === "false"
+			? false
+			: frontmatter.completionGuard === "true"
+				? true
+				: undefined;
 
 		agents.push({
 			name: runtimeName,
@@ -659,6 +681,7 @@ function loadAgentsFromDir(dir: string, source: AgentSource): AgentConfig[] {
 				Number.isInteger(parsedMaxSubagentDepth) && parsedMaxSubagentDepth >= 0
 					? parsedMaxSubagentDepth
 					: undefined,
+			completionGuard,
 			extraFields: Object.keys(extraFields).length > 0 ? extraFields : undefined,
 		});
 	}

@@ -196,6 +196,40 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		assert.match(result.error ?? "", /completed without making edits/);
 	});
 
+	it("allows declared read-only agents to mention implementation words without edits", async () => {
+		mockPi.onCall({ output: "Validation report after the patch" });
+		const agents = [makeAgent("architect", { tools: ["read", "grep", "find", "ls"] })];
+
+		const result = await runSync(tempDir, agents, "architect", "Produce a proposal that implements the approved fix", {
+			runId: "guard-readonly-tools",
+		});
+
+		assert.equal(result.exitCode, 0);
+		assert.equal(result.progress.status, "completed");
+		assert.equal(result.finalOutput, "Validation report after the patch");
+	});
+
+	it("keeps bash-enabled agents conservative unless completion guard is disabled", async () => {
+		mockPi.onCall({ output: "cold start test after patch" });
+		mockPi.onCall({ output: "cold start test after patch" });
+		const agents = [
+			makeAgent("test-runner", { tools: ["read", "grep", "bash", "ls"] }),
+			makeAgent("test-runner-optout", { tools: ["read", "grep", "bash", "ls"], completionGuard: false }),
+		];
+
+		const withoutOptOut = await runSync(tempDir, agents, "test-runner", "Run cold start test after patch", {
+			runId: "guard-bash-conservative",
+		});
+		assert.equal(withoutOptOut.exitCode, 1);
+		assert.match(withoutOptOut.error ?? "", /completed without making edits/);
+
+		const withOptOut = await runSync(tempDir, agents, "test-runner-optout", "Run cold start test after patch", {
+			runId: "guard-bash-optout",
+		});
+		assert.equal(withOptOut.exitCode, 0);
+		assert.equal(withOptOut.progress.status, "completed");
+	});
+
 	it("allows implementation runs when parsed messages include a real edit tool call", async () => {
 		mockPi.onCall({
 			jsonl: [

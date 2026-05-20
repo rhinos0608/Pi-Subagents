@@ -668,8 +668,14 @@ async function runSingleAttempt(
 	};
 
 	let fullOutput = getFinalOutput(result.messages);
-	const completionGuard = result.exitCode === 0 && !result.error
-		? evaluateCompletionMutationGuard({ agent: agent.name, task, messages: result.messages })
+	const completionGuard = result.exitCode === 0 && !result.error && agent.completionGuard !== false
+		? evaluateCompletionMutationGuard({
+			agent: agent.name,
+			task,
+			messages: result.messages,
+			tools: agent.tools,
+			mcpDirectTools: agent.mcpDirectTools,
+		})
 		: undefined;
 	if (completionGuard?.triggered && !observedMutationAttempt) {
 		result.exitCode = 1;
