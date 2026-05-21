@@ -10,7 +10,7 @@ import { createNestedRoute, writeNestedEvent } from "../../src/runs/shared/neste
 const routeRoots: string[] = [];
 
 afterEach(() => {
-	for (const root of routeRoots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
+	for (const root of routeRoots.splice(0)) fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
 });
 
 function stateWithForeground(id: string): SubagentState {

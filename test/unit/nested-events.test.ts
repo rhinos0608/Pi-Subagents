@@ -77,6 +77,7 @@ describe("nested event route validation", () => {
 		process.env[SUBAGENT_PARENT_DEPTH_ENV] = "3";
 		process.env[SUBAGENT_PARENT_PATH_ENV] = JSON.stringify([
 			{ runId: "root-run", stepIndex: 0, agent: "root-agent" },
+			{ runId: "../unsafe", stepIndex: 1, agent: "bad" },
 			{ runId: "nested-parent", stepIndex: 2, agent: "nested-agent" },
 		]);
 
@@ -89,6 +90,13 @@ describe("nested event route validation", () => {
 				{ runId: "nested-parent", stepIndex: 2, agent: "nested-agent" },
 			],
 		});
+	});
+
+	it("ignores unsafe nested parent ids from env", () => {
+		process.env[SUBAGENT_PARENT_RUN_ID_ENV] = "../unsafe";
+		process.env[SUBAGENT_PARENT_CHILD_INDEX_ENV] = "2";
+
+		assert.equal(resolveNestedParentAddressFromEnv(), undefined);
 	});
 
 	it("resolves only matching contained routes from env", () => {

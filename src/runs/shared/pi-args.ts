@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { encodeNestedPathEnv, parseNestedPathEnv, type NestedPathEntry } from "./nested-path.ts";
 import { resolveMcpDirectToolNames } from "./mcp-direct-tool-allowlist.ts";
 
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"];
@@ -51,7 +52,7 @@ interface BuildPiArgsInput {
 	parentRunId?: string;
 	parentChildIndex?: number;
 	parentDepth?: number;
-	parentPath?: Array<{ runId: string; stepIndex?: number; agent?: string }>;
+	parentPath?: NestedPathEntry[];
 	parentCapabilityToken?: string;
 }
 
@@ -158,7 +159,7 @@ export function buildPiArgs(input: BuildPiArgsInput): BuildPiArgsResult {
 	const inheritedDepth = Number(process.env[SUBAGENT_PARENT_DEPTH_ENV]);
 	const parentDepth = input.parentDepth ?? (inheritedNestedRoute && Number.isFinite(inheritedDepth) ? inheritedDepth + 1 : 1);
 	const parentPath = input.parentPath ?? [
-		...parseParentPathEnv(process.env[SUBAGENT_PARENT_PATH_ENV]),
+		...parseNestedPathEnv(process.env[SUBAGENT_PARENT_PATH_ENV]),
 		...(parentRunId ? [{
 			runId: parentRunId,
 			...(parentChildIndex && /^\d+$/.test(parentChildIndex) ? { stepIndex: Number(parentChildIndex) } : {}),
@@ -177,7 +178,7 @@ export function buildPiArgs(input: BuildPiArgsInput): BuildPiArgsResult {
 	env[SUBAGENT_PARENT_RUN_ID_ENV] = fanoutAuthorized ? parentRunId : "";
 	env[SUBAGENT_PARENT_CHILD_INDEX_ENV] = fanoutAuthorized ? parentChildIndex : "";
 	env[SUBAGENT_PARENT_DEPTH_ENV] = fanoutAuthorized ? String(parentDepth) : "";
-	env[SUBAGENT_PARENT_PATH_ENV] = fanoutAuthorized && parentPath.length ? JSON.stringify(parentPath.slice(0, 4)) : "";
+	env[SUBAGENT_PARENT_PATH_ENV] = fanoutAuthorized ? encodeNestedPathEnv(parentPath) : "";
 	env[SUBAGENT_PARENT_CAPABILITY_TOKEN_ENV] = fanoutAuthorized
 		? input.parentCapabilityToken ?? process.env[SUBAGENT_PARENT_CAPABILITY_TOKEN_ENV] ?? ""
 		: "";
@@ -207,26 +208,7 @@ export function buildPiArgs(input: BuildPiArgsInput): BuildPiArgsResult {
 	return { args, env, tempDir };
 }
 
-export function parseParentPathEnv(value: string | undefined): Array<{ runId: string; stepIndex?: number; agent?: string }> {
-	if (!value) return [];
-	try {
-		const parsed = JSON.parse(value) as unknown;
-		if (!Array.isArray(parsed)) return [];
-		return parsed.flatMap((item) => {
-			if (!item || typeof item !== "object") return [];
-			const record = item as Record<string, unknown>;
-			return typeof record.runId === "string" && record.runId.length > 0
-				? [{
-					runId: record.runId,
-					...(typeof record.stepIndex === "number" && Number.isFinite(record.stepIndex) ? { stepIndex: record.stepIndex } : {}),
-					...(typeof record.agent === "string" && record.agent.length > 0 ? { agent: record.agent } : {}),
-				}]
-				: [];
-		});
-	} catch {
-		return [];
-	}
-}
+export const parseParentPathEnv = parseNestedPathEnv;
 
 export function cleanupTempDir(tempDir: string | null | undefined): void {
 	if (!tempDir) return;

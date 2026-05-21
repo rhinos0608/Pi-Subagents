@@ -16,7 +16,7 @@ import {
 	SUBAGENT_PARENT_ROOT_RUN_ID_ENV,
 	SUBAGENT_PARENT_RUN_ID_ENV,
 } from "../../src/runs/shared/pi-args.ts";
-import type { SubagentState } from "../../src/shared/types.ts";
+import { ASYNC_DIR, type SubagentState } from "../../src/shared/types.ts";
 
 const routeRoots: string[] = [];
 const savedEnv = {
@@ -201,6 +201,33 @@ describe("nested control routing", () => {
 		}
 	});
 
+	it("requires an id for child-safe status instead of listing unrelated top-level async runs", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-nested-child-safe-status-"));
+		const runId = `child-safe-unrelated-${Date.now().toString(36)}`;
+		const asyncDir = path.join(ASYNC_DIR, runId);
+		try {
+			fs.mkdirSync(asyncDir, { recursive: true });
+			fs.writeFileSync(path.join(asyncDir, "status.json"), JSON.stringify({
+				runId,
+				mode: "single",
+				state: "running",
+				pid: 12345,
+				startedAt: 100,
+				lastUpdate: 100,
+				steps: [{ agent: "outside", status: "running", startedAt: 100 }],
+			}, null, 2), "utf-8");
+
+			const result = await createExecutor(createState(), [], false).execute("status", { action: "status" }, new AbortController().signal, undefined, ctx(root));
+
+			assert.equal(result.isError, true);
+			assert.match(text(result), /requires an id/);
+			assert.doesNotMatch(text(result), new RegExp(runId));
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+			fs.rmSync(asyncDir, { recursive: true, force: true });
+		}
+	});
+
 	it("does not let bare interrupt target hidden nested descendants", async () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-nested-bare-interrupt-"));
 		try {
@@ -336,6 +363,82 @@ describe("nested control routing", () => {
 			assert.match(registry.children[0]?.error ?? "", /model registry exploded/);
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("keeps the fanout child control listener alive after control inbox polling errors", async () => {
+		const route = createNestedRoute("root-poll-error");
+		routeRoots.push(path.dirname(route.eventSink));
+		setNestedRouteEnv(route, "root-poll-error");
+		process.env[SUBAGENT_CHILD_ENV] = "1";
+		process.env[SUBAGENT_FANOUT_CHILD_ENV] = "1";
+		const pi = {
+			events: { emit() {}, on() { return () => {}; } },
+			registerTool() {},
+			getSessionName() { return "child"; },
+		} as any;
+		fs.rmSync(route.controlInbox, { recursive: true, force: true });
+		fs.writeFileSync(route.controlInbox, "not a directory", "utf-8");
+		const originalError = console.error;
+		const logged: unknown[][] = [];
+		console.error = (...args: unknown[]) => {
+			logged.push(args);
+		};
+		try {
+			registerFanoutChildSubagentExtension(pi);
+			await waitFor(() => logged.some((entry) => String(entry[0] ?? "").includes(route.controlInbox) && String(entry[0] ?? "").includes("root-poll-error")));
+
+			fs.rmSync(route.controlInbox, { force: true });
+			fs.mkdirSync(route.controlInbox, { recursive: true });
+			const requestPath = writeNestedControlRequest(route, {
+				ts: Date.now(),
+				requestId: "poll-error-recovers",
+				targetRunId: "missing-run",
+				action: "interrupt",
+			});
+
+			await waitFor(() => readNestedControlResults(route).some((result) => result.requestId === "poll-error-recovers" && result.ok === false));
+			assert.equal(fs.existsSync(requestPath), false);
+		} finally {
+			console.error = originalError;
+		}
+	});
+
+	it("keeps fanout child control requests when result writing fails and retries after recovery", async () => {
+		const route = createNestedRoute("root-result-write-fails");
+		routeRoots.push(path.dirname(route.eventSink));
+		setNestedRouteEnv(route, "root-result-write-fails");
+		process.env[SUBAGENT_CHILD_ENV] = "1";
+		process.env[SUBAGENT_FANOUT_CHILD_ENV] = "1";
+		const pi = {
+			events: { emit() {}, on() { return () => {}; } },
+			registerTool() {},
+			getSessionName() { return "child"; },
+		} as any;
+		fs.rmSync(route.eventSink, { recursive: true, force: true });
+		fs.writeFileSync(route.eventSink, "not a directory", "utf-8");
+		const requestPath = writeNestedControlRequest(route, {
+			ts: Date.now(),
+			requestId: "result-write-fails",
+			targetRunId: "missing-run",
+			action: "interrupt",
+		});
+		const originalError = console.error;
+		const logged: unknown[][] = [];
+		console.error = (...args: unknown[]) => {
+			logged.push(args);
+		};
+		try {
+			registerFanoutChildSubagentExtension(pi);
+			await waitFor(() => logged.some((entry) => String(entry[0] ?? "").includes("result-write-fails") && /keeping request for retry/.test(String(entry[0] ?? ""))));
+			assert.equal(fs.existsSync(requestPath), true);
+
+			fs.rmSync(route.eventSink, { force: true });
+			fs.mkdirSync(route.eventSink, { recursive: true });
+			await waitFor(() => readNestedControlResults(route).some((result) => result.requestId === "result-write-fails" && result.ok === false));
+			assert.equal(fs.existsSync(requestPath), false);
+		} finally {
+			console.error = originalError;
 		}
 	});
 

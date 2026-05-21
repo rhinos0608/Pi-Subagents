@@ -2,11 +2,17 @@
 
 ## [Unreleased]
 
+## [0.25.0] - 2026-05-21
+
 ### Added
 - Allow child agents whose resolved builtin tools explicitly include `subagent` to run child-safe nested fanout, with parent-visible nested status trees and nested `status`/`interrupt`/`resume` by id.
 
 ### Fixed
 - Preserve compact nested child summaries in grouped result/intercom payloads and async completion metadata before ordinary result files are processed and deleted.
+- Keep async result files retryable when nested registry enrichment temporarily fails, instead of marking them seen before a successful delivery pass.
+- Require an explicit id for child-safe nested `status` when no local foreground run is active, preventing fanout children from listing unrelated top-level async runs.
+- Keep fanout child control inbox polling alive across transient filesystem errors, and retain control requests for retry when control-result writes fail.
+- Share nested path/env sanitization between child launch arguments and nested event projection.
 
 ## [0.24.4] - 2026-05-20
 

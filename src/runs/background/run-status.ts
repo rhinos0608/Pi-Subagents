@@ -102,6 +102,13 @@ export function inspectSubagentStatus(params: RunStatusParams, deps: RunStatusDe
 	const asyncDirRoot = deps.asyncDirRoot ?? ASYNC_DIR;
 	const resultsDir = deps.resultsDir ?? RESULTS_DIR;
 	if (!params.id && !params.runId && !params.dir) {
+		if (deps.nested) {
+			return {
+				content: [{ type: "text", text: "Child-safe subagent status requires an id when no foreground run is active." }],
+				isError: true,
+				details: { mode: "single", results: [] },
+			};
+		}
 		try {
 			const runs = listAsyncRuns(asyncDirRoot, { states: ["queued", "running"], resultsDir, kill: deps.kill, now: deps.now });
 			return {

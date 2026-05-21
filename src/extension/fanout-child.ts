@@ -57,53 +57,68 @@ function startNestedControlInboxListener(pi: ExtensionAPI, state: SubagentState)
 	}
 	if (!route) return undefined;
 	const seen = new Set<string>();
+	const inFlight = new Set<string>();
+	const pendingResults = new Map<string, Parameters<typeof writeNestedControlResult>[1]>();
 	const timer = setInterval(() => {
-		for (const request of readNestedControlRequests(route)) {
-			if (seen.has(request.requestId)) continue;
-			seen.add(request.requestId);
-			void (async () => {
-				let ok = false;
-				let message = "Control request failed.";
-				try {
-					const control = state.foregroundControls.get(request.targetRunId);
-					if (!control) {
-						message = `Nested run ${request.targetRunId} is not active in this fanout child.`;
-						return;
-					}
-					if (request.action === "interrupt") {
-						ok = control.interrupt?.() === true;
-						message = ok
-							? `Interrupt requested for nested run ${request.targetRunId}.`
-							: `Nested run ${request.targetRunId} has no active child step to interrupt.`;
-					} else if (!request.message?.trim()) {
-						message = "Nested resume requires message.";
-					} else if (!control.currentAgent) {
-						message = `Nested run ${request.targetRunId} has no active child message route.`;
-					} else {
-						const index = control.currentIndex ?? 0;
-						const target = resolveSubagentIntercomTarget(request.targetRunId, control.currentAgent, index);
-						ok = await deliverSubagentIntercomMessageEvent(
-							pi.events,
-							target,
-							`Follow-up for nested run ${request.targetRunId} (${control.currentAgent}):\n\n${request.message.trim()}`,
-							500,
-							{ source: "nested-resume", runId: request.targetRunId, agent: control.currentAgent, index },
-						);
-						message = ok
-							? `Delivered follow-up to live nested run ${request.targetRunId}.`
-							: `Nested child intercom target is not registered: ${target}`;
-					}
-				} catch (error) {
-					message = error instanceof Error ? error.message : String(error);
-				} finally {
+		try {
+			for (const request of readNestedControlRequests(route)) {
+				if (seen.has(request.requestId) || inFlight.has(request.requestId)) continue;
+				inFlight.add(request.requestId);
+				void (async () => {
 					try {
-						writeNestedControlResult(route, { ts: Date.now(), requestId: request.requestId, targetRunId: request.targetRunId, ok, message });
-					} catch (error) {
-						console.error("Failed to write nested control result:", error);
+						let result = pendingResults.get(request.requestId);
+						if (!result) {
+							let ok = false;
+							let message = "Control request failed.";
+							try {
+								const control = state.foregroundControls.get(request.targetRunId);
+								if (!control) {
+									message = `Nested run ${request.targetRunId} is not active in this fanout child.`;
+								} else if (request.action === "interrupt") {
+									ok = control.interrupt?.() === true;
+									message = ok
+										? `Interrupt requested for nested run ${request.targetRunId}.`
+										: `Nested run ${request.targetRunId} has no active child step to interrupt.`;
+								} else if (!request.message?.trim()) {
+									message = "Nested resume requires message.";
+								} else if (!control.currentAgent) {
+									message = `Nested run ${request.targetRunId} has no active child message route.`;
+								} else {
+									const index = control.currentIndex ?? 0;
+									const target = resolveSubagentIntercomTarget(request.targetRunId, control.currentAgent, index);
+									ok = await deliverSubagentIntercomMessageEvent(
+										pi.events,
+										target,
+										`Follow-up for nested run ${request.targetRunId} (${control.currentAgent}):\n\n${request.message.trim()}`,
+										500,
+										{ source: "nested-resume", runId: request.targetRunId, agent: control.currentAgent, index },
+									);
+									message = ok
+										? `Delivered follow-up to live nested run ${request.targetRunId}.`
+										: `Nested child intercom target is not registered: ${target}`;
+								}
+							} catch (error) {
+								message = error instanceof Error ? error.message : String(error);
+							}
+							result = { ts: Date.now(), requestId: request.requestId, targetRunId: request.targetRunId, ok, message };
+						}
+						try {
+							writeNestedControlResult(route, result);
+						} catch (error) {
+							pendingResults.set(request.requestId, result);
+							console.error(`Failed to write nested control result for request '${request.requestId}' targeting '${request.targetRunId}' via inbox '${route.controlInbox}'; keeping request for retry:`, error);
+							return;
+						}
+						pendingResults.delete(request.requestId);
+						seen.add(request.requestId);
+						try { fs.unlinkSync(request.filePath); } catch {}
+					} finally {
+						inFlight.delete(request.requestId);
 					}
-					try { fs.unlinkSync(request.filePath); } catch {}
-				}
-			})();
+				})();
+			}
+		} catch (error) {
+			console.error(`Failed to poll nested control inbox '${route.controlInbox}' for root '${route.rootRunId}':`, error);
 		}
 	}, 200);
 	timer.unref?.();

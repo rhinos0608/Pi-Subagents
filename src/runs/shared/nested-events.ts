@@ -14,6 +14,7 @@ import {
 	type SubagentRunMode,
 	type SubagentState,
 } from "../../shared/types.ts";
+import { isSafeNestedPathId, parseNestedPathEnv, sanitizeNestedPath, type NestedPathEntry } from "./nested-path.ts";
 import {
 	SUBAGENT_PARENT_CAPABILITY_TOKEN_ENV,
 	SUBAGENT_PARENT_CHILD_INDEX_ENV,
@@ -30,7 +31,6 @@ export const NESTED_EVENTS_DIR = path.join(TEMP_ROOT_DIR, "nested-subagent-event
 const ROUTE_FILE = "route.json";
 const REGISTRY_FILE = "registry.json";
 const MAX_EVENT_BYTES = 64 * 1024;
-const MAX_ID_LENGTH = 128;
 const MAX_STEPS = 12;
 const MAX_CHILDREN = 16;
 const MAX_DEPTH = 3;
@@ -80,13 +80,7 @@ export interface NestedRegistry {
 }
 
 export function isSafeNestedId(value: unknown): value is string {
-	return typeof value === "string"
-		&& value.length > 0
-		&& value.length <= MAX_ID_LENGTH
-		&& !path.isAbsolute(value)
-		&& !value.includes("/")
-		&& !value.includes("\\")
-		&& !value.includes("..");
+	return isSafeNestedPathId(value);
 }
 
 export function assertSafeNestedId(label: string, value: string): void {
@@ -152,36 +146,15 @@ export function resolveInheritedNestedRouteFromEnv(env: NodeJS.ProcessEnv = proc
 	}
 }
 
-function parseNestedPath(value: string | undefined): Array<{ runId: string; stepIndex?: number; agent?: string }> | undefined {
-	if (!value) return undefined;
-	let parsed: unknown;
-	try {
-		parsed = JSON.parse(value);
-	} catch {
-		return undefined;
-	}
-	if (!Array.isArray(parsed)) return undefined;
-	const pathParts = parsed.map((part) => {
-		if (!part || typeof part !== "object") return undefined;
-		const record = part as Record<string, unknown>;
-		if (!isSafeNestedId(record.runId)) return undefined;
-		return {
-			runId: record.runId,
-			...(clampNumber(record.stepIndex) !== undefined ? { stepIndex: clampNumber(record.stepIndex) } : {}),
-			...(stringValue(record.agent, 128) ? { agent: stringValue(record.agent, 128) } : {}),
-		};
-	}).filter((part): part is { runId: string; stepIndex?: number; agent?: string } => Boolean(part)).slice(0, MAX_DEPTH + 1);
-	return pathParts.length ? pathParts : undefined;
-}
-
-export function resolveNestedParentAddressFromEnv(env: NodeJS.ProcessEnv = process.env): { parentRunId: string; parentStepIndex?: number; depth: number; path: Array<{ runId: string; stepIndex?: number; agent?: string }> } | undefined {
+export function resolveNestedParentAddressFromEnv(env: NodeJS.ProcessEnv = process.env): { parentRunId: string; parentStepIndex?: number; depth: number; path: NestedPathEntry[] } | undefined {
 	const parentRunId = env[SUBAGENT_PARENT_RUN_ID_ENV];
-	if (!parentRunId) return undefined;
+	if (!isSafeNestedId(parentRunId)) return undefined;
 	const rawIndex = env[SUBAGENT_PARENT_CHILD_INDEX_ENV];
 	const parentStepIndex = rawIndex && /^\d+$/.test(rawIndex) ? Number(rawIndex) : undefined;
 	const depth = Math.min(Math.max(1, clampNumber(Number(env[SUBAGENT_PARENT_DEPTH_ENV])) ?? 1), MAX_DEPTH);
-	const path = parseNestedPath(env[SUBAGENT_PARENT_PATH_ENV]) ?? [{ runId: parentRunId, ...(parentStepIndex !== undefined ? { stepIndex: parentStepIndex } : {}) }];
-	return { parentRunId, ...(parentStepIndex !== undefined ? { parentStepIndex } : {}), depth, path };
+	const parsedPath = parseNestedPathEnv(env[SUBAGENT_PARENT_PATH_ENV]);
+	const nestedPath = parsedPath.length ? parsedPath : [{ runId: parentRunId, ...(parentStepIndex !== undefined ? { stepIndex: parentStepIndex } : {}) }];
+	return { parentRunId, ...(parentStepIndex !== undefined ? { parentStepIndex } : {}), depth, path: nestedPath };
 }
 
 export function resolveNestedAsyncDir(rootRunId: string, run: NestedRunSummary): string | undefined {
@@ -247,17 +220,7 @@ export function sanitizeSummary(input: unknown, depth = 0): NestedRunSummary | u
 	if (!input || typeof input !== "object") return undefined;
 	const raw = input as Record<string, unknown>;
 	if (!isSafeNestedId(raw.id) || !isSafeNestedId(raw.parentRunId)) return undefined;
-	const rawPath = Array.isArray(raw.path) ? raw.path : [];
-	const pathParts = rawPath.map((part) => {
-		if (!part || typeof part !== "object") return undefined;
-		const record = part as Record<string, unknown>;
-		if (!isSafeNestedId(record.runId)) return undefined;
-		return {
-			runId: record.runId,
-			...(clampNumber(record.stepIndex) !== undefined ? { stepIndex: clampNumber(record.stepIndex) } : {}),
-			...(stringValue(record.agent, 128) ? { agent: stringValue(record.agent, 128) } : {}),
-		};
-	}).filter((part): part is { runId: string; stepIndex?: number; agent?: string } => Boolean(part)).slice(0, MAX_DEPTH + 1);
+	const pathParts = sanitizeNestedPath(raw.path);
 	const steps = Array.isArray(raw.steps)
 		? raw.steps.map((step) => sanitizeStep(step, depth + 1)).filter((step): step is NestedStepSummary => Boolean(step)).slice(0, MAX_STEPS)
 		: undefined;

@@ -158,12 +158,14 @@ describe("result watcher", () => {
 				},
 			});
 			const originalError = console.error;
+			const childSessionPath = path.join(resultsDir, "a-session.jsonl");
 			console.error = () => {};
 			try {
 				watcher.startResultWatcher();
 				assert.equal(state.watcher, null);
 				assert.notEqual(state.watcherRestartTimer, null);
 
+				fs.writeFileSync(childSessionPath, "", "utf-8");
 				fs.writeFileSync(path.join(resultsDir, "async-fallback.json"), JSON.stringify({
 					id: "async-fallback",
 					runId: "run-fallback",
@@ -173,7 +175,7 @@ describe("result watcher", () => {
 					state: "complete",
 					summary: "Combined summary",
 					results: [
-						{ agent: "a", output: "Result from a", success: true, intercomTarget: "subagent-a-run-fallback-1" },
+						{ agent: "a", output: "Result from a", success: true, sessionFile: childSessionPath, intercomTarget: "subagent-a-run-fallback-1" },
 						{ agent: "b", output: "Result from b", success: false, error: "B failed", intercomTarget: "subagent-b-run-fallback-2" },
 					],
 					sessionId: "session-1",
@@ -190,11 +192,18 @@ describe("result watcher", () => {
 			assert.equal(intercomEvents.length, 1);
 			assert.equal(emitted.some((entry) => entry.event === "subagent:async-complete"), true);
 			assert.equal(fs.existsSync(path.join(resultsDir, "async-fallback.json")), false);
-			const payload = intercomEvents[0]?.data as { mode?: string; status?: string; message?: string };
+			const payload = intercomEvents[0]?.data as { mode?: string; status?: string; message?: string; children?: Array<{ status?: string; summary?: string; sessionPath?: string }> };
+			const completion = emitted.find((entry) => entry.event === "subagent:async-complete")?.data as { results?: Array<{ status?: string; summary?: string; sessionPath?: string }> } | undefined;
 			assert.equal(payload.mode, "parallel");
 			assert.equal(payload.status, "failed");
 			assert.match(String(payload.message ?? ""), /Run: run-fallback/);
 			assert.match(String(payload.message ?? ""), /Children: 1 completed, 1 failed/);
+			assert.equal(payload.children?.[0]?.sessionPath, childSessionPath);
+			assert.equal(completion?.results?.[0]?.sessionPath, childSessionPath);
+			assert.equal(payload.children?.[1]?.status, "failed");
+			assert.equal(completion?.results?.[1]?.status, "failed");
+			assert.equal(payload.children?.[1]?.summary, "B failed\n\nOutput:\nResult from b");
+			assert.equal(completion?.results?.[1]?.summary, "B failed\n\nOutput:\nResult from b");
 		} finally {
 			fs.rmSync(resultsDir, { recursive: true, force: true });
 		}
@@ -496,17 +505,40 @@ describe("result watcher", () => {
 		}
 	});
 
-	it("keeps result files for retry when nested registry enrichment fails", async () => {
+	it("retries and delivers result files after nested registry enrichment recovers", async () => {
 		const resultsDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-result-watcher-nested-retry-"));
 		const route = createNestedRoute("async-nested-retry");
 		try {
-			fs.writeFileSync(path.join(path.dirname(route.eventSink), "registry.json"), "{", "utf-8");
+			const registryPath = path.join(path.dirname(route.eventSink), "registry.json");
+			fs.writeFileSync(registryPath, "{", "utf-8");
+			writeNestedEvent(route, {
+				type: "subagent.nested.completed",
+				ts: 100,
+				parentRunId: "async-nested-retry",
+				parentStepIndex: 0,
+				child: {
+					id: "nested-retry-child",
+					parentRunId: "async-nested-retry",
+					parentStepIndex: 0,
+					depth: 1,
+					path: [{ runId: "async-nested-retry", stepIndex: 0 }],
+					state: "complete",
+					agent: "child",
+				},
+			});
 			const emitted: Array<{ event: string; data: unknown }> = [];
+			const listeners = new Map<string, Set<(payload: unknown) => void>>();
 			const pi = {
 				events: {
-					on: () => () => {},
+					on(event: string, listener: (payload: unknown) => void) {
+						const set = listeners.get(event) ?? new Set();
+						set.add(listener);
+						listeners.set(event, set);
+						return () => set.delete(listener);
+					},
 					emit(event: string, data: unknown) {
 						emitted.push({ event, data });
+						for (const listener of listeners.get(event) ?? []) listener(data);
 					},
 				},
 			};
@@ -528,20 +560,31 @@ describe("result watcher", () => {
 					state: "complete",
 					summary: "owner done",
 					sessionId: "session-1",
+					intercomTarget: "subagent-chat-main",
 				}), "utf-8");
 				watcher.primeExistingResults();
 				await new Promise((resolve) => setTimeout(resolve, 100));
+
+				assert.equal(fs.existsSync(resultPath), true);
+				assert.equal(emitted.length, 0);
+				assert.ok(
+					logged.some((entry) => /will retry later/.test(String(entry[0] ?? ""))),
+					"expected nested enrichment retry warning to be logged",
+				);
+
+				fs.rmSync(registryPath, { force: true });
+				watcher.primeExistingResults();
+				await new Promise((resolve) => setTimeout(resolve, 650));
 			} finally {
 				console.error = originalError;
 				watcher.stopResultWatcher();
 			}
 
-			assert.equal(fs.existsSync(resultPath), true);
-			assert.equal(emitted.length, 0);
-			assert.ok(
-				logged.some((entry) => /will retry later/.test(String(entry[0] ?? ""))),
-				"expected nested enrichment retry warning to be logged",
-			);
+			assert.equal(fs.existsSync(resultPath), false);
+			const completion = emitted.find((entry) => entry.event === "subagent:async-complete")?.data as { nestedChildren?: Array<{ id?: string }> } | undefined;
+			assert.deepEqual(completion?.nestedChildren?.map((child) => child.id), ["nested-retry-child"]);
+			const intercomPayload = emitted.find((entry) => entry.event === "subagent:result-intercom")?.data as { children?: Array<{ children?: Array<{ id?: string }> }> } | undefined;
+			assert.deepEqual(intercomPayload?.children?.[0]?.children?.map((child) => child.id), ["nested-retry-child"]);
 		} finally {
 			fs.rmSync(resultsDir, { recursive: true, force: true });
 			fs.rmSync(path.dirname(route.eventSink), { recursive: true, force: true });

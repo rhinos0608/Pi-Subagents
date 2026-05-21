@@ -532,7 +532,7 @@ describe("buildPiArgs system prompt mode wiring", () => {
 		process.env[SUBAGENT_RUN_ID_ENV] = "owner-run";
 		process.env[SUBAGENT_PARENT_CHILD_INDEX_ENV] = "4";
 		process.env[SUBAGENT_PARENT_DEPTH_ENV] = "2";
-		process.env[SUBAGENT_PARENT_PATH_ENV] = JSON.stringify([{ runId: "root-run", stepIndex: 0 }, { runId: "owner-run", stepIndex: 1 }]);
+		process.env[SUBAGENT_PARENT_PATH_ENV] = JSON.stringify([{ runId: "root-run", stepIndex: 0 }, { runId: "../unsafe", stepIndex: 1 }, { runId: "owner-run", stepIndex: 1 }]);
 		process.env[SUBAGENT_PARENT_CAPABILITY_TOKEN_ENV] = "inherited-token";
 
 		const fanout = buildPiArgs({
