@@ -973,7 +973,7 @@ export async function runSync(
 		});
 		const acceptanceFailure = acceptanceFailureMessage(result.acceptance);
 		stripAcceptanceReportsFromMessages(result.messages);
-		if (acceptanceFailure && result.exitCode === 0 && !result.detached && !result.interrupted) {
+		if (acceptanceFailure && result.acceptance.explicit && result.exitCode === 0 && !result.detached && !result.interrupted) {
 		result.exitCode = 1;
 		result.error = result.error ? `${result.error}\n${acceptanceFailure}` : acceptanceFailure;
 		if (result.progress) {
