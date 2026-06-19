@@ -216,6 +216,33 @@ Plan the work.
 		assert.equal(agent.source, "package");
 	}));
 
+	it("discovers project package agents when cwd is nested below the project root", () => withTempHome(() => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-nested-package-discovery-"));
+		tempDirs.push(dir);
+		const nested = path.join(dir, "packages", "app", "src");
+		const packageRoot = path.join(dir, ".pi", "npm", "node_modules", "nested-workflow");
+		fs.mkdirSync(nested, { recursive: true });
+		writeJson(path.join(packageRoot, "package.json"), {
+			name: "nested-workflow",
+			"pi-subagents": {
+				agents: ["./agents"],
+			},
+		});
+		writeAgent(path.join(packageRoot, "agents", "reviewer.md"), `---
+name: reviewer
+package: nested-workflow
+description: Review from a project package.
+---
+
+Review nested project work.
+`);
+
+		const agent = discoverAgents(nested, "both").agents.find((candidate) => candidate.name === "nested-workflow.reviewer");
+		assert.ok(agent);
+		assert.equal(agent.source, "package");
+		assert.equal(agent.filePath, path.join(packageRoot, "agents", "reviewer.md"));
+	}));
+
 	it("keeps package definitions below user and project overrides", () => withTempHome((home) => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-package-precedence-"));
 		tempDirs.push(dir);

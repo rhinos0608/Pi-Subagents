@@ -361,14 +361,15 @@ function collectSettingsPackageRoots(settingsFile: string, baseDir: string): str
 
 function collectPackageSubagentPaths(cwd: string, options: { includeUser: boolean; includeProject: boolean } = { includeUser: true, includeProject: true }): PackageSubagentPaths {
 	const agentDir = getAgentDir();
+	const projectRoot = findNearestProjectRoot(cwd) ?? cwd;
 	const packageRoots = [
-		cwd,
+		projectRoot,
 	];
 
 	if (options.includeProject) {
 		packageRoots.push(
-			...collectPackageRootsFromNodeModules(path.join(cwd, ".pi", "npm", "node_modules")),
-			...collectSettingsPackageRoots(path.join(cwd, ".pi", "settings.json"), path.join(cwd, ".pi")),
+			...collectPackageRootsFromNodeModules(path.join(projectRoot, ".pi", "npm", "node_modules")),
+			...collectSettingsPackageRoots(path.join(projectRoot, ".pi", "settings.json"), path.join(projectRoot, ".pi")),
 		);
 	}
 
@@ -379,8 +380,10 @@ function collectPackageSubagentPaths(cwd: string, options: { includeUser: boolea
 		);
 	}
 
-	const globalRoot = getGlobalNpmRoot();
-	if (globalRoot && options.includeUser) packageRoots.push(...collectPackageRootsFromNodeModules(globalRoot));
+	if (options.includeUser) {
+		const globalRoot = getGlobalNpmRoot();
+		if (globalRoot) packageRoots.push(...collectPackageRootsFromNodeModules(globalRoot));
+	}
 
 	const seenRoots = new Set<string>();
 	const seenAgents = new Set<string>();
