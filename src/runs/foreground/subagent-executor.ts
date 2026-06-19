@@ -649,6 +649,7 @@ async function resumeAsyncRun(input: {
 			cwd: input.requestCwd,
 			currentSessionId: input.deps.state.currentSessionId,
 			currentModelProvider: input.ctx.model?.provider,
+			currentModel: input.ctx.model,
 		},
 		cwd: effectiveCwd,
 		maxOutput: input.params.maxOutput,
@@ -1082,6 +1083,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 		cwd: ctx.cwd,
 		currentSessionId: deps.state.currentSessionId!,
 		currentModelProvider: ctx.model?.provider,
+		currentModel: ctx.model,
 	};
 	const availableModels: ModelInfo[] = ctx.modelRegistry.getAvailable().map(toModelInfo);
 	const currentMaxSubagentDepth = resolveCurrentMaxSubagentDepth(deps.config.maxSubagentDepth);
@@ -1280,6 +1282,7 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 			cwd: ctx.cwd,
 			currentSessionId: deps.state.currentSessionId!,
 			currentModelProvider: ctx.model?.provider,
+			currentModel: ctx.model,
 		};
 		const asyncChain = wrapChainTasksForFork(chainResult.requestedAsync.chain, params.context);
 		return executeAsyncChain(id, {
@@ -1696,6 +1699,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 				cwd: ctx.cwd,
 				currentSessionId: deps.state.currentSessionId!,
 				currentModelProvider: ctx.model?.provider,
+				currentModel: ctx.model,
 			};
 			const parallelTasks = tasks.map((t, i) => {
 				const taskText = params.context === "fork" ? wrapForkTask(taskTexts[i]!) : taskTexts[i]!;
@@ -1977,6 +1981,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 				cwd: ctx.cwd,
 				currentSessionId: deps.state.currentSessionId!,
 				currentModelProvider: ctx.model?.provider,
+				currentModel: ctx.model,
 			};
 			return executeAsyncSingle(id, {
 				agent: params.agent!,
