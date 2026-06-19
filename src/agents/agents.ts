@@ -1022,6 +1022,22 @@ function resolveNearestProjectChainDirs(cwd: string): { readDirs: string[]; pref
 }
 const BUILTIN_AGENTS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "agents");
 
+export const EXTRA_AGENT_DIRS_ENV = "PI_SUBAGENT_EXTRA_AGENT_DIRS";
+
+// Additional read-only directories to scan for agent definitions, supplied by the
+// launcher via PI_SUBAGENT_EXTRA_AGENT_DIRS (PATH-style, split on os/path delimiter).
+// Lets a hermetic wrapper (e.g. a Nix-store install) expose bundled agents without
+// copying or symlinking them into the writable agent dir. Loaded as "user" source,
+// at lower precedence than agents the user placed in their own agent dir.
+function extraUserAgentDirs(): string[] {
+	const raw = process.env[EXTRA_AGENT_DIRS_ENV];
+	if (!raw) return [];
+	return raw
+		.split(path.delimiter)
+		.map((dir) => dir.trim())
+		.filter((dir) => dir.length > 0);
+}
+
 export function discoverAgents(cwd: string, scope: AgentScope): AgentDiscoveryResult {
 	const userDirOld = path.join(getAgentDir(), "agents");
 	const userDirNew = path.join(os.homedir(), ".agents");
@@ -1043,9 +1059,10 @@ export function discoverAgents(cwd: string, scope: AgentScope): AgentDiscoveryRe
 		projectSettingsPath,
 	);
 
+	const userAgentsExtra = scope === "project" ? [] : extraUserAgentDirs().flatMap((dir) => loadAgentsFromDir(dir, "user"));
 	const userAgentsOld = scope === "project" ? [] : loadAgentsFromDir(userDirOld, "user");
 	const userAgentsNew = scope === "project" ? [] : loadAgentsFromDir(userDirNew, "user");
-	const userAgents = [...userAgentsOld, ...userAgentsNew];
+	const userAgents = [...userAgentsExtra, ...userAgentsOld, ...userAgentsNew];
 
 	const projectAgents = scope === "user" ? [] : projectAgentDirs.flatMap((dir) => loadAgentsFromDir(dir, "project"));
 	const packageAgents = packageSubagentPaths.agents.flatMap((dir) => loadAgentsFromDir(dir, "package"));
@@ -1088,6 +1105,7 @@ export function discoverAgentsAll(cwd: string): {
 		projectSettingsPath,
 	);
 	const user = [
+		...extraUserAgentDirs().flatMap((dir) => loadAgentsFromDir(dir, "user")),
 		...loadAgentsFromDir(userDirOld, "user"),
 		...loadAgentsFromDir(userDirNew, "user"),
 	];
