@@ -691,8 +691,8 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 	});
 
 	it("mixed foreground outcomes produce failed grouped status and receipt counts", async () => {
-		mockPi.onCall({ output: "Parallel child success", exitCode: 0 });
-		mockPi.onCall({ output: "Parallel child failure", exitCode: 1 });
+		mockPi.onCall({ matchArgIncludes: "task-a", output: "Parallel child success", exitCode: 0 });
+		mockPi.onCall({ matchArgIncludes: "task-b", output: "Parallel child failure", stderr: "Parallel child failure", exitCode: 1 });
 		const { executor, events } = makeExecutor({ agents: [makeAgent("a"), makeAgent("b")] });
 
 		const result = await executor.execute(
