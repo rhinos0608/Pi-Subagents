@@ -34,6 +34,7 @@ import { discoverAvailableSkills, normalizeSkillInput } from "../../agents/skill
 import { buildAsyncRunnerSteps, executeAsyncChain, executeAsyncSingle, formatAsyncStartedMessage, isAsyncAvailable } from "../background/async-execution.ts";
 import { enqueueChainAppendRequest, readPendingChainAppendRequests, runnerStepOutputNames } from "../background/chain-append.ts";
 import { ChainOutputValidationError, validateChainOutputBindingsWithContext } from "../shared/chain-outputs.ts";
+import { validateAcceptanceInput } from "../shared/acceptance.ts";
 import { createForkContextResolver } from "../../shared/fork-context.ts";
 import { resolveCurrentSessionId } from "../../shared/session-identity.ts";
 import { applyIntercomBridgeToAgent, INTERCOM_BRIDGE_MARKER, resolveIntercomBridge, resolveIntercomSessionTarget, resolveSubagentIntercomTarget, type IntercomBridgeState } from "../../intercom/intercom-bridge.ts";
@@ -473,6 +474,14 @@ function appendStepToAsyncChain(input: {
 	if (!input.params.chain || input.params.chain.length !== 1) {
 		return {
 			content: [{ type: "text", text: "action='append-step' requires chain with exactly one step." }],
+			isError: true,
+			details: { mode: "management", results: [] },
+		};
+	}
+	const acceptanceErrors = validateExecutionAcceptance(input.params);
+	if (acceptanceErrors.length > 0) {
+		return {
+			content: [{ type: "text", text: `Cannot append step: ${acceptanceErrors.join(" ")}` }],
 			isError: true,
 			details: { mode: "management", results: [] },
 		};
@@ -1079,6 +1088,15 @@ function validateExecutionInput(
 		};
 	}
 
+	const acceptanceErrors = validateExecutionAcceptance(params);
+	if (acceptanceErrors.length > 0) {
+		return {
+			content: [{ type: "text", text: acceptanceErrors.join(" ") }],
+			isError: true,
+			details: { mode: getRequestedModeLabel(params), results: [] },
+		};
+	}
+
 	if (hasSingle && params.agent && !agents.find((agent) => agent.name === params.agent)) {
 		return {
 			content: [{ type: "text", text: `Unknown agent: ${params.agent}` }],
@@ -1154,6 +1172,42 @@ function validateExecutionInput(
 	}
 
 	return null;
+}
+
+function validateExecutionChainBindings(params: SubagentParamsLike, dynamicFanoutMaxItems?: number): AgentToolResult<Details> | null {
+	if ((params.chain?.length ?? 0) === 0) return null;
+	try {
+		validateChainOutputBindingsWithContext(params.chain as ChainStep[], { maxItems: dynamicFanoutMaxItems });
+	} catch (error) {
+		if (error instanceof ChainOutputValidationError) {
+			return {
+				content: [{ type: "text", text: error.message }],
+				isError: true,
+				details: { mode: "chain" as const, results: [] },
+			};
+		}
+		throw error;
+	}
+	return null;
+}
+
+function validateExecutionAcceptance(params: SubagentParamsLike): string[] {
+	const errors: string[] = [];
+	errors.push(...validateAcceptanceInput(params.acceptance, "acceptance"));
+	for (const [index, task] of (params.tasks ?? []).entries()) {
+		errors.push(...validateAcceptanceInput(task.acceptance, `tasks[${index}].acceptance`));
+	}
+	for (const [stepIndex, step] of (params.chain ?? []).entries()) {
+		errors.push(...validateAcceptanceInput((step as { acceptance?: unknown }).acceptance, `chain[${stepIndex}].acceptance`));
+		if (isParallelStep(step)) {
+			for (const [taskIndex, task] of step.parallel.entries()) {
+				errors.push(...validateAcceptanceInput(task.acceptance, `chain[${stepIndex}].parallel[${taskIndex}].acceptance`));
+			}
+		} else if (isDynamicParallelStep(step)) {
+			errors.push(...validateAcceptanceInput(step.parallel.acceptance, `chain[${stepIndex}].parallel.acceptance`));
+		}
+	}
+	return errors;
 }
 
 function getRequestedModeLabel(params: SubagentParamsLike): Details["mode"] {
@@ -2858,6 +2912,8 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		} catch (error) {
 			return toExecutionErrorResult(effectiveParams, error);
 		}
+		const chainBindingsError = validateExecutionChainBindings(effectiveParams, deps.config.chain?.dynamicFanout?.maxItems);
+		if (chainBindingsError) return chainBindingsError;
 
 		const onUpdateWithContext = onUpdate
 			? (r: AgentToolResult<Details>) => onUpdate(withForkContext(r, effectiveParams.context))

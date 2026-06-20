@@ -66,72 +66,11 @@ const JsonSchemaObject = Type.Unsafe({
 	description: "JSON Schema object for strict structured output. Non-object roots are rejected.",
 });
 
-const AcceptanceEvidenceKind = Type.String({
-	enum: [
-		"changed-files",
-		"tests-added",
-		"commands-run",
-		"validation-output",
-		"residual-risks",
-		"no-staged-files",
-		"diff-summary",
-		"review-findings",
-		"manual-notes",
-	],
-});
-
-const AcceptanceGateSchema = Type.Object({
-	id: Type.String(),
-	must: Type.String(),
-	evidence: Type.Optional(Type.Array(AcceptanceEvidenceKind)),
-	severity: Type.Optional(Type.String({ enum: ["required", "recommended"] })),
-}, { additionalProperties: false });
-
-const AcceptanceVerifyCommandSchema = Type.Object({
-	id: Type.String(),
-	command: Type.String(),
-	timeoutMs: Type.Optional(Type.Integer({ minimum: 1 })),
-	cwd: Type.Optional(Type.String()),
-	env: Type.Optional(Type.Unsafe({ type: "object", additionalProperties: { type: "string" } })),
-	allowFailure: Type.Optional(Type.Boolean()),
-}, { additionalProperties: false });
-
-const AcceptanceReviewGateSchema = Type.Object({
-	agent: Type.Optional(Type.String()),
-	focus: Type.Optional(Type.String()),
-	required: Type.Optional(Type.Boolean()),
-}, { additionalProperties: false });
-
 const AcceptanceOverride = Type.Unsafe({
 	anyOf: [
 		{ type: "string", enum: ["auto", "none", "attested", "checked", "verified", "reviewed"] },
-		{ const: false },
-		{
-			type: "object",
-			properties: {
-				level: { type: "string", enum: ["auto", "none", "attested", "checked", "verified", "reviewed"] },
-				criteria: {
-					type: "array",
-					items: {
-						anyOf: [
-							{ type: "string" },
-							AcceptanceGateSchema,
-						],
-					},
-				},
-				evidence: { type: "array", items: AcceptanceEvidenceKind },
-				verify: { type: "array", items: AcceptanceVerifyCommandSchema },
-				review: {
-					anyOf: [
-						{ const: false },
-						AcceptanceReviewGateSchema,
-					],
-				},
-				stopRules: { type: "array", items: { type: "string" } },
-				reason: { type: "string" },
-			},
-			additionalProperties: false,
-		},
+		{ type: "boolean", enum: [false] },
+		{ type: "object", additionalProperties: true },
 	],
 	description: "Optional acceptance policy. Omitted means auto-inferred; verified requires configured runtime commands.",
 });
@@ -236,11 +175,6 @@ const ChainItem = Type.Object({
 }, {
 	description: "Chain step: use {agent, task?, ...} for sequential, {parallel: [...]} for static concurrent execution, or {expand, parallel: {...}, collect} for dynamic fanout.",
 	additionalProperties: false,
-	allOf: [
-		{ if: { required: ["expand"] }, then: { required: ["parallel", "collect"], properties: { parallel: { type: "object" } } } },
-		{ if: { required: ["collect"] }, then: { required: ["expand", "parallel"], properties: { parallel: { type: "object" } } } },
-		{ not: { required: ["expand"], properties: { parallel: { type: "array", items: {} } } } },
-	],
 });
 
 const ControlOverrides = Type.Object({
