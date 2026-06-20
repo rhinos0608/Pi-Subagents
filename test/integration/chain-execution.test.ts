@@ -1074,6 +1074,17 @@ describe("chain execution — parallel steps", { skip: !available ? "pi packages
 		return JSON.parse(fs.readFileSync(path.join(mockPi.dir, callFile), "utf-8")).args as string[];
 	}
 
+	function readCallArgsMatching(text: string): string[] {
+		const callFiles = fs.readdirSync(mockPi.dir)
+			.filter((name) => name.startsWith("call-") && name.endsWith(".json"))
+			.sort();
+		for (const callFile of callFiles) {
+			const args = JSON.parse(fs.readFileSync(path.join(mockPi.dir, callFile), "utf-8")).args as string[];
+			if (args.join("\n").includes(text)) return args;
+		}
+		assert.fail(`expected recorded call containing ${text}`);
+	}
+
 	it("runs parallel tasks within a chain step", async () => {
 		mockPi.onCall({ output: "Parallel task done" });
 		const agents = [makeAgent("reviewer-a"), makeAgent("reviewer-b")];
@@ -1153,6 +1164,52 @@ describe("chain execution — parallel steps", { skip: !available ? "pi packages
 		const finalTask = readCallArgs(2).at(-1) ?? "";
 		assert.match(finalTask, /Alpha named output/);
 		assert.match(finalTask, /Beta named output/);
+	});
+
+	it("funnels an initial parallel step through one agent, then fans the funnel output back out", async () => {
+		mockPi.onCall({ matchArgIncludes: "Scout API", output: "Scout A findings" });
+		mockPi.onCall({ matchArgIncludes: "Scout UI", output: "Scout B findings" });
+		mockPi.onCall({ matchArgIncludes: "Synthesize:", output: "Funnel synthesis" });
+		mockPi.onCall({ matchArgIncludes: "Review funnel A:", output: "Reviewer A done" });
+		mockPi.onCall({ matchArgIncludes: "Review funnel B:", output: "Reviewer B done" });
+		const agents = [makeAgent("scout-a"), makeAgent("scout-b"), makeAgent("synthesizer"), makeAgent("review-a"), makeAgent("review-b")];
+
+		const result = await executeChain(
+			makeChainParams(
+				[
+					{
+						parallel: [
+							{ agent: "scout-a", task: "Scout API" },
+							{ agent: "scout-b", task: "Scout UI" },
+						],
+					},
+					{ agent: "synthesizer", task: "Synthesize:\n{previous}" },
+					{
+						parallel: [
+							{ agent: "review-a", task: "Review funnel A:\n{previous}" },
+							{ agent: "review-b", task: "Review funnel B:\n{previous}" },
+						],
+					},
+				],
+				agents,
+			),
+		);
+
+		assert.ok(!result.isError, `should succeed: ${JSON.stringify(result.content)}`);
+		assert.deepEqual(result.details.results.map((entry) => entry.agent), ["scout-a", "scout-b", "synthesizer", "review-a", "review-b"]);
+		assert.equal(result.details.totalSteps, 3);
+		const funnelTask = readCallArgsMatching("Synthesize:").at(-1) ?? "";
+		assert.match(funnelTask, /=== Parallel Task 1 \(scout-a\) ===/);
+		assert.match(funnelTask, /Scout A findings/);
+		assert.match(funnelTask, /=== Parallel Task 2 \(scout-b\) ===/);
+		assert.match(funnelTask, /Scout B findings/);
+		const fanoutTaskA = readCallArgsMatching("Review funnel A:").at(-1) ?? "";
+		const fanoutTaskB = readCallArgsMatching("Review funnel B:").at(-1) ?? "";
+		assert.match(fanoutTaskA, /Review funnel A:\nFunnel synthesis/);
+		assert.match(fanoutTaskB, /Review funnel B:\nFunnel synthesis/);
+		assert.equal(result.details.workflowGraph?.nodes[0]?.kind, "parallel-group");
+		assert.equal(result.details.workflowGraph?.nodes[1]?.kind, "step");
+		assert.equal(result.details.workflowGraph?.nodes[2]?.kind, "parallel-group");
 	});
 
 	it("aggregates file-only parallel outputs as file references for the next step", async () => {
