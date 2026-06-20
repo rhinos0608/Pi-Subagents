@@ -20,8 +20,7 @@ import { serializeAgent } from "./agent-serializer.ts";
 import { serializeChain, serializeJsonChain } from "./chain-serializer.ts";
 import { discoverAvailableSkills } from "./skills.ts";
 import {
-	formatProactiveSkillSubagentRecommendations,
-	recommendProactiveSkillSubagents,
+	buildProactiveSkillSubagentRecommendationLines,
 } from "./proactive-skills.ts";
 import type { Details, ExtensionConfig } from "../shared/types.ts";
 
@@ -39,14 +38,6 @@ interface ManagementParams {
 
 function result(text: string, isError = false): AgentToolResult<Details> {
 	return { content: [{ type: "text", text }], isError, details: { mode: "management", results: [] } };
-}
-
-function discoverAvailableSkillsBestEffort(cwd: string): Array<{ name: string; description?: string }> {
-	try {
-		return discoverAvailableSkills(cwd);
-	} catch {
-		return [];
-	}
 }
 
 function parseCsv(value: string): string[] {
@@ -462,12 +453,12 @@ export function handleList(params: ManagementParams, ctx: ManagementContext): Ag
 	const agents = scopedAgents.filter((a) => !a.disabled);
 	const chains = d.chains.filter((c) => scope === "both" || c.source === "package" || c.source === scope).sort((a, b) => a.name.localeCompare(b.name));
 	const diagnostics = d.chainDiagnostics.filter((entry) => scope === "both" || entry.source === scope);
-	const proactiveSuggestions = formatProactiveSkillSubagentRecommendations(recommendProactiveSkillSubagents({
+	const proactiveSuggestions = buildProactiveSkillSubagentRecommendationLines({
 		agents,
 		chains,
-		availableSkills: discoverAvailableSkillsBestEffort(ctx.cwd),
 		config: ctx.config?.proactiveSkillSubagents,
-	}));
+		discoverAvailableSkills: () => discoverAvailableSkills(ctx.cwd),
+	});
 	const lines = [
 		"Executable agents:",
 		...(agents.length

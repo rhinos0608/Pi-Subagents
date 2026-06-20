@@ -24,7 +24,7 @@ export interface ProactiveSkillSubagentRecommendation {
 	reason: string;
 }
 
-interface AvailableSkill {
+export interface AvailableSkill {
 	name: string;
 	description?: string;
 }
@@ -167,4 +167,25 @@ export function formatProactiveSkillSubagentRecommendations(
 		}),
 		"Guardrails: use these for broad tasks where a skill-specialist pass is useful; keep fanout small, use fresh context unless private/session context is explicitly needed, and skip when the user asks for a direct answer.",
 	];
+}
+
+export function buildProactiveSkillSubagentRecommendationLines(input: {
+	agents: AgentConfig[];
+	chains?: ChainConfig[];
+	config?: ProactiveSkillSubagentsConfig | false;
+	discoverAvailableSkills: () => AvailableSkill[];
+}): string[] {
+	if (!resolveProactiveSkillSubagentsConfig(input.config).enabled) return [];
+	let availableSkills: AvailableSkill[];
+	try {
+		availableSkills = input.discoverAvailableSkills();
+	} catch {
+		availableSkills = [];
+	}
+	return formatProactiveSkillSubagentRecommendations(recommendProactiveSkillSubagents({
+		agents: input.agents,
+		chains: input.chains,
+		availableSkills,
+		config: input.config,
+	}));
 }
