@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Added
+- Allow active async chains to accept an `append-step` request that adds one new tail step while the chain is still running.
+- Allow async subagent results to be attached as the root step of a new follow-up chain.
+- Added `subagentOnlyExtensions` so agents can pass selected tool extensions only to spawned subagents without exposing them to the parent agent.
+- Added proactive skill-subagent suggestions to `subagent({ action: "list" })` based on repeatedly configured skill use, while keeping the behavior advisory and opt-out friendly.
+- Added regression coverage for long worker/reviewer chains and parallel -> funnel -> fanout chain flows across foreground and async execution.
+
+### Fixed
+- Interrupt live async children before delivering `resume` follow-up messages so intercom nudges reach workers that are stuck mid-turn more reliably.
+- Reject appended chain steps with duplicate reserved output names or unknown named-output references before they are queued.
+
 ## [0.29.0] - 2026-06-19
 
 ### Added
