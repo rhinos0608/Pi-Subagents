@@ -407,6 +407,7 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 			assert.equal(attachedStatus.chainStepCount, 2);
 			assert.deepEqual(attachedStatus.steps?.map((step) => step.agent), ["worker", "reviewer"]);
 			assert.match(attachedStatus.steps?.[0]?.label ?? "", /Attached resume-chain-root-/);
+			await waitForFile(path.join(RESULTS_DIR, `${attachedId}.json`));
 		} finally {
 			fs.rmSync(sourceAsyncDir, { recursive: true, force: true });
 			fs.rmSync(sourceResultPath, { force: true });
