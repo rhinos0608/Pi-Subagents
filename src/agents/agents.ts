@@ -844,10 +844,23 @@ function listFilesRecursive(dir: string, predicate: (fileName: string) => boolea
 	return files;
 }
 
+function isLegacyAgentSkillPath(rootDir: string, filePath: string): boolean {
+	const relative = path.relative(rootDir, filePath);
+	const parts = relative.split(path.sep).map((part) => part.toLowerCase());
+	if (path.basename(rootDir).toLowerCase() === ".agents") {
+		parts.unshift(".agents");
+	}
+	return parts.some((part, index) => part === ".agents" && parts[index + 1] === "skills");
+}
+
 function loadAgentsFromDir(dir: string, source: AgentSource): AgentConfig[] {
 	const agents: AgentConfig[] = [];
 
 	for (const filePath of listFilesRecursive(dir, (fileName) => fileName.endsWith(".md") && !fileName.endsWith(".chain.md"))) {
+		if (isLegacyAgentSkillPath(dir, filePath)) {
+			continue;
+		}
+
 		let content: string;
 		try {
 			content = fs.readFileSync(filePath, "utf-8");
