@@ -111,17 +111,22 @@ const makeAgentCompletions = (state: SubagentState, multiAgent: boolean) => (pre
 		return agents.filter((a) => a.name.startsWith(prefix)).map((a) => ({ value: a.name, label: a.name }));
 	}
 
-	// Find the start of the current chain step: after the last top-level `->`, `(` or `|`
-	// (group boundaries), tracking quotes so separators inside a task are ignored.
-	let inSingle = false, inDouble = false, segStart = 0;
+	// Find the start of the current chain step: after the last top-level `->` arrow or `(`,
+	// or after a `|` *inside* a group. A `|` at depth 0 is plain task text (only `(` opens a
+	// group), so it must not restart agent completion — otherwise `scout -- do x | wr` would
+	// wrongly resume suggesting agents past the `--` task. Quotes are tracked so separators
+	// inside a task are ignored.
+	let inSingle = false, inDouble = false, depth = 0, segStart = 0;
 	for (let i = 0; i < prefix.length; i++) {
 		const ch = prefix[i]!;
 		if (inSingle) { if (ch === "'") inSingle = false; continue; }
 		if (inDouble) { if (ch === '"') inDouble = false; continue; }
 		if (ch === "'") { inSingle = true; continue; }
 		if (ch === '"') { inDouble = true; continue; }
-		if (ch === "(" || ch === "|") segStart = i + 1;
-		else if (ch === ">" && prefix[i - 1] === "-") segStart = i + 1;
+		if (ch === "(") { depth++; segStart = i + 1; }
+		else if (ch === ")") { if (depth > 0) depth--; segStart = i + 1; }
+		else if (ch === "|" && depth > 0) segStart = i + 1;
+		else if (ch === ">" && prefix[i - 1] === "-" && depth === 0) segStart = i + 1;
 	}
 	// Inside an open quote, or once the task has started (`--` / a quote), we are no
 	// longer typing an agent name.
@@ -537,20 +542,13 @@ export function parseGroupSegment(segment: string): ParsedGroup {
 	return { kind: "group", tasks: rawParts.map((part) => parseSingleTaskToken(part)), config };
 }
 
-// True if `input` uses inline parallel-group syntax outside quotes. Only parentheses
-// mark a group — a bare `|` is meaningful only inside `( ... )`, so leaving it out keeps
-// legacy `-- task | with pipe` working as a plain single-agent chain.
+// True if `input` uses inline parallel-group syntax. A group is a *step* that begins
+// with `(` at the top level, so we split on top-level ` -> ` arrows and look for a
+// segment that opens with `(`. Parentheses appearing inside a task (e.g.
+// `scout -- inspect auth (backend)`) do not count, which keeps legacy shared-task
+// `-- task` parsing — including a bare `|` inside the task — on the single-agent path.
 export function hasGroupSyntax(input: string): boolean {
-	let inSingle = false, inDouble = false;
-	for (let i = 0; i < input.length; i++) {
-		const ch = input[i]!;
-		if (inSingle) { if (ch === "'") inSingle = false; continue; }
-		if (inDouble) { if (ch === '"') inDouble = false; continue; }
-		if (ch === "'") { inSingle = true; continue; }
-		if (ch === '"') { inDouble = true; continue; }
-		if (ch === "(" || ch === ")") return true;
-	}
-	return false;
+	return splitOnArrow(input).some((seg) => seg.trim().startsWith("("));
 }
 
 export function parseChainExpression(input: string): { steps: ParsedGroupStep[] } {

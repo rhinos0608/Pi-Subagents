@@ -533,6 +533,13 @@ Write
 				assert.deepEqual(runCompletions.map((completion) => completion.value), ["code-analysis.scout"]);
 				const chainCompletions = commands.get("chain")!.getArgumentCompletions!("code-analysis.scout \"Scan\" -> doc") as Array<{ value: string; label: string }>;
 				assert.deepEqual(chainCompletions.map((completion) => completion.value), ["code-analysis.scout \"Scan\" -> documentation.writer"]);
+				// Regression: a bare `|` inside a `--` shared task is plain text, not a group
+				// separator, so it must not resume agent completion past the task.
+				const pipeInTask = commands.get("chain")!.getArgumentCompletions!("code-analysis.scout -- do x | doc");
+				assert.equal(pipeInTask, null);
+				// Inside an actual parallel group, `|` still separates tasks and completes agents.
+				const groupCompletions = commands.get("chain")!.getArgumentCompletions!("code-analysis.scout \"Scan\" -> (documentation.writer \"w\" | code") as Array<{ value: string; label: string }>;
+				assert.deepEqual(groupCompletions.map((completion) => completion.value), ["code-analysis.scout \"Scan\" -> (documentation.writer \"w\" | code-analysis.scout"]);
 			});
 		});
 	});

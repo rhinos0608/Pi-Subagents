@@ -158,6 +158,18 @@ describe("hasGroupSyntax", () => {
 	it("returns false for plain chain input", () => {
 		assert.equal(hasGroupSyntax("scout -> reviewer"), false);
 	});
+
+	it("does not treat unquoted parens inside a -- task as group syntax", () => {
+		// Regression: a shared-task command must stay on the legacy path even when the
+		// task text contains bare parentheses. A group is a *step* that opens with `(`.
+		assert.equal(hasGroupSyntax("scout -- inspect auth (backend)"), false);
+		assert.equal(hasGroupSyntax("scout -- inspect (auth) -> writer"), false);
+	});
+
+	it("still detects a group that opens a step", () => {
+		assert.equal(hasGroupSyntax('scout "x" -> (a "y" | b "z")'), true);
+		assert.equal(hasGroupSyntax('(a "y" | b "z") -> writer'), true);
+	});
 });
 
 describe("parseChainExpression", () => {
@@ -380,6 +392,26 @@ describe("buildChainExpressionSteps", () => {
 		assert.equal(
 			built.chain[0] && "task" in built.chain[0] ? built.chain[0].task : undefined,
 			"do x | y",
+		);
+	});
+
+	it("keeps unquoted parens in a -- task on the legacy single-agent path", () => {
+		// Regression: `/chain scout -- inspect auth (backend)` was wrongly rejected as a
+		// malformed group. Bare parens in the shared task must parse as plain task text.
+		const notifications: string[] = [];
+		const built = buildChainExpressionSteps(
+			makeState(tempRoot) as never,
+			"scout -- inspect auth (backend)",
+			makeCtx(notifications) as never,
+		);
+		assert.ok(built);
+		if (!built) return;
+		assert.deepEqual(notifications, []);
+		assert.equal(built.chain.length, 1);
+		assert.equal(built.task, "inspect auth (backend)");
+		assert.equal(
+			built.chain[0] && "task" in built.chain[0] ? built.chain[0].task : undefined,
+			"inspect auth (backend)",
 		);
 	});
 

@@ -366,6 +366,7 @@ Notes:
 
 - Groups must contain at least two tasks separated by ` | `, each with its own task.
 - Group syntax is only valid between ` -> ` separators, and the group must appear as a complete step.
+- Only a step that *opens* with `(` is a group. Parentheses inside a shared `--` task (e.g. `/chain scout -- inspect auth (backend)`) stay literal text and keep the legacy single-agent behavior.
 - A group is treated as the prior step’s output for the next sequential step.
 - Tab completion suggests agents inside groups — after `(`, after `|`, and on each new `->` step.
 
