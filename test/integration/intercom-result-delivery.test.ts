@@ -124,7 +124,7 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 		return JSON.parse(fs.readFileSync(path.join(mockPi.dir, callFile), "utf-8")).args as string[];
 	}
 
-	function makeExecutor(options: { bridgeMode?: "always" | "off"; agents?: ReturnType<typeof makeAgent>[]; acknowledgeResults?: boolean } = {}) {
+	function makeExecutor(options: { bridgeMode?: "always" | "off"; agents?: ReturnType<typeof makeAgent>[]; acknowledgeResults?: boolean; kill?: (pid: number, signal?: NodeJS.Signals | 0) => boolean } = {}) {
 		const events = createRecordingEventBus({ acknowledgeResults: options.acknowledgeResults ?? true });
 		const state = {
 			baseCwd: tempDir,
@@ -159,6 +159,7 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 			getSubagentSessionRoot: () => tempDir,
 			expandTilde: (value: string) => value,
 			discoverAgents: () => ({ agents: options.agents ?? [makeAgent("worker")] }),
+			kill: options.kill,
 		});
 		return { executor, events, state };
 	}
@@ -316,17 +317,24 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 	it("resume action sends a follow-up to a live async child when the target is registered", async () => {
 		const runId = `resume-live-${Date.now()}`;
 		const asyncDir = path.join(ASYNC_DIR, runId);
+		const kills: Array<{ pid: number; signal?: NodeJS.Signals | 0 }> = [];
 		try {
 			fs.mkdirSync(asyncDir, { recursive: true });
 			fs.writeFileSync(path.join(asyncDir, "status.json"), JSON.stringify({
 				runId,
 				mode: "single",
 				state: "running",
+				pid: process.pid,
 				startedAt: 100,
-				lastUpdate: 100,
+				lastUpdate: Date.now(),
 				steps: [{ agent: "worker", status: "running" }],
 			}, null, 2), "utf-8");
-			const { executor, events } = makeExecutor();
+			const { executor, events } = makeExecutor({
+				kill: (pid, signal) => {
+					kills.push({ pid, signal });
+					return true;
+				},
+			});
 
 			const result = await executor.execute(
 				"resume-live",
@@ -337,7 +345,8 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 			);
 
 			assert.equal(result.isError, undefined);
-			assert.match(result.content[0]?.text ?? "", /Delivered follow-up to live async child/);
+			assert.match(result.content[0]?.text ?? "", /Interrupted live async child, then delivered follow-up/);
+			assert.deepEqual(kills, [{ pid: process.pid, signal: process.platform === "win32" ? "SIGBREAK" : "SIGUSR2" }]);
 			const payload = events.emitted.find((entry) => entry.channel === "subagent:result-intercom")?.payload as { to?: string; message?: string } | undefined;
 			assert.equal(payload?.to, `subagent-worker-${runId}-1`);
 			assert.match(payload?.message ?? "", /Can you clarify the last change\?/);

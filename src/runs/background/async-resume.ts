@@ -1,8 +1,10 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { ASYNC_DIR, RESULTS_DIR, type AsyncStatus } from "../../shared/types.ts";
+import { ASYNC_DIR, RESULTS_DIR, type AsyncStatus, type SubagentState } from "../../shared/types.ts";
 import { resolveSubagentIntercomTarget } from "../../intercom/intercom-bridge.ts";
 import { reconcileAsyncRun } from "./stale-run-reconciler.ts";
+
+export const ASYNC_RESUME_INTERRUPT_SIGNAL: NodeJS.Signals = process.platform === "win32" ? "SIGBREAK" : "SIGUSR2";
 
 export interface AsyncResumeParams {
 	id?: string;
@@ -29,6 +31,47 @@ export type AsyncResumeTarget = {
 	cwd?: string;
 	sessionFile?: string;
 };
+
+type KillFn = (pid: number, signal?: NodeJS.Signals | 0) => boolean;
+
+function readAsyncStatus(asyncDir: string): AsyncStatus | null {
+	const statusPath = path.join(asyncDir, "status.json");
+	try {
+		return JSON.parse(fs.readFileSync(statusPath, "utf-8")) as AsyncStatus;
+	} catch (error) {
+		const code = error && typeof error === "object" && "code" in error ? (error as NodeJS.ErrnoException).code : undefined;
+		if (code === "ENOENT") return null;
+		throw error;
+	}
+}
+
+export function interruptLiveAsyncResumeTarget(input: {
+	target: AsyncResumeTarget & { kind: "live" };
+	state?: Pick<SubagentState, "asyncJobs">;
+	kill?: KillFn;
+	now?: () => number;
+}): { ok: true; asyncId: string } | { ok: false; message: string } {
+	const asyncId = input.target.runId;
+	if (!input.target.asyncDir) {
+		return { ok: false, message: `Async run ${asyncId} is live but does not have an async directory to interrupt.` };
+	}
+	const status = readAsyncStatus(input.target.asyncDir);
+	if (!status || status.state !== "running" || typeof status.pid !== "number") {
+		return { ok: false, message: `Async run ${asyncId} is live but no interrupt-capable runner pid was found.` };
+	}
+	try {
+		(input.kill ?? process.kill)(status.pid, ASYNC_RESUME_INTERRUPT_SIGNAL);
+		const tracked = input.state?.asyncJobs.get(asyncId);
+		if (tracked) {
+			tracked.activityState = undefined;
+			tracked.updatedAt = input.now?.() ?? Date.now();
+		}
+		return { ok: true, asyncId };
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		return { ok: false, message: `Failed to interrupt async run ${asyncId}: ${message}` };
+	}
+}
 
 interface AsyncResultFile {
 	id?: string;
