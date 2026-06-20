@@ -143,6 +143,15 @@ For a persistent override, edit settings. This example pins the reviewer everywh
 
 Use `~/.pi/agent/settings.json` for a user override or `.pi/settings.json` for a project override. The same `agentOverrides` block can change `tools`, `skills`, inherited context, prompt text, or disable a builtin. If you want a totally different agent, create a user or project agent with the same name; for normal tweaks, prefer overrides.
 
+To inspect what `pi-subagents` has actually loaded right now, use:
+
+```text
+/subagents-models
+/subagents-models reviewer
+```
+
+That reports the live runtime mapping, which can differ from settings on disk until you reload Pi.
+
 ## Where running subagents show up
 
 Foreground runs stream progress in the conversation while they run.
@@ -248,6 +257,7 @@ Skip this section until you want exact syntax.
 | `/parallel agent1 "task1" -> agent2 "task2"` | Run agents in parallel |
 | `/run-chain <chainName> -- <task>` | Launch a saved `.chain.md` or `.chain.json` workflow |
 | `/subagents-doctor` | Show read-only setup diagnostics |
+| `/subagents-models [agent]` | Show the runtime-loaded builtin model mapping, optionally filtered to one builtin |
 
 Commands validate agent names locally, support tab completion, and send results back into the conversation.
 
@@ -743,6 +753,8 @@ Agent definitions are not loaded into context by default. Management actions let
 { action: "list" }
 { action: "list", agentScope: "project" }
 { action: "get", agent: "scout" }
+{ action: "models" }
+{ action: "models", agent: "reviewer" }
 { action: "get", agent: "code-analysis.scout" }
 { action: "get", chainName: "review-pipeline" }
 
