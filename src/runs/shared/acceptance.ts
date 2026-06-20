@@ -299,24 +299,74 @@ function extractBalancedJson(text: string, start: number): string | undefined {
 	return undefined;
 }
 
-export function parseAcceptanceReport(output: string): { report?: AcceptanceReport; error?: string } {
-	const fenced = [...output.matchAll(/```acceptance-report\s*\n([\s\S]*?)```/gi)]
+function unwrapAcceptanceReport(value: unknown): unknown {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+	const record = value as { acceptance?: unknown; "acceptance-report"?: unknown };
+	if ("acceptance" in record) return record.acceptance;
+	if ("acceptance-report" in record) return record["acceptance-report"];
+	return value;
+}
+
+function hasAcceptanceReportWrapper(value: unknown): boolean {
+	return Boolean(value && typeof value === "object" && !Array.isArray(value) && ("acceptance" in value || "acceptance-report" in value));
+}
+
+function parseReportJson(body: string): unknown {
+	const trimmed = body.trim();
+	try {
+		return JSON.parse(trimmed) as unknown;
+	} catch (error) {
+		const jsonStart = trimmed.indexOf("{");
+		if (jsonStart > 0) {
+			const json = extractBalancedJson(trimmed, jsonStart);
+			if (json) return JSON.parse(json) as unknown;
+		}
+		throw error;
+	}
+}
+
+function fencedBlocks(output: string, tag: string): string[] {
+	return [...output.matchAll(new RegExp(`\`\`\`${tag}\\s*\\n([\\s\\S]*?)\`\`\``, "gi"))]
 		.map((match) => match[1]?.trim())
 		.filter((value): value is string => Boolean(value));
+}
+
+function parseAcceptanceReportBody(body: string): AcceptanceReport | undefined {
+	const parsed = parseReportJson(body);
+	const report = unwrapAcceptanceReport(parsed);
+	return isAcceptanceReport(report) ? report : undefined;
+}
+
+function parseGenericJsonAcceptanceReportBody(body: string): AcceptanceReport | undefined {
+	const parsed = parseReportJson(body);
+	const report = unwrapAcceptanceReport(parsed);
+	if (!isAcceptanceReport(report)) return undefined;
+	if (hasAcceptanceReportWrapper(parsed)) return report;
+	return report.criteriaSatisfied !== undefined ? report : undefined;
+}
+
+export function parseAcceptanceReport(output: string): { report?: AcceptanceReport; error?: string } {
+	const fenced = fencedBlocks(output, "acceptance-report");
 	const parseErrors: string[] = [];
 	for (const body of fenced) {
 		try {
-			const parsed = JSON.parse(body) as unknown;
-			const report = (parsed && typeof parsed === "object" && "acceptance" in parsed)
-				? (parsed as { acceptance?: unknown }).acceptance
-				: parsed;
-			if (isAcceptanceReport(report)) return { report };
+			const report = parseAcceptanceReportBody(body);
+			if (report) return { report };
 			parseErrors.push("acceptance-report block does not contain a valid acceptance report");
 		} catch (error) {
 			parseErrors.push(error instanceof Error ? error.message : String(error));
 		}
 	}
 	if (parseErrors.length > 0) return { error: `Failed to parse acceptance-report: ${parseErrors.join("; ")}` };
+	for (const body of fencedBlocks(output, "(?:json|jsonc|json5)")) {
+		try {
+			const report = parseGenericJsonAcceptanceReportBody(body);
+			if (report) return { report };
+		} catch {
+			// Ignore unrelated or malformed generic JSON fences; only explicit
+			// acceptance-report fences should turn parse failures into blockers.
+		}
+	}
 	const markerIndex = output.search(/ACCEPTANCE_REPORT\s*:/i);
 	if (markerIndex !== -1) {
 		const jsonStart = output.indexOf("{", markerIndex);
@@ -325,7 +375,8 @@ export function parseAcceptanceReport(output: string): { report?: AcceptanceRepo
 			if (json) {
 				try {
 					const parsed = JSON.parse(json) as unknown;
-					if (isAcceptanceReport(parsed)) return { report: parsed };
+					const report = unwrapAcceptanceReport(parsed);
+					if (isAcceptanceReport(report)) return { report };
 				} catch (error) {
 					return { error: error instanceof Error ? error.message : String(error) };
 				}
@@ -336,6 +387,16 @@ export function parseAcceptanceReport(output: string): { report?: AcceptanceRepo
 }
 
 export function stripAcceptanceReport(output: string): string {
+	const trailingFence = output.match(/\n?```(acceptance-report|json|jsonc|json5)\s*\n([\s\S]*?)```\s*$/i);
+	if (trailingFence?.index !== undefined) {
+		const tag = trailingFence[1]?.toLowerCase();
+		if (tag === "acceptance-report") return output.slice(0, trailingFence.index).trimEnd();
+		try {
+			if (trailingFence[2] && parseGenericJsonAcceptanceReportBody(trailingFence[2])) return output.slice(0, trailingFence.index).trimEnd();
+		} catch {
+			// Leave unrelated or malformed generic JSON fences visible.
+		}
+	}
 	return output
 		.replace(/\n?```acceptance-report\s*\n[\s\S]*?```\s*$/i, "")
 		.replace(/\n?ACCEPTANCE_REPORT\s*:\s*\{[\s\S]*\}\s*$/i, "")
