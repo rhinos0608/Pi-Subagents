@@ -12,6 +12,7 @@
 ### Fixed
 - Interrupt live async children before delivering `resume` follow-up messages so intercom nudges reach workers that are stuck mid-turn more reliably.
 - Reject appended chain steps with duplicate reserved output names or unknown named-output references before they are queued.
+- Ignore legacy `.agents/skills` files during agent discovery so skill definitions are not registered as subagents. Thanks to chyax98 (@chyax98) for #257.
 
 ## [0.29.0] - 2026-06-19
 
