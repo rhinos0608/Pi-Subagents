@@ -157,6 +157,31 @@ interface AsyncExecutionResult {
 	isError?: boolean;
 }
 
+export interface AsyncRunnerStepBuildParams {
+	chain: ChainStep[];
+	task?: string;
+	resultMode?: SubagentRunMode;
+	agents: AgentConfig[];
+	ctx: AsyncExecutionContext;
+	availableModels?: AvailableModelInfo[];
+	cwd?: string;
+	chainSkills?: string[];
+	sessionFilesByFlatIndex?: (string | undefined)[];
+	dynamicFanoutMaxItems?: number;
+	maxSubagentDepth: number;
+	asyncDir: string;
+	validateOutputBindings?: boolean;
+}
+
+export type AsyncRunnerStepBuildResult =
+	| {
+		steps: RunnerStep[];
+		runnerCwd: string;
+		workflowGraph: ReturnType<typeof buildWorkflowGraphSnapshot>;
+		originalTask?: string;
+	}
+	| { error: string };
+
 export function formatAsyncStartedMessage(headline: string): string {
 	return [
 		headline,
@@ -225,31 +250,15 @@ const UNAVAILABLE_SUBAGENT_SKILL_ERROR = "Skills not found: pi-subagents";
 class UnavailableSubagentSkillError extends Error {}
 class AsyncStartValidationError extends Error {}
 
-/**
- * Execute a chain asynchronously
- */
-export function executeAsyncChain(
-	id: string,
-	params: AsyncChainParams,
-): AsyncExecutionResult {
+export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildParams): AsyncRunnerStepBuildResult {
 	const {
 		chain,
 		agents,
 		ctx,
 		cwd,
-		maxOutput,
-		artifactsDir,
-		artifactConfig,
-		shareEnabled,
-		sessionRoot,
 		sessionFilesByFlatIndex,
 		maxSubagentDepth,
-		worktreeSetupHook,
-		worktreeSetupHookTimeoutMs,
-		controlConfig,
-		controlIntercomTarget,
-		childIntercomTarget,
-		nestedRoute,
+		asyncDir,
 	} = params;
 	const resultMode = params.resultMode ?? "chain";
 	const chainSkills = params.chainSkills ?? [];
@@ -264,9 +273,11 @@ export function executeAsyncChain(
 				: (firstStep as SequentialStep).task)
 		: undefined);
 	try {
-		validateChainOutputBindings(chain, { maxItems: params.dynamicFanoutMaxItems });
+		if (params.validateOutputBindings !== false) {
+			validateChainOutputBindings(chain, { maxItems: params.dynamicFanoutMaxItems });
+		}
 	} catch (error) {
-		if (error instanceof ChainOutputValidationError) return formatAsyncStartError(resultMode, error.message);
+		if (error instanceof ChainOutputValidationError) return { error: error.message };
 		throw error;
 	}
 	const workflowGraph = buildWorkflowGraphSnapshot({ runId: id, mode: resultMode, steps: chain });
@@ -276,32 +287,12 @@ export function executeAsyncChain(
 			? s.parallel.map((t) => t.agent)
 			: isDynamicParallelStep(s)
 				? [s.parallel.agent]
-			: [(s as SequentialStep).agent];
+				: [(s as SequentialStep).agent];
 		for (const agentName of stepAgents) {
 			if (!agents.find((x) => x.name === agentName)) {
-				return {
-					content: [{ type: "text", text: `Unknown agent: ${agentName}` }],
-					isError: true,
-					details: { mode: resultMode, results: [] },
-				};
+				return { error: `Unknown agent: ${agentName}` };
 			}
 		}
-	}
-
-	const inheritedNestedRoute = resolveInheritedNestedRouteFromEnv();
-	const nestedAddress = inheritedNestedRoute ? resolveNestedParentAddressFromEnv() : undefined;
-	const asyncDir = inheritedNestedRoute
-		? path.join(TEMP_ROOT_DIR, "nested-subagent-runs", inheritedNestedRoute.rootRunId, id)
-		: path.join(ASYNC_DIR, id);
-	try {
-		fs.mkdirSync(asyncDir, { recursive: true });
-	} catch (error) {
-		const message = error instanceof Error ? error.message : String(error);
-		return {
-			content: [{ type: "text", text: `Failed to create async run directory '${asyncDir}': ${message}` }],
-			isError: true,
-			details: { mode: resultMode, results: [] },
-		};
 	}
 
 	let progressInstructionCreated = false;
@@ -393,9 +384,8 @@ export function executeAsyncChain(
 		return sessionFile;
 	};
 
-	let steps: RunnerStep[];
 	try {
-		steps = chain.map((s, stepIndex) => {
+		const steps = chain.map((s, stepIndex) => {
 			if (isParallelStep(s)) {
 				const parallelBehaviors = s.parallel.map((task) => {
 					const agent = agents.find((candidate) => candidate.name === task.agent)!;
@@ -451,10 +441,79 @@ export function executeAsyncChain(
 			}
 			return buildSeqStep(s as SequentialStep, nextSessionFile());
 		});
+		return { steps, runnerCwd, workflowGraph, ...(originalTask !== undefined ? { originalTask } : {}) };
 	} catch (error) {
-		if (error instanceof UnavailableSubagentSkillError || error instanceof AsyncStartValidationError) return formatAsyncStartError(resultMode, error.message);
+		if (error instanceof UnavailableSubagentSkillError || error instanceof AsyncStartValidationError) return { error: error.message };
 		throw error;
 	}
+}
+
+/**
+ * Execute a chain asynchronously
+ */
+export function executeAsyncChain(
+	id: string,
+	params: AsyncChainParams,
+): AsyncExecutionResult {
+	const {
+		chain,
+		agents,
+		ctx,
+		cwd,
+		maxOutput,
+		artifactsDir,
+		artifactConfig,
+		shareEnabled,
+		sessionRoot,
+		sessionFilesByFlatIndex,
+		maxSubagentDepth,
+		worktreeSetupHook,
+		worktreeSetupHookTimeoutMs,
+		controlConfig,
+		controlIntercomTarget,
+		childIntercomTarget,
+		nestedRoute,
+	} = params;
+	const resultMode = params.resultMode ?? "chain";
+	const inheritedNestedRoute = resolveInheritedNestedRouteFromEnv();
+	const nestedAddress = inheritedNestedRoute ? resolveNestedParentAddressFromEnv() : undefined;
+	const asyncDir = inheritedNestedRoute
+		? path.join(TEMP_ROOT_DIR, "nested-subagent-runs", inheritedNestedRoute.rootRunId, id)
+		: path.join(ASYNC_DIR, id);
+	try {
+		fs.mkdirSync(asyncDir, { recursive: true });
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		return {
+			content: [{ type: "text", text: `Failed to create async run directory '${asyncDir}': ${message}` }],
+			isError: true,
+			details: { mode: resultMode, results: [] },
+		};
+	}
+
+	const built = buildAsyncRunnerSteps(id, {
+		chain,
+		task: params.task,
+		resultMode,
+		agents,
+		ctx,
+		availableModels: params.availableModels,
+		cwd,
+		chainSkills: params.chainSkills,
+		sessionFilesByFlatIndex,
+		dynamicFanoutMaxItems: params.dynamicFanoutMaxItems,
+		maxSubagentDepth,
+		asyncDir,
+	});
+	if ("error" in built) {
+		try {
+			fs.rmSync(asyncDir, { recursive: true, force: true });
+		} catch {
+			// Best-effort cleanup for validation failures before the runner is spawned.
+		}
+		return formatAsyncStartError(resultMode, built.error);
+	}
+	const { steps, runnerCwd, workflowGraph } = built;
 	let childTargetIndex = 0;
 	const childIntercomTargets = childIntercomTarget ? steps.flatMap((step) => {
 		if ("parallel" in step) {
