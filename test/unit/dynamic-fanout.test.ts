@@ -7,6 +7,7 @@ import {
 	materializeDynamicParallelStep,
 	resolveJsonPointer,
 	validateDynamicCollection,
+	validateDynamicStepShape,
 } from "../../src/runs/shared/dynamic-fanout.ts";
 import type { ChainStep } from "../../src/shared/settings.ts";
 import type { ChainOutputMap, SingleResult } from "../../src/shared/types.ts";
@@ -120,6 +121,22 @@ describe("dynamic fanout helpers", () => {
 				ChainOutputValidationError,
 			);
 		}
+	});
+
+	it("accepts a runner-injected parentSessionId on the parallel template but keeps it out of user-facing validation", () => {
+		// Regression: the async runner threads parentSessionId onto the dynamic parallel
+		// template for permission-system forwarding. It must pass runner-internal validation
+		// (allowRunnerFields) without leaking into the user-facing dynamic field whitelist.
+		const runnerStep = {
+			expand: { from: { output: "targets", path: "/items" }, maxItems: 4 },
+			parallel: { agent: "reviewer", task: "Review {item.path}", parentSessionId: "session-parent" },
+			collect: { as: "reviews" },
+		} as unknown as Parameters<typeof validateDynamicStepShape>[0];
+		assert.doesNotThrow(() => validateDynamicStepShape(runnerStep, 1, { allowRunnerFields: true }));
+		assert.throws(
+			() => validateDynamicStepShape(runnerStep, 1),
+			(error: unknown) => error instanceof DynamicFanoutError && /parentSessionId/.test(error.message),
+		);
 	});
 
 	it("validates source ordering and collect name collisions", () => {

@@ -784,6 +784,7 @@ export function executeAsyncSingle(
 				id,
 				steps: [
 					{
+						parentSessionId: ctx.currentSessionId,
 						agent,
 						task: taskWithOutputInstruction,
 						cwd: runnerCwd,

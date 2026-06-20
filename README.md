@@ -297,16 +297,18 @@ pi list
 
 ### How it works
 
-At session start, pi-subagents records the current session identity in
-`PI_SUBAGENT_PARENT_SESSION`. Every child subprocess inherits this variable
-from the process environment. When the permission system inside a child
+At session start, the interactive (root) session records its own identity in
+`PI_SUBAGENT_PARENT_SESSION`. When pi-subagents launches a child, it passes the
+launching session's identity to that child explicitly, falling back to the
+inherited environment variable. When the permission system inside a child
 encounters an `ask` permission, it reads this variable to locate the parent
-session and forwards the confirmation request there. The parent session's
-UI prompts the user, and the decision flows back to the child.
+session and forwards the confirmation request there.
 
-For nested subagents (depth > 1), the forwarding chain goes directly to the
-root UI session. The permission system includes agent-name metadata in every
-forwarded request so the parent knows which child triggered it.
+This resolves an interactive prompt only when the parent it points at is the
+interactive session — i.e. for the direct children of the root session. A
+nested child's parent is itself a headless subagent process with no UI to
+surface the prompt, so `ask` policies are best placed on agents that run as
+direct children of the interactive session.
 
 ## Direct commands
 

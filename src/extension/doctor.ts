@@ -1,5 +1,4 @@
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { discoverAgentsAll, type AgentSource } from "../agents/agents.ts";
 import { isAsyncAvailable } from "../runs/background/async-execution.ts";
@@ -180,13 +179,9 @@ function formatPermissionSystemSection(): string[] {
 	}
 	const isChild = process.env["PI_SUBAGENT_CHILD"] === "1";
 	lines.push(`- subagent process: ${isChild ? "yes (PI_SUBAGENT_CHILD=1)" : "no"}`);
-	// Check for pi-permission-system extension config
-	const configPath = path.join(os.homedir(), ".pi", "agent", "extensions", "pi-permission-system", "config.json");
-	if (fs.existsSync(configPath)) {
-		lines.push(`- pi-permission-system config: found (${configPath})`);
-	} else {
-		lines.push("- pi-permission-system config: not found — extension may not be installed");
-	}
+	// Whether pi-permission-system is installed and where it stores config is
+	// outside pi-subagents' control, so we only report the forwarding signal we
+	// own. Run `pi list` to confirm the permission extension is installed.
 	return lines;
 }
 
