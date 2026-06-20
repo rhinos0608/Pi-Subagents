@@ -101,7 +101,7 @@ interface ChainExecutionResult {
 		chainAgents?: string[];
 		totalSteps?: number;
 		workflowGraph?: {
-			nodes: Array<{ kind?: string; outputName?: string; status?: string; error?: string; acceptanceStatus?: string; children?: Array<{ itemKey?: string; label?: string; status?: string; acceptanceStatus?: string }> }>;
+			nodes: Array<{ kind?: string; agent?: string; flatIndex?: number; outputName?: string; status?: string; error?: string; acceptanceStatus?: string; children?: Array<{ itemKey?: string; label?: string; status?: string; acceptanceStatus?: string }> }>;
 		};
 		currentStepIndex?: number;
 		outputs?: Record<string, { text: string; structured?: unknown }>;
@@ -892,6 +892,39 @@ describe("chain execution — sequential", { skip: !available ? "pi packages not
 		assert.ok(!result.isError);
 		assert.equal(result.details.results.length, 3);
 		assert.ok(result.details.results.every((r) => r.exitCode === 0));
+	});
+
+	it("runs a 40-step alternating worker and reviewer chain", async () => {
+		const chainLength = 40;
+		for (let i = 0; i < chainLength; i++) {
+			mockPi.onCall({ output: `step-${i}-output` });
+		}
+		const chain = Array.from({ length: chainLength }, (_, i): TestSequentialStep => ({
+			agent: i % 2 === 0 ? "worker" : "reviewer",
+			...(i === 0 ? { task: "Start long worker/reviewer chain" } : {}),
+		}));
+		const agents = [makeAgent("worker"), makeAgent("reviewer")];
+
+		const result = await executeChain(makeChainParams(chain, agents));
+
+		assert.ok(!result.isError, `long chain should succeed: ${JSON.stringify(result.content)}`);
+		assert.equal(mockPi.callCount(), chainLength);
+		assert.equal(result.details.results.length, chainLength);
+		assert.equal(result.details.totalSteps, chainLength);
+		assert.equal(result.details.chainAgents?.length, chainLength);
+		assert.equal(result.details.workflowGraph?.nodes.length, chainLength);
+		assert.equal(result.details.workflowGraph?.nodes.at(-1)?.agent, "reviewer");
+		assert.equal(result.details.workflowGraph?.nodes.at(-1)?.flatIndex, chainLength - 1);
+		assert.ok(result.details.results.every((r) => r.exitCode === 0));
+		assert.deepEqual(
+			result.details.results.map((r) => r.agent),
+			chain.map((step) => step.agent),
+		);
+
+		const finalTaskArg = readCallArgs(chainLength - 1).at(-1) ?? "";
+		assert.match(finalTaskArg, /step-38-output/);
+		assert.doesNotMatch(finalTaskArg, /step-37-output/);
+		assert.match(result.content[0]?.text ?? "", /40 steps/);
 	});
 
 	it("returns error for unknown agent in chain", async () => {
