@@ -163,6 +163,18 @@ function readMockPiArgs(mockPi: MockPi, index: number): string[] {
 	return payload.args;
 }
 
+function readMockPiArgsMatching(mockPi: MockPi, text: string): string[] {
+	const callFiles = fs.readdirSync(mockPi.dir)
+		.filter((name) => name.startsWith("call-") && name.endsWith(".json"))
+		.sort();
+	for (const callFile of callFiles) {
+		const payload = JSON.parse(fs.readFileSync(path.join(mockPi.dir, callFile), "utf-8")) as { args?: string[] };
+		assert.ok(Array.isArray(payload.args), "expected recorded args");
+		if (payload.args.join("\n").includes(text)) return payload.args;
+	}
+	assert.fail(`expected recorded call containing ${text}`);
+}
+
 describe("async execution utilities", { skip: !available ? "pi packages not available" : undefined }, () => {
 	let tempDir: string;
 	let mockPi: MockPi;
@@ -483,6 +495,70 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		assert.equal(payload.workflowGraph?.nodes?.[0]?.outputName, "data");
 		assert.equal(payload.workflowGraph?.nodes?.[0]?.status, "completed");
 		assert.equal(payload.workflowGraph?.nodes?.[1]?.status, "completed");
+	});
+
+	it("async chains can start parallel, funnel into one step, then fan back out", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
+		mockPi.onCall({ matchArgIncludes: "Scout API", output: "Scout A async findings" });
+		mockPi.onCall({ matchArgIncludes: "Scout UI", output: "Scout B async findings" });
+		mockPi.onCall({ matchArgIncludes: "Synthesize:", output: "Async funnel synthesis" });
+		mockPi.onCall({ matchArgIncludes: "Review funnel A:", output: "Async reviewer A done" });
+		mockPi.onCall({ matchArgIncludes: "Review funnel B:", output: "Async reviewer B done" });
+		const id = `async-parallel-funnel-fanout-${Date.now().toString(36)}`;
+		const result = executeAsyncChain(id, {
+			chain: [
+				{
+					parallel: [
+						{ agent: "scout-a", task: "Scout API" },
+						{ agent: "scout-b", task: "Scout UI" },
+					],
+					concurrency: 2,
+				},
+				{ agent: "synthesizer", task: "Synthesize:\n{previous}" },
+				{
+					parallel: [
+						{ agent: "review-a", task: "Review funnel A:\n{previous}" },
+						{ agent: "review-b", task: "Review funnel B:\n{previous}" },
+					],
+					concurrency: 2,
+				},
+			],
+			agents: [makeAgent("scout-a"), makeAgent("scout-b"), makeAgent("synthesizer"), makeAgent("review-a"), makeAgent("review-b")],
+			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-parallel-funnel-fanout" },
+			artifactConfig: { enabled: false, includeInput: false, includeOutput: false, includeJsonl: false, includeMetadata: false, cleanupDays: 7 },
+			shareEnabled: false,
+			maxSubagentDepth: 2,
+		});
+
+		assert.ok(!result.isError, `should launch: ${JSON.stringify(result.content)}`);
+		const resultPath = await waitForAsyncResultFile(id, 10_000);
+		const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8")) as AsyncResultPayload;
+		const status = JSON.parse(fs.readFileSync(path.join(ASYNC_DIR, id, "status.json"), "utf-8")) as AsyncStatusPayload;
+		assert.equal(payload.success, true);
+		assert.deepEqual(payload.results.map((entry) => entry.output), [
+			"Scout A async findings",
+			"Scout B async findings",
+			"Async funnel synthesis",
+			"Async reviewer A done",
+			"Async reviewer B done",
+		]);
+		assert.deepEqual(status.steps?.map((step) => step.status), ["complete", "complete", "complete", "complete", "complete"]);
+		assert.deepEqual(status.parallelGroups, [
+			{ start: 0, count: 2, stepIndex: 0 },
+			{ start: 3, count: 2, stepIndex: 2 },
+		]);
+		const funnelTask = readMockPiArgsMatching(mockPi, "Synthesize:").at(-1) ?? "";
+		assert.match(funnelTask, /=== Parallel Task 1 \(scout-a\) ===/);
+		assert.match(funnelTask, /Scout A async findings/);
+		assert.match(funnelTask, /=== Parallel Task 2 \(scout-b\) ===/);
+		assert.match(funnelTask, /Scout B async findings/);
+		assert.match(readMockPiArgsMatching(mockPi, "Review funnel A:").at(-1) ?? "", /Review funnel A:\nAsync funnel synthesis/);
+		assert.match(readMockPiArgsMatching(mockPi, "Review funnel B:").at(-1) ?? "", /Review funnel B:\nAsync funnel synthesis/);
+		assert.equal(payload.workflowGraph?.nodes?.[0]?.kind, "parallel-group");
+		assert.equal(payload.workflowGraph?.nodes?.[0]?.status, "completed");
+		assert.equal(payload.workflowGraph?.nodes?.[1]?.kind, "step");
+		assert.equal(payload.workflowGraph?.nodes?.[1]?.status, "completed");
+		assert.equal(payload.workflowGraph?.nodes?.[2]?.kind, "parallel-group");
+		assert.equal(payload.workflowGraph?.nodes?.[2]?.status, "completed");
 	});
 
 	it("async dynamic status shows a placeholder before materialization", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
