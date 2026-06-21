@@ -394,19 +394,32 @@ function maybeReadSkillDescription(filePath: string): string | undefined {
 
 function collectFilesystemSkills(cwd: string, agentDir: string, skillPaths: SkillSearchPath[]): CachedSkillEntry[] {
 	const entries: CachedSkillEntry[] = [];
-	const seen = new Set<string>();
-	const visitedDirectories = new Set<string>();
+	const seen = new Map<string, number>();
+	const visitedDirectories = new Map<string, number>();
 	let order = 0;
 
 	const pushEntry = (name: string, filePath: string, sourceHint?: SkillSource) => {
 		const resolvedFile = path.resolve(filePath);
-		if (seen.has(resolvedFile)) return;
 		if (!fs.existsSync(resolvedFile)) return;
-		seen.add(resolvedFile);
+		const source = inferSkillSource(resolvedFile, cwd, agentDir, sourceHint);
+		const existingIndex = seen.get(resolvedFile);
+		if (existingIndex !== undefined) {
+			const existing = entries[existingIndex];
+			if (existing && (SOURCE_PRIORITY[source] ?? 0) > (SOURCE_PRIORITY[existing.source] ?? 0)) {
+				entries[existingIndex] = {
+					...existing,
+					name,
+					source,
+					description: maybeReadSkillDescription(resolvedFile),
+				};
+			}
+			return;
+		}
+		seen.set(resolvedFile, entries.length);
 		entries.push({
 			name,
 			filePath: resolvedFile,
-			source: inferSkillSource(resolvedFile, cwd, agentDir, sourceHint),
+			source,
 			description: maybeReadSkillDescription(resolvedFile),
 			order: order++,
 		});
@@ -414,20 +427,22 @@ function collectFilesystemSkills(cwd: string, agentDir: string, skillPaths: Skil
 
 	const shouldSkipDirectory = (name: string) => name.startsWith(".") || name === "node_modules";
 
-	const markDirectoryVisited = (dirPath: string): boolean => {
+	const markDirectoryVisited = (dirPath: string, sourceHint?: SkillSource): boolean => {
 		let resolvedDir: string;
 		try {
 			resolvedDir = fs.realpathSync(dirPath);
 		} catch {
 			resolvedDir = path.resolve(dirPath);
 		}
-		if (visitedDirectories.has(resolvedDir)) return false;
-		visitedDirectories.add(resolvedDir);
+		const priority = sourceHint ? SOURCE_PRIORITY[sourceHint] ?? 0 : SOURCE_PRIORITY.unknown;
+		const previousPriority = visitedDirectories.get(resolvedDir);
+		if (previousPriority !== undefined && previousPriority >= priority) return false;
+		visitedDirectories.set(resolvedDir, priority);
 		return true;
 	};
 
 	const walkSkillDirectories = (dirPath: string, sourceHint?: SkillSource) => {
-		if (!markDirectoryVisited(dirPath)) return;
+		if (!markDirectoryVisited(dirPath, sourceHint)) return;
 
 		const skillFile = path.join(dirPath, "SKILL.md");
 		if (fs.existsSync(skillFile)) {
@@ -487,7 +502,7 @@ function collectFilesystemSkills(cwd: string, agentDir: string, skillPaths: Skil
 			continue;
 		}
 
-		markDirectoryVisited(skillPath.path);
+		markDirectoryVisited(skillPath.path, skillPath.source);
 
 		let childEntries: fs.Dirent[];
 		try {

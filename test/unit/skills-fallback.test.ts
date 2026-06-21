@@ -132,6 +132,30 @@ describe("skills filesystem fallback", () => {
 		assert.match(resolved[0]?.content ?? "", /Use direct markdown skill\./);
 	});
 
+	it("keeps nested skills from higher-priority explicit settings roots after parent recursion", () => {
+		writeSkillFile(
+			path.join(tempDir, "skills", "group", "issue-262-settings-nested"),
+			"Use settings nested skill.",
+		);
+		fs.writeFileSync(
+			path.join(tempDir, "package.json"),
+			JSON.stringify({ name: "fixture", version: "1.0.0", pi: { skills: ["./skills"] } }, null, 2),
+			"utf-8",
+		);
+		fs.mkdirSync(path.join(tempDir, ".pi"), { recursive: true });
+		fs.writeFileSync(
+			path.join(tempDir, ".pi", "settings.json"),
+			JSON.stringify({ skills: ["../skills/group"] }, null, 2),
+			"utf-8",
+		);
+
+		const { resolved, missing } = resolveSkills(["issue-262-settings-nested"], tempDir);
+		assert.deepEqual(missing, []);
+		assert.equal(resolved.length, 1);
+		assert.equal(resolved[0]?.source, "project-settings");
+		assert.match(resolved[0]?.content ?? "", /Use settings nested skill\./);
+	});
+
 	it("resolves and reads skill content via filesystem fallback", () => {
 		makeProjectSkill(tempDir, "resolve-skill", "Run local fallback checks.");
 
