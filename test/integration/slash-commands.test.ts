@@ -127,6 +127,7 @@ function createCommandContext(
 		setStatus: (key: string, text: string | undefined) => void;
 		setToolsExpanded: (expanded: boolean) => void;
 		sessionManager: unknown;
+		modelRegistry: { getAvailable: () => Array<{ provider: string; id: string }> };
 	}> = {},
 ) {
 	return {
@@ -139,7 +140,7 @@ function createCommandContext(
 			onTerminalInput: () => () => {},
 			custom: overrides.custom ?? (async () => undefined),
 		},
-		modelRegistry: { getAvailable: () => [] },
+		modelRegistry: overrides.modelRegistry ?? { getAvailable: () => [] },
 		sessionManager: overrides.sessionManager ?? {
 			getSessionFile: () => null,
 			getSessionId: () => "session-test",
@@ -855,6 +856,161 @@ describe("subagents-models slash command", { skip: !available ? "slash-commands.
 			registerSlashCommands!(pi, createState(process.cwd()));
 			const completions = commands.get("subagents-models")!.getArgumentCompletions!("sc") as Array<{ value: string; label: string }>;
 			assert.deepEqual(completions.map((completion) => completion.value), ["scout"]);
+		});
+	});
+});
+
+describe("subagent profiles slash commands", { skip: !available ? "slash-commands.ts not importable" : undefined }, () => {
+	it("lists saved profiles", async () => {
+		await withIsolatedHome(async () => {
+			const profilesDir = path.join(process.env.HOME!, ".pi", "agent", "profiles", "pi-subagents");
+			fs.mkdirSync(profilesDir, { recursive: true });
+			fs.writeFileSync(path.join(profilesDir, "openai-codex.quota.json"), JSON.stringify({ subagents: { agentOverrides: {} } }));
+			fs.writeFileSync(path.join(profilesDir, "openai-codex.quality.json"), JSON.stringify({ subagents: { agentOverrides: {} } }));
+			const sent: unknown[] = [];
+			const commands = new Map<string, RegisteredSlashCommand>();
+			const pi = {
+				events: createEventBus(),
+				registerCommand(name: string, spec: RegisteredSlashCommand) {
+					commands.set(name, spec);
+				},
+				registerShortcut() {},
+				sendMessage(message: unknown) { sent.push(message); },
+			};
+			registerSlashCommands!(pi, createState(process.cwd()));
+			await commands.get("subagents-profiles")!.handler("", createCommandContext());
+			assert.match(String((sent[0] as { content?: unknown }).content ?? ""), /openai-codex\.quota/);
+			assert.match(String((sent[0] as { content?: unknown }).content ?? ""), /openai-codex\.quality/);
+		});
+	});
+
+	it("loads a saved profile into user settings", async () => {
+		await withIsolatedHome(async () => {
+			const profilesDir = path.join(process.env.HOME!, ".pi", "agent", "profiles", "pi-subagents");
+			fs.mkdirSync(profilesDir, { recursive: true });
+			fs.writeFileSync(path.join(profilesDir, "openai-codex.quota.json"), JSON.stringify({
+				subagents: { agentOverrides: { scout: { model: "openai-codex/gpt-5.3-codex-spark" } } },
+			}, null, 2));
+			const sent: unknown[] = [];
+			const commands = new Map<string, RegisteredSlashCommand>();
+			const pi = {
+				events: createEventBus(),
+				registerCommand(name: string, spec: RegisteredSlashCommand) { commands.set(name, spec); },
+				registerShortcut() {},
+				sendMessage(message: unknown) { sent.push(message); },
+			};
+			registerSlashCommands!(pi, createState(process.cwd()));
+			await commands.get("subagents-load-profile")!.handler("openai-codex.quota", createCommandContext());
+			const settings = JSON.parse(fs.readFileSync(path.join(process.env.HOME!, ".pi", "agent", "settings.json"), "utf-8"));
+			assert.equal(settings.subagents.agentOverrides.scout.model, "openai-codex/gpt-5.3-codex-spark");
+			assert.match(String((sent[0] as { content?: unknown }).content ?? ""), /run \/reload/);
+		});
+	});
+
+	it("refreshes a provider model catalog", async () => {
+		await withIsolatedHome(async () => {
+			const sent: unknown[] = [];
+			const commands = new Map<string, RegisteredSlashCommand>();
+			const pi = {
+				events: createEventBus(),
+				exec: async () => ({ stdout: "OK\n", stderr: "", code: 0, killed: false }),
+				registerCommand(name: string, spec: RegisteredSlashCommand) { commands.set(name, spec); },
+				registerShortcut() {},
+				sendMessage(message: unknown) { sent.push(message); },
+			};
+			registerSlashCommands!(pi, createState(process.cwd()));
+			await commands.get("subagents-refresh-provider-models")!.handler("openai-codex", createCommandContext({
+				cwd: process.cwd(),
+				modelRegistry: {
+					getAvailable: () => [
+						{ provider: "openai-codex", id: "gpt-5.3-codex-spark", reasoning: true },
+						{ provider: "openai-codex", id: "gpt-5.4-mini", reasoning: true },
+					],
+				},
+			}) as never);
+			assert.match(String((sent[0] as { content?: unknown }).content ?? ""), /Provider: openai-codex/);
+			assert.match(String((sent[0] as { content?: unknown }).content ?? ""), /Warning: 2 models were classified with name heuristics fallback\./);
+			assert.equal(fs.existsSync(path.join(process.env.HOME!, ".pi", "agent", "profiles", "pi-subagents", "providers", "openai-codex.models.json")), true);
+		});
+	});
+
+	it("generates provider profiles", async () => {
+		await withIsolatedHome(async () => {
+			const sent: unknown[] = [];
+			const commands = new Map<string, RegisteredSlashCommand>();
+			const pi = {
+				events: createEventBus(),
+				exec: async () => ({ stdout: "OK\n", stderr: "", code: 0, killed: false }),
+				registerCommand(name: string, spec: RegisteredSlashCommand) { commands.set(name, spec); },
+				registerShortcut() {},
+				sendMessage(message: unknown) { sent.push(message); },
+			};
+			registerSlashCommands!(pi, createState(process.cwd()));
+			await commands.get("subagents-generate-profiles")!.handler("openai-codex", createCommandContext({
+				modelRegistry: {
+					getAvailable: () => [
+						{ provider: "openai-codex", id: "gpt-5.3-codex-spark", reasoning: true },
+						{ provider: "openai-codex", id: "gpt-5.4-mini", reasoning: true },
+						{ provider: "openai-codex", id: "gpt-5.4", reasoning: true },
+						{ provider: "openai-codex", id: "gpt-5.5", reasoning: true },
+					],
+				},
+			}) as never);
+			assert.match(String((sent[0] as { content?: unknown }).content ?? ""), /Generated subagent profiles/);
+			assert.match(String((sent[0] as { content?: unknown }).content ?? ""), /Warning: generated profiles depend on heuristic-only classification for 4 selected models\./);
+			assert.equal(fs.existsSync(path.join(process.env.HOME!, ".pi", "agent", "profiles", "pi-subagents", "openai-codex.quota.json")), true);
+			assert.equal(fs.existsSync(path.join(process.env.HOME!, ".pi", "agent", "profiles", "pi-subagents", "openai-codex.quality.json")), true);
+		});
+	});
+
+	it("checks a profile", async () => {
+		await withIsolatedHome(async () => {
+			const profilesDir = path.join(process.env.HOME!, ".pi", "agent", "profiles", "pi-subagents");
+			fs.mkdirSync(profilesDir, { recursive: true });
+			fs.writeFileSync(path.join(profilesDir, "demo.json"), JSON.stringify({
+				subagents: { agentOverrides: { scout: { model: "openai-codex/gpt-5.3-codex-spark" } } },
+			}, null, 2));
+			const sent: unknown[] = [];
+			const commands = new Map<string, RegisteredSlashCommand>();
+			const pi = {
+				events: createEventBus(),
+				exec: async () => ({ stdout: "OK\n", stderr: "", code: 0, killed: false }),
+				registerCommand(name: string, spec: RegisteredSlashCommand) { commands.set(name, spec); },
+				registerShortcut() {},
+				sendMessage(message: unknown) { sent.push(message); },
+			};
+			registerSlashCommands!(pi, createState(process.cwd()));
+			await commands.get("subagents-check-profile")!.handler("demo", createCommandContext({
+				modelRegistry: { getAvailable: () => [{ provider: "openai-codex", id: "gpt-5.3-codex-spark" }] },
+			}) as never);
+			assert.match(String((sent[0] as { content?: unknown }).content ?? ""), /probe ok/);
+		});
+	});
+
+	it("suggests provider names for refresh and generate commands", async () => {
+		await withIsolatedHome(async () => {
+			const commands = new Map<string, RegisteredSlashCommand>();
+			const pi = {
+				events: createEventBus(),
+				registerCommand(name: string, spec: RegisteredSlashCommand) { commands.set(name, spec); },
+				registerShortcut() {},
+				sendMessage(_message: unknown) {},
+			};
+			const state = createState(process.cwd());
+			state.lastUiContext = createCommandContext({
+				modelRegistry: {
+					getAvailable: () => [
+						{ provider: "openai-codex", id: "gpt-5.4" },
+						{ provider: "openai", id: "gpt-5" },
+						{ provider: "anthropic", id: "claude-sonnet-4" },
+					],
+				},
+			}) as never;
+			registerSlashCommands!(pi, state);
+			const refresh = commands.get("subagents-refresh-provider-models")!.getArgumentCompletions!("open") as Array<{ value: string; label: string }>;
+			const generate = commands.get("subagents-generate-profiles")!.getArgumentCompletions!("an") as Array<{ value: string; label: string }>;
+			assert.deepEqual(refresh.map((entry) => entry.value), ["openai", "openai-codex"]);
+			assert.deepEqual(generate.map((entry) => entry.value), ["anthropic"]);
 		});
 	});
 });

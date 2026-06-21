@@ -4,6 +4,14 @@ import * as path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Key, matchesKey } from "@earendil-works/pi-tui";
 import { BUILTIN_AGENT_NAMES, discoverAgents, discoverAgentsAll, type ChainConfig } from "../agents/agents.ts";
+import {
+	DEFAULT_PROVIDER_MODELS_MAX_AGE_DAYS,
+	applySubagentProfile,
+	checkSubagentProfile,
+	generateProfilesForProvider,
+	listSubagentProfiles,
+	refreshProviderModelCatalog,
+} from "../profiles/profiles.ts";
 import type { SubagentParamsLike } from "../runs/foreground/subagent-executor.ts";
 import { isDynamicParallelStep, isParallelStep, type ChainStep } from "../shared/settings.ts";
 import { assertJsonSchemaObject } from "../runs/shared/structured-output.ts";
@@ -131,6 +139,29 @@ const makeBuiltinAgentNameCompletions = () => (prefix: string) => {
 		.filter((name) => name.startsWith(prefix))
 		.map((name) => ({ value: name, label: name }));
 };
+
+const makeProviderCompletions = (state: SubagentState) => (prefix: string) => {
+	if (prefix.includes(" ")) return null;
+	const available = state.lastUiContext?.modelRegistry?.getAvailable?.();
+	if (!Array.isArray(available)) return null;
+	const providers = [...new Set(available
+		.map((model) => typeof model?.provider === "string" ? model.provider : "")
+		.filter(Boolean))]
+		.sort((a, b) => a.localeCompare(b));
+	return providers
+		.filter((provider) => provider.startsWith(prefix))
+		.map((provider) => ({ value: provider, label: provider }));
+};
+
+function sendSlashText(pi: ExtensionAPI, text: string): void {
+	pi.sendMessage({ content: text, display: true });
+}
+
+function parseSingleRequiredArg(args: string, usage: string): { ok: true; value: string } | { ok: false; message: string } {
+	const parts = args.trim().split(/\s+/).filter(Boolean);
+	if (parts.length !== 1) return { ok: false, message: usage };
+	return { ok: true, value: parts[0]! };
+}
 
 function loadSavedOutputSchema(chain: ChainConfig, stepAgent: string, outputSchema: unknown): JsonSchemaObject | undefined {
 	if (outputSchema === undefined) return undefined;
@@ -590,6 +621,144 @@ export function registerSlashCommands(
 				return;
 			}
 			await runSlashSubagent(pi, ctx, { action: "models", agent });
+		},
+	});
+
+	pi.registerCommand("subagents-profiles", {
+		description: "List saved subagent profiles",
+		handler: async (_args, _ctx) => {
+			const profiles = listSubagentProfiles();
+			if (profiles.length === 0) {
+				sendSlashText(pi, "Subagent profiles\n\nNo subagent profiles found in ~/.pi/agent/profiles/pi-subagents/");
+				return;
+			}
+			sendSlashText(pi, `Subagent profiles\n\n${profiles.join("\n")}`);
+		},
+	});
+
+	pi.registerCommand("subagents-load-profile", {
+		description: "Load a subagent profile into ~/.pi/agent/settings.json",
+		getArgumentCompletions: (prefix) => {
+			if (prefix.includes(" ")) return null;
+			return listSubagentProfiles()
+				.filter((name) => name.startsWith(prefix))
+				.map((name) => ({ value: name, label: name }));
+		},
+		handler: async (args, ctx) => {
+			const parsed = parseSingleRequiredArg(args, "Usage: /subagents-load-profile <name>");
+			if (!parsed.ok) {
+				ctx.ui.notify(parsed.message, "error");
+				return;
+			}
+			try {
+				const result = applySubagentProfile(parsed.value);
+				sendSlashText(pi, [
+					`Loaded subagent profile: ${parsed.value}`,
+					`Profile: ${result.filePath}`,
+					`Updated: ${result.settingsPath}`,
+					"Next: run /reload to apply it in the current session",
+				].join("\n"));
+			} catch (error) {
+				ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
+			}
+		},
+	});
+
+	pi.registerCommand("subagents-refresh-provider-models", {
+		description: "Refresh the cached model catalog for one provider",
+		getArgumentCompletions: makeProviderCompletions(state),
+		handler: async (args, ctx) => {
+			const trimmed = args.trim();
+			const force = /(?:^|\s)--force$/.test(trimmed) || /(?:^|\s)force$/.test(trimmed);
+			const withoutForce = trimmed.replace(/(?:^|\s)(?:--force|force)$/, "").trim();
+			const parsed = parseSingleRequiredArg(withoutForce, "Usage: /subagents-refresh-provider-models <provider> [--force]");
+			if (!parsed.ok) {
+				ctx.ui.notify(parsed.message, "error");
+				return;
+			}
+			try {
+				const result = await refreshProviderModelCatalog(pi, ctx, parsed.value, { force, maxAgeDays: DEFAULT_PROVIDER_MODELS_MAX_AGE_DAYS });
+				const lines = [
+					"Provider model catalog",
+					`Provider: ${parsed.value}`,
+					`Status: ${result.reused ? "fresh cache reused" : "refreshed"}`,
+					`File: ${result.filePath}`,
+					`Models: ${result.catalog.models.length}`,
+					`Refreshed at: ${result.catalog.refreshedAt}`,
+				];
+				if (result.heuristicFallbackCount > 0) {
+					lines.push(`Warning: ${result.heuristicFallbackCount} model${result.heuristicFallbackCount === 1 ? " was" : "s were"} classified with name heuristics fallback.`);
+				}
+				sendSlashText(pi, lines.join("\n"));
+			} catch (error) {
+				ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
+			}
+		},
+	});
+
+	pi.registerCommand("subagents-generate-profiles", {
+		description: "Generate <provider>.quota and <provider>.quality subagent profiles",
+		getArgumentCompletions: makeProviderCompletions(state),
+		handler: async (args, ctx) => {
+			const parsed = parseSingleRequiredArg(args, "Usage: /subagents-generate-profiles <provider>");
+			if (!parsed.ok) {
+				ctx.ui.notify(parsed.message, "error");
+				return;
+			}
+			try {
+				const result = await generateProfilesForProvider(pi, ctx, parsed.value, { maxAgeDays: DEFAULT_PROVIDER_MODELS_MAX_AGE_DAYS });
+				const lines = [
+					"Generated subagent profiles",
+					`Provider: ${parsed.value}`,
+					`Catalog: ${result.catalogPath}`,
+					`Quota: ${result.quotaPath}`,
+					`  cheap=${result.quotaModels.cheap}`,
+					`  medium=${result.quotaModels.medium}`,
+					`  strong=${result.quotaModels.strong}`,
+					`Quality: ${result.qualityPath}`,
+					`  cheap=${result.qualityModels.cheap}`,
+					`  medium=${result.qualityModels.medium}`,
+					`  strong=${result.qualityModels.strong}`,
+				];
+				if (result.selectedHeuristicFallbackCount > 0) {
+					lines.push(`Warning: generated profiles depend on heuristic-only classification for ${result.selectedHeuristicFallbackCount} selected model${result.selectedHeuristicFallbackCount === 1 ? "" : "s"}.`);
+				} else if (result.heuristicFallbackCount > 0) {
+					lines.push(`Warning: provider catalog still contains ${result.heuristicFallbackCount} heuristic-classified model${result.heuristicFallbackCount === 1 ? "" : "s"}.`);
+				}
+				sendSlashText(pi, lines.join("\n"));
+			} catch (error) {
+				ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
+			}
+		},
+	});
+
+	pi.registerCommand("subagents-check-profile", {
+		description: "Check whether a saved profile still points to usable models",
+		getArgumentCompletions: (prefix) => {
+			if (prefix.includes(" ")) return null;
+			return listSubagentProfiles()
+				.filter((name) => name.startsWith(prefix))
+				.map((name) => ({ value: name, label: name }));
+		},
+		handler: async (args, ctx) => {
+			const parsed = parseSingleRequiredArg(args, "Usage: /subagents-check-profile <name>");
+			if (!parsed.ok) {
+				ctx.ui.notify(parsed.message, "error");
+				return;
+			}
+			try {
+				const result = await checkSubagentProfile(pi, ctx, parsed.value);
+				const lines = [
+					"Subagent profile check",
+					`Profile: ${result.profileName}`,
+					`File: ${result.filePath}`,
+					"",
+					...result.results.map((entry) => `${entry.agent} → ${entry.model} — registry ${entry.inRegistry ? "ok" : "missing"}; probe ${entry.probe.status}${entry.probe.message ? ` (${entry.probe.message.split(/\r?\n/, 1)[0]})` : ""}`),
+				];
+				sendSlashText(pi, lines.join("\n"));
+			} catch (error) {
+				ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
+			}
 		},
 	});
 

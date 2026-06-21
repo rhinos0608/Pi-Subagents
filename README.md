@@ -258,8 +258,40 @@ Skip this section until you want exact syntax.
 | `/run-chain <chainName> -- <task>` | Launch a saved `.chain.md` or `.chain.json` workflow |
 | `/subagents-doctor` | Show read-only setup diagnostics |
 | `/subagents-models [agent]` | Show the runtime-loaded builtin model mapping, optionally filtered to one builtin |
+| `/subagents-profiles` | List saved subagent profiles from `~/.pi/agent/profiles/pi-subagents/` |
+| `/subagents-load-profile <name>` | Replace only `settings.subagents` with a saved profile and remind you to `/reload` |
+| `/subagents-refresh-provider-models <provider> [--force]` | Create or refresh the cached provider model catalog |
+| `/subagents-generate-profiles <provider>` | Generate `<provider>.quota.json` and `<provider>.quality.json` profiles |
+| `/subagents-check-profile <name>` | Check a saved profile against the current registry and live model probes |
 
 Commands validate agent names locally, support tab completion, and send results back into the conversation.
+
+### Profiles and provider model catalogs
+
+Profiles are stored under:
+
+```text
+~/.pi/agent/profiles/pi-subagents/
+```
+
+Provider model catalogs are cached under:
+
+```text
+~/.pi/agent/profiles/pi-subagents/providers/
+```
+
+Use the profile workflow like this:
+
+```text
+/subagents-refresh-provider-models openai-codex
+/subagents-generate-profiles openai-codex
+/subagents-load-profile openai-codex.quota
+/reload
+```
+
+`/subagents-refresh-provider-models` writes a serialized provider model catalog with observed registry data, simple role-oriented classification, and live probe results from tiny one-shot `pi -p --model ...` checks. The cache refreshes when missing or stale; use `--force` to ignore freshness and probe again immediately.
+
+`/subagents-generate-profiles` uses the provider catalog to produce quota and quality profiles. `/subagents-check-profile` re-checks each assigned model in a saved profile against the current registry and a live probe so you can detect model removals, auth problems, or stale assignments.
 
 ### Per-step tasks
 
