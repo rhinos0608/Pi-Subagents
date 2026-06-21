@@ -12,6 +12,7 @@
 - Actually wire the previously documented foreground-only `timeoutMs`/`maxRuntimeMs` aliases through single, parallel, chain, and dynamic fanout runs, including stable `timedOut: true` results, preserved partial output, manual-interrupt precedence, and skipped acceptance verification after timeout.
 - Apply `subagents.agentOverrides.<name>` to matching user-scope and project-scope custom agents, while keeping explicit agent frontmatter authoritative per field. Thanks to Jacek Juraszek (@jjuraszek) for #218.
 - Preserve compact foreground `write`/`edit` tool-call evidence in prompt-template delegation responses so convergence checks do not stop loops early. Thanks to Hans Schnedlitz (@hschne) for #207.
+- Respect each agent's `defaultContext` in mixed parallel and chain subagent calls when no explicit `context` is provided, so fresh-default scouts no longer inherit forked parent transcripts just because another agent in the same invocation defaults to fork. Thanks to Mitch Fultz (@fitchmultz) for #228.
 
 ## [0.30.0] - 2026-06-20
 

@@ -172,6 +172,7 @@ interface ExecutionContextData {
 	sessionRoot: string;
 	sessionDirForIndex: (idx?: number) => string;
 	sessionFileForIndex: (idx?: number) => string | undefined;
+	sessionFileForTask: (agentName: string, idx?: number) => string | undefined;
 	artifactConfig: ArtifactConfig;
 	artifactsDir: string;
 	backgroundRequestedWhileClarifying: boolean;
@@ -181,6 +182,7 @@ interface ExecutionContextData {
 	nestedRoute?: NestedRouteInfo;
 	timeoutMs?: number;
 	deadlineAt?: number;
+	contextPolicy: AgentDefaultContextPolicy;
 }
 
 function resolveRequestedCwd(runtimeCwd: string, requestedCwd: string | undefined): string {
@@ -551,6 +553,7 @@ function appendStepToAsyncChain(input: {
 
 	const scope: AgentScope = resolveExecutionAgentScope(input.params.agentScope);
 	const agents = input.deps.discoverAgents(input.requestCwd, scope).agents;
+	const contextPolicy = resolveExplicitContextPolicy(input.params);
 	const chainSkillInput = normalizeSkillInput(input.params.skill);
 	const chainSkills = chainSkillInput === false ? [] : (chainSkillInput ?? []);
 	const asyncCtx = {
@@ -561,7 +564,7 @@ function appendStepToAsyncChain(input: {
 		currentModel: input.ctx.model,
 	};
 	const built = buildAsyncRunnerSteps(resolved.id, {
-		chain: wrapChainTasksForFork(input.params.chain, input.params.context),
+		chain: wrapChainTasksForFork(input.params.chain, contextPolicy),
 		task: input.params.task,
 		resultMode: "chain",
 		agents,
@@ -865,7 +868,8 @@ async function resumeAsyncRun(input: {
 		const runId = randomUUID().slice(0, 8);
 		const artifactConfig: ArtifactConfig = { ...DEFAULT_ARTIFACT_CONFIG, enabled: input.params.artifacts !== false };
 		const availableModels = input.ctx.modelRegistry.getAvailable().map(toModelInfo);
-		const chain = wrapChainTasksForFork(attachChain, input.params.context);
+		const contextPolicy = resolveExplicitContextPolicy(input.params);
+		const chain = wrapChainTasksForFork(attachChain, contextPolicy);
 		const normalized = normalizeSkillInput(input.params.skill);
 		const result = executeAsyncChain(runId, {
 			chain,
@@ -1156,16 +1160,46 @@ function getRequestedModeLabel(params: SubagentParamsLike): Details["mode"] {
 	return "single";
 }
 
-function applyAgentDefaultContext(params: SubagentParamsLike, agents: AgentConfig[]): SubagentParamsLike {
-	if (params.context !== undefined) return params;
+interface AgentDefaultContextPolicy {
+	params: SubagentParamsLike;
+	contextForAgent(agentName: string): "fresh" | "fork";
+	usesFork: boolean;
+}
+
+function resolveAgentDefaultContextPolicy(params: SubagentParamsLike, agents: AgentConfig[]): AgentDefaultContextPolicy {
+	if (params.context !== undefined) {
+		return resolveExplicitContextPolicy(params);
+	}
 	const byName = new Map(agents.map((agent) => [agent.name, agent]));
+	const contextForAgent = (agentName: string): "fresh" | "fork" =>
+		byName.get(agentName)?.defaultContext === "fork" ? "fork" : "fresh";
+	const usesFork = collectRequestedAgentNames(params).some((name) => contextForAgent(name) === "fork");
+	return {
+		params: usesFork ? { ...params, context: "fork" } : params,
+		contextForAgent,
+		usesFork,
+	};
+}
+
+function resolveExplicitContextPolicy(params: SubagentParamsLike): AgentDefaultContextPolicy {
+	const context = params.context === "fork" ? "fork" : "fresh";
+	return {
+		params,
+		contextForAgent: () => context,
+		usesFork: context === "fork",
+	};
+}
+
+function collectRequestedAgentNames(params: SubagentParamsLike): string[] {
 	const names: string[] = [];
 	if (params.agent) names.push(params.agent);
 	for (const task of params.tasks ?? []) names.push(task.agent);
 	for (const step of params.chain ?? []) names.push(...getStepAgents(step));
-	return names.some((name) => byName.get(name)?.defaultContext === "fork")
-		? { ...params, context: "fork" }
-		: params;
+	return names;
+}
+
+function shouldForkAgent(contextPolicy: AgentDefaultContextPolicy, agentName: string): boolean {
+	return contextPolicy.contextForAgent(agentName) === "fork";
 }
 
 function buildRequestedModeError(params: SubagentParamsLike, message: string): AgentToolResult<Details> {
@@ -1282,14 +1316,14 @@ function toExecutionErrorResult(params: SubagentParamsLike, error: unknown): Age
 
 function collectChainSessionFiles(
 	chain: ChainStep[],
-	sessionFileForIndex: (idx?: number) => string | undefined,
+	sessionFileForTask: (agentName: string, idx?: number) => string | undefined,
 ): (string | undefined)[] {
 	const sessionFiles: (string | undefined)[] = [];
 	let flatIndex = 0;
 	for (const step of chain) {
 		if (isParallelStep(step)) {
-			for (let i = 0; i < step.parallel.length; i++) {
-				sessionFiles.push(sessionFileForIndex(flatIndex));
+			for (const task of step.parallel) {
+				sessionFiles.push(sessionFileForTask(task.agent, flatIndex));
 				flatIndex++;
 			}
 			continue;
@@ -1298,21 +1332,22 @@ function collectChainSessionFiles(
 			sessionFiles.push(undefined);
 			continue;
 		}
-		sessionFiles.push(sessionFileForIndex(flatIndex));
+		sessionFiles.push(sessionFileForTask((step as SequentialStep).agent, flatIndex));
 		flatIndex++;
 	}
 	return sessionFiles;
 }
 
-function wrapChainTasksForFork(chain: ChainStep[], context: SubagentParamsLike["context"]): ChainStep[] {
-	if (context !== "fork") return chain;
+function wrapChainTasksForFork(chain: ChainStep[], contextPolicy: AgentDefaultContextPolicy): ChainStep[] {
 	return chain.map((step, stepIndex) => {
 		if (isParallelStep(step)) {
 			return {
 				...step,
 				parallel: step.parallel.map((task) => ({
 					...task,
-					task: wrapForkTask(task.task ?? "{previous}"),
+					task: shouldForkAgent(contextPolicy, task.agent)
+						? wrapForkTask(task.task ?? "{previous}")
+						: task.task,
 				})),
 			};
 		}
@@ -1321,16 +1356,57 @@ function wrapChainTasksForFork(chain: ChainStep[], context: SubagentParamsLike["
 				...step,
 				parallel: {
 					...step.parallel,
-					task: wrapForkTask(step.parallel.task ?? "{previous}"),
+					task: shouldForkAgent(contextPolicy, step.parallel.agent)
+						? wrapForkTask(step.parallel.task ?? "{previous}")
+						: step.parallel.task,
 				},
 			};
 		}
 		const sequential = step as SequentialStep;
 		return {
 			...sequential,
-			task: wrapForkTask(sequential.task ?? (stepIndex === 0 ? "{task}" : "{previous}")),
+			task: shouldForkAgent(contextPolicy, sequential.agent)
+				? wrapForkTask(sequential.task ?? (stepIndex === 0 ? "{task}" : "{previous}"))
+				: sequential.task,
 		};
 	});
+}
+
+function preflightForkSessionsForStaticTasks(
+	params: SubagentParamsLike,
+	contextPolicy: AgentDefaultContextPolicy,
+	sessionFileForTask: (agentName: string, idx?: number) => string | undefined,
+): void {
+	if (!contextPolicy.usesFork) return;
+	if (params.agent) {
+		if (shouldForkAgent(contextPolicy, params.agent)) sessionFileForTask(params.agent, 0);
+		return;
+	}
+	if (params.tasks) {
+		params.tasks.forEach((task, index) => {
+			if (shouldForkAgent(contextPolicy, task.agent)) sessionFileForTask(task.agent, index);
+		});
+		return;
+	}
+	if (!params.chain?.length) return;
+	let flatIndex = 0;
+	for (const step of params.chain) {
+		if (isParallelStep(step)) {
+			for (const task of step.parallel) {
+				if (shouldForkAgent(contextPolicy, task.agent)) sessionFileForTask(task.agent, flatIndex);
+				flatIndex++;
+			}
+			continue;
+		}
+		if (isDynamicParallelStep(step)) {
+			if (shouldForkAgent(contextPolicy, step.parallel.agent)) sessionFileForTask(step.parallel.agent, flatIndex);
+			flatIndex++;
+			continue;
+		}
+		const sequential = step as SequentialStep;
+		if (shouldForkAgent(contextPolicy, sequential.agent)) sessionFileForTask(sequential.agent, flatIndex);
+		flatIndex++;
+	}
 }
 
 function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentToolResult<Details> | null {
@@ -1342,12 +1418,14 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 		shareEnabled,
 		sessionRoot,
 		sessionFileForIndex,
+		sessionFileForTask,
 		artifactConfig,
 		artifactsDir,
 		effectiveAsync,
 		controlConfig,
 		intercomBridge,
 		nestedRoute,
+		contextPolicy,
 	} = data;
 	const hasChain = (params.chain?.length ?? 0) > 0;
 	const hasTasks = (params.tasks?.length ?? 0) > 0;
@@ -1405,7 +1483,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 		const skillOverrides = params.tasks.map((task) => normalizeSkillInput(task.skill));
 		const parallelTasks = params.tasks.map((task, index) => ({
 			agent: task.agent,
-			task: params.context === "fork" ? wrapForkTask(task.task) : task.task,
+			task: shouldForkAgent(contextPolicy, task.agent) ? wrapForkTask(task.task) : task.task,
 			cwd: task.cwd,
 			...(modelOverrides[index] ? { model: modelOverrides[index] } : {}),
 			...(skillOverrides[index] !== undefined ? { skill: skillOverrides[index] } : {}),
@@ -1432,7 +1510,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 			shareEnabled,
 			sessionRoot,
 			chainSkills: [],
-			sessionFilesByFlatIndex: params.tasks.map((_, index) => sessionFileForIndex(index)),
+			sessionFilesByFlatIndex: params.tasks.map((task, index) => sessionFileForTask(task.agent, index)),
 			maxSubagentDepth: currentMaxSubagentDepth,
 			worktreeSetupHook: deps.config.worktreeSetupHook,
 			worktreeSetupHookTimeoutMs: deps.config.worktreeSetupHookTimeoutMs,
@@ -1446,7 +1524,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 	if (hasChain && params.chain) {
 		const normalized = normalizeSkillInput(params.skill);
 		const chainSkills = normalized === false ? [] : (normalized ?? []);
-		const chain = wrapChainTasksForFork(params.chain as ChainStep[], params.context);
+		const chain = wrapChainTasksForFork(params.chain as ChainStep[], contextPolicy);
 		return executeAsyncChain(id, {
 			chain,
 			task: params.task,
@@ -1460,7 +1538,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 			shareEnabled,
 			sessionRoot,
 			chainSkills,
-			sessionFilesByFlatIndex: collectChainSessionFiles(chain, sessionFileForIndex),
+			sessionFilesByFlatIndex: collectChainSessionFiles(chain, sessionFileForTask),
 			dynamicFanoutMaxItems: deps.config.chain?.dynamicFanout?.maxItems,
 			maxSubagentDepth: currentMaxSubagentDepth,
 			worktreeSetupHook: deps.config.worktreeSetupHook,
@@ -1490,7 +1568,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 		const modelOverride = resolveSubagentModelOverride((params.model as string | undefined) ?? a.model, ctx.model, availableModels, currentProvider);
 		return executeAsyncSingle(id, {
 			agent: params.agent!,
-			task: params.context === "fork" ? wrapForkTask(params.task ?? "") : (params.task ?? ""),
+			task: shouldForkAgent(contextPolicy, params.agent!) ? wrapForkTask(params.task ?? "") : (params.task ?? ""),
 			agentConfig: a,
 			ctx: asyncCtx,
 			availableModels,
@@ -1500,7 +1578,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 			artifactConfig,
 			shareEnabled,
 			sessionRoot,
-			sessionFile: sessionFileForIndex(0),
+			sessionFile: sessionFileForTask(params.agent!, 0),
 			skills,
 			output: effectiveOutput,
 			outputMode: effectiveOutputMode,
@@ -1530,18 +1608,20 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 		shareEnabled,
 		sessionDirForIndex,
 		sessionFileForIndex,
+		sessionFileForTask,
 		artifactsDir,
 		artifactConfig,
 		onUpdate,
 		sessionRoot,
 		controlConfig,
+		contextPolicy,
 	} = data;
 	const onControlEvent = createForegroundControlNotifier(data, deps);
 	const childIntercomTarget = data.intercomBridge.active ? resolveSubagentIntercomTarget : undefined;
 	const foregroundControl = deps.state.foregroundControls.get(runId);
 	const normalized = normalizeSkillInput(params.skill);
 	const chainSkills = normalized === false ? [] : (normalized ?? []);
-	const chain = wrapChainTasksForFork(params.chain as ChainStep[], params.context);
+	const chain = wrapChainTasksForFork(params.chain as ChainStep[], contextPolicy);
 	const currentMaxSubagentDepth = resolveCurrentMaxSubagentDepth(deps.config.maxSubagentDepth);
 	const chainResult = await executeChain({
 		chain,
@@ -1555,6 +1635,7 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 		shareEnabled,
 		sessionDirForIndex,
 		sessionFileForIndex,
+		sessionFileForTask,
 		artifactsDir,
 		artifactConfig,
 		includeProgress: params.includeProgress,
@@ -1595,7 +1676,7 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 			currentModelProvider: ctx.model?.provider,
 			currentModel: ctx.model,
 		};
-		const asyncChain = wrapChainTasksForFork(chainResult.requestedAsync.chain, params.context);
+		const asyncChain = wrapChainTasksForFork(chainResult.requestedAsync.chain, contextPolicy);
 		return executeAsyncChain(id, {
 			chain: asyncChain,
 			task: params.task,
@@ -1609,7 +1690,7 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 			shareEnabled,
 			sessionRoot,
 			chainSkills: chainResult.requestedAsync.chainSkills,
-			sessionFilesByFlatIndex: collectChainSessionFiles(asyncChain, sessionFileForIndex),
+			sessionFilesByFlatIndex: collectChainSessionFiles(asyncChain, sessionFileForTask),
 			dynamicFanoutMaxItems: deps.config.chain?.dynamicFanout?.maxItems,
 			maxSubagentDepth: currentMaxSubagentDepth,
 			worktreeSetupHook: deps.config.worktreeSetupHook,
@@ -1655,6 +1736,7 @@ interface ForegroundParallelRunInput {
 	runId: string;
 	sessionDirForIndex: (idx?: number) => string | undefined;
 	sessionFileForIndex: (idx?: number) => string | undefined;
+	sessionFileForTask: (agentName: string, idx?: number) => string | undefined;
 	shareEnabled: boolean;
 	artifactConfig: ArtifactConfig;
 	artifactsDir: string;
@@ -1818,7 +1900,7 @@ async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Pr
 			runId: input.runId,
 			index,
 			sessionDir: input.sessionDirForIndex(index),
-			sessionFile: input.sessionFileForIndex(index),
+			sessionFile: input.sessionFileForTask(task.agent, index),
 			share: input.shareEnabled,
 			artifactsDir: input.artifactConfig.enabled ? input.artifactsDir : undefined,
 			artifactConfig: input.artifactConfig,
@@ -1892,6 +1974,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 		runId,
 		sessionDirForIndex,
 		sessionFileForIndex,
+		sessionFileForTask,
 		shareEnabled,
 		artifactConfig,
 		artifactsDir,
@@ -1899,6 +1982,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 		onUpdate,
 		sessionRoot,
 		controlConfig,
+		contextPolicy,
 	} = data;
 	const onControlEvent = createForegroundControlNotifier(data, deps);
 	const childIntercomTarget = data.intercomBridge.active ? resolveSubagentIntercomTarget : undefined;
@@ -2020,7 +2104,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 				currentModel: ctx.model,
 			};
 			const parallelTasks = tasks.map((t, i) => {
-				const taskText = params.context === "fork" ? wrapForkTask(taskTexts[i]!) : taskTexts[i]!;
+				const taskText = shouldForkAgent(contextPolicy, t.agent) ? wrapForkTask(taskTexts[i]!) : taskTexts[i]!;
 				const progress = taskDisallowsFileUpdates(taskText) ? false : behaviorOverrides[i]?.progress;
 				return {
 					agent: t.agent,
@@ -2048,7 +2132,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 				shareEnabled,
 				sessionRoot,
 				chainSkills: [],
-				sessionFilesByFlatIndex: tasks.map((_, index) => sessionFileForIndex(index)),
+				sessionFilesByFlatIndex: tasks.map((task, index) => sessionFileForTask(task.agent, index)),
 				maxSubagentDepth: currentMaxSubagentDepth,
 				worktreeSetupHook: deps.config.worktreeSetupHook,
 				worktreeSetupHookTimeoutMs: deps.config.worktreeSetupHookTimeoutMs,
@@ -2093,10 +2177,8 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 		const parallelProgressPrecreated = firstProgressIndex !== -1;
 		if (parallelProgressPrecreated) writeInitialProgressFile(effectiveCwd);
 
-		if (params.context === "fork") {
-			for (let i = 0; i < taskTexts.length; i++) {
-				taskTexts[i] = wrapForkTask(taskTexts[i]!);
-			}
+		for (let i = 0; i < taskTexts.length; i++) {
+			if (shouldForkAgent(contextPolicy, tasks[i]!.agent)) taskTexts[i] = wrapForkTask(taskTexts[i]!);
 		}
 
 		const deadlineAt = data.deadlineAt ?? (data.timeoutMs !== undefined ? Date.now() + data.timeoutMs : undefined);
@@ -2110,6 +2192,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 			runId,
 			sessionDirForIndex,
 			sessionFileForIndex,
+			sessionFileForTask,
 			shareEnabled,
 			artifactConfig,
 			artifactsDir,
@@ -2220,13 +2303,14 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 		signal,
 		runId,
 		sessionDirForIndex,
-		sessionFileForIndex,
+		sessionFileForTask,
 		shareEnabled,
 		artifactConfig,
 		artifactsDir,
 		onUpdate,
 		sessionRoot,
 		controlConfig,
+		contextPolicy,
 	} = data;
 	const onControlEvent = createForegroundControlNotifier(data, deps);
 	const childIntercomTarget = data.intercomBridge.active ? resolveSubagentIntercomTarget(runId, params.agent!, 0) : undefined;
@@ -2310,7 +2394,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 			};
 			return executeAsyncSingle(id, {
 				agent: params.agent!,
-				task: params.context === "fork" ? wrapForkTask(task) : task,
+				task: shouldForkAgent(contextPolicy, params.agent!) ? wrapForkTask(task) : task,
 				agentConfig,
 				ctx: asyncCtx,
 				availableModels,
@@ -2320,7 +2404,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 				artifactConfig,
 				shareEnabled,
 				sessionRoot,
-				sessionFile: sessionFileForIndex(0),
+				sessionFile: sessionFileForTask(params.agent!, 0),
 				skills: skillOverride === false ? [] : skillOverride,
 				output: effectiveOutput,
 				outputMode: effectiveOutputMode,
@@ -2335,7 +2419,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 		}
 	}
 
-	if (params.context === "fork") {
+	if (shouldForkAgent(contextPolicy, params.agent!)) {
 		task = wrapForkTask(task);
 	}
 	const cleanTask = task;
@@ -2397,7 +2481,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 		intercomEvents: deps.pi.events,
 		runId,
 		sessionDir: sessionDirForIndex(0),
-		sessionFile: sessionFileForIndex(0),
+		sessionFile: sessionFileForTask(params.agent!, 0),
 		share: shareEnabled,
 		artifactsDir: artifactConfig.enabled ? artifactsDir : undefined,
 		artifactConfig,
@@ -2674,7 +2758,8 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		const parentSessionFile = ctx.sessionManager.getSessionFile() ?? null;
 		deps.state.currentSessionId = resolveCurrentSessionId(ctx.sessionManager);
 		const discoveredAgents = deps.discoverAgents(effectiveCwd, scope).agents;
-		effectiveParams = applyAgentDefaultContext(effectiveParams, discoveredAgents);
+		const contextPolicy = resolveAgentDefaultContextPolicy(effectiveParams, discoveredAgents);
+		effectiveParams = contextPolicy.params;
 		const sessionName = resolveIntercomSessionTarget(deps.pi.getSessionName(), ctx.sessionManager.getSessionId());
 		const intercomBridge = resolveIntercomBridge({
 			config: deps.config.intercomBridge,
@@ -2708,9 +2793,9 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		);
 		if (validationError) return validationError;
 
-		let sessionFileForIndex: (idx?: number) => string | undefined = () => undefined;
+		let forkSessionFileForIndex: (idx?: number) => string | undefined = () => undefined;
 		try {
-			sessionFileForIndex = createForkContextResolver(ctx.sessionManager, effectiveParams.context).sessionFileForIndex;
+			forkSessionFileForIndex = createForkContextResolver(ctx.sessionManager, contextPolicy.usesFork ? "fork" : undefined).sessionFileForIndex;
 		} catch (error) {
 			return toExecutionErrorResult(effectiveParams, error);
 		}
@@ -2748,8 +2833,17 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		}
 		const sessionDirForIndex = (idx?: number) =>
 			path.join(sessionRoot, `run-${idx ?? 0}`);
+		const forkSessionFileForTask = (agentName: string, idx?: number) =>
+			shouldForkAgent(contextPolicy, agentName) ? forkSessionFileForIndex(idx) : undefined;
+		const childSessionFileForTask = (agentName: string, idx?: number) =>
+			forkSessionFileForTask(agentName, idx) ?? path.join(sessionDirForIndex(idx), "session.jsonl");
 		const childSessionFileForIndex = (idx?: number) =>
-			sessionFileForIndex(idx) ?? path.join(sessionDirForIndex(idx), "session.jsonl");
+			path.join(sessionDirForIndex(idx), "session.jsonl");
+		try {
+			preflightForkSessionsForStaticTasks(effectiveParams, contextPolicy, forkSessionFileForTask);
+		} catch (error) {
+			return toExecutionErrorResult(effectiveParams, error);
+		}
 
 		const onUpdateWithContext = onUpdate
 			? (r: AgentToolResult<Details>) => onUpdate(withForkContext(r, effectiveParams.context))
@@ -2767,6 +2861,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			sessionRoot,
 			sessionDirForIndex,
 			sessionFileForIndex: childSessionFileForIndex,
+			sessionFileForTask: childSessionFileForTask,
 			artifactConfig,
 			artifactsDir,
 			backgroundRequestedWhileClarifying,
@@ -2775,6 +2870,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			intercomBridge,
 			nestedRoute,
 			timeoutMs: foregroundTimeout.timeoutMs,
+			contextPolicy,
 		};
 
 		const foregroundMode: "single" | "parallel" | "chain" = hasChain ? "chain" : hasTasks ? "parallel" : "single";
