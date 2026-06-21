@@ -89,6 +89,28 @@ describe("acceptance gates", () => {
 		assert.equal(genericJson.report, undefined);
 		assert.match(genericJson.error ?? "", /Structured acceptance report not found/);
 
+		const criteriaOnlyJson = parseAcceptanceReport(`done\n\
+\
+\`\`\`json\n{\"criteriaSatisfied\":[{\"id\":\"criterion-1\",\"status\":\"satisfied\",\"evidence\":\"example\"}]}\n\`\`\``);
+		assert.equal(criteriaOnlyJson.report, undefined);
+		assert.match(criteriaOnlyJson.error ?? "", /Structured acceptance report not found/);
+
+		const invalidSignalJson = `done\n\
+\
+\`\`\`json\n{\"criteriaSatisfied\":[{\"id\":\"criterion-1\",\"status\":\"satisfied\",\"evidence\":\"example\"}],\"changedFiles\":false}\n\`\`\``;
+		const genericJsonWithInvalidSignal = parseAcceptanceReport(invalidSignalJson);
+		assert.equal(genericJsonWithInvalidSignal.report, undefined);
+		assert.match(genericJsonWithInvalidSignal.error ?? "", /Structured acceptance report not found/);
+		assert.equal(stripAcceptanceReport(invalidSignalJson), invalidSignalJson);
+
+		const partialWrapperJson = `done\n\
+\
+\`\`\`json\n{\"acceptance\":{\"changedFiles\":[\"src/file.ts\"]}}\n\`\`\``;
+		const genericJsonWithPartialWrapper = parseAcceptanceReport(partialWrapperJson);
+		assert.equal(genericJsonWithPartialWrapper.report, undefined);
+		assert.match(genericJsonWithPartialWrapper.error ?? "", /Structured acceptance report not found/);
+		assert.equal(stripAcceptanceReport(partialWrapperJson), partialWrapperJson);
+
 		const reportShapedJson = `done\n\
 \
 \`\`\`json\n{\"changedFiles\":[\"src/file.ts\"]}\n\`\`\``;
@@ -112,6 +134,29 @@ describe("acceptance gates", () => {
 			assert.equal(parsed.error, undefined);
 			assert.equal(stripAcceptanceReport(output), "done");
 		}
+	});
+
+	it("strips trailing json-family reports after earlier unrelated json fences", () => {
+		const output = [
+			"metadata",
+			"```json",
+			JSON.stringify({ notes: "not an acceptance report" }),
+			"```",
+			"done",
+			"```json",
+			JSON.stringify(reportData()),
+			"```",
+		].join("\n");
+		const parsed = parseAcceptanceReport(output);
+
+		assert.ok(parsed.report);
+		assert.equal(stripAcceptanceReport(output), [
+			"metadata",
+			"```json",
+			JSON.stringify({ notes: "not an acceptance report" }),
+			"```",
+			"done",
+		].join("\n"));
 	});
 
 	it("unwraps acceptance-report wrapper objects", () => {

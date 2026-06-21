@@ -307,8 +307,30 @@ function unwrapAcceptanceReport(value: unknown): unknown {
 	return value;
 }
 
-function hasAcceptanceReportWrapper(value: unknown): boolean {
-	return Boolean(value && typeof value === "object" && !Array.isArray(value) && ("acceptance" in value || "acceptance-report" in value));
+function isCommandsRunArray(value: unknown): value is NonNullable<AcceptanceReport["commandsRun"]> {
+	return Array.isArray(value) && value.every((item) => {
+		if (!item || typeof item !== "object" || Array.isArray(item)) return false;
+		const command = item as { command?: unknown; result?: unknown; summary?: unknown };
+		return typeof command.command === "string"
+			&& (command.result === "passed" || command.result === "failed" || command.result === "not-run")
+			&& typeof command.summary === "string";
+	});
+}
+
+function hasGenericAcceptanceReportSignal(value: unknown): boolean {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+	const record = value as Record<string, unknown>;
+	return "criteriaSatisfied" in record && (
+		isStringArray(record.changedFiles)
+		|| isStringArray(record.testsAddedOrUpdated)
+		|| isCommandsRunArray(record.commandsRun)
+		|| isStringArray(record.validationOutput)
+		|| isStringArray(record.residualRisks)
+		|| typeof record.noStagedFiles === "boolean"
+		|| typeof record.diffSummary === "string"
+		|| isStringArray(record.reviewFindings)
+		|| typeof record.manualNotes === "string"
+	);
 }
 
 function parseReportJson(body: string): unknown {
@@ -341,8 +363,7 @@ function parseGenericJsonAcceptanceReportBody(body: string): AcceptanceReport | 
 	const parsed = parseReportJson(body);
 	const report = unwrapAcceptanceReport(parsed);
 	if (!isAcceptanceReport(report)) return undefined;
-	if (hasAcceptanceReportWrapper(parsed)) return report;
-	return report.criteriaSatisfied !== undefined ? report : undefined;
+	return hasGenericAcceptanceReportSignal(report) ? report : undefined;
 }
 
 export function parseAcceptanceReport(output: string): { report?: AcceptanceReport; error?: string } {
@@ -387,12 +408,18 @@ export function parseAcceptanceReport(output: string): { report?: AcceptanceRepo
 }
 
 export function stripAcceptanceReport(output: string): string {
-	const trailingFence = output.match(/\n?```(acceptance-report|json|jsonc|json5)\s*\n([\s\S]*?)```\s*$/i);
-	if (trailingFence?.index !== undefined) {
-		const tag = trailingFence[1]?.toLowerCase();
-		if (tag === "acceptance-report") return output.slice(0, trailingFence.index).trimEnd();
+	const trailingFencePattern = /\n?```(acceptance-report|json|jsonc|json5)\s*\n([\s\S]*?)```\s*/gi;
+	let trailingFence: { index: number; tag: string; body: string } | undefined;
+	for (const match of output.matchAll(trailingFencePattern)) {
+		const end = (match.index ?? 0) + match[0].length;
+		if (output.slice(end).trim().length === 0 && match[1] && match[2]) {
+			trailingFence = { index: match.index ?? 0, tag: match[1].toLowerCase(), body: match[2] };
+		}
+	}
+	if (trailingFence) {
+		if (trailingFence.tag === "acceptance-report") return output.slice(0, trailingFence.index).trimEnd();
 		try {
-			if (trailingFence[2] && parseGenericJsonAcceptanceReportBody(trailingFence[2])) return output.slice(0, trailingFence.index).trimEnd();
+			if (parseGenericJsonAcceptanceReportBody(trailingFence.body)) return output.slice(0, trailingFence.index).trimEnd();
 		} catch {
 			// Leave unrelated or malformed generic JSON fences visible.
 		}
