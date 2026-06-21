@@ -8,6 +8,7 @@
 ### Fixed
 - Added `subagents.disableThinking` so bundled builtin agents can drop thinking suffix defaults for providers that do not accept them. Thanks to Joshua Harding (@jhstatewide) for #212.
 - Actually wire the previously documented foreground-only `timeoutMs`/`maxRuntimeMs` aliases through single, parallel, chain, and dynamic fanout runs, including stable `timedOut: true` results, preserved partial output, manual-interrupt precedence, and skipped acceptance verification after timeout.
+- Apply `subagents.agentOverrides.<name>` to matching user-scope and project-scope custom agents, while keeping explicit agent frontmatter authoritative per field. Thanks to Jacek Juraszek (@jjuraszek) for #218.
 
 ## [0.30.0] - 2026-06-20
 
