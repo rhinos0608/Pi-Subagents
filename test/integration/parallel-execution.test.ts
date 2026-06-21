@@ -325,21 +325,33 @@ Inspect
 ## Acceptance Contract`));
 	});
 
-	it("top-level parallel progress emits the existing progress instruction style", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+	it("top-level parallel defaultProgress uses isolated run storage", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
 		mockPi.onCall({ output: "Progress done" });
-		const executor = makeExecutor();
+		const executor = makeExecutor([makeAgent("echo", { defaultProgress: true })]);
+		const parentSessionFile = path.join(tempDir, "parent-session.jsonl");
 
-		await executor.execute(
+		const result = await executor.execute(
 			"parallel-progress",
-			{ tasks: [{ agent: "echo", task: "Track work", progress: true }] },
+			{ tasks: [{ agent: "echo", task: "Track work" }] },
 			new AbortController().signal,
 			undefined,
-			makeMinimalCtx(tempDir),
+			{
+				...makeMinimalCtx(tempDir),
+				sessionManager: {
+					getSessionId: () => "session-123",
+					getSessionFile: () => parentSessionFile,
+				},
+			},
 		);
+		const runId = result.details?.runId;
+		assert.ok(runId, "expected run id in details");
+		const expectedProgressPath = path.join(tempDir, "subagent-artifacts", "progress", runId, "progress.md");
 
 		const args = readLastCallArgs();
-		assert.ok((args.at(-1) ?? "").includes(`Update progress at: ${path.join(tempDir, "progress.md")}`));
-		assert.equal(fs.existsSync(path.join(tempDir, "progress.md")), true);
+		const taskArg = args.at(-1) ?? "";
+		assert.ok(taskArg.includes(`Update progress at: ${expectedProgressPath}`), taskArg);
+		assert.equal(fs.existsSync(expectedProgressPath), true);
+		assert.equal(fs.existsSync(path.join(tempDir, "progress.md")), false);
 	});
 
 	it("top-level parallel suppresses progress when the task is review-only", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {

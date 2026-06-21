@@ -495,6 +495,24 @@ describe("chain execution — sequential", { skip: !available ? "pi packages not
 		assert.equal(fs.existsSync(path.join(tempDir, "progress.md")), false);
 	});
 
+	it("foreground chains still resolve defaultProgress inside the chain directory", async () => {
+		mockPi.onCall({ output: "Progress done" });
+		const agents = [makeAgent("reviewer", { defaultProgress: true })];
+		const chainDir = path.join(tempDir, "chain-progress");
+		const runId = "chain-progress-run";
+
+		await executeChain(
+			makeChainParams(
+				[{ agent: "reviewer", task: "Track chain work" }],
+				agents,
+				{ chainDir, runId },
+			),
+		);
+
+		const taskArg = readCallArgs(0).at(-1) ?? "";
+		assert.ok(taskArg.includes(`Create and maintain progress at: ${path.join(chainDir, runId, "progress.md")}`), taskArg);
+	});
+
 	it("passes {previous} between steps (step 2 receives step 1 output)", async () => {
 		mockPi.onCall({ output: "Step 1 unique output: MARKER_ABC_123" });
 		const agents = [makeAgent("step1"), makeAgent("step2")];

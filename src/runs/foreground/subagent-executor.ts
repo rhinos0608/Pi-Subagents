@@ -1742,6 +1742,7 @@ interface ForegroundParallelRunInput {
 	artifactsDir: string;
 	maxOutput?: MaxOutputConfig;
 	paramsCwd: string;
+	progressDir: string;
 	maxSubagentDepths: number[];
 	availableModels: ModelInfo[];
 	modelOverrides: (string | undefined)[];
@@ -1869,7 +1870,7 @@ async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Pr
 			? buildChainInstructions({ ...behavior, output: false, progress: false }, taskCwd, false)
 			: { prefix: "", suffix: "" };
 		const progressInstructions = behavior
-			? buildChainInstructions({ ...behavior, output: false, reads: false }, input.paramsCwd, index === input.firstProgressIndex)
+			? buildChainInstructions({ ...behavior, output: false, reads: false }, input.progressDir, index === input.firstProgressIndex)
 			: { prefix: "", suffix: "" };
 		const outputPath = resolveSingleOutputPath(behavior?.output, input.ctx.cwd, taskCwd);
 		const taskText = injectSingleOutputInstruction(
@@ -2175,7 +2176,8 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 		}
 
 		const parallelProgressPrecreated = firstProgressIndex !== -1;
-		if (parallelProgressPrecreated) writeInitialProgressFile(effectiveCwd);
+		const parallelProgressDir = path.join(artifactsDir, "progress", runId);
+		if (parallelProgressPrecreated) writeInitialProgressFile(parallelProgressDir);
 
 		for (let i = 0; i < taskTexts.length; i++) {
 			if (shouldForkAgent(contextPolicy, tasks[i]!.agent)) taskTexts[i] = wrapForkTask(taskTexts[i]!);
@@ -2198,6 +2200,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 			artifactsDir,
 			maxOutput: params.maxOutput,
 			paramsCwd: effectiveCwd,
+			progressDir: parallelProgressDir,
 			availableModels,
 			modelOverrides,
 			behaviors,
