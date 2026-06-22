@@ -131,12 +131,21 @@ function extractVersionScore(id: string): number {
 	return Math.max(...match.map((value) => Number.parseFloat(value)).filter((value) => Number.isFinite(value)));
 }
 
+function modelNameTokens(modelName: string): string[] {
+	return modelName
+		.toLowerCase()
+		.replace(/([a-z])([0-9])/g, "$1 $2")
+		.replace(/([0-9])([a-z])/g, "$1 $2")
+		.split(/[^a-z0-9.]+/)
+		.filter(Boolean);
+}
+
 function inferProfileBand(modelName: string): 0 | 1 | 2 | 3 | 4 {
-	const lower = modelName.toLowerCase();
-	if (/(spark|flash|nano|tiny|instant)/.test(lower)) return 0;
-	if (/(mini|haiku|small)/.test(lower)) return 1;
-	if (/(opus|max|ultra|pro)/.test(lower)) return 4;
-	if (/(sonnet|turbo|plus)/.test(lower)) return 3;
+	const tokens = new Set(modelNameTokens(modelName));
+	if (["spark", "flash", "nano", "tiny", "instant"].some((token) => tokens.has(token))) return 0;
+	if (["mini", "haiku", "small"].some((token) => tokens.has(token))) return 1;
+	if (["opus", "max", "ultra", "pro"].some((token) => tokens.has(token))) return 4;
+	if (["sonnet", "turbo", "plus"].some((token) => tokens.has(token))) return 3;
 	return 2;
 }
 
@@ -226,6 +235,7 @@ function classifyModel(input: ModelClassificationInput, context: ClassificationC
 	classificationSources: ClassificationSource[];
 } {
 	const modelName = input.name?.trim() || input.id;
+	const tokens = new Set(modelNameTokens(modelName));
 	const band = inferProfileBand(modelName);
 	const versionScore = extractVersionScore(input.id);
 	const costNorm = normalize(combinedCost(input.cost), context.cost);
@@ -236,24 +246,34 @@ function classifyModel(input: ModelClassificationInput, context: ClassificationC
 		? ["official-metadata", "heuristic-name"]
 		: ["heuristic-name"];
 	const heuristicBase = band / 4;
-	const qualityScoreRaw = [
+	const qualitySignals = [
 		heuristicBase,
-		...(costNorm !== undefined ? [costNorm] : []),
 		...(contextNorm !== undefined ? [contextNorm] : []),
 		...(maxTokensNorm !== undefined ? [maxTokensNorm] : []),
 		...(input.reasoning === true ? [1] : []),
 		...(input.reasoning === false ? [0] : []),
 	];
-	const qualityScore = qualityScoreRaw.reduce((sum, value) => sum + value, 0) / qualityScoreRaw.length;
+	const latencyHintsFast = tokens.has("highspeed") || tokens.has("flash") || tokens.has("instant") || tokens.has("turbo");
+	const latencyHintsSlow = tokens.has("pro") || tokens.has("ultra") || tokens.has("opus") || tokens.has("max");
+	let qualityScore = qualitySignals.reduce((sum, value) => sum + value, 0) / qualitySignals.length;
+	if (latencyHintsFast) {
+		qualityScore -= 0.2;
+	}
+	qualityScore = Math.max(0, Math.min(1, qualityScore));
 	const costTier = costNorm !== undefined
 		? rankToCostTier(costNorm)
 		: band === 0 ? "cheap" : band >= 3 ? "expensive" : "medium";
 	const qualityTier = scoreToQualityTier(qualityScore);
-	const latencyTier: LatencyTier = costNorm !== undefined
-		? (costNorm <= 0.33 ? "fast" : costNorm <= 0.66 ? "medium" : "slow")
-		: (band <= 1 ? "fast" : band >= 3 ? "slow" : "medium");
+	const latencyTier: LatencyTier = latencyHintsFast
+		? "fast"
+		: latencyHintsSlow
+			? "slow"
+			: costNorm !== undefined
+				? (costNorm <= 0.33 ? "fast" : costNorm <= 0.66 ? "medium" : "slow")
+				: (band <= 1 ? "fast" : band >= 3 ? "slow" : "medium");
 	const recommendedRoleTier = qualityTierToRoleTier(qualityTier, costTier);
-	const profileRank = Math.round((qualityScore * 100) * 10) + Math.round(versionScore * 10);
+	const latencyPenalty = latencyHintsFast ? 125 : 0;
+	const profileRank = Math.round((qualityScore * 100) * 10) + Math.round(versionScore * 25) - latencyPenalty;
 	return {
 		profileRank,
 		costTier,
@@ -305,12 +325,39 @@ function profilePositions(kind: ProfileKind): { cheap: number; medium: number; s
 
 function pickTierModels(models: ProviderModelCatalogModel[], kind: ProfileKind): { cheap: string; medium: string; strong: string } {
 	if (models.length === 0) throw new Error("No provider models are available for profile generation.");
+	const selectionPool = kind === "quota" && models.length > 1
+		? models.slice(0, -1)
+		: models;
 	const positions = profilePositions(kind);
 	return {
-		cheap: models[roundIndex(models.length, positions.cheap)]!.fullId,
-		medium: models[roundIndex(models.length, positions.medium)]!.fullId,
-		strong: models[roundIndex(models.length, positions.strong)]!.fullId,
+		cheap: selectionPool[roundIndex(selectionPool.length, positions.cheap)]!.fullId,
+		medium: selectionPool[roundIndex(selectionPool.length, positions.medium)]!.fullId,
+		strong: selectionPool[roundIndex(selectionPool.length, positions.strong)]!.fullId,
 	};
+}
+
+function observedCombinedCost(model: ProviderModelCatalogModel): number | undefined {
+	return combinedCost(model.observed.cost);
+}
+
+function dominatesModel(a: ProviderModelCatalogModel, b: ProviderModelCatalogModel): boolean {
+	const costA = observedCombinedCost(a);
+	const costB = observedCombinedCost(b);
+	if (costA === undefined || costB === undefined) return false;
+	if (costA > costB) return false;
+	if (a.derived.profileRank < b.derived.profileRank) return false;
+	if ((a.observed.reasoning === true ? 1 : 0) < (b.observed.reasoning === true ? 1 : 0)) return false;
+	if ((a.observed.contextWindow ?? 0) < (b.observed.contextWindow ?? 0)) return false;
+	if ((a.observed.maxTokens ?? 0) < (b.observed.maxTokens ?? 0)) return false;
+	return costA < costB
+		|| a.derived.profileRank > b.derived.profileRank
+		|| (a.observed.reasoning === true && b.observed.reasoning !== true)
+		|| (a.observed.contextWindow ?? 0) > (b.observed.contextWindow ?? 0)
+		|| (a.observed.maxTokens ?? 0) > (b.observed.maxTokens ?? 0);
+}
+
+function filterDominatedModels(models: ProviderModelCatalogModel[]): ProviderModelCatalogModel[] {
+	return models.filter((candidate, index) => !models.some((other, otherIndex) => otherIndex !== index && dominatesModel(other, candidate)));
 }
 
 function buildProfileFile(kind: ProfileKind, models: { cheap: string; medium: string; strong: string }): SubagentProfileFile {
@@ -523,18 +570,19 @@ export async function generateProfilesForProvider(
 		probe: options.probe,
 	});
 	const usableModels = catalog.models.filter(catalogModelIsUsable);
-	if (usableModels.length === 0) {
+	const profileModels = filterDominatedModels(usableModels);
+	if (profileModels.length === 0) {
 		throw new Error(`Provider '${provider}' has no usable models after filtering.`);
 	}
-	const quotaModels = pickTierModels(usableModels, "quota");
-	const qualityModels = pickTierModels(usableModels, "quality");
+	const quotaModels = pickTierModels(profileModels, "quota");
+	const qualityModels = pickTierModels(profileModels, "quality");
 	const dir = ensureSubagentProfilesDir();
 	const quotaPath = path.join(dir, `${provider}.quota.json`);
 	const qualityPath = path.join(dir, `${provider}.quality.json`);
 	writeJsonFile(quotaPath, buildProfileFile("quota", quotaModels));
 	writeJsonFile(qualityPath, buildProfileFile("quality", qualityModels));
 	const selectedModels = new Set([...Object.values(quotaModels), ...Object.values(qualityModels)]);
-	const selectedHeuristicFallbackCount = usableModels.filter((model) => selectedModels.has(model.fullId) && modelUsesHeuristicClassification(model)).length;
+	const selectedHeuristicFallbackCount = profileModels.filter((model) => selectedModels.has(model.fullId) && modelUsesHeuristicClassification(model)).length;
 	return { quotaPath, qualityPath, catalogPath, quotaModels, qualityModels, heuristicFallbackCount, selectedHeuristicFallbackCount };
 }
 

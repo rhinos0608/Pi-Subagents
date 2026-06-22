@@ -168,10 +168,60 @@ describe("profiles helpers", () => {
 		assert.equal(result.selectedHeuristicFallbackCount, 4);
 		assert.equal(result.quotaModels.cheap, "openai-codex/gpt-5.3-codex-spark");
 		assert.equal(result.quotaModels.medium, "openai-codex/gpt-5.4-mini");
-		assert.equal(result.quotaModels.strong, "openai-codex/gpt-5.4");
+		assert.equal(result.quotaModels.strong, "openai-codex/gpt-5.4-mini");
 		assert.equal(result.qualityModels.cheap, "openai-codex/gpt-5.4-mini");
 		assert.equal(result.qualityModels.medium, "openai-codex/gpt-5.4");
 		assert.equal(result.qualityModels.strong, "openai-codex/gpt-5.5");
+	});
+
+	it("does not treat provider names like MiniMax as mini-tier tokens and prefers M3 over M2.7-highspeed for quality", async () => {
+		const pi = {
+			exec: async () => ({ stdout: "OK\n", stderr: "", code: 0, killed: false }),
+		};
+		const ctx = makeCtx(process.cwd(), [
+			{
+				provider: "minimax",
+				id: "MiniMax-M2.7",
+				name: "MiniMax-M2.7",
+				reasoning: true,
+				contextWindow: 204800,
+				maxTokens: 131072,
+				cost: { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0.375 },
+			},
+			{
+				provider: "minimax",
+				id: "MiniMax-M3",
+				name: "MiniMax-M3",
+				reasoning: true,
+				contextWindow: 512000,
+				maxTokens: 128000,
+				cost: { input: 0.6, output: 2.4, cacheRead: 0.12, cacheWrite: 0 },
+			},
+			{
+				provider: "minimax",
+				id: "MiniMax-M2.7-highspeed",
+				name: "MiniMax-M2.7-highspeed",
+				reasoning: true,
+				contextWindow: 204800,
+				maxTokens: 131072,
+				cost: { input: 0.6, output: 2.4, cacheRead: 0.06, cacheWrite: 0.375 },
+			},
+		]);
+
+		const refreshed = await refreshProviderModelCatalog(pi, ctx as never, "minimax");
+		const highspeed = refreshed.catalog.models.find((entry) => entry.fullId === "minimax/MiniMax-M2.7-highspeed");
+		const m3 = refreshed.catalog.models.find((entry) => entry.fullId === "minimax/MiniMax-M3");
+		assert.equal(highspeed?.derived.latencyTier, "fast");
+		assert.equal(typeof highspeed?.derived.profileRank, "number");
+		assert.equal(typeof m3?.derived.profileRank, "number");
+		assert.equal((m3?.derived.profileRank ?? 0) > (highspeed?.derived.profileRank ?? 0), true);
+		const result = await generateProfilesForProvider(pi, ctx as never, "minimax", { forceRefresh: true });
+		assert.equal(result.quotaModels.cheap, "minimax/MiniMax-M2.7");
+		assert.equal(result.quotaModels.medium, "minimax/MiniMax-M2.7");
+		assert.equal(result.quotaModels.strong, "minimax/MiniMax-M2.7");
+		assert.equal(result.qualityModels.strong, "minimax/MiniMax-M3");
+		assert.equal(Object.values(result.quotaModels).includes("minimax/MiniMax-M2.7-highspeed"), false);
+		assert.equal(Object.values(result.qualityModels).includes("minimax/MiniMax-M2.7-highspeed"), false);
 	});
 
 	it("checks a profile against the registry and live probe", async () => {
