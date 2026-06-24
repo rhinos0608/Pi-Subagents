@@ -181,6 +181,122 @@ Inspect
 		assert.match(readText(got), /Subagent-only extensions: \.\/tools\/child-only\.ts, \/opt\/pi\/child\.ts/);
 	});
 
+	it("does not serialize settings overrides into custom agent frontmatter during updates", () => {
+		const ctx = { cwd: tempDir, modelRegistry: { getAvailable: () => [{ provider: "anthropic", id: "claude-sonnet-4-6" }] } };
+		const settingsPath = path.join(tempDir, ".pi", "settings.json");
+		const agentPath = path.join(tempDir, ".pi", "agents", "implementer.md");
+		fs.mkdirSync(path.dirname(agentPath), { recursive: true });
+		fs.writeFileSync(settingsPath, JSON.stringify({
+			subagents: {
+				agentOverrides: {
+					implementer: {
+						model: "anthropic/claude-sonnet-4-6",
+						systemPromptMode: "append",
+						inheritProjectContext: true,
+						inheritSkills: true,
+					},
+				},
+			},
+		}, null, 2), "utf-8");
+		fs.writeFileSync(agentPath, `---
+name: implementer
+description: TDD implementer
+---
+
+Drive the failing test first.
+`, "utf-8");
+
+		const got = handleManagementAction("get", { agent: "implementer" }, ctx);
+		assert.equal(got.isError, false);
+		const beforeText = readText(got);
+		assert.match(beforeText, /Model: anthropic\/claude-sonnet-4-6/);
+		assert.match(beforeText, /System prompt mode: append/);
+		assert.match(beforeText, /Inherit project context: true/);
+		assert.match(beforeText, /Inherit skills: true/);
+
+		const updated = handleUpdate(
+			{ agent: "implementer", config: { description: "Updated implementer" } },
+			ctx,
+		);
+		assert.equal(updated.isError, false);
+
+		const content = fs.readFileSync(agentPath, "utf-8");
+		assert.match(content, /^description: Updated implementer$/m);
+		assert.doesNotMatch(content, /^model:/m);
+		assert.doesNotMatch(content, /^systemPromptMode:/m);
+		assert.doesNotMatch(content, /^inheritProjectContext:/m);
+		assert.doesNotMatch(content, /^inheritSkills:/m);
+
+		const gotAfter = handleManagementAction("get", { agent: "implementer" }, ctx);
+		assert.equal(gotAfter.isError, false);
+		const afterText = readText(gotAfter);
+		assert.match(afterText, /Model: anthropic\/claude-sonnet-4-6/);
+		assert.match(afterText, /System prompt mode: append/);
+		assert.match(afterText, /Inherit project context: true/);
+		assert.match(afterText, /Inherit skills: true/);
+	});
+
+	it("preserves explicit default-like frontmatter that blocks settings overrides during updates", () => {
+		const ctx = { cwd: tempDir, modelRegistry: { getAvailable: () => [] } };
+		const settingsPath = path.join(tempDir, ".pi", "settings.json");
+		const agentPath = path.join(tempDir, ".pi", "agents", "implementer.md");
+		fs.mkdirSync(path.dirname(agentPath), { recursive: true });
+		fs.writeFileSync(settingsPath, JSON.stringify({
+			subagents: {
+				agentOverrides: {
+					implementer: {
+						thinking: "high",
+						fallbackModels: ["openai/gpt-5-mini"],
+						tools: ["bash"],
+						skills: ["override-skill"],
+						defaultContext: "fork",
+						completionGuard: false,
+					},
+				},
+			},
+		}, null, 2), "utf-8");
+		fs.writeFileSync(agentPath, `---
+name: implementer
+description: TDD implementer
+fallbackModels:
+thinking: off
+tools:
+skills:
+defaultContext:
+completionGuard: true
+---
+
+Drive the failing test first.
+`, "utf-8");
+
+		const got = handleManagementAction("get", { agent: "implementer" }, ctx);
+		assert.equal(got.isError, false);
+		const beforeText = readText(got);
+		assert.match(beforeText, /Thinking: off/);
+		assert.doesNotMatch(beforeText, /Thinking: high/);
+
+		const updated = handleUpdate(
+			{ agent: "implementer", config: { description: "Updated implementer" } },
+			ctx,
+		);
+		assert.equal(updated.isError, false);
+
+		const content = fs.readFileSync(agentPath, "utf-8");
+		assert.match(content, /^description: Updated implementer$/m);
+		assert.match(content, /^fallbackModels: ?$/m);
+		assert.match(content, /^thinking: off$/m);
+		assert.match(content, /^tools: ?$/m);
+		assert.match(content, /^skills: ?$/m);
+		assert.match(content, /^defaultContext: ?$/m);
+		assert.match(content, /^completionGuard: true$/m);
+
+		const gotAfter = handleManagementAction("get", { agent: "implementer" }, ctx);
+		assert.equal(gotAfter.isError, false);
+		const afterText = readText(gotAfter);
+		assert.match(afterText, /Thinking: off/);
+		assert.doesNotMatch(afterText, /Thinking: high/);
+	});
+
 	it("updates JSON chain descriptions without rewriting them as markdown", () => {
 		const ctx = { cwd: tempDir, modelRegistry: { getAvailable: () => [] } };
 		const chainPath = path.join(tempDir, ".pi", "chains", "dynamic-review.chain.json");
