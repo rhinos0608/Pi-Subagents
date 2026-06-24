@@ -331,7 +331,8 @@ function buildSkillPaths(cwd: string, agentDir: string): SkillSearchPath[] {
 	const deduped = new Map<string, SkillSearchPath>();
 	for (const entry of skillPaths) {
 		const resolvedPath = path.resolve(entry.path);
-		if (!deduped.has(resolvedPath)) {
+		const existing = deduped.get(resolvedPath);
+		if (!existing || (SOURCE_PRIORITY[entry.source] ?? 0) > (SOURCE_PRIORITY[existing.source] ?? 0)) {
 			deduped.set(resolvedPath, { path: resolvedPath, source: entry.source });
 		}
 	}
