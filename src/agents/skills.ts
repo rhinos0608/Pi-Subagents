@@ -6,7 +6,7 @@ import { execSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { getAgentDir } from "../shared/utils.ts";
+import { getAgentDir, getProjectConfigDir } from "../shared/utils.ts";
 
 export type SkillSource =
 	| "project"
@@ -51,7 +51,6 @@ const MAX_CACHE_SIZE = 50;
 let loadSkillsCache: { cwd: string; agentDir: string; skills: CachedSkillEntry[]; timestamp: number } | null = null;
 const LOAD_SKILLS_CACHE_TTL_MS = 5000;
 
-const CONFIG_DIR = ".pi";
 const SUBAGENT_ORCHESTRATION_SKILL = "pi-subagents";
 
 const SOURCE_PRIORITY: Record<SkillSource, number> = {
@@ -135,8 +134,9 @@ function getGlobalNpmRoot(): string | null {
 }
 
 function collectInstalledPackageSkillPaths(cwd: string, agentDir: string): SkillSearchPath[] {
+	const projectConfigDir = getProjectConfigDir(cwd);
 	const dirs: SkillSearchPath[] = [
-		{ path: path.join(cwd, CONFIG_DIR, "npm", "node_modules"), source: "project-package" },
+		{ path: path.join(projectConfigDir, "npm", "node_modules"), source: "project-package" },
 		{ path: path.join(agentDir, "npm", "node_modules"), source: "user-package" },
 	];
 
@@ -187,8 +187,9 @@ function collectInstalledPackageSkillPaths(cwd: string, agentDir: string): Skill
 
 function collectSettingsSkillPaths(cwd: string, agentDir: string): SkillSearchPath[] {
 	const results: SkillSearchPath[] = [];
+	const projectConfigDir = getProjectConfigDir(cwd);
 	const settingsFiles = [
-		{ file: path.join(cwd, CONFIG_DIR, "settings.json"), base: path.join(cwd, CONFIG_DIR), source: "project-settings" as const },
+		{ file: path.join(projectConfigDir, "settings.json"), base: projectConfigDir, source: "project-settings" as const },
 		{ file: path.join(agentDir, "settings.json"), base: agentDir, source: "user-settings" as const },
 	];
 
@@ -287,8 +288,9 @@ function resolveSettingsPackageRoot(source: string, baseDir: string): string | u
 }
 
 function collectSettingsPackageSkillPaths(cwd: string, agentDir: string): SkillSearchPath[] {
+	const projectConfigDir = getProjectConfigDir(cwd);
 	const settingsFiles = [
-		{ file: path.join(cwd, CONFIG_DIR, "settings.json"), base: path.join(cwd, CONFIG_DIR), source: "project-package" as const },
+		{ file: path.join(projectConfigDir, "settings.json"), base: projectConfigDir, source: "project-package" as const },
 		{ file: path.join(agentDir, "settings.json"), base: agentDir, source: "user-package" as const },
 	];
 	const results: SkillSearchPath[] = [];
@@ -317,8 +319,9 @@ function collectSettingsPackageSkillPaths(cwd: string, agentDir: string): SkillS
 }
 
 function buildSkillPaths(cwd: string, agentDir: string): SkillSearchPath[] {
+	const projectConfigDir = getProjectConfigDir(cwd);
 	const skillPaths: SkillSearchPath[] = [
-		{ path: path.join(cwd, CONFIG_DIR, "skills"), source: "project" },
+		{ path: path.join(projectConfigDir, "skills"), source: "project" },
 		{ path: path.join(cwd, ".agents", "skills"), source: "project" },
 		{ path: path.join(agentDir, "skills"), source: "user" },
 		{ path: path.join(os.homedir(), ".agents", "skills"), source: "user" },
@@ -342,9 +345,9 @@ function buildSkillPaths(cwd: string, agentDir: string): SkillSearchPath[] {
 function inferSkillSource(filePath: string, cwd: string, agentDir: string, sourceHint?: SkillSource): SkillSource {
 	if (sourceHint) return sourceHint;
 
-	const projectConfigRoot = path.resolve(cwd, CONFIG_DIR);
-	const projectSkillsRoot = path.resolve(cwd, CONFIG_DIR, "skills");
-	const projectPackagesRoot = path.resolve(cwd, CONFIG_DIR, "npm", "node_modules");
+	const projectConfigRoot = path.resolve(getProjectConfigDir(cwd));
+	const projectSkillsRoot = path.resolve(projectConfigRoot, "skills");
+	const projectPackagesRoot = path.resolve(projectConfigRoot, "npm", "node_modules");
 	const projectAgentsRoot = path.resolve(cwd, ".agents");
 	const userSkillsRoot = path.resolve(agentDir, "skills");
 	const userPackagesRoot = path.resolve(agentDir, "npm", "node_modules");

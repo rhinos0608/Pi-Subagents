@@ -8,7 +8,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AcceptanceInput, OutputMode } from "../shared/types.ts";
-import { getAgentDir } from "../shared/utils.ts";
+import { getAgentDir, getProjectConfigDir } from "../shared/utils.ts";
 import { KNOWN_FIELDS } from "./agent-serializer.ts";
 import { parseChain, parseJsonChain } from "./chain-serializer.ts";
 import { mergeAgentsForScope } from "./agent-selection.ts";
@@ -383,9 +383,10 @@ function collectPackageSubagentPaths(cwd: string, options: { includeUser: boolea
 	];
 
 	if (options.includeProject) {
+		const projectConfigDir = getProjectConfigDir(projectRoot);
 		packageRoots.push(
-			...collectPackageRootsFromNodeModules(path.join(projectRoot, ".pi", "npm", "node_modules")),
-			...collectSettingsPackageRoots(path.join(projectRoot, ".pi", "settings.json"), path.join(projectRoot, ".pi")),
+			...collectPackageRootsFromNodeModules(path.join(projectConfigDir, "npm", "node_modules")),
+			...collectSettingsPackageRoots(path.join(projectConfigDir, "settings.json"), projectConfigDir),
 		);
 	}
 
@@ -501,7 +502,7 @@ function cloneOverrideValue(override: BuiltinAgentOverrideConfig): BuiltinAgentO
 function findNearestProjectRoot(cwd: string): string | null {
 	let currentDir = cwd;
 	while (true) {
-		if (isDirectory(path.join(currentDir, ".pi")) || isDirectory(path.join(currentDir, ".agents"))) {
+		if (isDirectory(getProjectConfigDir(currentDir)) || isDirectory(path.join(currentDir, ".agents"))) {
 			return currentDir;
 		}
 
@@ -517,7 +518,7 @@ function getUserAgentSettingsPath(): string {
 
 function getProjectAgentSettingsPath(cwd: string): string | null {
 	const projectRoot = findNearestProjectRoot(cwd);
-	return projectRoot ? path.join(projectRoot, ".pi", "settings.json") : null;
+	return projectRoot ? path.join(getProjectConfigDir(projectRoot), "settings.json") : null;
 }
 
 function readSettingsFileStrict(filePath: string): Record<string, unknown> {
@@ -1193,7 +1194,7 @@ function resolveNearestProjectAgentDirs(cwd: string): { readDirs: string[]; pref
 	if (!projectRoot) return { readDirs: [], preferredDir: null };
 
 	const legacyDir = path.join(projectRoot, ".agents");
-	const preferredDir = path.join(projectRoot, ".pi", "agents");
+	const preferredDir = path.join(getProjectConfigDir(projectRoot), "agents");
 	const readDirs: string[] = [];
 	if (isDirectory(legacyDir)) readDirs.push(legacyDir);
 	if (isDirectory(preferredDir)) readDirs.push(preferredDir);
@@ -1208,7 +1209,7 @@ function resolveNearestProjectChainDirs(cwd: string): { readDirs: string[]; pref
 	const projectRoot = findNearestProjectRoot(cwd);
 	if (!projectRoot) return { readDirs: [], preferredDir: null };
 
-	const preferredDir = path.join(projectRoot, ".pi", "chains");
+	const preferredDir = path.join(getProjectConfigDir(projectRoot), "chains");
 	return {
 		readDirs: isDirectory(preferredDir) ? [preferredDir] : [],
 		preferredDir,
