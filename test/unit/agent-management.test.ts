@@ -181,6 +181,122 @@ Inspect
 		assert.match(readText(got), /Subagent-only extensions: \.\/tools\/child-only\.ts, \/opt\/pi\/child\.ts/);
 	});
 
+	it("does not serialize settings overrides into custom agent frontmatter during updates", () => {
+		const ctx = { cwd: tempDir, modelRegistry: { getAvailable: () => [{ provider: "anthropic", id: "claude-sonnet-4-6" }] } };
+		const settingsPath = path.join(tempDir, ".pi", "settings.json");
+		const agentPath = path.join(tempDir, ".pi", "agents", "implementer.md");
+		fs.mkdirSync(path.dirname(agentPath), { recursive: true });
+		fs.writeFileSync(settingsPath, JSON.stringify({
+			subagents: {
+				agentOverrides: {
+					implementer: {
+						model: "anthropic/claude-sonnet-4-6",
+						systemPromptMode: "append",
+						inheritProjectContext: true,
+						inheritSkills: true,
+					},
+				},
+			},
+		}, null, 2), "utf-8");
+		fs.writeFileSync(agentPath, `---
+name: implementer
+description: TDD implementer
+---
+
+Drive the failing test first.
+`, "utf-8");
+
+		const got = handleManagementAction("get", { agent: "implementer" }, ctx);
+		assert.equal(got.isError, false);
+		const beforeText = readText(got);
+		assert.match(beforeText, /Model: anthropic\/claude-sonnet-4-6/);
+		assert.match(beforeText, /System prompt mode: append/);
+		assert.match(beforeText, /Inherit project context: true/);
+		assert.match(beforeText, /Inherit skills: true/);
+
+		const updated = handleUpdate(
+			{ agent: "implementer", config: { description: "Updated implementer" } },
+			ctx,
+		);
+		assert.equal(updated.isError, false);
+
+		const content = fs.readFileSync(agentPath, "utf-8");
+		assert.match(content, /^description: Updated implementer$/m);
+		assert.doesNotMatch(content, /^model:/m);
+		assert.doesNotMatch(content, /^systemPromptMode:/m);
+		assert.doesNotMatch(content, /^inheritProjectContext:/m);
+		assert.doesNotMatch(content, /^inheritSkills:/m);
+
+		const gotAfter = handleManagementAction("get", { agent: "implementer" }, ctx);
+		assert.equal(gotAfter.isError, false);
+		const afterText = readText(gotAfter);
+		assert.match(afterText, /Model: anthropic\/claude-sonnet-4-6/);
+		assert.match(afterText, /System prompt mode: append/);
+		assert.match(afterText, /Inherit project context: true/);
+		assert.match(afterText, /Inherit skills: true/);
+	});
+
+	it("preserves explicit default-like frontmatter that blocks settings overrides during updates", () => {
+		const ctx = { cwd: tempDir, modelRegistry: { getAvailable: () => [] } };
+		const settingsPath = path.join(tempDir, ".pi", "settings.json");
+		const agentPath = path.join(tempDir, ".pi", "agents", "implementer.md");
+		fs.mkdirSync(path.dirname(agentPath), { recursive: true });
+		fs.writeFileSync(settingsPath, JSON.stringify({
+			subagents: {
+				agentOverrides: {
+					implementer: {
+						thinking: "high",
+						fallbackModels: ["openai/gpt-5-mini"],
+						tools: ["bash"],
+						skills: ["override-skill"],
+						defaultContext: "fork",
+						completionGuard: false,
+					},
+				},
+			},
+		}, null, 2), "utf-8");
+		fs.writeFileSync(agentPath, `---
+name: implementer
+description: TDD implementer
+fallbackModels:
+thinking: off
+tools:
+skills:
+defaultContext:
+completionGuard: true
+---
+
+Drive the failing test first.
+`, "utf-8");
+
+		const got = handleManagementAction("get", { agent: "implementer" }, ctx);
+		assert.equal(got.isError, false);
+		const beforeText = readText(got);
+		assert.match(beforeText, /Thinking: off/);
+		assert.doesNotMatch(beforeText, /Thinking: high/);
+
+		const updated = handleUpdate(
+			{ agent: "implementer", config: { description: "Updated implementer" } },
+			ctx,
+		);
+		assert.equal(updated.isError, false);
+
+		const content = fs.readFileSync(agentPath, "utf-8");
+		assert.match(content, /^description: Updated implementer$/m);
+		assert.match(content, /^fallbackModels: ?$/m);
+		assert.match(content, /^thinking: off$/m);
+		assert.match(content, /^tools: ?$/m);
+		assert.match(content, /^skills: ?$/m);
+		assert.match(content, /^defaultContext: ?$/m);
+		assert.match(content, /^completionGuard: true$/m);
+
+		const gotAfter = handleManagementAction("get", { agent: "implementer" }, ctx);
+		assert.equal(gotAfter.isError, false);
+		const afterText = readText(gotAfter);
+		assert.match(afterText, /Thinking: off/);
+		assert.doesNotMatch(afterText, /Thinking: high/);
+	});
+
 	it("updates JSON chain descriptions without rewriting them as markdown", () => {
 		const ctx = { cwd: tempDir, modelRegistry: { getAvailable: () => [] } };
 		const chainPath = path.join(tempDir, ".pi", "chains", "dynamic-review.chain.json");
@@ -259,6 +375,70 @@ Inspect
 		assert.match(readText(listed), /Chain diagnostics:/);
 		assert.match(readText(listed), /broken\.chain\.json/);
 		assert.match(readText(listed), /Invalid JSON chain/);
+	});
+
+	it("reports builtin runtime-loaded model mappings from current session state", () => {
+		const ctx = {
+			cwd: tempDir,
+			modelRegistry: {
+				getAvailable: () => [
+					{ provider: "openai", id: "gpt-5-mini" },
+					{ provider: "anthropic", id: "claude-sonnet-4" },
+				],
+			},
+			model: { provider: "openai", id: "gpt-5-mini" },
+		};
+
+		const result = handleManagementAction("models", {}, ctx);
+		const text = readText(result);
+		assert.equal(result.isError, false);
+		assert.match(text, /^Builtin subagent models/m);
+		assert.match(text, /Current session model:\n  openai\/gpt-5-mini/);
+		assert.match(text, /(?:^|\n)scout\n  model:\n    openai\/gpt-5-mini\n  source: inherits current session model(?:\n|$)/);
+	});
+
+	it("reports override source and disabled builtin state in runtime model mappings", () => {
+		const projectSettingsPath = path.join(tempDir, ".pi", "settings.json");
+		fs.mkdirSync(path.dirname(projectSettingsPath), { recursive: true });
+		fs.writeFileSync(projectSettingsPath, JSON.stringify({
+			subagents: {
+				agentOverrides: {
+					reviewer: { model: "claude-sonnet-4", disabled: true },
+				},
+			},
+		}, null, 2), "utf-8");
+
+		const ctx = {
+			cwd: tempDir,
+			modelRegistry: {
+				getAvailable: () => [
+					{ provider: "openai", id: "gpt-5-mini" },
+					{ provider: "anthropic", id: "claude-sonnet-4" },
+				],
+			},
+			model: { provider: "openai", id: "gpt-5-mini" },
+		};
+
+		const result = handleManagementAction("models", { agent: "reviewer" }, ctx);
+		const text = readText(result);
+		assert.equal(result.isError, false);
+		assert.match(text, /^Builtin subagent model/m);
+		assert.match(text, /Agent: reviewer/);
+		assert.match(text, /Effective model:\n  anthropic\/claude-sonnet-4/);
+		assert.match(text, /Source: project override/);
+		assert.match(text, /Requested model setting:\n  claude-sonnet-4/);
+		assert.match(text, /Disabled: true/);
+		assert.match(text.replaceAll("\\", "/"), /Override file:\n  .*\.pi\/settings\.json/);
+	});
+
+	it("rejects unknown builtin filters for runtime model mappings", () => {
+		const result = handleManagementAction("models", { agent: "not-a-builtin" }, {
+			cwd: tempDir,
+			modelRegistry: { getAvailable: () => [] },
+		});
+
+		assert.equal(result.isError, true);
+		assert.match(readText(result), /Builtin agent 'not-a-builtin' not found/);
 	});
 
 	it("creates delegate with its builtin prompt defaults", () => {

@@ -60,6 +60,11 @@ interface AsyncStatusPayload {
 	}>;
 }
 
+interface MockPiCallRecord {
+	args?: string[];
+	systemPrompts?: Array<{ mode?: string; path?: string; text?: string; error?: string }>;
+}
+
 interface AsyncExecutionModule {
 	isAsyncAvailable(): boolean;
 	executeAsyncSingle(id: string, params: Record<string, unknown>): AsyncExecutionResult;
@@ -96,6 +101,10 @@ const ASYNC_DIR = typesMod?.ASYNC_DIR;
 const RESULTS_DIR = typesMod?.RESULTS_DIR;
 const TEMP_ROOT_DIR = typesMod?.TEMP_ROOT_DIR;
 const createSubagentExecutor = executorMod?.createSubagentExecutor;
+
+function escapeRegExp(value: string): string {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
 function git(cwd: string, args: string[]): string {
 	const result = spawnSync("git", ["-C", cwd, ...args], { encoding: "utf-8" });
@@ -141,7 +150,7 @@ async function waitForAsyncResultFile(id: string, timeoutMs = 15_000): Promise<s
 	return resultPath;
 }
 
-async function waitForMockPiArgs(mockPi: MockPi, index: number, timeoutMs = 30_000): Promise<string[]> {
+async function waitForMockPiCall(mockPi: MockPi, index: number, timeoutMs = 30_000): Promise<{ args: string[]; systemPrompts: NonNullable<MockPiCallRecord["systemPrompts"]> }> {
 	const deadline = Date.now() + timeoutMs;
 	for (;;) {
 		const callFile = fs.readdirSync(mockPi.dir)
@@ -149,13 +158,17 @@ async function waitForMockPiArgs(mockPi: MockPi, index: number, timeoutMs = 30_0
 			.sort()
 			.at(index);
 		if (callFile) {
-			const payload = JSON.parse(fs.readFileSync(path.join(mockPi.dir, callFile), "utf-8")) as { args?: string[] };
+			const payload = JSON.parse(fs.readFileSync(path.join(mockPi.dir, callFile), "utf-8")) as MockPiCallRecord;
 			assert.ok(Array.isArray(payload.args), "expected recorded args");
-			return payload.args;
+			return { args: payload.args, systemPrompts: payload.systemPrompts ?? [] };
 		}
 		if (Date.now() > deadline) assert.fail(`Timed out waiting for recorded mock pi call ${index}`);
 		await new Promise((resolve) => setTimeout(resolve, 100));
 	}
+}
+
+async function waitForMockPiArgs(mockPi: MockPi, index: number, timeoutMs = 30_000): Promise<string[]> {
+	return (await waitForMockPiCall(mockPi, index, timeoutMs)).args;
 }
 
 function readLastMockPiArgs(mockPi: MockPi): string[] {
@@ -164,7 +177,7 @@ function readLastMockPiArgs(mockPi: MockPi): string[] {
 		.sort()
 		.at(-1);
 	assert.ok(callFile, "expected a recorded mock pi call");
-	const payload = JSON.parse(fs.readFileSync(path.join(mockPi.dir, callFile), "utf-8")) as { args?: string[] };
+	const payload = JSON.parse(fs.readFileSync(path.join(mockPi.dir, callFile), "utf-8")) as MockPiCallRecord;
 	assert.ok(Array.isArray(payload.args), "expected recorded args");
 	return payload.args;
 }
@@ -175,7 +188,7 @@ function readMockPiArgs(mockPi: MockPi, index: number): string[] {
 		.sort()
 		.at(index);
 	assert.ok(callFile, `expected recorded call ${index}`);
-	const payload = JSON.parse(fs.readFileSync(path.join(mockPi.dir, callFile), "utf-8")) as { args?: string[] };
+	const payload = JSON.parse(fs.readFileSync(path.join(mockPi.dir, callFile), "utf-8")) as MockPiCallRecord;
 	assert.ok(Array.isArray(payload.args), "expected recorded args");
 	return payload.args;
 }
@@ -347,13 +360,13 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 			tempArtifactsDir: tempDir,
 			getSubagentSessionRoot: () => tempDir,
 			expandTilde: (p: string) => p,
-			discoverAgents: () => ({ agents: [makeAgent("worker")] }),
+			discoverAgents: () => ({ agents: [makeAgent("worker", { defaultProgress: true })] }),
 		});
 
 		const result = await executor.execute(
 			"async-parallel-fields",
 			{
-				tasks: [{ agent: "worker", task: "Do async work", output: "async-top-output.md", reads: ["input.md"], progress: true }],
+				tasks: [{ agent: "worker", task: "Do async work", output: "async-top-output.md", reads: ["input.md"] }],
 				async: true,
 				clarify: false,
 			},
@@ -392,10 +405,12 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		assert.ok(callFile, "expected a recorded mock pi call");
 		const args = JSON.parse(fs.readFileSync(path.join(mockPi.dir, callFile), "utf-8")).args as string[];
 		const taskArg = args.at(-1) ?? "";
+		const progressPath = path.join(ASYNC_DIR, asyncId, "progress", "progress.md");
 		assert.ok(taskArg.includes(`[Read from: ${path.join(tempDir, "input.md")}]`));
-		assert.ok(taskArg.includes(`Update progress at: ${path.join(tempDir, "progress.md")}`));
-		assert.ok(taskArg.includes(`Write your findings to: ${outputPath}`));
-		assert.equal(fs.existsSync(path.join(tempDir, "progress.md")), true);
+		assert.ok(taskArg.includes(`Update progress at: ${progressPath}`));
+		assert.ok(taskArg.includes(`Write your findings to exactly this path: ${outputPath}`));
+		assert.equal(fs.existsSync(progressPath), true);
+		assert.equal(fs.existsSync(path.join(tempDir, "progress.md")), false);
 	});
 
 	it("async single rejects explicit reviewed acceptance without a reviewer result", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
@@ -838,7 +853,7 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 			const args = await waitForMockPiArgs(mockPi, 0);
 			const taskArg = args.at(-1) ?? "";
 			assert.ok(taskArg.includes(`[Read from: ${path.join(worktreeCwd, "input.md")}]`));
-			assert.ok(taskArg.includes(`Write your findings to: ${path.join(worktreeCwd, "report.md")}`));
+			assert.ok(taskArg.includes(`Write your findings to exactly this path: ${path.join(worktreeCwd, "report.md")}`));
 			await waitForAsyncResultFile(asyncId, 90_000);
 		} finally {
 			removeTempDir(repoDir);
@@ -1129,6 +1144,44 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		assert.equal(fs.readFileSync(outputPath, "utf-8"), "async full output\nwith details");
 	});
 
+	it("background single runs make output overrides authoritative in the child system prompt", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
+		mockPi.onCall({ output: "async override report" });
+		const id = `async-output-override-system-prompt-${Date.now().toString(36)}`;
+		const outputPath = path.join(tempDir, "async-custom-report.md");
+		const run = executeAsyncSingle(id, {
+			agent: "researcher",
+			task: "Write report",
+			agentConfig: makeAgent("researcher", {
+				output: "default-report.md",
+				systemPrompt: "Output format (`default-report.md`):\n\nWrite the full report to default-report.md.",
+			}),
+			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
+			artifactConfig: {
+				enabled: false,
+				includeInput: false,
+				includeOutput: false,
+				includeJsonl: false,
+				includeMetadata: false,
+				cleanupDays: 7,
+			},
+			shareEnabled: false,
+			sessionRoot: path.join(tempDir, "sessions"),
+			output: outputPath,
+			maxSubagentDepth: 2,
+		});
+
+		assert.equal(run.details.asyncId, id);
+		const call = await waitForMockPiCall(mockPi, 0);
+		const taskArg = call.args.at(-1) ?? "";
+		const systemPrompt = call.systemPrompts[0]?.text ?? "";
+		assert.match(taskArg, new RegExp(`Write your findings to exactly this path: ${escapeRegExp(outputPath)}`));
+		assert.match(systemPrompt, /Output format \(`default-report\.md`\):/);
+		assert.match(systemPrompt, /Runtime output path override:/);
+		assert.match(systemPrompt, new RegExp(`Write your findings to exactly this path: ${escapeRegExp(outputPath)}`));
+		assert.match(systemPrompt, /Ignore any other output filename or output path mentioned elsewhere/);
+		await waitForAsyncResultFile(id);
+	});
+
 	it("background single runs treat string false as disabled output", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
 		mockPi.onCall({ output: "async inline report" });
 		const id = `async-string-false-output-${Date.now().toString(36)}`;
@@ -1159,7 +1212,7 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		assert.doesNotMatch(payload.summary ?? "", /Output saved to:/);
 		assert.equal(fs.existsSync(path.join(tempDir, "false")), false);
 		assert.equal(fs.existsSync(path.join(tempDir, "default-report.md")), false);
-		assert.doesNotMatch(readLastMockPiArgs(mockPi).at(-1) ?? "", /Write your findings to:/);
+		assert.doesNotMatch(readLastMockPiArgs(mockPi).at(-1) ?? "", /Write your findings to(?: exactly this path)?:/);
 	});
 
 	it("background runs detect hidden tool failures even when the child exits 0", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
@@ -2008,6 +2061,69 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		while (!fs.existsSync(resultPath)) {
 			if (Date.now() > doneDeadline) assert.fail(`Timed out waiting for async result file: ${resultPath}`);
 			await new Promise((resolve) => setTimeout(resolve, 100));
+		}
+	});
+
+	it("background event logs drop noisy message updates and cap child diagnostics", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
+		const previousMaxBytes = process.env.PI_SUBAGENT_ASYNC_EVENTS_MAX_BYTES;
+		process.env.PI_SUBAGENT_ASYNC_EVENTS_MAX_BYTES = "900";
+		try {
+			mockPi.onCall({
+				steps: [
+					{
+						jsonl: [
+							{
+								type: "message_update",
+								assistantMessageEvent: {
+									type: "thinking_delta",
+									delta: "NOISY_PARTIAL_DELTA",
+									partial: { role: "assistant", content: [{ type: "text", text: "NOISY_PARTIAL_SNAPSHOT".repeat(200) }] },
+								},
+								message: { role: "assistant", content: [{ type: "text", text: "NOISY_PARTIAL_MESSAGE".repeat(200) }] },
+							},
+							events.toolStart("bash", { command: `echo ${"BIG_COMMAND_PAYLOAD".repeat(200)}` }),
+							events.assistantMessage("Done after noisy stream"),
+						],
+					},
+				],
+			});
+
+			const id = `async-noisy-events-${Date.now().toString(36)}`;
+			const asyncDir = path.join(ASYNC_DIR, id);
+			const sessionRoot = path.join(tempDir, "sessions");
+
+			executeAsyncSingle(id, {
+				agent: "worker",
+				task: "Stream noisy diagnostics",
+				agentConfig: makeAgent("worker"),
+				ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
+				artifactConfig: {
+					enabled: false,
+					includeInput: false,
+					includeOutput: false,
+					includeJsonl: false,
+					includeMetadata: false,
+					cleanupDays: 7,
+				},
+				shareEnabled: false,
+				sessionRoot,
+				maxSubagentDepth: 2,
+			});
+
+			const resultPath = await waitForAsyncResultFile(id, 10_000);
+			const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8")) as AsyncResultPayload;
+			assert.equal(payload.success, true);
+			assert.equal(payload.results[0]?.output, "Done after noisy stream");
+
+			const eventsText = fs.readFileSync(path.join(asyncDir, "events.jsonl"), "utf-8");
+			assert.doesNotMatch(eventsText, /"type":"message_update"/);
+			assert.doesNotMatch(eventsText, /NOISY_PARTIAL_/);
+			assert.doesNotMatch(eventsText, /BIG_COMMAND_PAYLOAD/);
+			assert.match(eventsText, /"type":"subagent\.events\.truncated"/);
+			assert.match(eventsText, /"droppedEventType":"tool_execution_start"/);
+		} finally {
+			if (previousMaxBytes === undefined) delete process.env.PI_SUBAGENT_ASYNC_EVENTS_MAX_BYTES;
+			else process.env.PI_SUBAGENT_ASYNC_EVENTS_MAX_BYTES = previousMaxBytes;
 		}
 	});
 

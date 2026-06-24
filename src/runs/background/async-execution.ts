@@ -11,7 +11,7 @@ import { createRequire } from "node:module";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { AgentConfig } from "../../agents/agents.ts";
 import { applyThinkingSuffix } from "../shared/pi-args.ts";
-import { injectSingleOutputInstruction, normalizeSingleOutputOverride, resolveSingleOutputPath, validateFileOnlyOutputMode } from "../shared/single-output.ts";
+import { injectOutputPathSystemPrompt, injectSingleOutputInstruction, normalizeSingleOutputOverride, resolveSingleOutputPath, validateFileOnlyOutputMode } from "../shared/single-output.ts";
 import { buildChainInstructions, isDynamicParallelStep, isParallelStep, resolveStepBehavior, suppressProgressForReadOnlyTask, writeInitialProgressFile, type ChainStep, type ResolvedStepBehavior, type SequentialStep, type StepOverrides } from "../../shared/settings.ts";
 import type { RunnerStep } from "../shared/parallel-utils.ts";
 import { resolvePiPackageRoot } from "../shared/pi-spawn.ts";
@@ -95,6 +95,8 @@ interface AsyncExecutionContext {
 	pi: ExtensionAPI;
 	cwd: string;
 	currentSessionId: string;
+	/** Parent session id used by permission-system ask forwarding. */
+	parentSessionId?: string;
 	currentModelProvider?: string;
 	currentModel?: ParentModel;
 }
@@ -115,6 +117,7 @@ interface AsyncChainParams {
 	sessionRoot?: string;
 	chainSkills?: string[];
 	sessionFilesByFlatIndex?: (string | undefined)[];
+	progressDir?: string;
 	dynamicFanoutMaxItems?: number;
 	maxSubagentDepth: number;
 	worktreeSetupHook?: string;
@@ -170,6 +173,7 @@ export interface AsyncRunnerStepBuildParams {
 	cwd?: string;
 	chainSkills?: string[];
 	sessionFilesByFlatIndex?: (string | undefined)[];
+	progressDir?: string;
 	dynamicFanoutMaxItems?: number;
 	maxSubagentDepth: number;
 	asyncDir: string;
@@ -277,6 +281,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 	const chainSkills = params.chainSkills ?? [];
 	const availableModels = params.availableModels;
 	const runnerCwd = resolveChildCwd(ctx.cwd, cwd);
+	const progressDir = params.progressDir ?? runnerCwd;
 	const graphChain: ChainStep[] = params.attachRoot
 		? [{
 				agent: params.attachRoot.agent,
@@ -346,8 +351,9 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 		const readInstructions = buildChainInstructions({ ...behavior, output: false, progress: false }, instructionCwd, false);
 		const isFirstProgressAgent = behavior.progress && !progressPrecreated && !progressInstructionCreated;
 		if (behavior.progress) progressInstructionCreated = true;
-		const progressInstructions = buildChainInstructions({ ...behavior, output: false, reads: false }, runnerCwd, isFirstProgressAgent);
+		const progressInstructions = buildChainInstructions({ ...behavior, output: false, reads: false }, progressDir, isFirstProgressAgent);
 		const outputPath = resolveSingleOutputPath(behavior.output, ctx.cwd, instructionCwd);
+		systemPrompt = injectOutputPathSystemPrompt(systemPrompt, outputPath);
 		const validationError = validateFileOnlyOutputMode(behavior.outputMode, outputPath, `Async step (${s.agent})`);
 		if (validationError) throw new AsyncStartValidationError(validationError);
 		let taskTemplate = s.task ?? "{previous}";
@@ -359,6 +365,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 		const primaryModel = resolveSubagentModelOverride(requestedModel, ctx.currentModel, availableModels, ctx.currentModelProvider);
 		const model = applyThinkingSuffix(primaryModel, a.thinking);
 		return {
+			parentSessionId: ctx.parentSessionId ?? ctx.currentSessionId,
 			agent: s.agent,
 			task,
 			phase: s.phase,
@@ -414,7 +421,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 				});
 				const progressPrecreated = parallelBehaviors.some((behavior) => behavior.progress);
 				if (progressPrecreated) {
-					if (!s.worktree) writeInitialProgressFile(runnerCwd);
+					if (!s.worktree || params.progressDir) writeInitialProgressFile(progressDir);
 					progressInstructionCreated = true;
 				}
 				return {
@@ -439,7 +446,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 				const behavior = suppressProgressForReadOnlyTask(resolveStepBehavior(agent, buildStepOverrides(s.parallel), chainSkills), s.parallel.task, originalTask);
 				const progressPrecreated = behavior.progress;
 				if (progressPrecreated) {
-					writeInitialProgressFile(runnerCwd);
+					writeInitialProgressFile(progressDir);
 					progressInstructionCreated = true;
 				}
 				return {
@@ -539,6 +546,7 @@ export function executeAsyncChain(
 		cwd,
 		chainSkills: params.chainSkills,
 		sessionFilesByFlatIndex,
+		progressDir: params.progressDir ?? (resultMode === "parallel" ? path.join(asyncDir, "progress") : undefined),
 		dynamicFanoutMaxItems: params.dynamicFanoutMaxItems,
 		maxSubagentDepth,
 		asyncDir,
@@ -765,6 +773,7 @@ export function executeAsyncSingle(
 
 	const effectiveOutput = normalizeSingleOutputOverride(params.output, agentConfig.output);
 	const outputPath = resolveSingleOutputPath(effectiveOutput, ctx.cwd, runnerCwd);
+	systemPrompt = injectOutputPathSystemPrompt(systemPrompt, outputPath);
 	const outputMode = params.outputMode ?? "inline";
 	const validationError = validateFileOnlyOutputMode(outputMode, outputPath, `Async single run (${agent})`);
 	if (validationError) return formatAsyncStartError("single", validationError);
@@ -783,6 +792,7 @@ export function executeAsyncSingle(
 				id,
 				steps: [
 					{
+						parentSessionId: ctx.parentSessionId ?? ctx.currentSessionId,
 						agent,
 						task: taskWithOutputInstruction,
 						cwd: runnerCwd,

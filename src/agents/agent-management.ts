@@ -8,6 +8,7 @@ import {
 	type AgentSource,
 	type ChainConfig,
 	type ChainStepConfig,
+	BUILTIN_AGENT_NAMES,
 	defaultInheritProjectContext,
 	defaultInheritSkills,
 	defaultSystemPromptMode,
@@ -22,11 +23,15 @@ import { discoverAvailableSkills } from "./skills.ts";
 import {
 	buildProactiveSkillSubagentRecommendationLines,
 } from "./proactive-skills.ts";
+import { parseFrontmatter } from "./frontmatter.ts";
+import { toModelInfo } from "../shared/model-info.ts";
+import { resolveSubagentModelOverride, type ParentModel } from "../runs/shared/model-fallback.ts";
 import type { Details, ExtensionConfig } from "../shared/types.ts";
+import { getProjectConfigDir } from "../shared/utils.ts";
 
-type ManagementAction = "list" | "get" | "create" | "update" | "delete";
+type ManagementAction = "list" | "get" | "models" | "create" | "update" | "delete";
 type ManagementScope = "user" | "project";
-type ManagementContext = Pick<ExtensionContext, "cwd" | "modelRegistry"> & { config?: ExtensionConfig };
+type ManagementContext = Pick<ExtensionContext, "cwd" | "modelRegistry"> & { model?: ExtensionContext["model"]; config?: ExtensionConfig };
 
 interface ManagementParams {
 	action?: string;
@@ -164,6 +169,84 @@ function skillsWarning(cwd: string, skills: string[] | undefined): string | unde
 	const available = new Set(discoverAvailableSkills(cwd).map((s) => s.name));
 	const missing = skills.filter((s) => !available.has(s));
 	return missing.length ? `Warning: skills not found: ${missing.join(", ")}.` : undefined;
+}
+
+function editableAgentConfig(agent: AgentConfig): AgentConfig {
+	const base = agent.override?.base;
+	if (!base) return { ...agent };
+
+	return {
+		...agent,
+		model: base.model,
+		fallbackModels: base.fallbackModels ? [...base.fallbackModels] : undefined,
+		thinking: base.thinking,
+		systemPromptMode: base.systemPromptMode,
+		inheritProjectContext: base.inheritProjectContext,
+		inheritSkills: base.inheritSkills,
+		defaultContext: base.defaultContext,
+		disabled: base.disabled,
+		systemPrompt: base.systemPrompt,
+		skills: base.skills ? [...base.skills] : undefined,
+		tools: base.tools ? [...base.tools] : undefined,
+		mcpDirectTools: base.mcpDirectTools ? [...base.mcpDirectTools] : undefined,
+		subagentOnlyExtensions: base.subagentOnlyExtensions ? [...base.subagentOnlyExtensions] : undefined,
+		completionGuard: base.completionGuard,
+		override: undefined,
+	};
+}
+
+function readAgentFrontmatterFields(filePath: string): Set<string> {
+	try {
+		const { frontmatter } = parseFrontmatter(fs.readFileSync(filePath, "utf-8"));
+		return new Set(Object.keys(frontmatter));
+	} catch {
+		return new Set();
+	}
+}
+
+function preservedAgentFrontmatterFields(agent: AgentConfig, cfg: Record<string, unknown>): Set<string> {
+	const fields = readAgentFrontmatterFields(agent.filePath);
+	const changed = (...names: string[]) => {
+		for (const name of names) fields.delete(name);
+	};
+
+	if (hasKey(cfg, "name")) changed("name");
+	if (hasKey(cfg, "package")) changed("package");
+	if (hasKey(cfg, "description")) changed("description");
+	if (hasKey(cfg, "systemPrompt")) changed("systemPrompt");
+	if (hasKey(cfg, "model")) changed("model");
+	if (hasKey(cfg, "fallbackModels")) changed("fallbackModels");
+	if (hasKey(cfg, "tools")) changed("tools");
+	if (hasKey(cfg, "skills")) changed("skill", "skills");
+	if (hasKey(cfg, "extensions")) changed("extensions");
+	if (hasKey(cfg, "subagentOnlyExtensions")) changed("subagentOnlyExtensions");
+	if (hasKey(cfg, "thinking")) {
+		changed("thinking");
+		if (cfg.thinking === "off") fields.add("thinking");
+	}
+	if (hasKey(cfg, "systemPromptMode")) {
+		changed("systemPromptMode");
+		fields.add("systemPromptMode");
+	}
+	if (hasKey(cfg, "inheritProjectContext")) {
+		changed("inheritProjectContext");
+		fields.add("inheritProjectContext");
+	}
+	if (hasKey(cfg, "inheritSkills")) {
+		changed("inheritSkills");
+		fields.add("inheritSkills");
+	}
+	if (hasKey(cfg, "defaultContext")) changed("defaultContext");
+	if (hasKey(cfg, "output")) changed("output");
+	if (hasKey(cfg, "reads")) changed("defaultReads");
+	if (hasKey(cfg, "progress")) changed("defaultProgress");
+	if (hasKey(cfg, "maxSubagentDepth")) changed("maxSubagentDepth");
+	if (hasKey(cfg, "completionGuard")) {
+		changed("completionGuard");
+		if (cfg.completionGuard === true) fields.add("completionGuard");
+	}
+
+	return fields;
 }
 
 function parseStepList(raw: unknown): { steps?: ChainStepConfig[]; error?: string } {
@@ -480,6 +563,84 @@ export function handleList(params: ManagementParams, ctx: ManagementContext): Ag
 	return result(lines.join("\n"));
 }
 
+function formatModelSource(agent: AgentConfig, currentModel: ParentModel | undefined): string {
+	if (agent.override && agent.model !== agent.override.base.model) {
+		return `${agent.override.scope} override`;
+	}
+	if (agent.model) return "builtin agent config";
+	if (currentModel) return "inherits current session model";
+	return "inherit requested, but no current session model is available";
+}
+
+function handleModels(params: ManagementParams, ctx: ManagementContext): AgentToolResult<Details> {
+	const requestedAgent = params.agent?.trim();
+	if (requestedAgent && !(BUILTIN_AGENT_NAMES as readonly string[]).includes(requestedAgent)) {
+		return result(`Builtin agent '${requestedAgent}' not found. Available: ${BUILTIN_AGENT_NAMES.join(", ")}.`, true);
+	}
+
+	const discovered = discoverAgentsAll(ctx.cwd);
+	const builtinByName = new Map(discovered.builtin.map((agent) => [agent.name, agent]));
+	const availableModels = ctx.modelRegistry.getAvailable().map(toModelInfo);
+	const currentModel = ctx.model ? { provider: ctx.model.provider, id: ctx.model.id } : undefined;
+	const preferredProvider = ctx.model?.provider;
+	const names = requestedAgent ? [requestedAgent] : [...BUILTIN_AGENT_NAMES];
+
+	if (requestedAgent) {
+		const agent = builtinByName.get(requestedAgent);
+		if (!agent) return result(`Builtin agent '${requestedAgent}' not found.`, true);
+		const resolvedModel = resolveSubagentModelOverride(agent.model, currentModel, availableModels, preferredProvider);
+		const lines = [
+			"Builtin subagent model",
+			"",
+			`Agent: ${requestedAgent}`,
+			"Effective model:",
+			`  ${resolvedModel ?? "(unresolved)"}`,
+			`Source: ${formatModelSource(agent, currentModel)}`,
+		];
+		if (agent.override) {
+			lines.push("Override file:");
+			lines.push(`  ${agent.override.path}`);
+		}
+		if (agent.model && resolvedModel && agent.model !== resolvedModel) {
+			lines.push("Requested model setting:");
+			lines.push(`  ${agent.model}`);
+		}
+		if (agent.disabled) lines.push("Disabled: true");
+		lines.push("Current session model:");
+		lines.push(`  ${currentModel ? `${currentModel.provider}/${currentModel.id}` : "(unavailable)"}`);
+		return result(lines.join("\n"));
+	}
+
+	const lines = [
+		"Builtin subagent models",
+		"",
+		"Current session model:",
+		`  ${currentModel ? `${currentModel.provider}/${currentModel.id}` : "(unavailable)"}`,
+		"",
+	];
+
+	for (const name of names) {
+		const agent = builtinByName.get(name);
+		if (!agent) {
+			lines.push(name);
+			lines.push("  model:");
+			lines.push("    (builtin definition not found)");
+			lines.push("  source: missing");
+			lines.push("");
+			continue;
+		}
+		const resolvedModel = resolveSubagentModelOverride(agent.model, currentModel, availableModels, preferredProvider);
+		const source = `${formatModelSource(agent, currentModel)}${agent.disabled ? "; disabled" : ""}`;
+		lines.push(name);
+		lines.push("  model:");
+		lines.push(`    ${resolvedModel ?? "(unresolved)"}`);
+		lines.push(`  source: ${source}`);
+		lines.push("");
+	}
+
+	return result(lines.join("\n"));
+}
+
 function handleGet(params: ManagementParams, ctx: ManagementContext): AgentToolResult<Details> {
 	if (!params.agent && !params.chainName) return result("Specify 'agent' or 'chainName' for get.", true);
 	const hasBoth = Boolean(params.agent && params.chainName);
@@ -527,9 +688,10 @@ export function handleCreate(params: ManagementParams, ctx: ManagementContext): 
 	const scope = scopeRaw as ManagementScope;
 	const isChain = hasKey(cfg, "steps");
 	const d = discoverAgentsAll(ctx.cwd);
+	const projectConfigDir = getProjectConfigDir(ctx.cwd);
 	const targetDir = isChain
-		? scope === "user" ? d.userChainDir : d.projectChainDir ?? path.join(ctx.cwd, ".pi", "chains")
-		: scope === "user" ? d.userDir : d.projectDir ?? path.join(ctx.cwd, ".pi", "agents");
+		? scope === "user" ? d.userChainDir : d.projectChainDir ?? path.join(projectConfigDir, "chains")
+		: scope === "user" ? d.userDir : d.projectDir ?? path.join(projectConfigDir, "agents");
 	fs.mkdirSync(targetDir, { recursive: true });
 	if (nameExistsInScope(ctx.cwd, scope, runtimeName)) return result(`Name '${runtimeName}' already exists in ${scope} scope. Use update instead.`, true);
 	const targetPath = path.join(targetDir, isChain ? `${runtimeName}.chain.md` : `${runtimeName}.md`);
@@ -583,7 +745,7 @@ export function handleUpdate(params: ManagementParams, ctx: ManagementContext): 
 		const targetOrError = resolveTarget("agent", params.agent, findAgents(params.agent, ctx.cwd, scopeHint ?? "both"), ctx.cwd, params.agentScope);
 		if ("content" in targetOrError) return targetOrError;
 		const target = targetOrError;
-		const updated: AgentConfig = { ...target };
+		const updated = editableAgentConfig(target);
 		const oldName = target.name;
 		if (hasKey(cfg, "name") && (typeof cfg.name !== "string" || !cfg.name.trim())) return result("config.name must be a non-empty string when provided.", true);
 		if (hasKey(cfg, "description") && (typeof cfg.description !== "string" || !cfg.description.trim())) return result("config.description must be a non-empty string when provided.", true);
@@ -600,6 +762,7 @@ export function handleUpdate(params: ManagementParams, ctx: ManagementContext): 
 		}
 		const applyError = applyAgentConfig(updated, cfg);
 		if (applyError) return result(applyError, true);
+		const preserveFrontmatterFields = preservedAgentFrontmatterFields(target, cfg);
 		updated.localName = newLocalName;
 		updated.packageName = newPackageName;
 		updated.name = buildRuntimeName(newLocalName, newPackageName);
@@ -621,7 +784,7 @@ export function handleUpdate(params: ManagementParams, ctx: ManagementContext): 
 			if (renamed.error) return result(renamed.error, true);
 			updated.filePath = renamed.filePath!;
 		}
-		fs.writeFileSync(updated.filePath, serializeAgent(updated), "utf-8");
+		fs.writeFileSync(updated.filePath, serializeAgent(updated, { preserveFrontmatterFields }), "utf-8");
 		if (updated.name !== oldName) {
 			const refs = discoverAgentsAll(ctx.cwd).chains.filter((c) => c.steps.some((s) => s.agent === oldName)).map((c) => `${c.name} (${c.source})`);
 			if (refs.length) warnings.push(`Warning: chains still reference '${oldName}': ${refs.join(", ")}.`);
@@ -703,6 +866,7 @@ export function handleManagementAction(action: string, params: ManagementParams,
 	switch (action as ManagementAction) {
 		case "list": return handleList(params, ctx);
 		case "get": return handleGet(params, ctx);
+		case "models": return handleModels(params, ctx);
 		case "create": return handleCreate(params, ctx);
 		case "update": return handleUpdate(params, ctx);
 		case "delete": return handleDelete(params, ctx);
