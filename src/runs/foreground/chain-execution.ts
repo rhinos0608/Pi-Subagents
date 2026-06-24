@@ -102,6 +102,7 @@ interface ParallelChainRunInput {
 	globalTaskIndex: number;
 	sessionDirForIndex: (idx?: number) => string | undefined;
 	sessionFileForIndex?: (idx?: number) => string | undefined;
+	sessionFileForTask?: (agentName: string, idx?: number) => string | undefined;
 	shareEnabled: boolean;
 	artifactConfig: ArtifactConfig;
 	artifactsDir: string;
@@ -276,7 +277,8 @@ async function runParallelChainTasks(input: ParallelChainRunInput): Promise<Sing
 				runId: input.runId,
 				index: input.globalTaskIndex + taskIndex,
 				sessionDir: input.sessionDirForIndex(input.globalTaskIndex + taskIndex),
-				sessionFile: input.sessionFileForIndex?.(input.globalTaskIndex + taskIndex),
+				sessionFile: input.sessionFileForTask?.(task.agent, input.globalTaskIndex + taskIndex)
+					?? input.sessionFileForIndex?.(input.globalTaskIndex + taskIndex),
 				share: input.shareEnabled,
 				artifactsDir: input.artifactConfig.enabled ? input.artifactsDir : undefined,
 				artifactConfig: input.artifactConfig,
@@ -369,6 +371,7 @@ interface ChainExecutionParams {
 	shareEnabled: boolean;
 	sessionDirForIndex: (idx?: number) => string | undefined;
 	sessionFileForIndex?: (idx?: number) => string | undefined;
+	sessionFileForTask?: (agentName: string, idx?: number) => string | undefined;
 	artifactsDir: string;
 	artifactConfig: ArtifactConfig;
 	includeProgress?: boolean;
@@ -428,6 +431,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 		shareEnabled,
 		sessionDirForIndex,
 		sessionFileForIndex,
+		sessionFileForTask,
 		artifactsDir,
 		artifactConfig,
 		includeProgress,
@@ -656,6 +660,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 					globalTaskIndex,
 					sessionDirForIndex,
 					sessionFileForIndex,
+					sessionFileForTask,
 					shareEnabled,
 					artifactConfig,
 					artifactsDir,
@@ -865,6 +870,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 				globalTaskIndex,
 				sessionDirForIndex,
 				sessionFileForIndex,
+				sessionFileForTask,
 				shareEnabled,
 				artifactConfig,
 				artifactsDir,
@@ -1075,7 +1081,8 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 				runId,
 				index: globalTaskIndex,
 				sessionDir: sessionDirForIndex(globalTaskIndex),
-				sessionFile: sessionFileForIndex?.(globalTaskIndex),
+				sessionFile: sessionFileForTask?.(seqStep.agent, globalTaskIndex)
+					?? sessionFileForIndex?.(globalTaskIndex),
 				share: shareEnabled,
 				artifactsDir: artifactConfig.enabled ? artifactsDir : undefined,
 				artifactConfig,
