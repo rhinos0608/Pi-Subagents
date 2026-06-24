@@ -14,6 +14,7 @@
 - Preserve compact foreground `write`/`edit` tool-call evidence in prompt-template delegation responses so convergence checks do not stop loops early. Thanks to Hans Schnedlitz (@hschne) for #207.
 - Respect each agent's `defaultContext` in mixed parallel and chain subagent calls when no explicit `context` is provided, so fresh-default scouts no longer inherit forked parent transcripts just because another agent in the same invocation defaults to fork. Thanks to Mitch Fultz (@fitchmultz) for #228.
 - Make runtime `output` overrides authoritative in child task and system prompts, and remove stale static filenames from bundled output-format instructions. Thanks to youngshine (@smithyyang) for #223.
+- Keep top-level parallel `defaultProgress` files in run-scoped artifact storage instead of the parent working directory. Thanks to youngshine (@smithyyang) for #224.
 
 ## [0.30.0] - 2026-06-20
 
