@@ -91,6 +91,11 @@ interface RunSyncResult {
 	};
 }
 
+interface MockPiCallRecord {
+	args?: string[];
+	systemPrompts?: Array<{ mode?: string; path?: string; text?: string; error?: string }>;
+}
+
 interface ExecutionModule {
 	runSync(
 		runtimeCwd: string,
@@ -119,6 +124,10 @@ const available = !!(execution && utils);
 const runSync = execution?.runSync;
 const getFinalOutput = utils?.getFinalOutput;
 const createSubagentExecutor = executorMod?.createSubagentExecutor;
+
+function escapeRegExp(value: string): string {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
 function writePackageSkill(packageRoot: string, skillName: string): void {
 	const skillDir = path.join(packageRoot, "skills", skillName);
@@ -157,15 +166,19 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		removeTempDir(tempDir);
 	});
 
-	function readCallArgs(): string[] {
+	function readCall(): { args: string[]; systemPrompts: NonNullable<MockPiCallRecord["systemPrompts"]> } {
 		const callFile = fs.readdirSync(mockPi.dir)
 			.filter((name) => name.startsWith("call-") && name.endsWith(".json"))
 			.sort()
 			.at(-1);
 		assert.ok(callFile, "expected a recorded mock pi call");
-		const payload = JSON.parse(fs.readFileSync(path.join(mockPi.dir, callFile), "utf-8")) as { args?: string[] };
+		const payload = JSON.parse(fs.readFileSync(path.join(mockPi.dir, callFile), "utf-8")) as MockPiCallRecord;
 		assert.ok(Array.isArray(payload.args), "expected recorded args");
-		return payload.args;
+		return { args: payload.args, systemPrompts: payload.systemPrompts ?? [] };
+	}
+
+	function readCallArgs(): string[] {
+		return readCall().args;
 	}
 
 	function makeExecutor(agents = [makeAgent("echo")]) {
@@ -909,6 +922,35 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		assert.equal(fs.readFileSync(outputPath, "utf-8"), "fresh assistant output");
 	});
 
+	it("makes task-level output overrides authoritative in the child system prompt", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		mockPi.onCall({ output: "override report" });
+		const overridePath = path.join(tempDir, "custom-report.md");
+		const executor = makeExecutor([
+			makeAgent("researcher", {
+				output: "default-report.md",
+				systemPrompt: "Output format (`default-report.md`):\n\nWrite the full report to default-report.md.",
+			}),
+		]);
+
+		const result = await executor.execute(
+			"single-output-override-system-prompt",
+			{ agent: "researcher", task: "Write report", output: overridePath },
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+
+		const call = readCall();
+		const taskArg = call.args.at(-1) ?? "";
+		const systemPrompt = call.systemPrompts[0]?.text ?? "";
+		assert.equal(result.isError, undefined);
+		assert.match(taskArg, new RegExp(`Write your findings to exactly this path: ${escapeRegExp(overridePath)}`));
+		assert.match(systemPrompt, /Output format \(`default-report\.md`\):/);
+		assert.match(systemPrompt, /Runtime output path override:/);
+		assert.match(systemPrompt, new RegExp(`Write your findings to exactly this path: ${escapeRegExp(overridePath)}`));
+		assert.match(systemPrompt, /Ignore any other output filename or output path mentioned elsewhere/);
+	});
+
 	it("treats string false as disabled output in foreground single runs", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
 		mockPi.onCall({ output: "inline report" });
 		const executor = makeExecutor([makeAgent("echo", { output: "default-report.md" })]);
@@ -926,7 +968,7 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		assert.doesNotMatch(result.content[0]?.text ?? "", /Output saved to:/);
 		assert.equal(fs.existsSync(path.join(tempDir, "false")), false);
 		assert.equal(fs.existsSync(path.join(tempDir, "default-report.md")), false);
-		assert.doesNotMatch(readCallArgs().at(-1) ?? "", /Write your findings to:/);
+		assert.doesNotMatch(readCallArgs().at(-1) ?? "", /Write your findings to(?: exactly this path)?:/);
 	});
 
 	it("rejects mismatched foreground timeout aliases before spawning", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
