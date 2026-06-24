@@ -560,6 +560,7 @@ function appendStepToAsyncChain(input: {
 		pi: input.deps.pi,
 		cwd: input.ctx.cwd,
 		currentSessionId: resolveCurrentSessionId(input.ctx.sessionManager),
+		parentSessionId: input.ctx.sessionManager.getSessionId() ?? undefined,
 		currentModelProvider: input.ctx.model?.provider,
 		currentModel: input.ctx.model,
 	};
@@ -887,6 +888,7 @@ async function resumeAsyncRun(input: {
 				pi: input.deps.pi,
 				cwd: input.requestCwd,
 				currentSessionId: input.deps.state.currentSessionId,
+				parentSessionId: input.ctx.sessionManager.getSessionId() ?? undefined,
 				currentModelProvider: input.ctx.model?.provider,
 				currentModel: input.ctx.model,
 			},
@@ -929,6 +931,7 @@ async function resumeAsyncRun(input: {
 			pi: input.deps.pi,
 			cwd: input.requestCwd,
 			currentSessionId: input.deps.state.currentSessionId,
+			parentSessionId: input.ctx.sessionManager.getSessionId() ?? undefined,
 			currentModelProvider: input.ctx.model?.provider,
 			currentModel: input.ctx.model,
 		},
@@ -1466,6 +1469,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 		pi: deps.pi,
 		cwd: ctx.cwd,
 		currentSessionId: deps.state.currentSessionId!,
+		parentSessionId: ctx.sessionManager.getSessionId() ?? undefined,
 		currentModelProvider: ctx.model?.provider,
 		currentModel: ctx.model,
 	};
@@ -1673,6 +1677,7 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 			pi: deps.pi,
 			cwd: ctx.cwd,
 			currentSessionId: deps.state.currentSessionId!,
+			parentSessionId: ctx.sessionManager.getSessionId() ?? undefined,
 			currentModelProvider: ctx.model?.provider,
 			currentModel: ctx.model,
 		};
@@ -1893,6 +1898,7 @@ async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Pr
 		}
 		const agentConfig = input.agents.find((agent) => agent.name === task.agent);
 		return runSync(input.ctx.cwd, input.agents, task.agent, taskText, {
+			parentSessionId: input.ctx.sessionManager.getSessionId() ?? undefined,
 			cwd: taskCwd,
 			signal: input.signal,
 			interruptSignal: interruptController.signal,
@@ -2101,6 +2107,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 				pi: deps.pi,
 				cwd: ctx.cwd,
 				currentSessionId: deps.state.currentSessionId!,
+				parentSessionId: ctx.sessionManager.getSessionId() ?? undefined,
 				currentModelProvider: ctx.model?.provider,
 				currentModel: ctx.model,
 			};
@@ -2392,6 +2399,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 				pi: deps.pi,
 				cwd: ctx.cwd,
 				currentSessionId: deps.state.currentSessionId!,
+				parentSessionId: ctx.sessionManager.getSessionId() ?? undefined,
 				currentModelProvider: ctx.model?.provider,
 				currentModel: ctx.model,
 			};
@@ -2477,6 +2485,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 
 	const deadlineAt = data.deadlineAt ?? (data.timeoutMs !== undefined ? Date.now() + data.timeoutMs : undefined);
 	const r = await runSync(ctx.cwd, agents, params.agent!, task, {
+		parentSessionId: ctx.sessionManager.getSessionId() ?? undefined,
 		cwd: effectiveCwd,
 		signal,
 		interruptSignal: interruptController.signal,
@@ -2627,7 +2636,9 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 				let orchestratorTarget: string | undefined;
 				try {
 					orchestratorTarget = resolveIntercomSessionTarget(deps.pi.getSessionName(), ctx.sessionManager.getSessionId());
-				} catch {}
+				} catch (error) {
+					if (!sessionError) sessionError = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+				}
 				return {
 					content: [{
 						type: "text",

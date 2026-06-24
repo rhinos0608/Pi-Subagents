@@ -239,6 +239,79 @@ For normal use, you do not need to configure anything. Advanced users can tune t
 
 At this point, you know enough to use the plugin. The rest of this README is reference material for exact command syntax, custom agents, saved chains, worktrees, and configuration.
 
+## Optional pi-permission-system integration
+
+[`@gotgenes/pi-permission-system`](https://github.com/gotgenes/pi-packages/tree/main/packages/pi-permission-system)
+adds a second policy layer — `allow` / `ask` / `deny` — on top of
+pi-subagents' visibility-based tool restrictions.
+
+The two compose independently:
+
+| Layer | What it controls | Who provides it |
+|-------|-----------------|-----------------|
+| Visibility | Which tools are registered before the session starts | pi-subagents (`tools:` frontmatter key) |
+| Policy  | Runtime allow/ask/deny decisions on every tool call, bash command, MCP operation | pi-permission-system (`permission:` frontmatter key) |
+
+### Installing
+
+```bash
+pi install npm:@gotgenes/pi-permission-system
+```
+
+No configuration is required for the integration — it is automatic when both
+extensions are installed. pi-subagents passes the parent session identity
+to child processes via the `PI_SUBAGENT_PARENT_SESSION` environment variable,
+which the permission system uses to forward `ask` prompts from headless
+subagent processes back to the parent session's UI.
+
+### Per-agent permission frontmatter
+
+Agent files can include a `permission:` block alongside the standard `tools:`
+key. The permission system reads it independently:
+
+```yaml
+---
+name: worker
+tools: bash,read,write,edit
+permission:
+  "*": ask
+  read: allow
+  bash:
+    "*": ask
+    "git *": allow
+    "npm test": allow
+---
+```
+
+In this example the subagent extension restricts visibility to four tools,
+and the permission system then applies `ask`/`allow` policy within that
+visible set. Both keys coexist without collision.
+
+### Checking the integration
+
+Run `/subagents-doctor` to check the permission system status.
+If `ask` prompts from children are not reaching the parent UI, verify both
+extensions are installed:
+
+```bash
+pi list
+```
+
+### How it works
+
+At session start, the interactive (root) session records its own identity in
+`PI_SUBAGENT_PARENT_SESSION`. When pi-subagents launches a child, it passes the
+launching session's identity to that child explicitly, falling back to the
+inherited environment variable. When the permission system inside a child
+encounters an `ask` permission, it reads this variable to locate the parent
+session and forwards the confirmation request there.
+
+This resolves an interactive prompt only when the parent it points at is the
+interactive session — i.e. for the direct children of the root session. A
+nested child's parent is itself a headless subagent process with no UI to
+surface the prompt, so `ask` policies are best placed on agents that run as
+direct children of the interactive session.
+
 ## Direct commands
 
 Skip this section until you want exact syntax.
