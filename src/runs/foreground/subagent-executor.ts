@@ -553,6 +553,7 @@ function appendStepToAsyncChain(input: {
 		pi: input.deps.pi,
 		cwd: input.ctx.cwd,
 		currentSessionId: resolveCurrentSessionId(input.ctx.sessionManager),
+		parentSessionId: input.ctx.sessionManager.getSessionId() ?? undefined,
 		currentModelProvider: input.ctx.model?.provider,
 		currentModel: input.ctx.model,
 	};
@@ -879,6 +880,7 @@ async function resumeAsyncRun(input: {
 				pi: input.deps.pi,
 				cwd: input.requestCwd,
 				currentSessionId: input.deps.state.currentSessionId,
+				parentSessionId: input.ctx.sessionManager.getSessionId() ?? undefined,
 				currentModelProvider: input.ctx.model?.provider,
 				currentModel: input.ctx.model,
 			},
@@ -921,6 +923,7 @@ async function resumeAsyncRun(input: {
 			pi: input.deps.pi,
 			cwd: input.requestCwd,
 			currentSessionId: input.deps.state.currentSessionId,
+			parentSessionId: input.ctx.sessionManager.getSessionId() ?? undefined,
 			currentModelProvider: input.ctx.model?.provider,
 			currentModel: input.ctx.model,
 		},
@@ -1368,6 +1371,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 		pi: deps.pi,
 		cwd: ctx.cwd,
 		currentSessionId: deps.state.currentSessionId!,
+		parentSessionId: ctx.sessionManager.getSessionId() ?? undefined,
 		currentModelProvider: ctx.model?.provider,
 		currentModel: ctx.model,
 	};
@@ -1567,6 +1571,7 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 			pi: deps.pi,
 			cwd: ctx.cwd,
 			currentSessionId: deps.state.currentSessionId!,
+			parentSessionId: ctx.sessionManager.getSessionId() ?? undefined,
 			currentModelProvider: ctx.model?.provider,
 			currentModel: ctx.model,
 		};
@@ -1985,6 +1990,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 				pi: deps.pi,
 				cwd: ctx.cwd,
 				currentSessionId: deps.state.currentSessionId!,
+				parentSessionId: ctx.sessionManager.getSessionId() ?? undefined,
 				currentModelProvider: ctx.model?.provider,
 				currentModel: ctx.model,
 			};
@@ -2267,6 +2273,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 				pi: deps.pi,
 				cwd: ctx.cwd,
 				currentSessionId: deps.state.currentSessionId!,
+				parentSessionId: ctx.sessionManager.getSessionId() ?? undefined,
 				currentModelProvider: ctx.model?.provider,
 				currentModel: ctx.model,
 			};

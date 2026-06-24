@@ -95,6 +95,8 @@ interface AsyncExecutionContext {
 	pi: ExtensionAPI;
 	cwd: string;
 	currentSessionId: string;
+	/** Parent session id used by permission-system ask forwarding. */
+	parentSessionId?: string;
 	currentModelProvider?: string;
 	currentModel?: ParentModel;
 }
@@ -359,7 +361,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 		const primaryModel = resolveSubagentModelOverride(requestedModel, ctx.currentModel, availableModels, ctx.currentModelProvider);
 		const model = applyThinkingSuffix(primaryModel, a.thinking);
 		return {
-			parentSessionId: ctx.currentSessionId,
+			parentSessionId: ctx.parentSessionId ?? ctx.currentSessionId,
 			agent: s.agent,
 			task,
 			phase: s.phase,
@@ -784,7 +786,7 @@ export function executeAsyncSingle(
 				id,
 				steps: [
 					{
-						parentSessionId: ctx.currentSessionId,
+						parentSessionId: ctx.parentSessionId ?? ctx.currentSessionId,
 						agent,
 						task: taskWithOutputInstruction,
 						cwd: runnerCwd,
