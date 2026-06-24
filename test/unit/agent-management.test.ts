@@ -428,7 +428,7 @@ Drive the failing test first.
 		assert.match(text, /Source: project override/);
 		assert.match(text, /Requested model setting:\n  claude-sonnet-4/);
 		assert.match(text, /Disabled: true/);
-		assert.match(text, /Override file:\n  .*\.pi\/settings\.json/);
+		assert.match(text.replaceAll("\\", "/"), /Override file:\n  .*\.pi\/settings\.json/);
 	});
 
 	it("rejects unknown builtin filters for runtime model mappings", () => {
