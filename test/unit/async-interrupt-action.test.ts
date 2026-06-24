@@ -30,7 +30,7 @@ function writeJson(filePath: string, value: object): void {
 	fs.writeFileSync(filePath, JSON.stringify(value, null, 2), "utf-8");
 }
 
-function createRunningAsync(state: SubagentState, runId: string): string {
+function createRunningAsync(state: SubagentState, runId: string, options: { track?: boolean } = {}): string {
 	const asyncDir = path.join(ASYNC_DIR, runId);
 	writeJson(path.join(asyncDir, "status.json"), {
 		runId,
@@ -42,14 +42,16 @@ function createRunningAsync(state: SubagentState, runId: string): string {
 		lastUpdate: Date.now(),
 		steps: [{ agent: "worker", status: "running", startedAt: 100 }],
 	});
-	state.asyncJobs.set(runId, {
-		asyncId: runId,
-		asyncDir,
-		status: "running",
-		pid: 12345,
-		agents: ["worker"],
-		updatedAt: 100,
-	});
+	if (options.track !== false) {
+		state.asyncJobs.set(runId, {
+			asyncId: runId,
+			asyncDir,
+			status: "running",
+			pid: 12345,
+			agents: ["worker"],
+			updatedAt: 100,
+		});
+	}
 	return asyncDir;
 }
 
@@ -86,6 +88,26 @@ function text(result: Awaited<ReturnType<ReturnType<typeof executorWithKill>["ex
 }
 
 describe("async interrupt action", () => {
+	it("interrupts a running async run resolved from disk after in-memory tracking is gone", async () => {
+		const state = createState();
+		const runId = `interrupt-disk-${Date.now().toString(36)}`;
+		const asyncDir = createRunningAsync(state, runId, { track: false });
+		try {
+			const kills: Array<{ pid: number; signal?: NodeJS.Signals | 0 }> = [];
+			const result = await executorWithKill(state, (pid, signal) => {
+				kills.push({ pid, signal });
+				return true;
+			}).execute("interrupt", { action: "interrupt", id: runId }, new AbortController().signal, undefined, ctx());
+
+			assert.equal(result.isError, undefined);
+			assert.match(text(result), new RegExp(`Interrupt requested for async run ${runId}`));
+			assert.equal(fs.existsSync(path.join(asyncDir, "control", "interrupt.json")), true);
+			assert.deepEqual(kills, [{ pid: 12345, signal: 0 }, { pid: 12345, signal: process.platform === "win32" ? "SIGBREAK" : "SIGUSR2" }]);
+		} finally {
+			cleanup(runId, asyncDir);
+		}
+	});
+
 	it("reports success and writes the portable request when the signal is unavailable", async () => {
 		const state = createState();
 		const runId = `interrupt-enosys-${Date.now().toString(36)}`;

@@ -57,7 +57,7 @@ export function requestAsyncInterrupt(
 	deps: { now?: () => number } = {},
 ): string {
 	const requestPath = interruptRequestPath(asyncDir);
-	const request: InterruptRequest = { type: "interrupt", ts: deps.now?.() ?? Date.now(), ...payload };
+	const request: InterruptRequest = { ...payload, ts: payload.ts ?? deps.now?.() ?? Date.now(), type: "interrupt" };
 	writeAtomicJson(requestPath, request);
 	return requestPath;
 }
@@ -73,7 +73,7 @@ export function consumeInterruptRequest(
 	const requestPath = interruptRequestPath(asyncDir);
 	if (!fsImpl.existsSync(requestPath)) return false;
 	try {
-		fsImpl.rmSync(requestPath, { force: true });
+		fsImpl.rmSync(requestPath, { force: true, recursive: true });
 	} catch {
 		// Already removed by a concurrent check — still counts as consumed.
 	}

@@ -35,10 +35,34 @@ describe("control channel: request file", () => {
 		}
 	});
 
+	it("keeps the request type authoritative even for untyped callers", () => {
+		const asyncDir = tmpAsyncDir("pi-control-write-type-");
+		try {
+			const requestPath = requestAsyncInterrupt(asyncDir, { type: "not-interrupt", source: "test" } as any, { now: () => 999 });
+			const data = JSON.parse(fs.readFileSync(requestPath, "utf-8"));
+			assert.equal(data.type, "interrupt");
+			assert.equal(data.source, "test");
+		} finally {
+			cleanup(asyncDir);
+		}
+	});
+
 	it("consumes a pending request exactly once and removes the file", () => {
 		const asyncDir = tmpAsyncDir("pi-control-consume-");
 		try {
 			requestAsyncInterrupt(asyncDir);
+			assert.equal(consumeInterruptRequest(asyncDir), true);
+			assert.equal(fs.existsSync(interruptRequestPath(asyncDir)), false);
+			assert.equal(consumeInterruptRequest(asyncDir), false);
+		} finally {
+			cleanup(asyncDir);
+		}
+	});
+
+	it("removes a malformed request directory instead of firing forever", () => {
+		const asyncDir = tmpAsyncDir("pi-control-consume-dir-");
+		try {
+			fs.mkdirSync(interruptRequestPath(asyncDir), { recursive: true });
 			assert.equal(consumeInterruptRequest(asyncDir), true);
 			assert.equal(fs.existsSync(interruptRequestPath(asyncDir)), false);
 			assert.equal(consumeInterruptRequest(asyncDir), false);
