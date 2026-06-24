@@ -96,12 +96,15 @@ describe("diagnoseIntercomBridge", () => {
 	it("reports inactive and unavailable when pi-intercom is missing", () => {
 		const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-intercom-diagnostic-test-"));
 		try {
+			// Point agentDir at the temp dir so the new tmp/extensions/npm fallback
+			// does not accidentally discover a real pi-intercom from the user's system.
 			const diagnostic = diagnoseIntercomBridge({
 				config: { mode: "always" },
 				context: "fresh",
 				orchestratorTarget: "main",
 				extensionDir: path.join(tempDir, "missing-pi-intercom"),
 				configPath: path.join(tempDir, "config.json"),
+				agentDir: tempDir,
 			});
 			assert.equal(diagnostic.active, false);
 			assert.equal(diagnostic.wantsIntercom, true);
