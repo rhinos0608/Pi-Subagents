@@ -39,28 +39,18 @@ export type AsyncResumeTarget = {
 
 type KillFn = (pid: number, signal?: NodeJS.Signals | 0) => boolean;
 
-function readAsyncStatus(asyncDir: string): AsyncStatus | null {
-	const statusPath = path.join(asyncDir, "status.json");
-	try {
-		return JSON.parse(fs.readFileSync(statusPath, "utf-8")) as AsyncStatus;
-	} catch (error) {
-		const code = error && typeof error === "object" && "code" in error ? (error as NodeJS.ErrnoException).code : undefined;
-		if (code === "ENOENT") return null;
-		throw error;
-	}
-}
-
 export function interruptLiveAsyncResumeTarget(input: {
 	target: AsyncResumeTarget & { kind: "live" };
 	state?: Pick<SubagentState, "asyncJobs">;
 	kill?: KillFn;
 	now?: () => number;
+	resultsDir?: string;
 }): { ok: true; asyncId: string } | { ok: false; message: string } {
 	const asyncId = input.target.runId;
 	if (!input.target.asyncDir) {
 		return { ok: false, message: `Async run ${asyncId} is live but does not have an async directory to interrupt.` };
 	}
-	const status = readAsyncStatus(input.target.asyncDir);
+	const status = reconcileAsyncRun(input.target.asyncDir, { resultsDir: input.resultsDir, kill: input.kill, now: input.now }).status;
 	if (!status || status.state !== "running" || typeof status.pid !== "number") {
 		return { ok: false, message: `Async run ${asyncId} is live but no interrupt-capable runner pid was found.` };
 	}

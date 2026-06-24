@@ -50,6 +50,7 @@ describe("live async resume interrupt", () => {
 				target,
 				state,
 				now: () => 1234,
+				resultsDir,
 				kill: (pid, signal) => {
 					kills.push({ pid, signal });
 					return true;
@@ -57,7 +58,7 @@ describe("live async resume interrupt", () => {
 			});
 
 			assert.deepEqual(result, { ok: true, asyncId: "run-live" });
-			assert.deepEqual(kills, [{ pid: process.pid, signal: ASYNC_RESUME_INTERRUPT_SIGNAL }]);
+			assert.deepEqual(kills, [{ pid: process.pid, signal: 0 }, { pid: process.pid, signal: ASYNC_RESUME_INTERRUPT_SIGNAL }]);
 			assert.equal(state.asyncJobs.get("run-live")?.activityState, undefined);
 			assert.equal(state.asyncJobs.get("run-live")?.updatedAt, 1234);
 			// The portable control request is dropped regardless of the signal path.
@@ -101,6 +102,7 @@ describe("live async resume interrupt", () => {
 				target,
 				state,
 				now: () => 7,
+				resultsDir,
 				kill: () => {
 					const error = new Error("kill ENOSYS") as NodeJS.ErrnoException;
 					error.code = "ENOSYS";
@@ -148,6 +150,7 @@ describe("live async resume interrupt", () => {
 
 			const result = interruptLiveAsyncResumeTarget({
 				target,
+				resultsDir,
 				kill: () => {
 					const error = new Error("missing process") as NodeJS.ErrnoException;
 					error.code = "ESRCH";
@@ -155,8 +158,11 @@ describe("live async resume interrupt", () => {
 				},
 			});
 
-			assert.deepEqual(result, { ok: false, message: "Failed to interrupt async run run-live: missing process" });
+			assert.deepEqual(result, { ok: false, message: "Async run run-live is live but no interrupt-capable runner pid was found." });
 			assert.equal(fs.existsSync(path.join(asyncDir, "control", "interrupt.json")), false);
+			const repairedStatus = JSON.parse(fs.readFileSync(path.join(asyncDir, "status.json"), "utf-8"));
+			assert.equal(repairedStatus.state, "failed");
+			assert.equal(fs.existsSync(path.join(resultsDir, "run-live.json")), true);
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
 		}

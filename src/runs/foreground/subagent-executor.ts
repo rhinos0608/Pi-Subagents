@@ -720,7 +720,7 @@ function directNestedAsyncInterrupt(target: ResolvedSubagentRunId & { kind: "nes
 	const run = target.match.run;
 	const asyncDir = resolveNestedAsyncDir(target.match.rootRunId, run);
 	if (!asyncDir) return undefined;
-	const status = readStatus(asyncDir);
+	const status = reconcileAsyncRun(asyncDir, { resultsDir: path.join(RESULTS_DIR, "nested", target.match.rootRunId) }).status;
 	const pid = typeof status?.pid === "number" && status.pid > 0 ? status.pid : run.pid;
 	if (!status || status.state !== "running" || typeof pid !== "number" || pid <= 0) return undefined;
 	try {
@@ -801,6 +801,7 @@ async function resumeAsyncRun(input: {
 			target,
 			state: input.deps.state,
 			kill: input.deps.kill,
+			resultsDir: RESULTS_DIR,
 		});
 		if (!interrupt.ok) {
 			return {
