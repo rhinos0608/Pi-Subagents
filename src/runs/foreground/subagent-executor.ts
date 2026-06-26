@@ -51,6 +51,8 @@ import {
 	stripDetailsOutputsForIntercomReceipt,
 } from "../../intercom/result-intercom.ts";
 import { buildRevivedAsyncTask, interruptLiveAsyncResumeTarget, resolveAsyncResumeTarget } from "../background/async-resume.ts";
+import { deliverInterruptRequest } from "../background/control-channel.ts";
+import { reconcileAsyncRun } from "../background/stale-run-reconciler.ts";
 import { resolveAsyncRootResultPath } from "../background/chain-root-attachment.ts";
 import { createNestedRoute, readNestedControlResults, resolveInheritedNestedRouteFromEnv, resolveNestedAsyncDir, resolveNestedParentAddressFromEnv, updateForegroundNestedProjection, writeNestedControlRequest, writeNestedEvent, type NestedRunResolutionScope } from "../shared/nested-events.ts";
 import { resolveSubagentRunId, type ResolvedSubagentRunId } from "../background/run-id-resolver.ts";
@@ -97,7 +99,6 @@ import {
 	wrapForkTask,
 } from "../../shared/types.ts";
 
-const ASYNC_INTERRUPT_SIGNAL: NodeJS.Signals = process.platform === "win32" ? "SIGBREAK" : "SIGUSR2";
 const MUTATING_MANAGEMENT_ACTIONS = new Set(["create", "update", "delete"]);
 
 interface TaskParam {
@@ -372,7 +373,17 @@ function resolveResumeTarget(params: SubagentParamsLike, state: SubagentState, o
 	throw new Error("Run not found. Provide id or runId.");
 }
 
-function getAsyncInterruptTarget(state: SubagentState, runId: string | undefined): { asyncId: string; asyncDir: string } | undefined {
+function getAsyncInterruptTarget(
+	state: SubagentState,
+	runId: string | undefined,
+	location?: { asyncDir: string | null; resolvedId?: string },
+): { asyncId: string; asyncDir: string } | undefined {
+	if (location?.asyncDir) {
+		return {
+			asyncId: location.resolvedId ?? runId ?? path.basename(location.asyncDir),
+			asyncDir: location.asyncDir,
+		};
+	}
 	if (runId) {
 		const direct = state.asyncJobs.get(runId);
 		if (direct) return { asyncId: direct.asyncId, asyncDir: direct.asyncDir };
@@ -415,10 +426,15 @@ function emitControlNotification(input: {
 	}
 }
 
-function interruptAsyncRun(state: SubagentState, runId: string | undefined, kill?: (pid: number, signal?: NodeJS.Signals | 0) => boolean): AgentToolResult<Details> | null {
-	const target = getAsyncInterruptTarget(state, runId);
+function interruptAsyncRun(
+	state: SubagentState,
+	runId: string | undefined,
+	kill?: (pid: number, signal?: NodeJS.Signals | 0) => boolean,
+	location?: { asyncDir: string | null; resolvedId?: string },
+): AgentToolResult<Details> | null {
+	const target = getAsyncInterruptTarget(state, runId, location);
 	if (!target) return null;
-	const status = readStatus(target.asyncDir);
+	const status = reconcileAsyncRun(target.asyncDir, { kill }).status;
 	if (!status || status.state !== "running" || typeof status.pid !== "number") {
 		return {
 			content: [{ type: "text", text: `No running async run with an interrupt-capable pid was found for '${runId ?? "current"}'.` }],
@@ -427,7 +443,7 @@ function interruptAsyncRun(state: SubagentState, runId: string | undefined, kill
 		};
 	}
 	try {
-		(kill ?? process.kill)(status.pid, ASYNC_INTERRUPT_SIGNAL);
+		deliverInterruptRequest({ asyncDir: target.asyncDir, pid: status.pid, kill, source: "interrupt-action" });
 		const tracked = state.asyncJobs.get(target.asyncId);
 		if (tracked) {
 			tracked.activityState = undefined;
@@ -719,11 +735,11 @@ function directNestedAsyncInterrupt(target: ResolvedSubagentRunId & { kind: "nes
 	const run = target.match.run;
 	const asyncDir = resolveNestedAsyncDir(target.match.rootRunId, run);
 	if (!asyncDir) return undefined;
-	const status = readStatus(asyncDir);
+	const status = reconcileAsyncRun(asyncDir, { resultsDir: path.join(RESULTS_DIR, "nested", target.match.rootRunId) }).status;
 	const pid = typeof status?.pid === "number" && status.pid > 0 ? status.pid : run.pid;
 	if (!status || status.state !== "running" || typeof pid !== "number" || pid <= 0) return undefined;
 	try {
-		process.kill(pid, ASYNC_INTERRUPT_SIGNAL);
+		deliverInterruptRequest({ asyncDir, pid, source: "nested-interrupt" });
 		return { content: [{ type: "text", text: `Interrupt requested for nested async run ${run.id}.` }], details: { mode: "management", results: [] } };
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
@@ -800,6 +816,7 @@ async function resumeAsyncRun(input: {
 			target,
 			state: input.deps.state,
 			kill: input.deps.kill,
+			resultsDir: RESULTS_DIR,
 		});
 		if (!interrupt.ok) {
 			return {
@@ -2784,7 +2801,12 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 						details: { mode: "management", results: [] },
 					};
 				}
-				const asyncInterruptResult = interruptAsyncRun(deps.state, resolved?.kind === "async" ? resolved.id : targetRunId, deps.kill);
+				const asyncInterruptResult = interruptAsyncRun(
+					deps.state,
+					resolved?.kind === "async" ? resolved.id : targetRunId,
+					deps.kill,
+					resolved?.kind === "async" ? resolved.location : undefined,
+				);
 				if (asyncInterruptResult) return asyncInterruptResult;
 				return {
 					content: [{ type: "text", text: "No interrupt-capable run found in this session." }],
