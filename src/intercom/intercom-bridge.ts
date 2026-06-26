@@ -199,6 +199,23 @@ function getGlobalNpmRoot(): string | null {
 	}
 }
 
+function tmpNpmIntercomPackageDir(agentDir: string): string | undefined {
+	const tmpNpmDir = path.join(agentDir, "tmp", "extensions", "npm");
+	try {
+		const entries = fs.readdirSync(tmpNpmDir, { withFileTypes: true });
+		for (const entry of entries) {
+			if (!entry.isDirectory()) continue;
+			const pkgDir = path.join(tmpNpmDir, entry.name, "node_modules", PI_INTERCOM_PACKAGE_NAME);
+			if (fs.existsSync(pkgDir) && packageHasPiExtension(pkgDir)) {
+				return path.resolve(pkgDir);
+			}
+		}
+	} catch {
+		// ignore ENOTDIR, ENOENT, permission errors
+	}
+	return undefined;
+}
+
 function configuredPiIntercomPackageDir(input: ResolveIntercomBridgeInput, agentDir: string): string | undefined {
 	const projectConfigDir = input.cwd ? findNearestProjectConfigDir(path.resolve(input.cwd)) : undefined;
 	const settingsFiles = [
@@ -235,7 +252,14 @@ function configuredPiIntercomPackageDir(input: ResolveIntercomBridgeInput, agent
 function resolveIntercomExtensionDir(input: ResolveIntercomBridgeInput, agentDir: string): string {
 	const legacyDir = path.resolve(input.extensionDir ?? envIntercomExtensionDir() ?? defaultIntercomExtensionDir(agentDir));
 	if (fs.existsSync(legacyDir)) return legacyDir;
-	return configuredPiIntercomPackageDir(input, agentDir) ?? legacyDir;
+
+	const configured = configuredPiIntercomPackageDir(input, agentDir);
+	if (configured) return configured;
+
+	const tmpDir = tmpNpmIntercomPackageDir(agentDir);
+	if (tmpDir) return tmpDir;
+
+	return legacyDir;
 }
 
 function extensionSandboxAllowsIntercom(extensions: string[] | undefined, extensionDir: string): boolean {

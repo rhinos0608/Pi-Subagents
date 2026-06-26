@@ -70,4 +70,25 @@ describe("PI_INTERCOM_EXTENSION_DIR override", () => {
 		});
 		assert.equal(diagnostic.extensionDir, path.resolve(explicitDir));
 	});
+
+	it("finds pi-intercom in the tmp/extensions/npm fallback directory", () => {
+		// Simulate the structure pi uses when loading --extension npm:pi-intercom:
+		// <agentDir>/tmp/extensions/npm/<hash>/node_modules/pi-intercom/
+		const tmpHashDir = path.join(agentDir, "tmp", "extensions", "npm", "abc123");
+		const pkgDir = path.join(tmpHashDir, "node_modules", "pi-intercom");
+		fs.mkdirSync(pkgDir, { recursive: true });
+		fs.writeFileSync(
+			path.join(pkgDir, "package.json"),
+			JSON.stringify({ name: "pi-intercom", pi: { extensions: ["./index.ts"] } }),
+		);
+		// Also create a distractor hash dir without pi-intercom
+		fs.mkdirSync(path.join(agentDir, "tmp", "extensions", "npm", "other", "node_modules"), { recursive: true });
+
+		const diagnostic = diagnoseIntercomBridge({
+			config: { mode: "always" },
+			context: "fresh",
+			orchestratorTarget: "main",
+		});
+		assert.equal(diagnostic.extensionDir, path.resolve(pkgDir));
+	});
 });
