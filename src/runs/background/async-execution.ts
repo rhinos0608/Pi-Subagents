@@ -127,6 +127,8 @@ interface AsyncChainParams {
 	childIntercomTarget?: (agent: string, index: number) => string | undefined;
 	nestedRoute?: NestedRouteInfo;
 	acceptance?: AcceptanceInput;
+	/** Global cap on simultaneously-running subagent tasks within the async run. */
+	globalConcurrencyLimit?: number;
 }
 
 interface AsyncSingleParams {
@@ -654,6 +656,7 @@ export function executeAsyncChain(
 				childIntercomTargets,
 				resultMode,
 				dynamicFanoutMaxItems: params.dynamicFanoutMaxItems,
+				globalConcurrencyLimit: params.globalConcurrencyLimit,
 				workflowGraph,
 				nestedRoute: nestedRoute ?? inheritedNestedRoute,
 				nestedSelf: inheritedNestedRoute && nestedAddress ? {
