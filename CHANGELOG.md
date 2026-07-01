@@ -14,7 +14,7 @@
 - Added `worktreeBaseDir` and `PI_SUBAGENTS_WORKTREE_DIR` so worktree isolation can use a stable trusted base directory. Thanks to Matt Robenolt (@mattrobenolt) for #185.
 - Added `singleRunOutputBaseDir` so single-agent relative outputs can be routed to a configured artifact directory. Thanks to Oleksii Nikiforov (@NikiforovAll) for #173.
 - Added `maxSubagentSpawnsPerSession` and `PI_SUBAGENT_MAX_SPAWNS_PER_SESSION` to cap total subagent launches in one session. Thanks to @eightHundreds for #239.
-- Enforce `timeoutMs` and `maxRuntimeMs` on async and background subagent runs. The per-launch deadline drives an AbortController that cancels acceptance verification, imported async roots, and fallback retries; direct children get SIGTERM with SIGKILL escalation on a bounded timer; nested descendants get timeout requests distinct from manual interrupt. `timedOut`, `deadlineAt`, and `error` propagate across status, results, and nested summaries.
+- Enforce `timeoutMs` and `maxRuntimeMs` on async and background subagent runs. The per-launch deadline drives an AbortController that cancels acceptance verification, imported async roots, and fallback retries; direct children get SIGTERM with SIGKILL escalation on a bounded timer; nested descendants get timeout requests distinct from manual interrupt. `timedOut`, `deadlineAt`, and `error` propagate across status, results, and nested summaries. Thanks to @pkese for #361.
 
 ### Fixed
 - Keep generated subagent markdown outputs, progress files, and run artifacts under the project-local `.pi-subagents/` directory by default. Thanks to Carolina (@carolitascl) for #326.
