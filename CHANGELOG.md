@@ -3,6 +3,12 @@
 ## [Unreleased]
 
 ### Added
+
+### Fixed
+
+## [0.32.0] - 2026-07-01
+
+### Added
 - Added `subagents.defaultModel` so subagents can have a global default model separate from the parent session model. Thanks to Artem Timofeev (@atimofeev) for #339.
 - Added `/subagent-cost` and `totalChildUsage` run details so parent sessions can inspect aggregate subagent child usage and cost. Thanks to Aaron Ky-Riesenbach (@aaronkyriesenbach) for #343.
 - Added configurable companion package recommendations for `pi-intercom` and `pi-prompt-template-model`, surfaced in session-start transcript messages, `subagent({ action: "list" })`, and `/subagents-doctor`, with `/subagents-companions` hide/show/status controls.
