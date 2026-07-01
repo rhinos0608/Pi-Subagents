@@ -189,11 +189,11 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		return readCall().args;
 	}
 
-	function makeExecutor(agents = [makeAgent("echo")]) {
+	function makeExecutor(agents = [makeAgent("echo")], config: Record<string, unknown> = {}) {
 		return createSubagentExecutor!({
 			pi: { events: createEventBus(), getSessionName: () => undefined },
 			state: { baseCwd: tempDir, currentSessionId: null, asyncJobs: new Map(), foregroundControls: new Map(), lastForegroundControlId: null },
-			config: {},
+			config,
 			asyncByDefault: false,
 			tempArtifactsDir: tempDir,
 			getSubagentSessionRoot: () => tempDir,
@@ -230,6 +230,20 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		assert.equal(firstResult.isError, undefined);
 		assert.equal(second.isError, true);
 		assert.match(second.content[0]?.text ?? "", /Issue exactly ONE subagent call per turn/);
+		assert.equal(mockPi.callCount(), 1);
+	});
+
+	it("blocks total subagent spawns after the per-session quota", async () => {
+		mockPi.onCall({ output: "first call completed" });
+		const executor = makeExecutor([makeAgent("echo")], { maxSubagentSpawnsPerSession: 1 });
+		const ctx = makeMinimalCtx(tempDir);
+
+		const first = await executor.execute("first", { agent: "echo", task: "First call" }, new AbortController().signal, undefined, ctx);
+		const second = await executor.execute("second", { agent: "echo", task: "Second call" }, new AbortController().signal, undefined, ctx);
+
+		assert.equal(first.isError, undefined);
+		assert.equal(second.isError, true);
+		assert.match(second.content[0]?.text ?? "", /Subagent spawn limit reached for this session \(1\/1 used, 1 requested\)/);
 		assert.equal(mockPi.callCount(), 1);
 	});
 
@@ -1024,6 +1038,48 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		assert.equal(result.exitCode, 0);
 		assert.equal(result.finalOutput, "fresh assistant output");
 		assert.equal(fs.readFileSync(outputPath, "utf-8"), "fresh assistant output");
+	});
+
+	it("routes foreground single relative outputs to the run output artifact directory by default", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		mockPi.onCall({ output: "default report" });
+		const executor = makeExecutor([makeAgent("researcher", { output: "context.md" })]);
+
+		const result = await executor.execute(
+			"single-default-output-base",
+			{ agent: "researcher", task: "Write report" },
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+
+		const taskArg = readCallArgs().at(-1) ?? "";
+		assert.equal(result.isError, undefined);
+		assert.match(taskArg, new RegExp(`Write your findings to exactly this path: ${escapeRegExp(path.join(tempDir, ".pi-subagents", "artifacts", "outputs"))}.*context\\.md`));
+		assert.equal(fs.existsSync(path.join(tempDir, "context.md")), false);
+	});
+
+	it("routes foreground single relative outputs to configured singleRunOutputBaseDir", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		mockPi.onCall({ output: "configured report" });
+		const configuredBase = path.join(tempDir, "configured-outputs");
+		const executor = makeExecutor(
+			[makeAgent("researcher", { output: "context.md" })],
+			{ singleRunOutputBaseDir: configuredBase },
+		);
+
+		const result = await executor.execute(
+			"single-configured-output-base",
+			{ agent: "researcher", task: "Write report" },
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+
+		const expectedOutputPath = path.join(configuredBase, "context.md");
+		const taskArg = readCallArgs().at(-1) ?? "";
+		assert.equal(result.isError, undefined);
+		assert.match(taskArg, new RegExp(`Write your findings to exactly this path: ${escapeRegExp(expectedOutputPath)}`));
+		assert.equal(fs.readFileSync(expectedOutputPath, "utf-8"), "configured report");
+		assert.equal(fs.existsSync(path.join(tempDir, "context.md")), false);
 	});
 
 	it("makes task-level output overrides authoritative in the child system prompt", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {

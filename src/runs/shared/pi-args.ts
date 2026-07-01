@@ -74,7 +74,7 @@ interface BuildPiArgsResult {
 }
 
 export function applyThinkingSuffix(model: string | undefined, thinking: string | undefined): string | undefined {
-	if (!model || !thinking || thinking === "off") return model;
+	if (!model || !thinking) return model;
 	const colonIdx = model.lastIndexOf(":");
 	if (colonIdx !== -1 && THINKING_LEVELS.includes(model.substring(colonIdx + 1))) return model;
 	return `${model}:${thinking}`;

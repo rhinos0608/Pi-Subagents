@@ -122,6 +122,7 @@ interface AsyncChainParams {
 	maxSubagentDepth: number;
 	worktreeSetupHook?: string;
 	worktreeSetupHookTimeoutMs?: number;
+	worktreeBaseDir?: string;
 	controlConfig?: ResolvedControlConfig;
 	controlIntercomTarget?: string;
 	childIntercomTarget?: (agent: string, index: number) => string | undefined;
@@ -146,11 +147,13 @@ interface AsyncSingleParams {
 	skills?: string[];
 	output?: string | boolean;
 	outputMode?: "inline" | "file-only";
+	outputBaseDir?: string;
 	modelOverride?: string;
 	availableModels?: AvailableModelInfo[];
 	maxSubagentDepth: number;
 	worktreeSetupHook?: string;
 	worktreeSetupHookTimeoutMs?: number;
+	worktreeBaseDir?: string;
 	controlConfig?: ResolvedControlConfig;
 	controlIntercomTarget?: string;
 	childIntercomTarget?: (agent: string, index: number) => string | undefined;
@@ -178,6 +181,7 @@ export interface AsyncRunnerStepBuildParams {
 	progressDir?: string;
 	dynamicFanoutMaxItems?: number;
 	maxSubagentDepth: number;
+	worktreeBaseDir?: string;
 	asyncDir: string;
 	outputBaseDir?: string;
 	validateOutputBindings?: boolean;
@@ -331,6 +335,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 		cwd,
 		sessionFilesByFlatIndex,
 		maxSubagentDepth,
+		worktreeBaseDir,
 		asyncDir,
 	} = params;
 	const outputBaseDir = params.outputBaseDir;
@@ -486,7 +491,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 						let behaviorCwd: string | undefined;
 						if (s.worktree) {
 							try {
-								behaviorCwd = resolveExpectedWorktreeAgentCwd(runnerCwd, `${id}-s${stepIndex}`, taskIndex);
+								behaviorCwd = resolveExpectedWorktreeAgentCwd(runnerCwd, `${id}-s${stepIndex}`, taskIndex, worktreeBaseDir);
 							} catch {
 								behaviorCwd = undefined;
 							}
@@ -570,6 +575,7 @@ export function executeAsyncChain(
 		maxSubagentDepth,
 		worktreeSetupHook,
 		worktreeSetupHookTimeoutMs,
+		worktreeBaseDir,
 		controlConfig,
 		controlIntercomTarget,
 		childIntercomTarget,
@@ -607,6 +613,7 @@ export function executeAsyncChain(
 		outputBaseDir: artifactsDir ? path.join(artifactsDir, "outputs", id) : undefined,
 		dynamicFanoutMaxItems: params.dynamicFanoutMaxItems,
 		maxSubagentDepth,
+		worktreeBaseDir,
 		asyncDir,
 	});
 	if ("error" in built) {
@@ -654,6 +661,7 @@ export function executeAsyncChain(
 				piArgv1: process.argv[1],
 				worktreeSetupHook,
 				worktreeSetupHookTimeoutMs,
+				worktreeBaseDir,
 				controlConfig,
 				controlIntercomTarget,
 				childIntercomTargets,
@@ -797,6 +805,7 @@ export function executeAsyncSingle(
 		maxSubagentDepth,
 		worktreeSetupHook,
 		worktreeSetupHookTimeoutMs,
+		worktreeBaseDir,
 		controlConfig,
 		controlIntercomTarget,
 		childIntercomTarget,
@@ -831,7 +840,7 @@ export function executeAsyncSingle(
 	}
 
 	const effectiveOutput = normalizeSingleOutputOverride(params.output, agentConfig.output);
-	const outputPath = resolveSingleOutputPath(effectiveOutput, ctx.cwd, runnerCwd, artifactsDir ? path.join(artifactsDir, "outputs", id) : undefined);
+	const outputPath = resolveSingleOutputPath(effectiveOutput, ctx.cwd, runnerCwd, params.outputBaseDir ?? (artifactsDir ? path.join(artifactsDir, "outputs", id) : undefined));
 	systemPrompt = injectOutputPathSystemPrompt(systemPrompt, outputPath);
 	const outputMode = params.outputMode ?? "inline";
 	const validationError = validateFileOnlyOutputMode(outputMode, outputPath, `Async single run (${agent})`);
@@ -897,6 +906,7 @@ export function executeAsyncSingle(
 				piArgv1: process.argv[1],
 				worktreeSetupHook,
 				worktreeSetupHookTimeoutMs,
+				worktreeBaseDir,
 				controlConfig,
 				controlIntercomTarget,
 				childIntercomTargets: childIntercomTarget ? [childIntercomTarget(agent, 0)] : undefined,

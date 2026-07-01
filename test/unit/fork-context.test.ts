@@ -212,7 +212,37 @@ describe("createForkContextResolver", () => {
 		}
 	});
 
-	it("fails clearly when branch extraction returns a missing child file", () => {
+	it("persists a forked session when Pi defers writing the branched file", () => {
+		const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-fork-deferred-child-"));
+		try {
+			const parentSessionFile = path.join(tempDir, "parent.jsonl");
+			const childSessionFile = path.join(tempDir, "nested", "child.jsonl");
+			writeMinimalSessionFile(parentSessionFile, "parent");
+			const header = { type: "session", version: 1, id: "child", timestamp: "2026-04-16T00:00:00.000Z", cwd: "/tmp", parentSession: parentSessionFile };
+			const entries = [{ type: "message", id: "leaf-abc", parentId: null, timestamp: "2026-04-16T00:00:01.000Z", message: { role: "user", content: "first turn" } }];
+			const resolver = createForkContextResolver({
+				getSessionFile: () => parentSessionFile,
+				getLeafId: () => "leaf-abc",
+			}, "fork", {
+				openSession: () => ({
+					createBranchedSession: () => childSessionFile,
+					getHeader: () => header,
+					getEntries: () => entries,
+				}),
+			});
+
+			assert.equal(resolver.sessionFileForIndex(0), childSessionFile);
+			assert.equal(fs.existsSync(childSessionFile), true);
+			assert.deepEqual(
+				fs.readFileSync(childSessionFile, "utf-8").trim().split("\n").map((line) => JSON.parse(line)),
+				[header, ...entries],
+			);
+		} finally {
+			fs.rmSync(tempDir, { recursive: true, force: true });
+		}
+	});
+
+	it("fails clearly when branch extraction returns a missing child file without fallback state", () => {
 		const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-fork-missing-child-"));
 		try {
 			const parentSessionFile = path.join(tempDir, "parent.jsonl");
@@ -229,7 +259,7 @@ describe("createForkContextResolver", () => {
 
 			assert.throws(
 				() => resolver.sessionFileForIndex(0),
-				/Failed to create forked subagent session: Session manager returned a forked session file that does not exist: .*missing-child\.jsonl/,
+				/Failed to create forked subagent session: Session manager returned a forked session file that does not exist and cannot be persisted by fallback: .*missing-child\.jsonl/,
 			);
 		} finally {
 			fs.rmSync(tempDir, { recursive: true, force: true });

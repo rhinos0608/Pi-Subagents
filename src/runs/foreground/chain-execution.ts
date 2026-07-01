@@ -408,6 +408,7 @@ interface ChainExecutionParams {
 	nestedRoute?: NestedRouteInfo;
 	worktreeSetupHook?: string;
 	worktreeSetupHookTimeoutMs?: number;
+	worktreeBaseDir?: string;
 	timeoutMs?: number;
 	deadlineAt?: number;
 	/** Global cap on simultaneously-running tasks within this chain. Defaults to DEFAULT_GLOBAL_CONCURRENCY_LIMIT. */
@@ -630,6 +631,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 						setupHook: params.worktreeSetupHook
 							? { hookPath: params.worktreeSetupHook, timeoutMs: params.worktreeSetupHookTimeoutMs }
 							: undefined,
+						baseDir: params.worktreeBaseDir,
 					});
 				} catch (error) {
 					const message = error instanceof Error ? error.message : String(error);

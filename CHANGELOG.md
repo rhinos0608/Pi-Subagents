@@ -10,6 +10,9 @@
 - Added `totalCost` rollups to foreground single, parallel, and chain run details, including nested foreground subagent costs and compact progress display. Thanks to Clark Everson (@gr3enarr0w) for #345.
 - Added `globalConcurrencyLimit` to cap simultaneously running subagent tasks across parallel groups in a single run. Thanks to Clark Everson (@gr3enarr0w) for #349.
 - Added `PI_SUBAGENT_PI_BINARY` to let wrappers launch child agents through an explicit Pi binary instead of resolving `pi` from `PATH`. Thanks to David Barroso (@dbarrosop) for #341.
+- Added `worktreeBaseDir` and `PI_SUBAGENTS_WORKTREE_DIR` so worktree isolation can use a stable trusted base directory. Thanks to Matt Robenolt (@mattrobenolt) for #185.
+- Added `singleRunOutputBaseDir` so single-agent relative outputs can be routed to a configured artifact directory. Thanks to Oleksii Nikiforov (@NikiforovAll) for #173.
+- Added `maxSubagentSpawnsPerSession` and `PI_SUBAGENT_MAX_SPAWNS_PER_SESSION` to cap total subagent launches in one session. Thanks to @eightHundreds for #239.
 
 ### Fixed
 - Keep generated subagent markdown outputs, progress files, and run artifacts under the project-local `.pi-subagents/` directory by default. Thanks to Carolina (@carolitascl) for #326.
@@ -21,6 +24,8 @@
 - Retry fallback models when a zero-exit subagent attempt produces no output, including background async runs, preserve structured-output-only completions, and pre-warm forked session files for parallel children. Thanks to Clark Everson (@gr3enarr0w) for #344.
 - Preserve explicit empty companion suggestion surfaces and keep global companion suggestions disabled when writing package dismissal state.
 - Include bounded async runner stderr tails when stale-run reconciliation marks a startup crash failed. Thanks to Salem Sayed (@salemsayed) for #340.
+- Persist forked child session files when Pi returns a branch path before writing it to disk. Thanks to @trisforrestcam for #174.
+- Pass explicit `thinking: off` through to child model arguments as a `:off` suffix. Thanks to Thomas Dietert (@tdietert) for #147.
 
 ## [0.31.1] - 2026-06-25
 

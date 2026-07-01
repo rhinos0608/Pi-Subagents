@@ -457,7 +457,7 @@ Append `[key=value,...]` to an agent name to override defaults. `/chain` applies
 
 | Key | Example | Description |
 |-----|---------|-------------|
-| `output` | `output=context.md` | Write results to a file. For `/chain` and `/parallel`, relative paths live under the chain directory; for `/run`, relative paths resolve against cwd. |
+| `output` | `output=context.md` | Write results to a file. Absolute paths are used as-is. Relative paths in `/run` resolve under `singleRunOutputBaseDir` when configured, otherwise under the run's output artifact directory. Relative paths in `/chain` and `/parallel` live under the chain or parallel run directory. |
 | `outputMode` | `outputMode=file-only` | Return only a concise file reference for saved output instead of the full saved content. Requires `output`; default is `inline`. |
 | `reads` | `reads=a.md+b.md` | Read files before executing. `+` separates multiple paths. |
 | `model` | `model=anthropic/claude-sonnet-4` | Override model for this step. |
@@ -1059,6 +1059,8 @@ Requirements:
 - task-level `cwd` overrides must be omitted or match the shared cwd
 - configured `worktreeSetupHook` must return valid JSON before timeout
 
+By default, worktrees are created under the system temp directory. Set `worktreeBaseDir` in config, or `PI_SUBAGENTS_WORKTREE_DIR` when config is unset, to put them under a stable trusted directory. Missing base directories are created automatically.
+
 After a worktree parallel step completes, per-agent diff stats are appended to the output and full patch files are written to artifacts. Worktrees and temp branches are cleaned up in `finally` blocks.
 
 ## Configuration
@@ -1089,6 +1091,14 @@ Forces depth-0 single, parallel, and chain runs into background mode and bypasse
 
 Caps simultaneously running subagent tasks within a single run across top-level parallel tasks, inline chain parallel groups, and dynamic fanout groups. The default is `20`; invalid values are clamped to `1`. Per-step `concurrency` and `parallel.concurrency` still apply, so effective concurrency is the lower of the local cap and the available global slots.
 
+### `maxSubagentSpawnsPerSession`
+
+```json
+{ "maxSubagentSpawnsPerSession": 40 }
+```
+
+Caps the total number of child subagent launches allowed during one parent session, including single runs, parallel task counts, static chain steps, and bounded dynamic fanout children. Set `PI_SUBAGENT_MAX_SPAWNS_PER_SESSION` to override the config for a process. The default is `40`; `0` blocks new subagent launches for that session.
+
 ### `parallel`
 
 ```json
@@ -1109,6 +1119,14 @@ Caps simultaneously running subagent tasks within a single run across top-level 
 ```
 
 Session directory precedence is: `params.sessionDir`, then `config.defaultSessionDir`, then a directory derived from the parent session. Sessions are always enabled.
+
+### `singleRunOutputBaseDir`
+
+```json
+{ "singleRunOutputBaseDir": "~/.pi/subagent-outputs" }
+```
+
+Routes relative `output` paths for single-agent `/run` calls under this directory. Absolute per-call or agent output paths are still used as-is. When unset, relative single-run outputs go under the run's output artifact directory instead of the project root.
 
 ### `maxSubagentDepth`
 
@@ -1170,6 +1188,14 @@ Controls recommendations for optional companion packages. `pi-intercom` enables 
 
 Use `/subagents-companions status` to inspect recommendation status. Use `/subagents-companions hide pi-intercom workspace` or `/subagents-companions hide pi-prompt-template-model user` to hide a recommendation. Use `/subagents-companions show <package>` to show a workspace recommendation again. Set `companionSuggestions` to `false` to disable all companion recommendations.
 
+### `worktreeBaseDir`
+
+```json
+{ "worktreeBaseDir": "/Users/matt/code/.worktrees/pi-subagents" }
+```
+
+Sets the base directory for `worktree: true` runs. Relative paths resolve from the repository root, `~/...` expands to your home directory, and `PI_SUBAGENTS_WORKTREE_DIR` is used when config is unset. The default remains the system temp directory.
+
 ### `worktreeSetupHook`
 
 ```json
@@ -1199,7 +1225,7 @@ Each chain run creates a user-scoped temp directory like:
 
 It may contain files such as `context.md`, `plan.md`, `progress.md`, and `parallel-{stepIndex}/.../output.md`. Directories older than 24 hours are cleaned up on extension startup.
 
-Debug artifacts live under `{sessionDir}/subagent-artifacts/` or a user-scoped temp artifact directory. Per task you may see:
+Debug artifacts live under `{sessionDir}/subagent-artifacts/`, `.pi-subagents/artifacts/` for project-scoped runs, or a user-scoped temp artifact directory. Single-run relative `output` files are saved under `{artifactsDir}/outputs/{runId}/` unless `singleRunOutputBaseDir` is configured. Per task you may see:
 
 - `{runId}_{agent}_input.md`
 - `{runId}_{agent}_output.md`

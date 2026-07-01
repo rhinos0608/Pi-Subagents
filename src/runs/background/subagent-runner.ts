@@ -104,6 +104,7 @@ interface SubagentRunConfig {
 	piArgv1?: string;
 	worktreeSetupHook?: string;
 	worktreeSetupHookTimeoutMs?: number;
+	worktreeBaseDir?: string;
 	controlConfig?: ResolvedControlConfig;
 	controlIntercomTarget?: string;
 	childIntercomTargets?: Array<string | undefined>;
@@ -1974,6 +1975,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 						setupHook: config.worktreeSetupHook
 							? { hookPath: config.worktreeSetupHook, timeoutMs: config.worktreeSetupHookTimeoutMs }
 							: undefined,
+						baseDir: config.worktreeBaseDir,
 					});
 				} catch (error) {
 					const setupError = error instanceof Error ? error.message : String(error);

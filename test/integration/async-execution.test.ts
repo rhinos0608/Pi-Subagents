@@ -1269,6 +1269,42 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		assert.equal(fs.readFileSync(outputPath, "utf-8"), "async full output\nwith details");
 	});
 
+	it("background single runs route relative outputs to outputBaseDir", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
+		mockPi.onCall({ output: "async configured report" });
+		const id = `async-configured-output-base-${Date.now().toString(36)}`;
+		const outputBaseDir = path.join(tempDir, "async-configured-outputs");
+		const run = executeAsyncSingle(id, {
+			agent: "researcher",
+			task: "Write report",
+			agentConfig: makeAgent("researcher", { output: "context.md" }),
+			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
+			artifactConfig: {
+				enabled: false,
+				includeInput: false,
+				includeOutput: false,
+				includeJsonl: false,
+				includeMetadata: false,
+				cleanupDays: 7,
+			},
+			shareEnabled: false,
+			sessionRoot: path.join(tempDir, "sessions"),
+			output: "context.md",
+			outputBaseDir,
+			maxSubagentDepth: 2,
+		});
+
+		assert.equal(run.details.asyncId, id);
+		const outputPath = path.join(outputBaseDir, "context.md");
+		const call = await waitForMockPiCall(mockPi, 0);
+		const taskArg = call.args.at(-1) ?? "";
+		assert.match(taskArg, new RegExp(`Write your findings to exactly this path: ${escapeRegExp(outputPath)}`));
+		const resultPath = await waitForAsyncResultFile(id);
+		const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8")) as AsyncResultPayload;
+		assert.equal(payload.success, true);
+		assert.equal(fs.readFileSync(outputPath, "utf-8"), "async configured report");
+		assert.equal(fs.existsSync(path.join(tempDir, "context.md")), false);
+	});
+
 	it("background single runs make output overrides authoritative in the child system prompt", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
 		mockPi.onCall({ output: "async override report" });
 		const id = `async-output-override-system-prompt-${Date.now().toString(36)}`;
