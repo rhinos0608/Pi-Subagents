@@ -569,6 +569,9 @@ function formatModelSource(agent: AgentConfig, currentModel: ParentModel | undef
 	if (agent.override && agent.model !== agent.override.base.model) {
 		return `${agent.override.scope} override`;
 	}
+	if (agent.modelSource?.type === "subagents.defaultModel" && agent.model === agent.modelSource.model) {
+		return `${agent.modelSource.scope} defaultModel`;
+	}
 	if (agent.model) return "builtin agent config";
 	if (currentModel) return "inherits current session model";
 	return "inherit requested, but no current session model is available";

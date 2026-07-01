@@ -84,6 +84,13 @@ interface BuiltinAgentOverrideInfo {
 	base: BuiltinAgentOverrideBase;
 }
 
+export interface AgentModelSourceInfo {
+	type: "subagents.defaultModel";
+	scope: "user" | "project";
+	path: string;
+	model: string;
+}
+
 export interface AgentConfig {
 	name: string;
 	localName?: string;
@@ -113,10 +120,12 @@ export interface AgentConfig {
 	disabled?: boolean;
 	extraFields?: Record<string, string>;
 	override?: BuiltinAgentOverrideInfo;
+	modelSource?: AgentModelSourceInfo;
 }
 
 interface SubagentSettings {
 	overrides: Record<string, BuiltinAgentOverrideConfig>;
+	defaultModel?: string;
 	disableBuiltins?: boolean;
 	disableThinking?: boolean;
 }
@@ -683,17 +692,50 @@ function readSubagentSettings(filePath: string | null): SubagentSettings {
 			throw new Error(`Subagent settings in '${filePath}' have invalid 'disableThinking'; expected a boolean.`);
 		}
 	}
+	let defaultModel: string | undefined;
+	if ("defaultModel" in subagentsObject) {
+		if (typeof subagentsObject.defaultModel === "string" && subagentsObject.defaultModel.trim()) {
+			defaultModel = subagentsObject.defaultModel.trim();
+		} else {
+			throw new Error(`Subagent settings in '${filePath}' have invalid 'defaultModel'; expected a non-empty string.`);
+		}
+	}
 
 	const parsed: Record<string, BuiltinAgentOverrideConfig> = {};
 	const agentOverrides = subagentsObject.agentOverrides;
 	if (!agentOverrides || typeof agentOverrides !== "object" || Array.isArray(agentOverrides)) {
-		return { overrides: parsed, disableBuiltins, disableThinking };
+		return { overrides: parsed, defaultModel, disableBuiltins, disableThinking };
 	}
 	for (const [name, value] of Object.entries(agentOverrides)) {
 		const override = parseBuiltinOverrideEntry(name, value, filePath);
 		if (override) parsed[name] = override;
 	}
-	return { overrides: parsed, disableBuiltins, disableThinking };
+	return { overrides: parsed, defaultModel, disableBuiltins, disableThinking };
+}
+
+function resolveSubagentDefaultModel(
+	userSettings: SubagentSettings,
+	projectSettings: SubagentSettings,
+	userSettingsPath: string,
+	projectSettingsPath: string | null,
+): AgentModelSourceInfo | undefined {
+	if (projectSettingsPath && projectSettings.defaultModel !== undefined) {
+		return { type: "subagents.defaultModel", scope: "project", path: projectSettingsPath, model: projectSettings.defaultModel };
+	}
+	return userSettings.defaultModel !== undefined
+		? { type: "subagents.defaultModel", scope: "user", path: userSettingsPath, model: userSettings.defaultModel }
+		: undefined;
+}
+
+function applySubagentDefaultModel(agents: AgentConfig[], defaultModel: AgentModelSourceInfo | undefined): AgentConfig[] {
+	if (!defaultModel) return agents;
+	return agents.map((agent) => {
+		if (agent.model !== undefined) return agent;
+		const next = { ...agent, model: defaultModel.model, modelSource: defaultModel };
+		const frontmatterFields = agentFrontmatterFields.get(agent);
+		if (frontmatterFields) agentFrontmatterFields.set(next, frontmatterFields);
+		return next;
+	});
 }
 
 function applyBuiltinOverride(
@@ -1241,13 +1283,14 @@ export function discoverAgents(cwd: string, scope: AgentScope): AgentDiscoveryRe
 	const projectSettingsPath = getProjectAgentSettingsPath(cwd);
 	const userSettings = scope === "project" ? EMPTY_SUBAGENT_SETTINGS : readSubagentSettings(userSettingsPath);
 	const projectSettings = scope === "user" ? EMPTY_SUBAGENT_SETTINGS : readSubagentSettings(projectSettingsPath);
+	const defaultModel = resolveSubagentDefaultModel(userSettings, projectSettings, userSettingsPath, projectSettingsPath);
 	const packageSubagentPaths = collectPackageSubagentPaths(cwd, {
 		includeUser: scope !== "project",
 		includeProject: scope !== "user",
 	});
 
 	const builtinAgents = applyBuiltinOverrides(
-		loadAgentsFromDir(BUILTIN_AGENTS_DIR, "builtin"),
+		applySubagentDefaultModel(loadAgentsFromDir(BUILTIN_AGENTS_DIR, "builtin"), defaultModel),
 		userSettings,
 		projectSettings,
 		userSettingsPath,
@@ -1258,7 +1301,7 @@ export function discoverAgents(cwd: string, scope: AgentScope): AgentDiscoveryRe
 	const userAgentsOld = scope === "project" ? [] : loadAgentsFromDir(userDirOld, "user");
 	const userAgentsNew = scope === "project" ? [] : loadAgentsFromDir(userDirNew, "user");
 	const userAgents = applyCustomAgentOverrides(
-		[...userAgentsExtra, ...userAgentsOld, ...userAgentsNew],
+		applySubagentDefaultModel([...userAgentsExtra, ...userAgentsOld, ...userAgentsNew], defaultModel),
 		userSettings,
 		projectSettings,
 		userSettingsPath,
@@ -1266,13 +1309,13 @@ export function discoverAgents(cwd: string, scope: AgentScope): AgentDiscoveryRe
 	);
 
 	const projectAgents = applyCustomAgentOverrides(
-		scope === "user" ? [] : projectAgentDirs.flatMap((dir) => loadAgentsFromDir(dir, "project")),
+		applySubagentDefaultModel(scope === "user" ? [] : projectAgentDirs.flatMap((dir) => loadAgentsFromDir(dir, "project")), defaultModel),
 		userSettings,
 		projectSettings,
 		userSettingsPath,
 		projectSettingsPath,
 	);
-	const packageAgents = packageSubagentPaths.agents.flatMap((dir) => loadAgentsFromDir(dir, "package"));
+	const packageAgents = applySubagentDefaultModel(packageSubagentPaths.agents.flatMap((dir) => loadAgentsFromDir(dir, "package")), defaultModel);
 	const agents = mergeAgentsForScope(scope, userAgents, projectAgents, builtinAgents, packageAgents)
 		.filter((agent) => agent.disabled !== true);
 
@@ -1302,21 +1345,22 @@ export function discoverAgentsAll(cwd: string): {
 	const projectSettingsPath = getProjectAgentSettingsPath(cwd);
 	const userSettings = readSubagentSettings(userSettingsPath);
 	const projectSettings = readSubagentSettings(projectSettingsPath);
+	const defaultModel = resolveSubagentDefaultModel(userSettings, projectSettings, userSettingsPath, projectSettingsPath);
 	const packageSubagentPaths = collectPackageSubagentPaths(cwd);
 
 	const builtin = applyBuiltinOverrides(
-		loadAgentsFromDir(BUILTIN_AGENTS_DIR, "builtin"),
+		applySubagentDefaultModel(loadAgentsFromDir(BUILTIN_AGENTS_DIR, "builtin"), defaultModel),
 		userSettings,
 		projectSettings,
 		userSettingsPath,
 		projectSettingsPath,
 	);
 	const user = applyCustomAgentOverrides(
-		[
+		applySubagentDefaultModel([
 			...extraUserAgentDirs().flatMap((dir) => loadAgentsFromDir(dir, "user")),
 			...loadAgentsFromDir(userDirOld, "user"),
 			...loadAgentsFromDir(userDirNew, "user"),
-		],
+		], defaultModel),
 		userSettings,
 		projectSettings,
 		userSettingsPath,
@@ -1328,7 +1372,7 @@ export function discoverAgentsAll(cwd: string): {
 			if (!packageMap.has(agent.name)) packageMap.set(agent.name, agent);
 		}
 	}
-	const packageAgents = Array.from(packageMap.values());
+	const packageAgents = applySubagentDefaultModel(Array.from(packageMap.values()), defaultModel);
 	const projectMap = new Map<string, AgentConfig>();
 	for (const dir of projectDirs) {
 		for (const agent of loadAgentsFromDir(dir, "project")) {
@@ -1336,7 +1380,7 @@ export function discoverAgentsAll(cwd: string): {
 		}
 	}
 	const project = applyCustomAgentOverrides(
-		Array.from(projectMap.values()),
+		applySubagentDefaultModel(Array.from(projectMap.values()), defaultModel),
 		userSettings,
 		projectSettings,
 		userSettingsPath,

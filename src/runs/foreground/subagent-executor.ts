@@ -4,7 +4,7 @@ import * as path from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { type AgentConfig, type AgentScope } from "../../agents/agents.ts";
-import { getArtifactsDir } from "../../shared/artifacts.ts";
+import { getArtifactsDir, getProjectChainRunsDir } from "../../shared/artifacts.ts";
 import { ChainClarifyComponent, type ChainClarifyResult } from "./chain-clarify.ts";
 import { toModelInfo, type ModelInfo } from "../../shared/model-info.ts";
 import { executeChain } from "./chain-execution.ts";
@@ -923,7 +923,7 @@ async function resumeAsyncRun(input: {
 			availableModels,
 			cwd: effectiveCwd,
 			maxOutput: input.params.maxOutput,
-			artifactsDir: input.deps.tempArtifactsDir,
+			artifactsDir: getArtifactsDir(parentSessionFile, effectiveCwd),
 			artifactConfig,
 			shareEnabled: input.params.share === true,
 			sessionRoot: input.deps.getSubagentSessionRoot(parentSessionFile),
@@ -966,7 +966,7 @@ async function resumeAsyncRun(input: {
 		},
 		cwd: effectiveCwd,
 		maxOutput: input.params.maxOutput,
-		artifactsDir: input.deps.tempArtifactsDir,
+		artifactsDir: getArtifactsDir(parentSessionFile, effectiveCwd),
 		artifactConfig,
 		shareEnabled: input.params.share === true,
 		sessionRoot: input.deps.getSubagentSessionRoot(parentSessionFile),
@@ -1728,7 +1728,7 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 		foregroundControl,
 		nestedRoute: foregroundControl?.nestedRoute,
 		chainSkills,
-		chainDir: params.chainDir,
+		chainDir: params.chainDir ?? getProjectChainRunsDir(effectiveCwd),
 		dynamicFanoutMaxItems: deps.config.chain?.dynamicFanout?.maxItems,
 		maxSubagentDepth: currentMaxSubagentDepth,
 		worktreeSetupHook: deps.config.worktreeSetupHook,
@@ -1828,6 +1828,7 @@ interface ForegroundParallelRunInput {
 	shareEnabled: boolean;
 	artifactConfig: ArtifactConfig;
 	artifactsDir: string;
+	outputBaseDir: string;
 	maxOutput?: MaxOutputConfig;
 	paramsCwd: string;
 	progressDir: string;
@@ -1931,6 +1932,7 @@ function findDuplicateParallelOutputPath(input: {
 	behaviors: ResolvedStepBehavior[];
 	paramsCwd: string;
 	ctxCwd: string;
+	outputBaseDir: string;
 	worktreeSetup?: WorktreeSetup;
 }): string | undefined {
 	const seen = new Map<string, { index: number; agent: string }>();
@@ -1939,7 +1941,7 @@ function findDuplicateParallelOutputPath(input: {
 		if (!behavior?.output) continue;
 		const task = input.tasks[index]!;
 		const taskCwd = resolveParallelTaskCwd(task, input.paramsCwd, input.worktreeSetup, index);
-		const outputPath = resolveSingleOutputPath(behavior.output, input.ctxCwd, taskCwd);
+		const outputPath = resolveSingleOutputPath(behavior.output, input.ctxCwd, taskCwd, input.outputBaseDir);
 		if (!outputPath) continue;
 		const previous = seen.get(outputPath);
 		if (previous) {
@@ -1967,7 +1969,7 @@ async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Pr
 		const progressInstructions = behavior
 			? buildChainInstructions({ ...behavior, output: false, reads: false }, input.progressDir, index === input.firstProgressIndex)
 			: { prefix: "", suffix: "" };
-		const outputPath = resolveSingleOutputPath(behavior?.output, input.ctx.cwd, taskCwd);
+		const outputPath = resolveSingleOutputPath(behavior?.output, input.ctx.cwd, taskCwd, input.outputBaseDir);
 		const taskText = injectSingleOutputInstruction(
 			`${readInstructions.prefix}${input.taskTexts[index]!}${progressInstructions.suffix}`,
 			outputPath,
@@ -2258,17 +2260,19 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 	if (errorResult) return errorResult;
 
 	try {
+		const outputBaseDir = path.join(artifactsDir, "outputs", runId);
 		const duplicateOutputError = findDuplicateParallelOutputPath({
 			tasks,
 			behaviors,
 			paramsCwd: effectiveCwd,
 			ctxCwd: ctx.cwd,
+			outputBaseDir,
 			worktreeSetup,
 		});
 		if (duplicateOutputError) return buildParallelModeError(duplicateOutputError);
 		for (let index = 0; index < tasks.length; index++) {
 			const taskCwd = resolveParallelTaskCwd(tasks[index]!, effectiveCwd, worktreeSetup, index);
-			const outputPath = resolveSingleOutputPath(behaviors[index]?.output, ctx.cwd, taskCwd);
+			const outputPath = resolveSingleOutputPath(behaviors[index]?.output, ctx.cwd, taskCwd, outputBaseDir);
 			const validationError = validateFileOnlyOutputMode(behaviors[index]?.outputMode, outputPath, `Parallel task ${index + 1} (${tasks[index]!.agent})`);
 			if (validationError) return buildParallelModeError(validationError);
 		}
@@ -2296,6 +2300,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 			shareEnabled,
 			artifactConfig,
 			artifactsDir,
+			outputBaseDir,
 			maxOutput: params.maxOutput,
 			paramsCwd: effectiveCwd,
 			progressDir: parallelProgressDir,
@@ -2532,7 +2537,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 		task = wrapForkTask(task);
 	}
 	const cleanTask = task;
-	const outputPath = resolveSingleOutputPath(effectiveOutput, ctx.cwd, effectiveCwd);
+	const outputPath = resolveSingleOutputPath(effectiveOutput, ctx.cwd, effectiveCwd, path.join(artifactsDir, "outputs", runId));
 	const validationError = validateFileOnlyOutputMode(effectiveOutputMode, outputPath, `Single run (${params.agent})`);
 	if (validationError) {
 		return { content: [{ type: "text", text: validationError }], isError: true, details: { mode: "single", results: [] } };
@@ -2971,7 +2976,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			...DEFAULT_ARTIFACT_CONFIG,
 			enabled: effectiveParams.artifacts !== false,
 		};
-		const artifactsDir = effectiveAsync ? deps.tempArtifactsDir : getArtifactsDir(parentSessionFile);
+		const artifactsDir = getArtifactsDir(parentSessionFile, effectiveCwd);
 
 		let sessionRoot: string;
 		if (effectiveParams.sessionDir) {

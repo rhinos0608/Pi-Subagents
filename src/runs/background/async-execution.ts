@@ -179,6 +179,7 @@ export interface AsyncRunnerStepBuildParams {
 	dynamicFanoutMaxItems?: number;
 	maxSubagentDepth: number;
 	asyncDir: string;
+	outputBaseDir?: string;
 	validateOutputBindings?: boolean;
 }
 
@@ -332,6 +333,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 		maxSubagentDepth,
 		asyncDir,
 	} = params;
+	const outputBaseDir = params.outputBaseDir;
 	const resultMode = params.resultMode ?? "chain";
 	const chainSkills = params.chainSkills ?? [];
 	const availableModels = params.availableModels;
@@ -407,7 +409,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 		const isFirstProgressAgent = behavior.progress && !progressPrecreated && !progressInstructionCreated;
 		if (behavior.progress) progressInstructionCreated = true;
 		const progressInstructions = buildChainInstructions({ ...behavior, output: false, reads: false }, progressDir, isFirstProgressAgent);
-		const outputPath = resolveSingleOutputPath(behavior.output, ctx.cwd, instructionCwd);
+		const outputPath = resolveSingleOutputPath(behavior.output, ctx.cwd, instructionCwd, outputBaseDir);
 		systemPrompt = injectOutputPathSystemPrompt(systemPrompt, outputPath);
 		const validationError = validateFileOnlyOutputMode(behavior.outputMode, outputPath, `Async step (${s.agent})`);
 		if (validationError) throw new AsyncStartValidationError(validationError);
@@ -601,7 +603,8 @@ export function executeAsyncChain(
 		cwd,
 		chainSkills: params.chainSkills,
 		sessionFilesByFlatIndex,
-		progressDir: params.progressDir ?? (resultMode === "parallel" ? path.join(asyncDir, "progress") : undefined),
+		progressDir: params.progressDir ?? (artifactsDir ? path.join(artifactsDir, "progress", id) : resultMode === "parallel" ? path.join(asyncDir, "progress") : undefined),
+		outputBaseDir: artifactsDir ? path.join(artifactsDir, "outputs", id) : undefined,
 		dynamicFanoutMaxItems: params.dynamicFanoutMaxItems,
 		maxSubagentDepth,
 		asyncDir,
@@ -828,7 +831,7 @@ export function executeAsyncSingle(
 	}
 
 	const effectiveOutput = normalizeSingleOutputOverride(params.output, agentConfig.output);
-	const outputPath = resolveSingleOutputPath(effectiveOutput, ctx.cwd, runnerCwd);
+	const outputPath = resolveSingleOutputPath(effectiveOutput, ctx.cwd, runnerCwd, artifactsDir ? path.join(artifactsDir, "outputs", id) : undefined);
 	systemPrompt = injectOutputPathSystemPrompt(systemPrompt, outputPath);
 	const outputMode = params.outputMode ?? "inline";
 	const validationError = validateFileOnlyOutputMode(outputMode, outputPath, `Async single run (${agent})`);

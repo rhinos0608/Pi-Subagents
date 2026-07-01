@@ -518,8 +518,11 @@ async function runSingleAttempt(
 				const toolArgs = evt.args && typeof evt.args === "object" && !Array.isArray(evt.args)
 					? evt.args as Record<string, unknown>
 					: {};
+				let shouldDetachForBlockingIntercom = false;
 				if (options.allowIntercomDetach && (evt.toolName === "intercom" || evt.toolName === "contact_supervisor")) {
 					intercomStarted = true;
+					shouldDetachForBlockingIntercom = (evt.toolName === "intercom" && toolArgs.action === "ask")
+						|| (evt.toolName === "contact_supervisor" && (toolArgs.reason === "need_decision" || toolArgs.reason === "interview_request"));
 				}
 				progress.toolCount++;
 				progress.currentTool = evt.toolName;
@@ -530,6 +533,9 @@ async function runSingleAttempt(
 				observedMutationAttempt = observedMutationAttempt || mutates;
 				pendingToolResult = { tool: evt.toolName ?? "tool", path: progress.currentPath, mutates, startedAt: now };
 				fireUpdate();
+				if (shouldDetachForBlockingIntercom && !detached && !processClosed) {
+					detachForIntercom();
+				}
 			}
 
 			if (evt.type === "tool_execution_end") {

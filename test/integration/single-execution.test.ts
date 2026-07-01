@@ -1539,6 +1539,59 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		});
 	}
 
+	for (const testCase of [
+		{ name: "intercom ask", toolName: "intercom", args: { action: "ask", to: "orchestrator" } },
+		{ name: "contact_supervisor need_decision", toolName: "contact_supervisor", args: { reason: "need_decision", message: "Need a decision" } },
+		{ name: "contact_supervisor interview_request", toolName: "contact_supervisor", args: { reason: "interview_request", message: "Need input", interview: { questions: [] } } },
+	]) {
+		it(`proactively detaches foreground children on blocking ${testCase.name}`, async () => {
+			mockPi.onCall({
+				steps: [
+					{ jsonl: [events.toolStart(testCase.toolName, testCase.args)] },
+					{ delay: 1000, jsonl: [events.assistantMessage("received pong")] },
+				],
+			});
+			const agents = makeAgentConfigs(["echo"]);
+
+			const result = await runSync(tempDir, agents, "echo", "Task", {
+				runId: `${testCase.toolName}-blocking-detach`,
+				allowIntercomDetach: true,
+			});
+
+			assert.equal(result.exitCode, 0);
+			assert.equal(result.detached, true);
+			assert.equal(result.detachedReason, "intercom coordination");
+			assert.equal(result.finalOutput, "Detached for intercom coordination.");
+			assert.equal(result.progress?.status, "detached");
+		});
+	}
+
+	for (const testCase of [
+		{ name: "intercom send", toolName: "intercom", args: { action: "send", to: "orchestrator", message: "FYI" } },
+		{ name: "contact_supervisor progress_update", toolName: "contact_supervisor", args: { reason: "progress_update", message: "FYI" } },
+	]) {
+		it(`does not proactively detach foreground children on non-blocking ${testCase.name}`, async () => {
+			mockPi.onCall({
+				steps: [
+					{ jsonl: [events.toolStart(testCase.toolName, testCase.args)] },
+					{ jsonl: [events.toolEnd(testCase.toolName)] },
+					{ jsonl: [events.assistantMessage("done")] },
+				],
+			});
+			const agents = makeAgentConfigs(["echo"]);
+
+			const result = await runSync(tempDir, agents, "echo", "Task", {
+				runId: `${testCase.toolName}-nonblocking`,
+				allowIntercomDetach: true,
+			});
+
+			assert.equal(result.exitCode, 0);
+			assert.equal(result.detached, undefined);
+			assert.equal(result.finalOutput, "done");
+			assert.equal(result.progress?.status, "completed");
+		});
+	}
+
 	it("lets an active intercom child accept detach when another child is listening", async () => {
 		const eventBus = createEventBus();
 		let firstDetachResponse: boolean | undefined;

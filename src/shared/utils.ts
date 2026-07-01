@@ -242,19 +242,28 @@ function writePrompt(agent: string, prompt: string): { dir: string; path: string
  * Get the final text output from a list of messages
  */
 export function getFinalOutput(messages: Message[]): string {
+	const validTextParts: string[] = [];
 	for (let i = messages.length - 1; i >= 0; i--) {
 		const msg = messages[i];
-		if (msg.role === "assistant") {
-			const hasAssistantError = ("errorMessage" in msg && typeof msg.errorMessage === "string" && msg.errorMessage.length > 0)
-				|| ("stopReason" in msg && msg.stopReason === "error");
-			if (hasAssistantError) continue;
-			for (let j = msg.content.length - 1; j >= 0; j--) {
-				const part = msg.content[j];
-				if (part.type === "text" && part.text.trim().length > 0) return part.text;
+		if (msg.role !== "assistant") continue;
+		const hasAssistantError = ("errorMessage" in msg && typeof msg.errorMessage === "string" && msg.errorMessage.length > 0)
+			|| ("stopReason" in msg && msg.stopReason === "error");
+		if (hasAssistantError) continue;
+		for (let j = msg.content.length - 1; j >= 0; j--) {
+			const part = msg.content[j];
+			if (part.type !== "text" || part.text.trim().length === 0) continue;
+			validTextParts.push(part.text);
+			if (/```acceptance-report\s*\n[\s\S]*?```/i.test(part.text)) return part.text;
+			for (const match of part.text.matchAll(/```(?:json|jsonc|json5)\s*\n([\s\S]*?)```/gi)) {
+				const body = match[1] ?? "";
+				if (/"criteriaSatisfied"/.test(body) && /"(?:changedFiles|testsAddedOrUpdated|commandsRun|validationOutput|residualRisks|noStagedFiles|diffSummary|reviewFindings|manualNotes)"/.test(body)) {
+					return part.text;
+				}
 			}
+			if (/ACCEPTANCE_REPORT\s*:/i.test(part.text)) return part.text;
 		}
 	}
-	return "";
+	return validTextParts[0] ?? "";
 }
 
 export function getSingleResultOutput(result: Pick<SingleResult, "finalOutput" | "messages">): string {
