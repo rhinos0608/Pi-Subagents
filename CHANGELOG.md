@@ -7,12 +7,14 @@
 - Added detached async runner stdout and stderr log files.
 - Added `totalCost` rollups to foreground single, parallel, and chain run details.
 - Added `globalConcurrencyLimit` to cap simultaneously running subagent tasks across parallel groups in a single run.
+- Added `PI_SUBAGENT_PI_BINARY` to let wrappers launch child agents through an explicit Pi binary instead of resolving `pi` from `PATH`.
 
 ### Fixed
 - Avoid runtime peer imports from detached async runners while still forwarding the Pi package root when available.
 - Fall back to PATH `node` for async runners when the current Node executable path is stale or deleted. Thanks to Richard Hao (@0xRichardH) for #347.
 - Retry fallback models when a zero-exit subagent attempt produces no output, including background async runs, while preserving structured-output-only completions.
 - Preserve explicit empty companion suggestion surfaces and keep global companion suggestions disabled when writing package dismissal state.
+- Include bounded async runner stderr tails when stale-run reconciliation marks a startup crash failed.
 
 ## [0.31.1] - 2026-06-25
 
