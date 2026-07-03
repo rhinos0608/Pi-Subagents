@@ -34,7 +34,7 @@ import { getProjectConfigDir } from "../shared/utils.ts";
 
 type ManagementAction = "list" | "get" | "models" | "create" | "update" | "delete" | "eject" | "disable" | "enable" | "reset";
 type ManagementScope = "user" | "project";
-type ManagementContext = Pick<ExtensionContext, "cwd" | "modelRegistry"> & { model?: ExtensionContext["model"]; config?: ExtensionConfig; companionSuggestionLines?: () => string[] };
+type ManagementContext = Pick<ExtensionContext, "cwd" | "modelRegistry"> & { model?: ExtensionContext["model"]; config?: ExtensionConfig };
 
 interface ManagementParams {
 	action?: string;
@@ -572,7 +572,6 @@ export function handleList(params: ManagementParams, ctx: ManagementContext): Ag
 		config: ctx.config?.proactiveSkillSubagents,
 		discoverAvailableSkills: () => discoverAvailableSkills(ctx.cwd),
 	});
-	const companionSuggestions = ctx.companionSuggestionLines?.() ?? [];
 	const lines = [
 		"Executable agents:",
 		...(agents.length
@@ -582,7 +581,6 @@ export function handleList(params: ManagementParams, ctx: ManagementContext): Ag
 		"Chains:",
 		...(chains.length ? chains.map((c) => `- ${c.name} (${c.source}): ${c.description}`) : ["- (none)"]),
 		...(proactiveSuggestions.length ? ["", ...proactiveSuggestions] : []),
-		...(companionSuggestions.length ? ["", ...companionSuggestions] : []),
 		...(diagnostics.length ? ["", "Chain diagnostics:", ...diagnostics.map((entry) => `- ${entry.filePath}: ${entry.error}`)] : []),
 	];
 	return result(lines.join("\n"));

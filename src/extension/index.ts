@@ -32,6 +32,7 @@ import { createScheduledRunManager } from "../runs/background/scheduled-runs.ts"
 import { registerSlashCommands } from "../slash/slash-commands.ts";
 import { registerPromptTemplateDelegationBridge } from "../slash/prompt-template-bridge.ts";
 import { registerSlashSubagentBridge } from "../slash/slash-bridge.ts";
+import { createNativeSupervisorChannel } from "../intercom/native-supervisor-channel.ts";
 import { registerSubagentRpcBridge } from "./rpc.ts";
 import { clearSlashSnapshots, getSlashRenderableSnapshot, resolveSlashMessageDetails, restoreSlashFinalSnapshots, type SlashMessageDetails } from "../slash/slash-live-state.ts";
 import { inspectSubagentStatus } from "../runs/background/run-status.ts";
@@ -41,14 +42,6 @@ import { SUBAGENT_CHILD_ENV, SUBAGENT_PARENT_SESSION_ENV } from "../runs/shared/
 import { formatDuration, shortenPath } from "../shared/formatters.ts";
 import { loadConfig } from "./config.ts";
 import { buildSubagentToolDescription } from "./tool-description.ts";
-import {
-	buildCompanionDoctorLines,
-	buildCompanionListLines,
-	collectCompanionStatuses,
-	handleCompanionCommand,
-	maybeSendCompanionStartupMessage,
-	resolveCompanionOrchestratorTarget,
-} from "./companion-suggestions.ts";
 import {
 	type Details,
 	type SubagentState,
@@ -263,7 +256,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	ensureAccessibleDir(ASYNC_DIR);
 	cleanupOldChainDirs();
 
-	let config = loadConfig();
+	const config = loadConfig();
 	const asyncByDefault = config.asyncByDefault === true;
 	const tempArtifactsDir = getArtifactsDir(null);
 	cleanupAllArtifactDirs(DEFAULT_ARTIFACT_CONFIG.cleanupDays);
@@ -284,14 +277,13 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		completionSeen: new Map(),
 		watcher: null,
 		watcherRestartTimer: null,
-		companionSuggestionStartupShown: false,
-		companionSuggestionListShown: false,
 		resultFileCoalescer: {
 			schedule: () => false,
 			clear: () => {},
 		},
 	};
 
+	const supervisorChannel = createNativeSupervisorChannel(pi, state);
 	const { startResultWatcher, primeExistingResults, stopResultWatcher } = createResultWatcher(
 		pi,
 		state,
@@ -304,6 +296,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	const runtimeCleanup = () => {
 		stopResultWatcher();
 		scheduledRunManager.stop();
+		supervisorChannel.dispose();
 		clearPendingForegroundControlNotices(state);
 		if (state.poller) {
 			clearInterval(state.poller);
@@ -333,10 +326,6 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		config,
 		asyncByDefault,
 		handleScheduledRunAction: (params, ctx) => scheduledRunManager.handleToolCall(params, ctx),
-		companionSuggestionLines: ({ surface, cwd, context, orchestratorTarget }) => {
-			const statuses = collectCompanionStatuses({ pi, config, cwd, context, orchestratorTarget });
-			return surface === "doctor" ? buildCompanionDoctorLines(statuses) : buildCompanionListLines(statuses);
-		},
 		tempArtifactsDir,
 		getSubagentSessionRoot,
 		expandTilde,
@@ -461,28 +450,6 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 			return total + count;
 		}, 0);
 	}
-
-	pi.registerCommand("subagents-companions", {
-		description: "Show or hide pi-subagents companion package recommendations",
-		handler: async (args, ctx) => {
-			try {
-				const statuses = collectCompanionStatuses({
-					pi,
-					config,
-					cwd: ctx.cwd,
-					orchestratorTarget: resolveCompanionOrchestratorTarget(pi, ctx),
-				});
-				const result = handleCompanionCommand(args, ctx, statuses);
-				if (result.updatedConfig) config = result.updatedConfig;
-				pi.sendMessage({ content: result.text, display: true });
-				if (result.error && ctx.hasUI) ctx.ui.notify(result.text, "error");
-			} catch (error) {
-				const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
-				pi.sendMessage({ content: `Failed to update companion suggestions: ${message}`, display: true });
-				if (ctx.hasUI) ctx.ui.notify(`Failed to update companion suggestions: ${message}`, "error");
-			}
-		},
-	});
 
 	const tool: ToolDefinition<typeof SubagentParams, Details> = {
 		name: "subagent",
@@ -632,8 +599,6 @@ wait also returns when a run needs attention (a child that went idle or blocked 
 			}
 		}
 		state.lastUiContext = ctx;
-		state.companionSuggestionStartupShown = false;
-		state.companionSuggestionListShown = false;
 		cleanupSessionArtifacts(ctx);
 		clearPendingForegroundControlNotices(state);
 		resetJobs(ctx);
@@ -646,18 +611,7 @@ wait also returns when a run needs attention (a child that went idle or blocked 
 	pi.on("session_start", (_event, ctx) => {
 		resetSessionState(ctx);
 		rpcBridge.emitReady(ctx);
-		maybeSendCompanionStartupMessage({
-			pi,
-			ctx,
-			state,
-			statuses: collectCompanionStatuses({
-				pi,
-				config,
-				cwd: ctx.cwd,
-				orchestratorTarget: resolveCompanionOrchestratorTarget(pi, ctx),
-				fast: true,
-			}),
-		});
+		supervisorChannel.start();
 	});
 
 	pi.on("session_shutdown", () => {
@@ -687,6 +641,7 @@ wait also returns when a run needs attention (a child that went idle or blocked 
 		slashBridge.dispose();
 		promptTemplateBridge.cancelAll();
 		promptTemplateBridge.dispose();
+		supervisorChannel.dispose();
 		if (globalStore[runtimeCleanupStoreKey] === runtimeCleanup) {
 			delete globalStore[runtimeCleanupStoreKey];
 		}

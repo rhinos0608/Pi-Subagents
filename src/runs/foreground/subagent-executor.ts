@@ -167,7 +167,6 @@ interface ExecutorDeps {
 	config: ExtensionConfig;
 	asyncByDefault: boolean;
 	handleScheduledRunAction?: (params: SubagentParamsLike, ctx: ExtensionContext) => Promise<AgentToolResult<Details>>;
-	companionSuggestionLines?: (input: { surface: "list" | "doctor"; cwd: string; context?: "fresh" | "fork"; orchestratorTarget?: string }) => string[];
 	tempArtifactsDir: string;
 	getSubagentSessionRoot: (parentSessionFile: string | null) => string;
 	expandTilde: (p: string) => string;
@@ -1004,7 +1003,6 @@ async function resumeAsyncRun(input: {
 		config: input.deps.config.intercomBridge,
 		context: input.params.context,
 		orchestratorTarget: sessionName,
-		cwd: effectiveCwd,
 	});
 	const agents = intercomBridge.active
 		? discoveredAgents.map((agent) => applyIntercomBridgeToAgent(agent, intercomBridge))
@@ -3028,12 +3026,6 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 							orchestratorTarget,
 							sessionError,
 							expandTilde: deps.expandTilde,
-							companionPackageLines: deps.companionSuggestionLines?.({
-								surface: "doctor",
-								cwd: requestCwd,
-								context: paramsWithResolvedCwd.context,
-								orchestratorTarget,
-							}),
 						}),
 					}],
 					details: { mode: "management", results: [] },
@@ -3180,16 +3172,6 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 				...ctx,
 				cwd: requestCwd,
 				config: deps.config,
-				companionSuggestionLines: () => {
-					if (params.action !== "list" || deps.state.companionSuggestionListShown) return [];
-					const lines = deps.companionSuggestionLines?.({
-						surface: "list",
-						cwd: requestCwd,
-						context: paramsWithResolvedCwd.context,
-					}) ?? [];
-					if (lines.length > 0) deps.state.companionSuggestionListShown = true;
-					return lines;
-				},
 			});
 		}
 
@@ -3238,7 +3220,6 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			config: deps.config.intercomBridge,
 			context: effectiveParams.context,
 			orchestratorTarget: sessionName,
-			cwd: effectiveCwd,
 		});
 		const agents = intercomBridge.active
 			? discoveredAgents.map((agent) => applyIntercomBridgeToAgent(agent, intercomBridge))

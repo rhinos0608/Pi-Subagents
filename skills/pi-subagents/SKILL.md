@@ -520,7 +520,7 @@ Use `oracle` as a smart-friend escalation when the parent needs help with trajec
 
 ## Subagent + Intercom Coordination
 
-`pi-subagents` works without `pi-intercom`. When `pi-intercom` is installed and enabled, the intercom bridge can automatically give child agents a private coordination channel back to the parent session.
+`pi-subagents` includes native supervisor coordination. Child agents can use `contact_supervisor` to ask the exact parent session that spawned them; messages are scoped by parent session id and should not appear in other Pi sessions.
 
 Most agents should not call generic `intercom` directly unless bridge instructions provide a target and `contact_supervisor` is unavailable. Do not invent a target. Prefer the tool from the injected bridge instructions.
 
@@ -539,7 +539,7 @@ Use `contact_supervisor` with `reason: "progress_update"` when:
 Message conventions:
 - `reason: "need_decision"` waits for the parent reply and returns it to the child.
 - `reason: "progress_update"` is non-blocking and should stay concise.
-- Child-side routine completion handoffs are not expected. With the intercom bridge active, parent-side `pi-subagents` sends grouped completion results through `pi-intercom`: one grouped message per foreground parent run and one per completed async result file. Acknowledged foreground delivery returns a compact receipt with artifact/session paths; if unacknowledged, the normal full output is preserved. Grouped messages include child intercom targets, full child summaries, and compact nested summaries under the parent child that launched them.
+- Child-side routine completion handoffs are not expected. Native supervisor messages are for decisions, structured input, and meaningful progress updates while a child is still running.
 
 If bridge instructions provide the child-facing tool, a child can ask:
 
@@ -674,14 +674,7 @@ fixes worth doing now. Parent agents can also apply the same recipes directly
 with `subagent(...)` when the user describes the workflow in natural language
 instead of invoking a slash command.
 
-If `pi-prompt-template-model` is installed, additional user prompt templates can delegate into
-`pi-subagents`. This is useful when a slash command should always run through a
-particular agent or with forked context.
-
-If `subagent({ action: "list" })`, `/subagents-doctor`, or a startup message recommends
-`pi-intercom` or `pi-prompt-template-model`, offer to run the shown `pi install npm:<package>`
-command only after user approval. To hide future recommendations, use
-`/subagents-companions hide <package> workspace` or `... user`.
+Additional user prompt templates can delegate into `pi-subagents` through the native `/prompt-workflow` and `/chain-prompts` commands. This is useful when a slash command should always run through a particular agent or with forked context. Prompt frontmatter can set `subagent`, `model`, `skill`, `cwd`, `worktree`, `fresh`, `fork`, or `inheritContext` for the native adapter.
 
 ## Extension RPC
 

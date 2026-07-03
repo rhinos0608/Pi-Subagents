@@ -265,17 +265,9 @@ The package includes reusable prompt templates for common workflows. You do not 
 
 Add `autofix` to `/parallel-review` or `/parallel-cleanup` to apply only the synthesized fixes worth doing now after reviewers return.
 
-## Optional pi-intercom companion
+## Native supervisor coordination
 
-`pi-subagents` works without `pi-intercom`. Install `pi-intercom` only if you want child agents to talk back to the parent Pi session while they are running.
-
-```bash
-pi install npm:pi-intercom
-```
-
-When `pi-intercom` is not active, `pi-subagents` may recommend it at session start, in `subagent({ action: "list" })`, and in `/subagents-doctor`. The recommendation is visible to the assistant so it can offer to run the install command or hide the recommendation after you approve that action.
-
-Most users do not call `intercom` directly. After `pi-intercom` is installed, `pi-subagents` can automatically give child agents a private coordination channel back to the parent session. The bridge recognizes the normal `pi install npm:pi-intercom` package install as well as legacy local extension checkouts.
+Child agents can talk back to the parent Pi session without installing `pi-intercom`. `pi-subagents` now provides the child-facing `contact_supervisor` tool and the parent-facing `intercom({ action: "reply" })` path natively.
 
 Use it for work where the child might need a decision instead of guessing:
 
@@ -289,11 +281,11 @@ Ask oracle to review this plan. If it sees a decision I need to make, have it as
 
 The child can use one dedicated coordination tool:
 
-- `contact_supervisor`: the child contacts the parent/supervisor session that delegated the task. Use `reason: "need_decision"` for blocking decisions or clarification, and `reason: "progress_update"` for short non-blocking updates when a discovery changes the plan. Do not ask for clarification when the only conflict is review-only/no-edit versus progress-writing or artifact-writing instructions; no-edit wins.
+- `contact_supervisor`: the child contacts the parent/supervisor session that delegated the task. Use `reason: "need_decision"` for blocking decisions or clarification, `reason: "interview_request"` for structured input, and `reason: "progress_update"` for short non-blocking updates when a discovery changes the plan. Do not ask for clarification when the only conflict is review-only/no-edit versus progress-writing or artifact-writing instructions; no-edit wins.
 
-Child-side routine completion handoffs are still not expected. With the intercom bridge active, parent-side `pi-subagents` sends grouped completion results through `pi-intercom`: one grouped message per foreground parent `subagent` run and one per completed async result file. Acknowledged foreground delivery returns a compact receipt with artifact/session paths; if unacknowledged, the normal full output is preserved. Grouped messages include child intercom targets, full child summaries, and compact nested child summaries under the parent child that launched them.
+Supervisor messages are scoped to the exact Pi session id that spawned the child. A second Pi session in the same repository does not receive those requests.
 
-If a child appears stalled, needs-attention notices can show up in the parent session with useful next actions, such as checking `subagent({ action: "status" })`, interrupting the run, or nudging the child.
+Child-side routine completion handoffs are still not expected. If a child appears stalled, needs-attention notices can show up in the parent session with useful next actions, such as checking `subagent({ action: "status" })`, interrupting the run, or nudging the child.
 
 If messages do not show up, run:
 
@@ -892,7 +884,7 @@ What the bundled skill covers:
 - **Prompt workflow recipes**: how to apply the packaged techniques directly with `subagent(...)` when the user describes the workflow in natural language instead of invoking a slash command. This includes parallel review, review-loop, parallel research, parallel context-build, parallel handoff-plan, gather-context-and-clarify, and parallel cleanup
 - **Role-agent prompting guidance**: compact contract prompts instead of long scripts, what to include in role-specific meta prompts, and retrieval budgets for researchers
 - **Safety boundaries**: child agents must not run subagents unless their resolved builtin tools explicitly include `subagent`, must not invent intercom targets, and must escalate unapproved decisions
-- **Intercom conventions**: when to ask vs send, and how parent-side result delivery works with `pi-intercom`
+- **Intercom conventions**: when to ask vs send, and how parent-side supervisor/result delivery works through the native channel
 - **Control and diagnostics**: attention signals, soft interrupts, status, and the `doctor` action
 
 If you are writing an agent that orchestrates subagents, the bundled skill helps it behave correctly without guessing the patterns. If you are a human user, you do not need to read it directly; the README and prompt shortcuts encode the same workflows in user-facing form.
@@ -1256,31 +1248,9 @@ Fields:
 - `mode`: default `always`; use `fork-only` to inject only for forked runs, or `off` to disable the bridge.
 - `instructionFile`: optional Markdown template replacing the default bridge instructions. `{orchestratorTarget}` is interpolated. Relative paths resolve from `~/.pi/agent/extensions/subagent/`.
 
-Bridge activation also requires `pi-intercom` to be installed and enabled through `pi install npm:pi-intercom` or a legacy local extension checkout, a targetable current session name or fallback alias, and `pi-intercom` in any explicit agent `extensions` allowlist.
+Bridge activation requires a targetable current parent session id, which `pi-subagents` passes to children automatically. It no longer depends on an external `pi-intercom` installation or per-agent extension allowlists.
 
 The default injected guidance tells children to use `contact_supervisor` with `reason: "need_decision"` when blocked or needing a decision, `reason: "progress_update"` only for meaningful blocked/progress updates, generic `intercom` as fallback plumbing, and avoid routine completion handoffs.
-
-### `companionSuggestions`
-
-```json
-{
-  "companionSuggestions": {
-    "enabled": true,
-    "packages": {
-      "pi-intercom": {
-        "surfaces": ["session_start", "list", "doctor"]
-      },
-      "pi-prompt-template-model": {
-        "surfaces": ["session_start", "list", "doctor"]
-      }
-    }
-  }
-}
-```
-
-Controls recommendations for optional companion packages. `pi-intercom` enables live supervisor decisions, progress updates, and grouped result delivery. `pi-prompt-template-model` makes subagent workflows reusable as prompt templates with model/thinking/skill/subagent frontmatter.
-
-Use `/subagents-companions status` to inspect recommendation status. Use `/subagents-companions hide pi-intercom workspace` or `/subagents-companions hide pi-prompt-template-model user` to hide a recommendation. Use `/subagents-companions show <package>` to show a workspace recommendation again. Set `companionSuggestions` to `false` to disable all companion recommendations.
 
 ### `worktreeBaseDir`
 
@@ -1443,13 +1413,13 @@ Intercom delivery events:
 - `subagent:control-intercom`
 - `subagent:result-intercom`
 
-The result watcher emits `subagent:async-complete`; `src/extension/index.ts` registers the notification handler that consumes it. Control/attention events are surfaced as visible parent notices and persisted for async runs. With `pi-intercom`, needs-attention notices and grouped parent-side subagent result deliveries can reach the orchestrator over intercom.
+The result watcher emits `subagent:async-complete`; `src/extension/index.ts` registers the notification handler that consumes it. Control/attention events are surfaced as visible parent notices and persisted for async runs. Native supervisor requests are delivered only to the exact parent session that spawned the child.
 
 ## Prompt-template integration
 
-`pi-subagents` works standalone through natural language, the `subagent` tool, slash commands, and the packaged prompt shortcuts listed near the top of this README. If you use [pi-prompt-template-model](https://github.com/nicobailon/pi-prompt-template-model), you can also wrap subagent delegation in your own reusable prompt templates.
+`pi-subagents` works standalone through natural language, the `subagent` tool, slash commands, and the packaged prompt shortcuts listed near the top of this README. It also includes a native prompt-workflow adapter for reusable subagent prompt templates, so you do not need `pi-prompt-template-model` for the common subagent workflow path.
 
-Example:
+Create a prompt in `.pi/prompts/` or `~/.pi/agent/prompts/`:
 
 ```md
 ---
@@ -1461,11 +1431,21 @@ cwd: /tmp/screenshots
 Use url in the prompt to take screenshot: $@
 ```
 
-Then `/take-screenshot https://example.com` switches to Sonnet, delegates to `browser-screenshoter` with `/tmp/screenshots` as cwd, and restores your model when done. Runtime overrides like `--cwd=<path>` and `--subagent=<name>` work too.
+Then run it through the native adapter:
 
-For more reusable workflows on top of subagents, including `/chain-prompts` and compare-style prompts such as `/best-of-n`, install `pi-prompt-template-model` separately and copy the examples you want into `~/.pi/agent/prompts/`.
+```text
+/prompt-workflow take-screenshot https://example.com
+```
 
-When `pi-prompt-template-model` is not active, `pi-subagents` may recommend it at session start, in `subagent({ action: "list" })`, and in `/subagents-doctor`. The recommendation is only a prompt; package installation still requires an explicit user-approved command.
+The adapter delegates to the named subagent, applies `model`, `skill`, `cwd`, `worktree`, and fork/fresh context metadata, and supports runtime overrides such as `--subagent reviewer`, `--fork`, `--fresh`, `--worktree`, and `--bg`.
+
+For prompt-template chains, use:
+
+```text
+/chain-prompts analyze -> fix -- user arguments here
+```
+
+Each named prompt becomes a native `subagent` chain step. This is intentionally scoped to subagent workflows; compare-style prompt features such as `/best-of-n` are not part of the built-in adapter.
 
 ## Runtime files
 

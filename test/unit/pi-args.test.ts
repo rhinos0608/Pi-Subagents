@@ -15,6 +15,8 @@ import {
 	SUBAGENT_PARENT_ROOT_RUN_ID_ENV,
 	SUBAGENT_PARENT_RUN_ID_ENV,
 	SUBAGENT_PARENT_SESSION_ENV,
+	SUBAGENT_ORCHESTRATOR_SESSION_ID_ENV,
+	SUBAGENT_SUPERVISOR_CHANNEL_DIR_ENV,
 	SUBAGENT_RUN_ID_ENV,
 	applyThinkingSuffix,
 	buildPiArgs,
@@ -320,6 +322,7 @@ describe("buildPiArgs system prompt mode wiring", () => {
 			inheritSkills: true,
 			intercomSessionName: "subagent-worker-78f659a3",
 			orchestratorIntercomTarget: "subagent-chat-parent",
+			parentSessionId: "session-parent-123",
 			runId: "78f659a3",
 			childAgentName: "worker",
 			childIndex: 2,
@@ -327,9 +330,29 @@ describe("buildPiArgs system prompt mode wiring", () => {
 
 		assert.equal(env.PI_SUBAGENT_INTERCOM_SESSION_NAME, "subagent-worker-78f659a3");
 		assert.equal(env.PI_SUBAGENT_ORCHESTRATOR_TARGET, "subagent-chat-parent");
+		assert.equal(env[SUBAGENT_ORCHESTRATOR_SESSION_ID_ENV], "session-parent-123");
 		assert.equal(env.PI_SUBAGENT_RUN_ID, "78f659a3");
 		assert.equal(env.PI_SUBAGENT_CHILD_AGENT, "worker");
 		assert.equal(env.PI_SUBAGENT_CHILD_INDEX, "2");
+		assert.equal(typeof env[SUBAGENT_SUPERVISOR_CHANNEL_DIR_ENV], "string");
+		assert.match(env[SUBAGENT_SUPERVISOR_CHANNEL_DIR_ENV] ?? "", /supervisor-channels/);
+	});
+
+	it("does not create a supervisor channel without an exact parent session id", () => {
+		const { env } = buildPiArgs({
+			baseArgs: ["-p"],
+			task: "hello",
+			sessionEnabled: false,
+			inheritProjectContext: true,
+			inheritSkills: true,
+			orchestratorIntercomTarget: "subagent-chat-parent",
+			runId: "78f659a3",
+			childAgentName: "worker",
+			childIndex: 2,
+		});
+
+		assert.equal(env[SUBAGENT_ORCHESTRATOR_SESSION_ID_ENV], undefined);
+		assert.equal(env[SUBAGENT_SUPERVISOR_CHANNEL_DIR_ENV], undefined);
 	});
 
 	it("emits explicit builtin tool allowlists", () => {

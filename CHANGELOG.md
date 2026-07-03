@@ -17,8 +17,11 @@
 - Added fuzzy model resolution so callers can specify models with provider separator variations, optional date-stamp parts, and case differences instead of exact `provider/modelId` strings. When `subagents.modelScope: { enforce: true, allow: [...] }` is configured, explicit caller-supplied out-of-scope models error while frontmatter/parent-inherited/fallback models warn. Inspired by @tintinweb's pi-subagents.
 - Added a parent-side `wait` tool for detached async subagent runs. `wait()` returns when the next active run finishes or needs attention, `wait({ all: true })` drains all active runs, `wait({ id })` targets one run, and `wait({ timeoutMs })` caps the block. This lets background-launching skills and non-interactive `pi -p` runs keep going without sleep/status-polling loops or abandoned children. Thanks to RoboBryce (@robobryce) for #365.
 - Added an opt-in `memory` frontmatter field for agent definitions so recurring custom agents can maintain role-specific durable memory (e.g. a security reviewer accumulating threat-model notes). `memory: { scope: "project" | "user", path: "<name>" }` resolves a safe `agent-memory/` directory, injects the first 200 lines of a `MEMORY.md` into the child system prompt, and falls back to a read-only memory block for agents without write tools. Memory lives under a dedicated namespace that does not conflict with Pi's parent/session/project memory system. Inspired by @tintinweb's pi-subagents.
+- Added native supervisor coordination for child subagents. Children can use `contact_supervisor` without installing `pi-intercom`, and parent-side requests are scoped to the exact session id that spawned the child.
+- Added native prompt workflow commands: `/prompt-workflow` runs a prompt template through a subagent, and `/chain-prompts` turns prompt templates into native subagent chain steps.
 
 ### Fixed
+- Removed companion-package recommendation messages from session start, `subagent({ action: "list" })`, and `/subagents-doctor`, addressing #381.
 - Scope async subagent completion notifications to the exact owning Pi session so another session in the same repo no longer receives result notices.
 - Harden scheduled-run timestamp parsing and persisted store validation so ambiguous absolute times and corrupted job records fail clearly instead of being normalized or dropped.
 - Derive live-detail and full-notification hints from Pi's configured expand key instead of hard-coding `Ctrl+O`. Thanks to Kylegl (@kylegl) for #364.
@@ -30,7 +33,7 @@
 ### Added
 - Added `subagents.defaultModel` so subagents can have a global default model separate from the parent session model. Thanks to Artem Timofeev (@atimofeev) for #339.
 - Added `/subagent-cost` and `totalChildUsage` run details so parent sessions can inspect aggregate subagent child usage and cost. Thanks to Aaron Ky-Riesenbach (@aaronkyriesenbach) for #343.
-- Added configurable companion package recommendations for `pi-intercom` and `pi-prompt-template-model`, surfaced in session-start transcript messages, `subagent({ action: "list" })`, and `/subagents-doctor`, with `/subagents-companions` hide/show/status controls.
+- Added configurable companion package recommendations for `pi-intercom` and `pi-prompt-template-model`, surfaced in session-start transcript messages, `subagent({ action: "list" })`, and `/subagents-doctor`, with `/subagents-companions` hide/show/status controls. Removed again in the next release after #381 because context-visible package recommendations were too noisy.
 - Added detached async runner stdout and stderr log files. Thanks to Daniel Mateos Carballares (@danim47c) for #358.
 - Added `totalCost` rollups to foreground single, parallel, and chain run details, including nested foreground subagent costs and compact progress display. Thanks to Clark Everson (@gr3enarr0w) for #345.
 - Added `globalConcurrencyLimit` to cap simultaneously running subagent tasks across parallel groups in a single run. Thanks to Clark Everson (@gr3enarr0w) for #349.
