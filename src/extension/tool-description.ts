@@ -47,6 +47,7 @@ CONTROL:
 • { action: "status", id: "...", view: "transcript", index?: 0, lines?: 80 } - tail a run or child output/session transcript
 • { action: "interrupt", id?: "..." } - soft-interrupt the current child turn and leave the run paused
 • { action: "resume", id: "...", message: "...", index?: 0 } - interrupt then follow up with a live async child, or revive a completed async/foreground child from its session
+• { action: "steer", id: "...", message: "...", index?: 0 } - queue non-terminal guidance for a live/queued async Pi child when supported
 • { action: "append-step", id: "...", chain: [{agent:"agent-c", task:"Use {previous}"}] } - append one step to the tail of a running async chain
 
 DIAGNOSTICS:
@@ -65,7 +66,7 @@ EXECUTE:
 
 MANAGE / CONTROL:
 • Use action without execution fields: list, get, models, create, update, delete, doctor.
-• Async control actions: status, interrupt, resume, append-step. Use status view:"fleet" for active-run overview and view:"transcript" to tail child output. Use id/runId prefixes carefully; use index for a specific child.
+• Async control actions: status, interrupt, resume, steer, append-step. Use status view:"fleet" for active-run overview, view:"transcript" to tail child output, and steer for non-terminal live guidance. Use id/runId prefixes carefully; use index for a specific child.
 
 ASYNC / WAIT:
 • async:true detaches background work. Do not sleep or poll just to wait; use the wait tool only when this turn must block. Otherwise continue useful work or respond and let completion notifications arrive.

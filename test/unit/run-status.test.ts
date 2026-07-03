@@ -442,6 +442,50 @@ describe("async run status inspection", () => {
 		}
 	});
 
+	it("surfaces steering counts and timestamps in exact and list status", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-run-status-steering-"));
+		try {
+			const asyncRoot = path.join(root, "runs");
+			const asyncDir = path.join(asyncRoot, "run-steered");
+			fs.mkdirSync(asyncDir, { recursive: true });
+			fs.writeFileSync(path.join(asyncDir, "status.json"), JSON.stringify({
+				runId: "run-steered",
+				mode: "single",
+				state: "running",
+				pid: 12345,
+				startedAt: 100,
+				lastUpdate: 200,
+				currentStep: 0,
+				steerCount: 2,
+				lastSteerAt: 150,
+				steps: [{ agent: "worker", status: "running", startedAt: 100, steerCount: 2, lastSteerAt: 150 }],
+			}, null, 2), "utf-8");
+
+			const exact = inspectSubagentStatus({ id: "run-steered" }, {
+				asyncDirRoot: asyncRoot,
+				resultsDir: path.join(root, "results"),
+				kill: () => true,
+				now: () => 250,
+			});
+			const exactText = textContent(exact);
+			assert.equal(exact.isError, undefined);
+			assert.match(exactText, /Steering: 2 steers, last 1970-01-01T00:00:00\.150Z/);
+			assert.match(exactText, /Step 1: worker running, steering: 2 steers, last 1970-01-01T00:00:00\.150Z/);
+
+			const list = inspectSubagentStatus({}, {
+				asyncDirRoot: asyncRoot,
+				resultsDir: path.join(root, "results"),
+				kill: () => true,
+				now: () => 250,
+			});
+			const listText = textContent(list);
+			assert.equal(list.isError, undefined);
+			assert.match(listText, /2 steers \| last steer 1970-01-01T00:00:00\.150Z/);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("shows nested runs under owning steps with exact status hints", () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-run-status-nested-root-"));
 		const route = createNestedRoute("run-nested-root");
