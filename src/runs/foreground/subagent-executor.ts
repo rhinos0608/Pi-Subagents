@@ -39,6 +39,7 @@ import { createForkContextResolver } from "../../shared/fork-context.ts";
 import { resolveCurrentSessionId } from "../../shared/session-identity.ts";
 import { applyIntercomBridgeToAgent, INTERCOM_BRIDGE_MARKER, resolveIntercomBridge, resolveIntercomSessionTarget, resolveSubagentIntercomTarget, type IntercomBridgeState } from "../../intercom/intercom-bridge.ts";
 import { formatControlIntercomMessage, formatControlNoticeMessage, resolveControlConfig, shouldNotifyControlEvent } from "../shared/subagent-control.ts";
+import { DEFAULT_TURN_BUDGET_GRACE_TURNS } from "../shared/turn-budget.ts";
 import { finalizeSingleOutput, injectSingleOutputInstruction, normalizeSingleOutputOverride, resolveSingleOutputPath, validateFileOnlyOutputMode } from "../shared/single-output.ts";
 import { compactForegroundDetails, getSingleResultOutput, mapConcurrent, readStatus, resolveChildCwd, sumResultsCost, sumResultsUsage } from "../../shared/utils.ts";
 import { DEFAULT_GLOBAL_CONCURRENCY_LIMIT, Semaphore } from "../shared/parallel-utils.ts";
@@ -83,7 +84,9 @@ import {
 	type NestedRouteInfo,
 	type NestedRunSummary,
 	type ResolvedControlConfig,
+	type ResolvedTurnBudget,
 	type SingleResult,
+	type TurnBudgetConfig,
 	type SubagentRunMode,
 	type SubagentState,
 	ASYNC_DIR,
@@ -136,6 +139,7 @@ export interface SubagentParamsLike {
 	async?: boolean;
 	timeoutMs?: number;
 	maxRuntimeMs?: number;
+	turnBudget?: TurnBudgetConfig;
 	clarify?: boolean;
 	share?: boolean;
 	control?: ControlConfig;
@@ -190,6 +194,7 @@ interface ExecutionContextData {
 	nestedRoute?: NestedRouteInfo;
 	timeoutMs?: number;
 	deadlineAt?: number;
+	turnBudget?: ResolvedTurnBudget;
 	contextPolicy: AgentDefaultContextPolicy;
 }
 
@@ -1434,6 +1439,20 @@ function resolveForegroundTimeout(params: SubagentParamsLike): { timeoutMs?: num
 	return { timeoutMs: rawTimeout ?? rawMaxRuntime };
 }
 
+function resolveTurnBudget(params: SubagentParamsLike, config: ExtensionConfig): { turnBudget?: ResolvedTurnBudget; error?: string } {
+	const raw = params.turnBudget ?? config.turnBudget;
+	if (raw === undefined) return {};
+	if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { error: "turnBudget must be an object with maxTurns and optional graceTurns." };
+	if (typeof raw.maxTurns !== "number" || !Number.isInteger(raw.maxTurns) || raw.maxTurns < 1) {
+		return { error: "turnBudget.maxTurns must be an integer >= 1." };
+	}
+	const graceTurns = raw.graceTurns ?? DEFAULT_TURN_BUDGET_GRACE_TURNS;
+	if (typeof graceTurns !== "number" || !Number.isInteger(graceTurns) || graceTurns < 0) {
+		return { error: "turnBudget.graceTurns must be an integer >= 0." };
+	}
+	return { turnBudget: { maxTurns: raw.maxTurns, graceTurns } };
+}
+
 function expandTopLevelTaskCounts(tasks: TaskParam[]): { tasks?: TaskParam[]; error?: string } {
 	const expanded: TaskParam[] = [];
 	for (let taskIndex = 0; taskIndex < tasks.length; taskIndex++) {
@@ -1766,6 +1785,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 			childIntercomTarget,
 			nestedRoute,
 			timeoutMs: data.timeoutMs,
+			turnBudget: data.turnBudget,
 			globalConcurrencyLimit: deps.config.globalConcurrencyLimit,
 		});
 	}
@@ -1799,6 +1819,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 			childIntercomTarget,
 			nestedRoute,
 			timeoutMs: data.timeoutMs,
+			turnBudget: data.turnBudget,
 			globalConcurrencyLimit: deps.config.globalConcurrencyLimit,
 		});
 	}
@@ -1848,6 +1869,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 			nestedRoute,
 			acceptance: params.acceptance,
 			timeoutMs: data.timeoutMs,
+			turnBudget: data.turnBudget,
 		});
 	}
 
@@ -1915,6 +1937,7 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 		worktreeBaseDir: deps.config.worktreeBaseDir,
 		timeoutMs: data.timeoutMs,
 		deadlineAt: data.deadlineAt,
+		turnBudget: data.turnBudget,
 		globalConcurrencyLimit: deps.config.globalConcurrencyLimit,
 	});
 
@@ -1961,6 +1984,7 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 			childIntercomTarget: data.intercomBridge.active ? (agent, index) => resolveSubagentIntercomTarget(id, agent, index) : undefined,
 			nestedRoute: data.nestedRoute,
 			timeoutMs: data.timeoutMs,
+			turnBudget: data.turnBudget,
 			globalConcurrencyLimit: deps.config.globalConcurrencyLimit,
 		});
 	}
@@ -2031,6 +2055,7 @@ interface ForegroundParallelRunInput {
 	worktreeSetup?: WorktreeSetup;
 	timeoutMs?: number;
 	deadlineAt?: number;
+	turnBudget?: ResolvedTurnBudget;
 }
 
 function buildParallelModeError(message: string): AgentToolResult<Details> {
@@ -2210,6 +2235,7 @@ async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Pr
 			acceptanceContext: { mode: "parallel" },
 			timeoutMs: input.timeoutMs,
 			deadlineAt: input.deadlineAt,
+			turnBudget: input.turnBudget,
 			onUpdate: input.onUpdate
 				? (progressUpdate) => {
 					const stepResults = progressUpdate.details?.results || [];
@@ -2430,6 +2456,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 				controlIntercomTarget: data.intercomBridge.active ? data.intercomBridge.orchestratorTarget : undefined,
 				childIntercomTarget: data.intercomBridge.active ? (agent, index) => resolveSubagentIntercomTarget(id, agent, index) : undefined,
 				timeoutMs: data.timeoutMs,
+				turnBudget: data.turnBudget,
 				globalConcurrencyLimit: deps.config.globalConcurrencyLimit,
 			});
 		}
@@ -2515,6 +2542,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 			worktreeSetup,
 			timeoutMs: data.timeoutMs,
 			deadlineAt,
+			turnBudget: data.turnBudget,
 		});
 		for (let i = 0; i < results.length; i++) {
 			const run = results[i]!;
@@ -2724,6 +2752,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 				controlIntercomTarget: data.intercomBridge.active ? data.intercomBridge.orchestratorTarget : undefined,
 				childIntercomTarget: data.intercomBridge.active ? (agent, index) => resolveSubagentIntercomTarget(id, agent, index) : undefined,
 				timeoutMs: data.timeoutMs,
+				turnBudget: data.turnBudget,
 			});
 		}
 	}
@@ -2815,6 +2844,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 		acceptanceContext: { mode: "single" },
 		timeoutMs: data.timeoutMs,
 		deadlineAt,
+		turnBudget: data.turnBudget,
 	});
 	if (foregroundControl?.currentIndex === 0) {
 		foregroundControl.interrupt = undefined;
@@ -2852,6 +2882,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 		mode: "single",
 		runId,
 		results: [r],
+		...(data.turnBudget ? { turnBudget: data.turnBudget } : {}),
 		progress: params.includeProgress ? allProgress : undefined,
 		artifacts: allArtifactPaths.length ? { dir: artifactsDir, files: allArtifactPaths } : undefined,
 		truncation: r.truncation,
@@ -3158,6 +3189,8 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		);
 		const foregroundTimeout = resolveForegroundTimeout(effectiveParams);
 		if (foregroundTimeout.error) return buildRequestedModeError(effectiveParams, foregroundTimeout.error);
+		const turnBudget = resolveTurnBudget(effectiveParams, deps.config);
+		if (turnBudget.error) return buildRequestedModeError(effectiveParams, turnBudget.error);
 
 		const scope: AgentScope = resolveExecutionAgentScope(effectiveParams.agentScope);
 		const effectiveCwd = effectiveParams.cwd ?? ctx.cwd;
@@ -3291,6 +3324,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			intercomBridge,
 			nestedRoute,
 			timeoutMs: foregroundTimeout.timeoutMs,
+			turnBudget: turnBudget.turnBudget,
 			contextPolicy,
 		};
 
