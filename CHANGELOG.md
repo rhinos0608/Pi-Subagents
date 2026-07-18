@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.35.0] - 2026-07-17
+
 ### Fixed
 - Updated Pi development packages and real-session SDK coverage to 0.80.10, removing known dependency audit findings. Thanks to dmg (@dmg-egg) for #520.
 - `subagent({ action: "get" })` now honors `agentScope` for agent and chain details. Thanks to Kyle (@kylegl) for #519.
