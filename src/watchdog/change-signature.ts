@@ -6,6 +6,16 @@ import * as path from "node:path";
 const IGNORED_CHANGE_PREFIXES = [".pi-subagents/", "tmp/", "node_modules/"];
 const IGNORED_CHANGE_PATHS = new Set([".pi-subagents", "tmp", "node_modules"]);
 
+const DEFAULT_MAX_HASH_FILE_BYTES = 64 * 1024 * 1024;
+
+// Read at call time (not module load) so PI_SUBAGENTS_MAX_HASH_FILE_BYTES can be
+// overridden by tests after this module is imported. Falls back to the 64 MiB
+// default when the env value is missing, non-numeric, non-finite, or <= 0.
+function maxHashFileBytes(): number {
+	const parsed = Number(process.env.PI_SUBAGENTS_MAX_HASH_FILE_BYTES);
+	return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_MAX_HASH_FILE_BYTES;
+}
+
 export interface WatchdogRepoChangeSignature {
 	root: string;
 	key: string;
@@ -29,6 +39,32 @@ function ignoredRelPath(relPath: string): boolean {
 
 function hashFile(filePath: string): string {
 	return createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
+}
+
+function largeFileHash(stat: fs.Stats): string {
+	return "large:" + stat.size + ":" + Math.floor(stat.mtimeMs);
+}
+
+function hashFileEntry(normalized: string, fullPath: string, stat: fs.Stats): unknown {
+	let hash: string;
+	if (stat.size > maxHashFileBytes()) {
+		hash = largeFileHash(stat);
+	} else {
+		try {
+			hash = hashFile(fullPath);
+		} catch (error) {
+			const code = (error as NodeJS.ErrnoException).code;
+			// A file racing away between lstat and read: mirror the lstat ENOENT path.
+			if (code === "ENOENT") return { path: normalized, state: "deleted" };
+			// Any other read failure (too-large, EACCES, EISDIR, ...) degrades to the
+			// metadata marker so one unreadable file never discards the whole signature.
+			hash = largeFileHash(stat);
+			if (code !== "ERR_FS_FILE_TOO_LARGE") {
+				console.warn("[pi-subagents] watchdog hashFile fell back to metadata for", normalized + ":", (error as Error)?.message);
+			}
+		}
+	}
+	return { path: normalized, state: "file", mode: stat.mode & 0o777, size: stat.size, hash };
 }
 
 function hashPath(root: string, relPath: string): unknown {
@@ -60,9 +96,7 @@ function hashPath(root: string, relPath: string): unknown {
 			.sort();
 		return { path: normalized, state: "dir", entries: entries.map((entry) => hashPath(root, entry)) };
 	}
-	if (stat.isFile()) {
-		return { path: normalized, state: "file", mode: stat.mode & 0o777, size: stat.size, hash: hashFile(fullPath) };
-	}
+	if (stat.isFile()) return hashFileEntry(normalized, fullPath, stat);
 	return { path: normalized, state: "other", mode: stat.mode };
 }
 
@@ -84,11 +118,7 @@ function parsePorcelainZ(raw: string): Array<{ status: string; paths: string[] }
 	return entries;
 }
 
-export function computeWatchdogRepoChangeSignature(cwd: string): WatchdogRepoChangeSignature | undefined {
-	const root = git(cwd, ["rev-parse", "--show-toplevel"])?.trim();
-	if (!root) return undefined;
-	const statusOutput = git(root, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]);
-	if (statusOutput === undefined) return undefined;
+function buildRepoChangeSignature(root: string, statusOutput: string): WatchdogRepoChangeSignature {
 	const entries = parsePorcelainZ(statusOutput)
 		.map((entry) => ({
 			status: entry.status,
@@ -104,6 +134,19 @@ export function computeWatchdogRepoChangeSignature(cwd: string): WatchdogRepoCha
 	}));
 	const key = createHash("sha256").update(JSON.stringify(payload)).digest("hex");
 	return { root, key, changedPaths };
+}
+
+export function computeWatchdogRepoChangeSignature(cwd: string): WatchdogRepoChangeSignature | undefined {
+	const root = git(cwd, ["rev-parse", "--show-toplevel"])?.trim();
+	if (!root) return undefined;
+	const statusOutput = git(root, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]);
+	if (statusOutput === undefined) return undefined;
+	try {
+		return buildRepoChangeSignature(root, statusOutput);
+	} catch (error) {
+		console.warn("[pi-subagents] watchdog repo change signature failed:", (error as Error)?.message);
+		return undefined;
+	}
 }
 
 function toolNameFromMessage(message: Record<string, unknown>): string {
