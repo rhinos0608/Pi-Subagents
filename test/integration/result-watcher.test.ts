@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
+import { buildCompletionKey } from "../../src/runs/background/completion-dedupe.ts";
 import { createResultWatcher } from "../../src/runs/background/result-watcher.ts";
 import { createNestedRoute, writeNestedEvent } from "../../src/runs/shared/nested-events.ts";
 import type { SubagentState } from "../../src/shared/types.ts";
@@ -951,4 +952,107 @@ describe("result watcher", () => {
 			fs.rmSync(resultsDir, { recursive: true, force: true });
 		}
 	});
+
+	it("delivers a result when a previous duplicate key has expired", async () => {
+		const resultsDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-result-watcher-expired-"));
+		try {
+			const state = createState();
+			state.currentSessionId = "session-1";
+			const emitted: string[] = [];
+			const watcher = createResultWatcher({ events: { on: () => () => {}, emit(event) { emitted.push(event); } } }, state, resultsDir, 60_000);
+			const resultFile = "expired.json";
+			const result = { sessionId: "session-1", agent: "worker", success: true, summary: "new result", timestamp: 123 };
+			const resultPath = path.join(resultsDir, resultFile);
+			fs.writeFileSync(resultPath, JSON.stringify(result), "utf-8");
+			state.completionSeen.set(buildCompletionKey(result, `result:${resultFile}`), Date.now() - 61_000);
+			try {
+				watcher.primeExistingResults();
+				await new Promise((resolve) => setTimeout(resolve, 75));
+			} finally {
+				watcher.stopResultWatcher();
+			}
+
+			assert.equal(fs.existsSync(resultPath), false);
+			assert.deepEqual(emitted, ["subagent:async-complete"]);
+		} finally {
+			fs.rmSync(resultsDir, { recursive: true, force: true });
+		}
+	});
+
+	it("keeps an unaccepted result for retry and deletes it only after notifier acceptance", async () => {
+		const resultsDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-result-watcher-notifier-retry-"));
+		try {
+			const state = createState();
+			state.currentSessionId = "session-1";
+			const emitted: string[] = [];
+			let attempts = 0;
+			const watcher = createResultWatcher({ events: { on: () => () => {}, emit(event) { emitted.push(event); } } }, state, resultsDir, 60_000, {
+				notifier: { async deliver() { attempts += 1; return attempts > 1; } },
+			});
+			const resultPath = path.join(resultsDir, "retry.json");
+			fs.writeFileSync(resultPath, JSON.stringify({ id: "retry", sessionId: "session-1", agent: "worker", success: true, summary: "done", timestamp: 1 }), "utf-8");
+			try {
+				watcher.primeExistingResults();
+				await new Promise((resolve) => setTimeout(resolve, 50));
+				assert.equal(fs.existsSync(resultPath), true);
+				await new Promise((resolve) => setTimeout(resolve, 180));
+			} finally {
+				watcher.stopResultWatcher();
+			}
+			assert.equal(attempts, 2);
+			assert.equal(fs.existsSync(resultPath), false);
+			assert.deepEqual(emitted, ["subagent:async-complete"]);
+		} finally {
+			fs.rmSync(resultsDir, { recursive: true, force: true });
+		}
+	});
+
+	it("drops stale watcher authority without emitting or deleting", async () => {
+		const resultsDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-result-watcher-stale-"));
+		try {
+			const state = createState();
+			state.currentSessionId = "session-1";
+			const emitted: string[] = [];
+			let accept!: (value: boolean) => void;
+			const watcher = createResultWatcher({ events: { on: () => () => {}, emit(event) { emitted.push(event); } } }, state, resultsDir, 60_000, {
+				notifier: { deliver: () => new Promise<boolean>((resolve) => { accept = resolve; }) },
+			});
+			const resultPath = path.join(resultsDir, "stale.json");
+			fs.writeFileSync(resultPath, JSON.stringify({ id: "stale", sessionId: "session-1", agent: "worker", success: true, summary: "done", timestamp: 1 }), "utf-8");
+			watcher.primeExistingResults();
+			await new Promise((resolve) => setTimeout(resolve, 50));
+			watcher.stopResultWatcher();
+			accept(true);
+			await new Promise((resolve) => setTimeout(resolve, 50));
+			assert.equal(fs.existsSync(resultPath), true);
+			assert.deepEqual(emitted, []);
+		} finally {
+			fs.rmSync(resultsDir, { recursive: true, force: true });
+		}
+	});
+
+	it("marks reload backlog display-only", async () => {
+		const resultsDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-result-watcher-quiet-"));
+		try {
+			const state = createState();
+			state.currentSessionId = "session-1";
+			const delivered: Array<{ triggerTurn?: boolean }> = [];
+			const emitted: string[] = [];
+			const watcher = createResultWatcher({ events: { on: () => () => {}, emit(event) { emitted.push(event); } } }, state, resultsDir, 60_000, {
+				notifier: { async deliver(result) { delivered.push({ triggerTurn: result.triggerTurn }); return true; } },
+			});
+			fs.writeFileSync(path.join(resultsDir, "quiet.json"), JSON.stringify({ id: "quiet", sessionId: "session-1", agent: "worker", success: true, summary: "done", timestamp: 1, intercomTarget: "host" }), "utf-8");
+			try {
+				watcher.primeExistingResults({ triggerTurn: false });
+				await new Promise((resolve) => setTimeout(resolve, 75));
+			} finally {
+				watcher.stopResultWatcher();
+			}
+			assert.deepEqual(delivered, [{ triggerTurn: false }]);
+			assert.equal(emitted.includes("subagent:result-intercom"), false);
+		} finally {
+			fs.rmSync(resultsDir, { recursive: true, force: true });
+		}
+	});
+
 });
