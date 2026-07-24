@@ -519,8 +519,12 @@ subagent({
 
 `worktree: true` gives each parallel task its own git worktree branched from
 HEAD. This requires a clean git state and is mainly for intentionally parallel
-write workflows. If you want one writer thread and several advisory agents,
-prefer a single-writer pattern instead.
+write workflows. On completion, use the `parallelHandoff.path` returned in
+foreground details or async status/results instead of scraping the combined
+text. Its versioned manifest records child status and output references, full
+patch paths and stats, and whether each temporary worktree and branch was
+removed. If you want one writer thread and several advisory agents, prefer a
+single-writer pattern instead.
 
 ## The Oracle Workflow
 

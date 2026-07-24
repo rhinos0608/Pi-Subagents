@@ -216,6 +216,72 @@ export interface ControlEvent {
 export type SubagentResultStatus = "completed" | "failed" | "paused" | "stopped" | "detached";
 export type SubagentRunMode = "single" | "parallel" | "chain";
 
+export interface ParallelHandoffPatch {
+	path: string;
+	branch: string;
+	changed: boolean;
+	diffStat: string;
+	filesChanged: number;
+	insertions: number;
+	deletions: number;
+	error?: string;
+}
+
+export interface ParallelHandoffChild {
+	index: number;
+	taskIndex: number;
+	agent: string;
+	status: SubagentResultStatus;
+	summary: string;
+	outputPath?: string;
+	structuredOutput?: unknown;
+	structuredOutputPath?: string;
+	sessionPath?: string;
+	patch: ParallelHandoffPatch;
+}
+
+export interface ParallelHandoffCleanupTask {
+	index: number;
+	path: string;
+	branch: string;
+	worktreeRemoved: boolean;
+	branchRemoved: boolean;
+	errors?: string[];
+}
+
+export interface ParallelHandoffGroup {
+	stepIndex: number;
+	baseCommit: string;
+	repoRoot: string;
+	children: ParallelHandoffChild[];
+	cleanup: {
+		state: "complete" | "partial";
+		tasks: ParallelHandoffCleanupTask[];
+		pruned: boolean;
+		errors?: string[];
+	};
+}
+
+export interface ParallelHandoffManifest {
+	version: 1;
+	runId: string;
+	mode: "parallel" | "chain";
+	source: "foreground" | "async";
+	cwd: string;
+	createdAt: number;
+	updatedAt: number;
+	groups: ParallelHandoffGroup[];
+}
+
+export interface ParallelHandoffReference {
+	version: 1;
+	path: string;
+	groupCount: number;
+	childCount: number;
+	changedPatches: number;
+	cleanupState: "complete" | "partial";
+}
+
 export interface AgentContract {
 	version: 1;
 }
@@ -404,6 +470,7 @@ export interface SubagentResultIntercomPayload {
 	index?: number;
 	artifactPath?: string;
 	sessionPath?: string;
+	parallelHandoff?: ParallelHandoffReference;
 }
 
 // ============================================================================
@@ -731,6 +798,7 @@ export interface Details {
 	// Aggregated cost across all agents in the run
 	totalCost?: CostSummary;
 	spawnBudget?: SpawnBudgetSnapshot;
+	parallelHandoff?: ParallelHandoffReference;
 }
 
 // ============================================================================
@@ -977,6 +1045,7 @@ export interface AsyncStatus {
 	totalCost?: CostSummary;
 	sessionFile?: string;
 	outputs?: ChainOutputMap;
+	parallelHandoff?: ParallelHandoffReference;
 }
 
 export type AsyncJobStep = NonNullable<AsyncStatus["steps"]>[number] & {
