@@ -7,7 +7,6 @@ import { SUBAGENT_CHILD_AGENT_ENV, SUBAGENT_CHILD_INDEX_ENV, SUBAGENT_FANOUT_CHI
 import { createStructuredOutputToolParameters, STRUCTURED_OUTPUT_CAPTURE_ENV, STRUCTURED_OUTPUT_SCHEMA_ENV, validateStructuredOutputValue } from "./structured-output.ts";
 import {
 	CHILD_TOOL_DIAGNOSTIC_PATH_ENV,
-	formatChildToolDiagnostic,
 	REQUIRED_CHILD_TOOLS_ENV,
 	writeChildToolDiagnostic,
 	type ChildToolDiagnostic,
@@ -372,6 +371,8 @@ export default function registerSubagentPromptRuntime(pi: ExtensionAPI): void {
 		waitState.currentSessionId = sessionManager ? resolveCurrentSessionId(sessionManager) : null;
 		registerNativeSupervisorClientOnce();
 		if (readRequiredChildTools()?.includes("intercom")) registerNativeSupervisorFallbackOnce();
+	});
+	onRuntimeEvent("agent_start", () => {
 		refreshChildToolDiagnostic(pi);
 	});
 	onRuntimeEvent("agent_end", async (_event: unknown, ctx: unknown) => {
@@ -419,7 +420,6 @@ export default function registerSubagentPromptRuntime(pi: ExtensionAPI): void {
 
 	onRuntimeEvent("before_agent_start", async (event: { systemPrompt: string }) => {
 		registerNativeSupervisorFallbackOnce();
-		const toolDiagnostic = refreshChildToolDiagnostic(pi);
 		const intercomSessionName = process.env[SUBAGENT_INTERCOM_SESSION_NAME_ENV]?.trim();
 		if (intercomSessionName && typeof pi.setSessionName === "function") {
 			pi.setSessionName(intercomSessionName);
@@ -435,9 +435,6 @@ export default function registerSubagentPromptRuntime(pi: ExtensionAPI): void {
 				inheritSkills: inheritSkills ?? true,
 				fanoutChild: fanoutChild === true,
 			});
-		}
-		if (toolDiagnostic) {
-			rewritten = `${formatChildToolDiagnostic(toolDiagnostic)}\nDo not claim tool-dependent work succeeded; report this configuration error to the parent.\n\n${rewritten}`;
 		}
 		if (rewritten === event.systemPrompt) return;
 		return { systemPrompt: rewritten };

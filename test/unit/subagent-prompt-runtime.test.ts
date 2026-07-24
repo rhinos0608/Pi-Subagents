@@ -596,7 +596,7 @@ describe("subagent prompt runtime", () => {
 		assert.deepEqual(registered, ["subagent_wait"]);
 	});
 
-	it("registers native intercom before checking a strict allowlist", () => {
+	it("registers native intercom before the final strict allowlist check", () => {
 		setSupervisorEnv();
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "subagent-intercom-diagnostic-"));
 		try {
@@ -619,6 +619,7 @@ describe("subagent prompt runtime", () => {
 
 			handlers.get("session_start")?.({});
 			assert.deepEqual(registered, ["subagent_wait", "contact_supervisor", "intercom"]);
+			handlers.get("agent_start")?.({});
 			assert.equal(fs.existsSync(diagnosticPath), false);
 		} finally {
 			fs.rmSync(dir, { recursive: true, force: true });
@@ -668,7 +669,7 @@ describe("subagent prompt runtime", () => {
 		assert.deepEqual(registered, ["subagent_wait", "contact_supervisor", "intercom"]);
 	});
 
-	it("records and explains requested tools missing from the child registry", async () => {
+	it("records requested tools missing from the child registry after startup hooks settle", async () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "subagent-tool-diagnostic-"));
 		try {
 			const diagnosticPath = path.join(dir, "tools.json");
@@ -683,22 +684,24 @@ describe("subagent prompt runtime", () => {
 					handlers.set(event, handler);
 				},
 				getAllTools: () => available.map((name) => ({ name })),
-			} as { on(event: string, handler: (payload?: unknown) => unknown): void; getAllTools(): Array<{ name: string }> });
+				registerTool() {},
+			} as { on(event: string, handler: (payload?: unknown) => unknown): void; getAllTools(): Array<{ name: string }>; registerTool(): void });
 
-			const missing = await handlers.get("before_agent_start")?.({ systemPrompt: BASE_PROMPT }) as { systemPrompt?: string } | undefined;
+			const promptRewrite = await handlers.get("before_agent_start")?.({ systemPrompt: BASE_PROMPT }) as { systemPrompt?: string } | undefined;
+			assert.equal(fs.existsSync(diagnosticPath), false);
+			assert.doesNotMatch(promptRewrite?.systemPrompt ?? "", /requested unavailable child tools/);
+
+			handlers.get("agent_start")?.({});
 			assert.deepEqual(readChildToolDiagnostic(diagnosticPath), {
 				agent: "extension-worker",
 				required: ["read", "fixture_search"],
 				available: ["read"],
 				missing: ["fixture_search"],
 			});
-			assert.match(missing?.systemPrompt ?? "", /requested unavailable child tools: fixture_search/);
-			assert.match(missing?.systemPrompt ?? "", /subagentOnlyExtensions/);
 
 			available.push("fixture_search");
-			const resolved = await handlers.get("before_agent_start")?.({ systemPrompt: BASE_PROMPT });
+			handlers.get("agent_start")?.({});
 			assert.equal(fs.existsSync(diagnosticPath), false);
-			assert.equal(resolved, undefined);
 		} finally {
 			fs.rmSync(dir, { recursive: true, force: true });
 		}
