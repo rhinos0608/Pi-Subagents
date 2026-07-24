@@ -28,15 +28,21 @@ import {
 import registerSubagentExtension from "../../src/extension/index.ts";
 import {
 	SUBAGENT_DELEGATION_PROTOCOL_VERSION,
+	SUBAGENT_DELEGATION_V2_PROTOCOL_VERSION,
 	SUBAGENT_DELEGATION_REQUEST_EVENT,
 	SUBAGENT_DELEGATION_RESPONSE_EVENT,
+	SUBAGENT_DELEGATION_STARTED_EVENT,
 	SUBAGENT_DELEGATION_UPDATE_EVENT,
 	type SubagentDelegationResponse,
 	type SubagentDelegationUpdate,
+	type SubagentDelegationV2Request,
+	type SubagentDelegationV2Response,
+	type SubagentDelegationV2Started,
 } from "../../src/api/delegation.ts";
 import { INTERCOM_DETACH_REQUEST_EVENT, INTERCOM_DETACH_RESPONSE_EVENT, type SubagentState } from "../../src/shared/types.ts";
 import { CHILD_WATCHDOG_STATUS_EVENT } from "../../src/watchdog/child-status.ts";
 import { WAIT_TOOL_ENABLED_ENV } from "../../src/runs/background/wait-config.ts";
+import { TOOL_BUDGET_ENV, TOOL_BUDGET_ZERO_AUTH_ENV } from "../../src/runs/shared/tool-budget.ts";
 import { MainWatchdogRuntime } from "../../src/watchdog/runtime.ts";
 import { MAX_CHILD_PENDING_LINE_BYTES, MAX_CHILD_STDERR_BYTES } from "../../src/runs/shared/child-protocol.ts";
 import {
@@ -351,6 +357,67 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		assert.match(result.content[0]?.text ?? "", /single alias finished/);
 	});
 
+	it("admits a zero run-level tool budget only for marked v2 delegated execution", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		const zeroBudget = { hard: 0, block: "*" as const };
+		const params = { agent: "echo", task: "Answer without tools", toolBudget: zeroBudget };
+		const ctx = makeMinimalCtx(tempDir);
+		const executor = makeExecutor([makeAgent("echo")]);
+
+		const ordinary = await executor.execute(
+			"ordinary-zero-budget",
+			{ ...params, delegatedAllowZeroToolBudget: true },
+			new AbortController().signal,
+			undefined,
+			ctx,
+		);
+		assert.equal(ordinary.isError, true);
+		assert.match(ordinary.content[0]?.text ?? "", /toolBudget\.hard must be an integer >= 1/);
+
+		const v1Delegated = await executor.executeDelegated(
+			"v1-delegated-zero-budget",
+			params,
+			new AbortController().signal,
+			undefined,
+			ctx,
+		);
+		assert.equal(v1Delegated.isError, true);
+		assert.match(v1Delegated.content[0]?.text ?? "", /toolBudget\.hard must be an integer >= 1/);
+
+		mockPi.onCall({ echoEnv: [TOOL_BUDGET_ENV, TOOL_BUDGET_ZERO_AUTH_ENV] });
+		const v2Delegated = await executor.executeDelegated(
+			"v2-delegated-zero-budget",
+			{ ...params, delegatedAllowZeroToolBudget: true },
+			new AbortController().signal,
+			undefined,
+			ctx,
+		);
+		assert.equal(v2Delegated.isError, undefined);
+		const env = JSON.parse(v2Delegated.content[0]?.text ?? "{}") as Record<string, string>;
+		assert.deepEqual(JSON.parse(env[TOOL_BUDGET_ENV] ?? "null"), zeroBudget);
+		assert.equal(env[TOOL_BUDGET_ZERO_AUTH_ENV], "1");
+		assert.equal(mockPi.callCount(), 1);
+	});
+
+	it("keeps delegated agent and config tool budgets at a minimum of one", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		const ctx = makeMinimalCtx(tempDir);
+		const cases = [
+			makeExecutor([makeAgent("echo", { toolBudget: { hard: 0 } })]),
+			makeExecutor([makeAgent("echo")], { toolBudget: { hard: 0 } }),
+		];
+		for (const [index, executor] of cases.entries()) {
+			const result = await executor.executeDelegated(
+				`delegated-default-zero-budget-${index}`,
+				{ agent: "echo", task: "Do work", delegatedAllowZeroToolBudget: true },
+				new AbortController().signal,
+				undefined,
+				ctx,
+			);
+			assert.equal(result.isError, true);
+			assert.match(result.content[0]?.text ?? "", /(?:agent\.|config\.)?toolBudget\.hard must be an integer >= 1/);
+		}
+		assert.equal(mockPi.callCount(), 0);
+	});
+
 	it("rejects string \"none\" acceptance before spawning", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
 		const executor = makeExecutor([makeAgent("echo")]);
 
@@ -499,7 +566,9 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 
 		try {
 			registerSubagentExtension(fakePi as never);
-			for (const handler of runtimeHandlers.get("session_start") ?? []) handler({ reason: "startup" }, ctx);
+			for (const handler of runtimeHandlers.get("session_start") ?? []) {
+				await handler({ reason: "startup" }, ctx);
+			}
 			extensionEvents.emit(SUBAGENT_DELEGATION_REQUEST_EVENT, {
 				version: SUBAGENT_DELEGATION_PROTOCOL_VERSION,
 				requestId: "registered-a",
@@ -531,11 +600,179 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 			}
 			assert.deepEqual(responses.map((response) => response.requestId).sort(), ["registered-a", "registered-b"]);
 			assert.ok(responses.every((response) => response.status === "completed"));
-			assert.equal(responses.find((response) => response.requestId === "registered-a")?.output, "registered first delegated call");
-			assert.equal(responses.find((response) => response.requestId === "registered-b")?.output, "registered second delegated call");
-			assert.equal(updates.some((update) => update.requestId === "registered-a" && update.currentTool === "read"), true);
+			assert.deepEqual(responses.map((response) => response.output).sort(), [
+				"registered first delegated call",
+				"registered second delegated call",
+			]);
+			const toolResponse = responses.find((response) => response.output === "registered first delegated call");
+			assert.ok(toolResponse);
+			assert.equal(updates.some((update) => update.requestId === toolResponse.requestId && update.currentTool === "read"), true);
 		} finally {
-			for (const handler of runtimeHandlers.get("session_shutdown") ?? []) handler({}, ctx);
+			for (const handler of runtimeHandlers.get("session_shutdown") ?? []) {
+				await handler({}, ctx);
+			}
+		}
+	});
+
+	it("routes registered strict v2 text delegation through the concurrent executor", async () => {
+		const literalJsonText = '{"looks":"json"}';
+		mockPi.onCall({
+			steps: [
+				{ jsonl: [events.toolStart("read", { path: "package.json" })], delay: 20 },
+				{ jsonl: [events.toolEnd("read"), events.toolResult("read", "{}")], delay: 20 },
+				{
+					jsonl: [{
+						type: "message_end",
+						message: {
+							role: "assistant",
+							content: [{ type: "text", text: literalJsonText }],
+							model: "mock/test-model",
+							stopReason: "stop",
+							usage: {
+								input: 11,
+								output: 7,
+								cacheRead: 3,
+								cacheWrite: 2,
+								cost: { total: 0.0125 },
+							},
+						},
+					}],
+					delay: 60,
+				},
+			],
+		});
+		mockPi.onCall({ output: "registered v2 second node", delay: 100 });
+		const extensionEvents = createEventBus();
+		const runtimeHandlers = new Map<string, Array<(event: unknown, ctx: ReturnType<typeof makeMinimalCtx>) => void>>();
+		const fakePi = new Proxy({
+			events: extensionEvents,
+			on(event: string, handler: (event: unknown, ctx: ReturnType<typeof makeMinimalCtx>) => void) {
+				const handlers = runtimeHandlers.get(event) ?? [];
+				handlers.push(handler);
+				runtimeHandlers.set(event, handlers);
+				return () => runtimeHandlers.set(event, (runtimeHandlers.get(event) ?? []).filter((entry) => entry !== handler));
+			},
+			registerTool() {},
+			registerCommand() {},
+			registerShortcut() {},
+			registerMessageRenderer() {},
+			sendMessage() {},
+			getSessionName() { return undefined; },
+		}, {
+			get(target, prop) {
+				if (prop in target) return target[prop as keyof typeof target];
+				return () => undefined;
+			},
+		});
+		const ctx = {
+			...makeMinimalCtx(tempDir),
+			modelRegistry: {
+				getAvailable: () => [{ provider: "mock", id: "test-model", reasoning: true }],
+			},
+			sessionManager: {
+				getSessionId: () => "registered-delegation-v2-session",
+				getSessionFile: () => path.join(tempDir, "registered-delegation-v2-session.jsonl"),
+				getEntries: () => [],
+			},
+		};
+		const started: SubagentDelegationV2Started[] = [];
+		const responses: SubagentDelegationV2Response[] = [];
+		extensionEvents.on(SUBAGENT_DELEGATION_STARTED_EVENT, (payload) => {
+			if ((payload as { version?: unknown }).version === SUBAGENT_DELEGATION_V2_PROTOCOL_VERSION) {
+				started.push(payload as SubagentDelegationV2Started);
+			}
+		});
+		extensionEvents.on(SUBAGENT_DELEGATION_RESPONSE_EVENT, (payload) => {
+			if ((payload as { version?: unknown }).version === SUBAGENT_DELEGATION_V2_PROTOCOL_VERSION) {
+				responses.push(payload as SubagentDelegationV2Response);
+			}
+		});
+
+		const firstRequest = {
+			version: SUBAGENT_DELEGATION_V2_PROTOCOL_VERSION,
+			requestId: "registered-v2-a",
+			ownerRunId: "owner-v2",
+			nodeId: "node-a",
+			agent: "worker",
+			task: "Return literal JSON-looking text",
+			context: "fresh",
+			cwd: tempDir,
+			model: "mock/test-model",
+			thinking: "high",
+			result: { kind: "text" },
+		} satisfies SubagentDelegationV2Request;
+		const secondRequest = {
+			version: SUBAGENT_DELEGATION_V2_PROTOCOL_VERSION,
+			requestId: "registered-v2-b",
+			ownerRunId: "owner-v2",
+			nodeId: "node-b",
+			agent: "reviewer",
+			task: "Run the second logical node",
+			context: "fresh",
+			cwd: tempDir,
+			model: "mock/test-model",
+			thinking: "high",
+			result: { kind: "text" },
+		} satisfies SubagentDelegationV2Request;
+
+		try {
+			registerSubagentExtension(fakePi as never);
+			for (const handler of runtimeHandlers.get("session_start") ?? []) {
+				await handler({ reason: "startup" }, ctx);
+			}
+			extensionEvents.emit(SUBAGENT_DELEGATION_REQUEST_EVENT, firstRequest);
+			extensionEvents.emit(SUBAGENT_DELEGATION_REQUEST_EVENT, secondRequest);
+
+			const callDeadlineAt = Date.now() + 30_000;
+			while (mockPi.callCount() < 2 && responses.length < 2 && Date.now() < callDeadlineAt) {
+				await new Promise((resolve) => setTimeout(resolve, 20));
+			}
+			assert.equal(mockPi.callCount(), 2, `different V2 logical nodes should use the concurrent delegated execution path: ${JSON.stringify(responses)}`);
+			assert.deepEqual(started.map(({ requestId, ownerRunId, nodeId }) => ({ requestId, ownerRunId, nodeId })).sort((a, b) => a.nodeId.localeCompare(b.nodeId)), [
+				{ requestId: "registered-v2-a", ownerRunId: "owner-v2", nodeId: "node-a" },
+				{ requestId: "registered-v2-b", ownerRunId: "owner-v2", nodeId: "node-b" },
+			]);
+
+			const responseDeadlineAt = Date.now() + 30_000;
+			while (responses.length < 2 && Date.now() < responseDeadlineAt) {
+				await new Promise((resolve) => setTimeout(resolve, 20));
+			}
+			assert.equal(responses.length, 2);
+			assert.ok(responses.every((response) => response.status === "completed"));
+			const terminalResponses = responses.filter((response) => response.status !== "invalid_request");
+			assert.equal(terminalResponses.length, 2);
+			for (const response of terminalResponses) {
+				assert.equal(response.ownerRunId, "owner-v2");
+				assert.equal(response.model, "mock/test-model:high");
+				assert.equal(response.thinking, "high");
+			}
+			const literalResponse = terminalResponses.find((response) => response.result?.kind === "text" && response.result.text === literalJsonText);
+			assert.ok(literalResponse);
+			assert.deepEqual(literalResponse.result, { kind: "text", text: literalJsonText });
+			assert.deepEqual(literalResponse.usage && {
+				input: literalResponse.usage.input,
+				output: literalResponse.usage.output,
+				cacheRead: literalResponse.usage.cacheRead,
+				cacheWrite: literalResponse.usage.cacheWrite,
+				cost: literalResponse.usage.cost,
+				turns: literalResponse.usage.turns,
+				toolCalls: literalResponse.usage.toolCalls,
+			}, {
+				input: 11,
+				output: 7,
+				cacheRead: 3,
+				cacheWrite: 2,
+				cost: 0.0125,
+				turns: 1,
+				toolCalls: 1,
+			});
+			assert.equal(typeof literalResponse.usage?.durationMs, "number");
+			const plainResponse = terminalResponses.find((response) => response.result?.kind === "text" && response.result.text === "registered v2 second node");
+			assert.ok(plainResponse);
+		} finally {
+			for (const handler of runtimeHandlers.get("session_shutdown") ?? []) {
+				await handler({}, ctx);
+			}
 		}
 	});
 
