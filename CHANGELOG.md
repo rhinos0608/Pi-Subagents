@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.37.0] - 2026-07-25
+
 ### Added
 - Bound public launch preflight to versioned selected-agent definition digests, projected async lifecycle/status/result/process-terminal roots, and actual foreground/async execution digests in result and status metadata. Thanks to @shaggitza for #637.
 - Added `subagents.defaultExtensions` for shared child extension allowlists and `agentOverrides.<name>.extensions` for per-agent settings. Thanks to chronoAP for #642.
