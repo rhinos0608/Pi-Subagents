@@ -813,7 +813,7 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 		mockPi.onCall({ output: "first child done" });
 		mockPi.onCall({ output: "second child done" });
 		mockPi.onCall({ output: "revived foreground answer" });
-		const { executor } = makeExecutor({ bridgeMode: "off", agents: [makeAgent("a"), makeAgent("b")] });
+		const { executor } = makeExecutor({ bridgeMode: "off", agents: [makeAgent("a"), makeAgent("b", { model: "anthropic/claude-sonnet-4", thinking: "high" })] });
 
 		const original = await executor.execute(
 			"foreground-resume-original",
@@ -842,6 +842,7 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 		const selectedSession = original.details?.results?.[1]?.sessionFile;
 		assert.ok(selectedSession, "expected selected child session file");
 		assert.equal(reviveArgs[reviveArgs.indexOf("--session") + 1], selectedSession);
+		assert.equal(reviveArgs[reviveArgs.indexOf("--model") + 1], original.details?.results?.[1]?.model);
 		const revivedId = revived.details?.asyncId;
 		assert.ok(revivedId, "expected revived async id");
 		const resultPath = path.join(RESULTS_DIR, `${revivedId}.json`);

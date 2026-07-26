@@ -407,6 +407,8 @@ function rememberForegroundRun(state: SubagentState, input: { runId: string; mod
 				...(result.savedOutputPath ? { savedOutputPath: result.savedOutputPath } : {}),
 				...(result.outputSaveError ? { outputSaveError: result.outputSaveError } : {}),
 				...(result.sessionFile ? { sessionFile: result.sessionFile } : {}),
+				...(result.model ? { model: result.model } : {}),
+				...(result.thinking ? { thinking: result.thinking } : {}),
 				...(result.artifactPaths ? { artifactPaths: result.artifactPaths } : {}),
 				...(result.transcriptPath ? { transcriptPath: result.transcriptPath } : {}),
 				...(result.transcriptError ? { transcriptError: result.transcriptError } : {}),
@@ -473,6 +475,8 @@ function updateRememberedForegroundChild(state: SubagentState, input: { runId: s
 		savedOutputPath: input.result.savedOutputPath,
 		outputSaveError: input.result.outputSaveError,
 		...(input.result.sessionFile ? { sessionFile: input.result.sessionFile } : {}),
+		...(input.result.model ? { model: input.result.model } : {}),
+		...(input.result.thinking ? { thinking: input.result.thinking } : {}),
 		...(input.result.artifactPaths ? { artifactPaths: input.result.artifactPaths } : {}),
 		...(input.result.transcriptPath ? { transcriptPath: input.result.transcriptPath } : {}),
 		...(input.result.transcriptError ? { transcriptError: input.result.transcriptError } : {}),
@@ -509,7 +513,7 @@ function updateRememberedForegroundChild(state: SubagentState, input: { runId: s
 	});
 }
 
-function resolveForegroundResumeTarget(params: SubagentParamsLike, state: SubagentState): { runId: string; mode: "single" | "parallel" | "chain"; state: "complete"; agent: string; index: number; cwd: string; sessionFile: string; launchContractDigest?: string; capabilityCeiling?: ResolvedSubagentCapabilityCeiling } | undefined {
+function resolveForegroundResumeTarget(params: SubagentParamsLike, state: SubagentState): { runId: string; mode: "single" | "parallel" | "chain"; state: "complete"; agent: string; index: number; cwd: string; sessionFile: string; model?: string; thinking?: string; launchContractDigest?: string; capabilityCeiling?: ResolvedSubagentCapabilityCeiling } | undefined {
 	const requested = (params.id ?? params.runId)?.trim();
 	if (!requested || !state.foregroundRuns?.size || !state.currentSessionId) return undefined;
 	const sessionRuns = [...state.foregroundRuns.values()].filter((run) => run.sessionId === state.currentSessionId);
@@ -536,6 +540,8 @@ function resolveForegroundResumeTarget(params: SubagentParamsLike, state: Subage
 		index,
 		cwd: run.cwd,
 		sessionFile,
+		...(child.model ? { model: child.model } : {}),
+		...(child.thinking ? { thinking: child.thinking } : {}),
 		...(child.launchContractDigest ? { launchContractDigest: child.launchContractDigest } : {}),
 		...(child.capabilityCeiling ? { capabilityCeiling: child.capabilityCeiling } : {}),
 	};

@@ -1204,6 +1204,8 @@ export interface ForegroundResumeChild {
 	index: number;
 	context?: "fresh" | "fork";
 	sessionFile?: string;
+	model?: string;
+	thinking?: string;
 	status: SubagentResultStatus;
 	activityState?: ActivityState;
 	lastActivityAt?: number;
