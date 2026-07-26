@@ -144,6 +144,14 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 		}
 	}
 
+	async function waitForCallCount(minimum: number, timeoutMs = 10_000): Promise<void> {
+		const deadline = Date.now() + timeoutMs;
+		while (mockPi.callCount() < minimum) {
+			if (Date.now() > deadline) assert.fail(`Timed out waiting for ${minimum} mock pi calls; saw ${mockPi.callCount()}`);
+			await new Promise((resolve) => setTimeout(resolve, 50));
+		}
+	}
+
 	async function waitForMissingPath(filePath: string, timeoutMs = 10_000): Promise<void> {
 		const deadline = Date.now() + timeoutMs;
 		while (fs.existsSync(filePath)) {
@@ -861,7 +869,10 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 			);
 			assert.equal(blocked.isError, true);
 			assert.match(blocked.content[0]?.text ?? "", new RegExp(`already owned by run '${firstRevivedId}'`));
-			assert.equal(fs.readdirSync(mockPi.dir).filter((name) => name.startsWith("call-")).length, 2, "contending foreground revival must not spawn Pi");
+			// The original and the first revival each spawn Pi asynchronously, so wait for both markers
+			// before asserting the contending revival added no third spawn.
+			await waitForCallCount(2);
+			assert.equal(mockPi.callCount(), 2, "contending foreground revival must not spawn Pi");
 
 			fs.writeFileSync(releasePath, "release", "utf-8");
 			await waitForFile(path.join(RESULTS_DIR, `${firstRevivedId}.json`));
