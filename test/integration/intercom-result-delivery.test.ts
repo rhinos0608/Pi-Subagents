@@ -825,6 +825,17 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 		const runId = original.details?.runId;
 		assert.ok(runId, "expected foreground run id");
 
+		const overridden = await executor.execute(
+			"foreground-resume-model-override",
+			{ action: "resume", id: runId, index: 1, message: "Follow up with b", model: "openai/gpt-5" },
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+		assert.equal(overridden.isError, true);
+		assert.match(overridden.content[0]?.text ?? "", /reuses the persisted child model/);
+		assert.equal(mockPi.callCount(), 2, "rejected model override must not spawn a revival");
+
 		const revived = await executor.execute(
 			"foreground-resume",
 			{ action: "resume", id: runId, index: 1, message: "Follow up with b" },

@@ -1141,6 +1141,13 @@ async function resumeAsyncRun(input: {
 			details: { mode: "management", results: [] },
 		};
 	}
+	if (input.params.model !== undefined) {
+		return {
+			content: [{ type: "text", text: "action='resume' reuses the persisted child model and does not accept a model override." }],
+			isError: true,
+			details: { mode: "management", results: [] },
+		};
+	}
 	const acceptanceErrors = validateExecutionAcceptance(input.params);
 	if (acceptanceErrors.length > 0) {
 		return {
@@ -1358,8 +1365,8 @@ async function resumeAsyncRun(input: {
 			sourceRunId: target.runId,
 			...(input.deps.state.currentSessionId ? { parentSessionId: input.deps.state.currentSessionId } : {}),
 		},
-		modelOverride: input.params.model ?? recoveryDescriptor?.model ?? target.model,
-		thinkingOverride: input.params.model ? undefined : recoveryDescriptor?.thinking ?? target.thinking,
+		modelOverride: recoveryDescriptor?.model ?? target.model,
+		thinkingOverride: recoveryDescriptor?.thinking ?? target.thinking,
 		outputBaseDir: resolveSingleRunOutputBaseDir(input.deps, artifactsDir, runId),
 		maxSubagentDepth: recoveryDescriptor?.maxSubagentDepth ?? resolveCurrentMaxSubagentDepth(input.deps.config.maxSubagentDepth),
 		waitToolEnabled: input.deps.waitToolEnabled,
