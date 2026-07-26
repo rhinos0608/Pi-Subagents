@@ -1225,6 +1225,7 @@ export interface ForegroundResumeChild {
 	detachedReason?: string;
 	acceptance?: AcceptanceLedger;
 	agentContract?: AgentContract;
+	launchContractDigest?: string;
 	execution?: ExecutionProjection;
 	review?: ReviewProjection;
 	effects?: EffectsProjection;

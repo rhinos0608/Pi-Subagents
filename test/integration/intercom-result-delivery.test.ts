@@ -836,6 +836,8 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 		assert.equal(revived.isError, undefined);
 		assert.match(revived.content[0]?.text ?? "", /Revived foreground subagent from/);
 		assert.match(revived.content[0]?.text ?? "", /Agent: b/);
+		assert.equal(revived.details?.sourceLaunchContractDigest, original.details?.results?.[1]?.launchContractDigest);
+		assert.ok(revived.details?.sourceLaunchContractDigest, "expected foreground source launch contract digest");
 		const reviveArgs = await readMockCallArgs(2);
 		const selectedSession = original.details?.results?.[1]?.sessionFile;
 		assert.ok(selectedSession, "expected selected child session file");
