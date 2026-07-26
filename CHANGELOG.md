@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- Classified verification-only tasks that prohibit product/source/config files as read-only. Thanks to @git-geeky for #648.
+
 ## [0.37.0] - 2026-07-25
 
 ### Added
