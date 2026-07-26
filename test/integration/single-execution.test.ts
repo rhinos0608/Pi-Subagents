@@ -745,6 +745,7 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 				assert.equal(response.ownerRunId, "owner-v2");
 				assert.equal(response.model, "mock/test-model:high");
 				assert.equal(response.thinking, "high");
+				assert.match(response.launchContractDigest ?? "", /^[0-9a-f]{64}$/);
 			}
 			const literalResponse = terminalResponses.find((response) => response.result?.kind === "text" && response.result.text === literalJsonText);
 			assert.ok(literalResponse);

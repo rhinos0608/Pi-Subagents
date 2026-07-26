@@ -268,6 +268,7 @@ export interface SubagentDelegationV2TerminalResponse extends SubagentDelegation
 	model?: string;
 	thinking?: string;
 	exitCode?: number;
+	launchContractDigest?: string;
 	result?: SubagentDelegationV2Value;
 	usage?: SubagentDelegationV2Usage;
 }

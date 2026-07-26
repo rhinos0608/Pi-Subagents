@@ -223,6 +223,7 @@ describe("public subagent delegation contract", () => {
 							exitCode: 0,
 							model: "openai/gpt-5",
 							thinking: "high",
+							launchContractDigest: "launch-contract-digest",
 							finalOutput: '{"looks":"json"}',
 							usage: { input: 2, output: 3, cacheRead: 4, cacheWrite: 5, cost: 0.01, turns: 2 },
 							progressSummary: { toolCount: 6, tokens: 5, durationMs: 7 },
@@ -249,6 +250,7 @@ describe("public subagent delegation contract", () => {
 			model: "openai/gpt-5",
 			thinking: "high",
 			exitCode: 0,
+			launchContractDigest: "launch-contract-digest",
 			result: { kind: "text", text: '{"looks":"json"}' },
 			usage: { input: 2, output: 3, cacheRead: 4, cacheWrite: 5, cost: 0.01, turns: 2, toolCalls: 6, durationMs: 7 },
 		} satisfies SubagentDelegationV2Response);

@@ -557,6 +557,7 @@ export function toSubagentDelegationV2Response(
 		...(child?.model ? { model: child.model } : {}),
 		...(child?.thinking ? { thinking: child.thinking } : {}),
 		...(typeof child?.exitCode === "number" ? { exitCode: child.exitCode } : {}),
+		...(child?.launchContractDigest ? { launchContractDigest: child.launchContractDigest } : {}),
 		...(projectedResult ? { result: projectedResult } : {}),
 		...(usage ? {
 			usage: {
