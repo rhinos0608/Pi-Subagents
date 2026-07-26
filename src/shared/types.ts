@@ -877,6 +877,8 @@ export interface Details {
 		processTerminal?: ProcessTerminalV1;
 	};
 	launchContractDigest?: string;
+	/** Original launch contract whose persisted session is being revived. */
+	sourceLaunchContractDigest?: string;
 }
 
 // ============================================================================
@@ -1429,6 +1431,8 @@ export type IntercomBridgeMode = "off" | "fork-only" | "always";
 export interface IntercomBridgeConfig {
 	mode?: IntercomBridgeMode;
 	instructionFile?: string;
+	/** Deliver grouped completion messages through an external acknowledged intercom listener. */
+	resultDelivery?: boolean;
 }
 
 interface TopLevelParallelConfig {

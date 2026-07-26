@@ -213,7 +213,7 @@ describe("public subagent delegation contract", () => {
 			},
 			executeVersioned: async (_id, params, _signal, _ctx, onUpdate) => {
 				observedParams = params as unknown as Record<string, unknown>;
-				onUpdate({ details: { mode: "single", results: [{ agent: "reviewer", model: "openai/gpt-5", thinking: "high" }], progress: [{ currentTool: "read" }] } });
+				onUpdate({ details: { mode: "single", runId: "run-v2", results: [{ agent: "reviewer", model: "openai/gpt-5", thinking: "high" }], progress: [{ currentTool: "read" }] } });
 				return {
 					details: {
 						mode: "single",
@@ -237,7 +237,7 @@ describe("public subagent delegation contract", () => {
 		const responsePromise = once(events, SUBAGENT_DELEGATION_RESPONSE_EVENT);
 		events.emit(SUBAGENT_DELEGATION_REQUEST_EVENT, textRequest);
 		assert.deepEqual(await startedPromise, { version: 2, requestId: "attempt-1", ownerRunId: "owner-1", nodeId: "node-1" });
-		assert.deepEqual(await updatePromise, { version: 2, requestId: "attempt-1", ownerRunId: "owner-1", nodeId: "node-1", currentTool: "read", model: "openai/gpt-5" });
+		assert.deepEqual(await updatePromise, { version: 2, requestId: "attempt-1", ownerRunId: "owner-1", nodeId: "node-1", runId: "run-v2", currentTool: "read", model: "openai/gpt-5" });
 		assert.deepEqual(await responsePromise, {
 			version: 2,
 			requestId: "attempt-1",

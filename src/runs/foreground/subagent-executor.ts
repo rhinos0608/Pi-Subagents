@@ -1361,8 +1361,8 @@ async function resumeAsyncRun(input: {
 		controlIntercomTarget: intercomBridge.active ? intercomBridge.orchestratorTarget : undefined,
 		childIntercomTarget: intercomBridge.active ? (agent, index) => resolveSubagentIntercomTarget(runId, agent, index) : undefined,
 		availableModels,
-		output: recoveryDescriptor?.outputPath,
-		outputMode: recoveryDescriptor?.outputMode,
+		output: typeof input.params.output === "string" ? input.params.output : recoveryDescriptor?.outputPath,
+		outputMode: input.params.outputMode ?? recoveryDescriptor?.outputMode,
 		...(recoveryDescriptor?.agentContract ? { agentContract: recoveryDescriptor.agentContract } : {}),
 		...(recoveryDescriptor?.structuredOutputSchema ? { structuredOutputSchema: recoveryDescriptor.structuredOutputSchema } : {}),
 		...(recoveryDescriptor?.skills ? { skills: [...recoveryDescriptor.skills] } : {}),
@@ -1387,7 +1387,13 @@ async function resumeAsyncRun(input: {
 		revivedTarget ? `Intercom target: ${revivedTarget} (if registered)` : undefined,
 		`Status if needed: subagent({ action: "status", id: "${revivedId}" })`,
 	].filter((line): line is string => Boolean(line));
-	return { content: [{ type: "text", text: formatAsyncStartedMessage(lines.join("\n"), input.ctx.hasUI) }], details: result.details };
+	return {
+		content: [{ type: "text", text: formatAsyncStartedMessage(lines.join("\n"), input.ctx.hasUI) }],
+		details: {
+			...result.details,
+			...(target.launchContractDigest ? { sourceLaunchContractDigest: target.launchContractDigest } : {}),
+		},
+	};
 }
 
 function resultSummaryForIntercom(result: SingleResult): string {
@@ -1433,7 +1439,7 @@ async function emitForegroundResultIntercom(input: {
 	nestedChildren?: NestedRunSummary[];
 	parallelHandoff?: Details["parallelHandoff"];
 }): Promise<ReturnType<typeof buildSubagentResultIntercomPayload> | null> {
-	if (!input.intercomBridge.active || !input.intercomBridge.orchestratorTarget) return null;
+	if (!input.intercomBridge.active || !input.intercomBridge.resultDelivery || !input.intercomBridge.orchestratorTarget) return null;
 	const children = input.results.flatMap((result, index) => result.detached ? [] : [{
 		agent: result.agent,
 		status: resolveSubagentResultStatus({
@@ -3980,7 +3986,10 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		if (chainBindingsError) return withResolvedContext(chainBindingsError, contextPolicy.contextSummary);
 
 		const onUpdateWithContext = onUpdate
-			? (r: AgentToolResult<Details>) => onUpdate(withResolvedContext(r, contextPolicy.contextSummary))
+			? (r: AgentToolResult<Details>) => onUpdate(withResolvedContext({
+				...r,
+				details: { ...r.details, runId },
+			}, contextPolicy.contextSummary))
 			: undefined;
 
 		const reservation = reserveSpawnBudget(

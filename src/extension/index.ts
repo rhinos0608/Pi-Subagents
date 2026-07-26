@@ -243,7 +243,10 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		state,
 		RESULTS_DIR,
 		10 * 60 * 1000,
-		{ notifier: completionNotifier },
+		{
+			notifier: completionNotifier,
+			deliverIntercomResults: config.intercomBridge?.resultDelivery !== false,
+		},
 	);
 
 	const runtimeCleanup = () => {

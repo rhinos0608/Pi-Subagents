@@ -160,7 +160,7 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 		}
 	}
 
-	function makeExecutor(options: { bridgeMode?: "always" | "off"; agents?: ReturnType<typeof makeAgent>[]; acknowledgeResults?: boolean; kill?: (pid: number, signal?: NodeJS.Signals | 0) => boolean } = {}) {
+	function makeExecutor(options: { bridgeMode?: "always" | "off"; resultDelivery?: boolean; agents?: ReturnType<typeof makeAgent>[]; acknowledgeResults?: boolean; kill?: (pid: number, signal?: NodeJS.Signals | 0) => boolean } = {}) {
 		const events = createRecordingEventBus({ acknowledgeResults: options.acknowledgeResults ?? true });
 		const state = {
 			baseCwd: tempDir,
@@ -188,7 +188,10 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 			},
 			state,
 			config: {
-				intercomBridge: { mode: options.bridgeMode ?? "always" },
+				intercomBridge: {
+					mode: options.bridgeMode ?? "always",
+					...(options.resultDelivery === undefined ? {} : { resultDelivery: options.resultDelivery }),
+				},
 			},
 			asyncByDefault: false,
 			tempArtifactsDir: tempDir,
@@ -241,6 +244,22 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 
 		assert.equal(events.emitted.some((entry) => entry.channel === "subagent:result-intercom"), false);
 		assert.match(result.content[0]?.text ?? "", /Legacy foreground output/);
+	});
+
+	it("keeps native foreground output without attempting external grouped delivery when disabled", async () => {
+		mockPi.onCall({ output: "Native foreground output" });
+		const { executor, events } = makeExecutor({ resultDelivery: false });
+
+		const result = await executor.execute(
+			"single-native-delivery",
+			{ agent: "worker", task: "Summarize feature" },
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+
+		assert.equal(events.emitted.some((entry) => entry.channel === "subagent:result-intercom"), false);
+		assert.match(result.content[0]?.text ?? "", /Native foreground output/);
 	});
 
 	it("falls back to legacy foreground output when grouped delivery is not acknowledged", async () => {
@@ -639,7 +658,7 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 				lastUpdate: 200,
 				cwd: tempDir,
 				sessionFile,
-				steps: [{ agent: "worker", status: "complete" }],
+				steps: [{ agent: "worker", status: "complete", launchContractDigest: "source-launch-contract-digest" }],
 			}, null, 2), "utf-8");
 			const { executor, events } = makeExecutor();
 
@@ -659,6 +678,7 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 			assert.doesNotMatch(result.content[0]?.text ?? "", /Follow:/);
 			const revivedId = result.details?.asyncId;
 			assert.ok(revivedId, "expected revived async id");
+			assert.equal(result.details?.sourceLaunchContractDigest, "source-launch-contract-digest");
 			const startedEvent = events.emitted.find((entry) => entry.channel === SUBAGENT_ASYNC_STARTED_EVENT && (entry.payload as { id?: string }).id === revivedId)?.payload as { goal?: string } | undefined;
 			assert.equal(startedEvent?.goal, "What changed?");
 			const resultPath = path.join(RESULTS_DIR, `${revivedId}.json`);
