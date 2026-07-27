@@ -1295,6 +1295,8 @@ export interface SubagentState {
 	/** Runtime-owned artifact resolution inputs used by Fleet transcript targeting. */
 	artifactDirPreference?: ArtifactDirPreference;
 	parentSessionFile?: string | null;
+	/** Last valid parent session model observed for this session; used when continuation contexts omit ctx.model. */
+	lastParentModel?: { provider: string; id: string };
 	subagentInProgress?: boolean;
 	subagentSpawns?: {
 		sessionId: string | null;

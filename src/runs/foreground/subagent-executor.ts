@@ -16,7 +16,7 @@ import { clearPendingForegroundControlNotices } from "../../extension/control-no
 import { runSync } from "./execution.ts";
 import { handleWatchdogToolAction, WATCHDOG_TOOL_ACTIONS } from "../../watchdog/tool-actions.ts";
 import type { MainWatchdogRuntime } from "../../watchdog/runtime.ts";
-import { buildModelCandidates, resolveEffectiveSubagentModel, resolveModelCandidate } from "../shared/model-fallback.ts";
+import { buildModelCandidates, normalizeParentModel, resolveEffectiveSubagentModel, resolveModelCandidate, type ParentModel } from "../shared/model-fallback.ts";
 import type { ModelScopeConfig } from "../shared/model-scope.ts";
 import { aggregateParallelOutputs } from "../shared/parallel-utils.ts";
 import { recordRun } from "../shared/run-history.ts";
@@ -192,6 +192,15 @@ export interface SubagentParamsLike {
 	additional?: number;
 }
 
+function rememberParentModel(state: { currentSessionId?: string | null; lastParentModel?: ParentModel }, sessionId: string | null, model: unknown): ParentModel | undefined {
+	if (state.currentSessionId !== sessionId) state.lastParentModel = undefined;
+	state.currentSessionId = sessionId;
+	const parentModel = normalizeParentModel(model);
+	if (!sessionId) return parentModel;
+	if (parentModel) state.lastParentModel = parentModel;
+	return parentModel ?? state.lastParentModel;
+}
+
 interface ExecutorDeps {
 	pi: ExtensionAPI;
 	state: SubagentState;
@@ -240,6 +249,7 @@ interface ExecutionContextData {
 	configToolBudget?: ResolvedToolBudget;
 	contextPolicy: AgentDefaultContextPolicy;
 	modelScope?: ModelScopeConfig;
+	parentModel?: ParentModel;
 	parentSessionId: string | null;
 	capabilityCeiling?: ResolvedSubagentCapabilityCeiling;
 }
@@ -782,6 +792,7 @@ function appendStepToAsyncChain(input: {
 	requestCwd: string;
 	ctx: ExtensionContext;
 	deps: ExecutorDeps;
+	parentModel?: ParentModel;
 }): AgentToolResult<Details> {
 	const targetRunId = input.params.id ?? input.params.runId;
 	if (!targetRunId) {
@@ -886,13 +897,14 @@ function appendStepToAsyncChain(input: {
 	const contextPolicy = resolveExplicitContextPolicy(input.params);
 	const chainSkillInput = normalizeSkillInput(input.params.skill);
 	const chainSkills = chainSkillInput === false ? [] : (chainSkillInput ?? []);
+	const parentModel = input.parentModel;
 	const asyncCtx = {
 		pi: input.deps.pi,
 		cwd: input.ctx.cwd,
 		currentSessionId: resolveCurrentSessionId(input.ctx.sessionManager),
 		parentSessionId: input.ctx.sessionManager.getSessionId() ?? undefined,
-		currentModelProvider: input.ctx.model?.provider,
-		currentModel: input.ctx.model,
+		currentModelProvider: parentModel?.provider,
+		currentModel: parentModel,
 		modelScope: discoveredForAppend.modelScope,
 		interactive: input.ctx.hasUI,
 	};
@@ -1130,6 +1142,7 @@ async function resumeAsyncRun(input: {
 	requestCwd: string;
 	ctx: ExtensionContext;
 	deps: ExecutorDeps;
+	parentModel?: ParentModel;
 	absoluteDeadlineAt?: number;
 }): Promise<AgentToolResult<Details>> {
 	const followUp = (input.params.message ?? input.params.task ?? "").trim();
@@ -1275,6 +1288,7 @@ async function resumeAsyncRun(input: {
 		const goal = resolveAsyncEventGoal(workflowTask, attachChain);
 		const chain = wrapChainTasksForFork(attachChain, contextPolicy);
 		const normalized = normalizeSkillInput(input.params.skill);
+		const parentModel = input.parentModel;
 		const result = executeAsyncChain(runId, {
 			chain,
 			task: workflowTask,
@@ -1293,8 +1307,8 @@ async function resumeAsyncRun(input: {
 				cwd: input.requestCwd,
 				currentSessionId: input.deps.state.currentSessionId,
 				parentSessionId: input.ctx.sessionManager.getSessionId() ?? undefined,
-				currentModelProvider: input.ctx.model?.provider,
-				currentModel: input.ctx.model,
+				currentModelProvider: parentModel?.provider,
+				currentModel: parentModel,
 				modelScope,
 				interactive: input.ctx.hasUI,
 			},
@@ -1336,6 +1350,7 @@ async function resumeAsyncRun(input: {
 	const artifactConfig: ArtifactConfig = recoveryDescriptor?.artifactConfig ?? { ...DEFAULT_ARTIFACT_CONFIG, enabled: input.params.artifacts !== false, dir: input.deps.config.artifactDir ?? DEFAULT_ARTIFACT_CONFIG.dir };
 	const artifactsDir = recoveryDescriptor?.artifactsDir ?? getArtifactsDir(parentSessionFile, effectiveCwd, artifactConfig.dir);
 	const availableModels = input.ctx.modelRegistry.getAvailable().map(toModelInfo);
+	const parentModel = input.parentModel;
 	const result = executeAsyncSingle(runId, {
 		agent: target.agent,
 		task: buildRevivedAsyncTask(target, followUp),
@@ -1346,8 +1361,8 @@ async function resumeAsyncRun(input: {
 			cwd: input.requestCwd,
 			currentSessionId: input.deps.state.currentSessionId,
 			parentSessionId: input.ctx.sessionManager.getSessionId() ?? undefined,
-			currentModelProvider: input.ctx.model?.provider,
-			currentModel: input.ctx.model,
+			currentModelProvider: parentModel?.provider,
+			currentModel: parentModel,
 			modelScope,
 			interactive: input.ctx.hasUI,
 		},
@@ -2066,19 +2081,20 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 		};
 	}
 	const id = randomUUID();
+	const parentModel = data.parentModel;
 	const asyncCtx = {
 		pi: deps.pi,
 		cwd: ctx.cwd,
 		currentSessionId: deps.state.currentSessionId!,
 		parentSessionId: ctx.sessionManager.getSessionId() ?? undefined,
-		currentModelProvider: ctx.model?.provider,
-		currentModel: ctx.model,
+		currentModelProvider: parentModel?.provider,
+		currentModel: parentModel,
 		modelScope: data.modelScope,
 		interactive: ctx.hasUI,
 	};
 	const availableModels: ModelInfo[] = ctx.modelRegistry.getAvailable().map(toModelInfo);
 	const currentMaxSubagentDepth = resolveCurrentMaxSubagentDepth(deps.config.maxSubagentDepth);
-	const currentProvider = ctx.model?.provider;
+	const currentProvider = parentModel?.provider;
 	const controlIntercomTarget = intercomBridge.active ? intercomBridge.orchestratorTarget : undefined;
 	const childIntercomTarget = intercomBridge.active ? (agent: string, index: number) => resolveSubagentIntercomTarget(id, agent, index) : undefined;
 
@@ -2196,7 +2212,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 		const normalizedSkills = normalizeSkillInput(params.skill);
 		const skills = normalizedSkills === false ? [] : normalizedSkills;
 		const maxSubagentDepth = resolveChildMaxSubagentDepth(currentMaxSubagentDepth, a.maxSubagentDepth);
-		const modelOverride = resolveEffectiveSubagentModel(params.model as string | undefined, a.model, ctx.model, availableModels, currentProvider, { scope: data.modelScope });
+		const modelOverride = resolveEffectiveSubagentModel(params.model as string | undefined, a.model, parentModel, availableModels, currentProvider, { scope: data.modelScope });
 		return executeAsyncSingle(id, {
 			agent: params.agent!,
 			task: shouldForkAgent(contextPolicy, params.agent!) ? wrapForkTask(params.task ?? "") : (params.task ?? ""),
@@ -2268,11 +2284,12 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 	const chainSkills = normalized === false ? [] : (normalized ?? []);
 	const chain = wrapChainTasksForFork(params.chain as ChainStep[], contextPolicy);
 	const currentMaxSubagentDepth = resolveCurrentMaxSubagentDepth(deps.config.maxSubagentDepth);
+	const chainCtx = normalizeParentModel(ctx.model) || !data.parentModel ? ctx : { ...ctx, model: data.parentModel };
 	const chainResult = await executeChain({
 		chain,
 		task: params.task,
 		agents,
-		ctx,
+		ctx: chainCtx,
 		modelScope: data.modelScope,
 		intercomEvents: deps.pi.events,
 		signal,
@@ -2322,13 +2339,14 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 			};
 		}
 		const id = randomUUID();
+		const parentModel = data.parentModel;
 		const asyncCtx = {
 			pi: deps.pi,
 			cwd: ctx.cwd,
 			currentSessionId: deps.state.currentSessionId!,
 			parentSessionId: ctx.sessionManager.getSessionId() ?? undefined,
-			currentModelProvider: ctx.model?.provider,
-			currentModel: ctx.model,
+			currentModelProvider: parentModel?.provider,
+			currentModel: parentModel,
 			modelScope: data.modelScope,
 			interactive: ctx.hasUI,
 		};
@@ -2428,6 +2446,7 @@ interface ForegroundParallelRunInput {
 	waitToolEnabled?: boolean;
 	availableModels: ModelInfo[];
 	modelScope?: ModelScopeConfig;
+	parentModel?: ParentModel;
 	modelOverrides: (string | undefined)[];
 	behaviors: Array<ReturnType<typeof resolveStepBehavior>>;
 	firstProgressIndex: number;
@@ -2663,7 +2682,7 @@ async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Pr
 			modelOverride: input.modelOverrides[index],
 			thinkingOverride: input.thinkingOverrideForTask(task.agent, index, input.modelOverrides[index]),
 			availableModels: input.availableModels,
-			preferredModelProvider: input.ctx.model?.provider,
+			preferredModelProvider: input.parentModel?.provider,
 			modelScope: input.modelScope,
 			skills: effectiveSkills === false ? [] : effectiveSkills,
 			structuredOutput: structuredRuntime,
@@ -2768,7 +2787,8 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 		if (worktreeTaskCwdError) return buildParallelModeError(worktreeTaskCwdError);
 	}
 
-	const currentProvider = ctx.model?.provider;
+	const parentModel = data.parentModel;
+	const currentProvider = parentModel?.provider;
 	const availableModels: ModelInfo[] = ctx.modelRegistry.getAvailable().map(toModelInfo);
 	let taskTexts = tasks.map((t) => t.task);
 	const skillOverrides: (string[] | false | undefined)[] = tasks.map((t) =>
@@ -2783,7 +2803,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 		...(task.model !== undefined ? { model: task.model } : {}),
 	}));
 	const modelOverrides: (string | undefined)[] = tasks.map((_, i) =>
-		resolveEffectiveSubagentModel(behaviorOverrides[i]?.model, agentConfigs[i]?.model, ctx.model, availableModels, currentProvider, { scope: data.modelScope }),
+		resolveEffectiveSubagentModel(behaviorOverrides[i]?.model, agentConfigs[i]?.model, parentModel, availableModels, currentProvider, { scope: data.modelScope }),
 	);
 
 	if (params.clarify === true && ctx.hasUI) {
@@ -2818,7 +2838,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 		for (let i = 0; i < result.behaviorOverrides.length; i++) {
 			const override = result.behaviorOverrides[i];
 			if (override?.model !== undefined) {
-				modelOverrides[i] = resolveEffectiveSubagentModel(override.model, agentConfigs[i]?.model, ctx.model, availableModels, currentProvider, { scope: data.modelScope });
+				modelOverrides[i] = resolveEffectiveSubagentModel(override.model, agentConfigs[i]?.model, parentModel, availableModels, currentProvider, { scope: data.modelScope });
 				behaviorOverrides[i]!.model = override.model;
 			}
 			if (override?.output !== undefined) behaviorOverrides[i]!.output = override.output;
@@ -2844,8 +2864,8 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 				cwd: ctx.cwd,
 				currentSessionId: deps.state.currentSessionId!,
 				parentSessionId: ctx.sessionManager.getSessionId() ?? undefined,
-				currentModelProvider: ctx.model?.provider,
-				currentModel: ctx.model,
+				currentModelProvider: parentModel?.provider,
+				currentModel: parentModel,
 				modelScope: data.modelScope,
 				interactive: ctx.hasUI,
 			};
@@ -2980,6 +3000,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 			progressDir: parallelProgressDir,
 			availableModels,
 			modelScope: data.modelScope,
+			parentModel,
 			modelOverrides,
 			behaviors,
 			firstProgressIndex: parallelProgressPrecreated ? -1 : firstProgressIndex,
@@ -3127,13 +3148,14 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 	const effectiveToolBudget = resolveEffectiveToolBudget({ runBudget: data.toolBudget, agentBudget: agentConfig.toolBudget, configBudget: data.configToolBudget });
 	if (effectiveToolBudget.error) return toExecutionErrorResult(params, new Error(effectiveToolBudget.error), data.contextPolicy.contextSummary);
 
-	const currentProvider = ctx.model?.provider;
+	const parentModel = data.parentModel;
+	const currentProvider = parentModel?.provider;
 	const availableModels: ModelInfo[] = ctx.modelRegistry.getAvailable().map(toModelInfo);
 	let task = params.task ?? "";
 	let modelOverride: string | undefined = resolveEffectiveSubagentModel(
 		params.model as string | undefined,
 		agentConfig.model,
-		ctx.model,
+		parentModel,
 		availableModels,
 		currentProvider,
 		{ scope: data.modelScope },
@@ -3173,7 +3195,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 
 		task = result.templates[0]!;
 		const override = result.behaviorOverrides[0];
-		if (override?.model !== undefined) modelOverride = resolveEffectiveSubagentModel(override.model, agentConfig.model, ctx.model, availableModels, currentProvider, { scope: data.modelScope });
+		if (override?.model !== undefined) modelOverride = resolveEffectiveSubagentModel(override.model, agentConfig.model, parentModel, availableModels, currentProvider, { scope: data.modelScope });
 		if (override?.output !== undefined) effectiveOutput = normalizeSingleOutputOverride(override.output, agentConfig.output);
 		if (override?.skills !== undefined) skillOverride = override.skills;
 
@@ -3191,8 +3213,8 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 				cwd: ctx.cwd,
 				currentSessionId: deps.state.currentSessionId!,
 				parentSessionId: ctx.sessionManager.getSessionId() ?? undefined,
-				currentModelProvider: ctx.model?.provider,
-				currentModel: ctx.model,
+				currentModelProvider: parentModel?.provider,
+				currentModel: parentModel,
 				modelScope: data.modelScope,
 				interactive: ctx.hasUI,
 			};
@@ -3482,6 +3504,13 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		const requestCwd = resolveRequestedCwd(ctx.cwd, requestParams.cwd);
 		const paramsWithResolvedCwd = requestParams.cwd === undefined ? requestParams : { ...requestParams, cwd: requestCwd };
 		const action = paramsWithResolvedCwd.action;
+		let requestParentModel: ParentModel | undefined;
+		try {
+			requestParentModel = rememberParentModel(deps.state, resolveCurrentSessionId(ctx.sessionManager), ctx.model);
+		} catch (error) {
+			if (action?.toLowerCase() !== "doctor") throw error;
+			requestParentModel = normalizeParentModel(ctx.model);
+		}
 		if (action) {
 			if ((WATCHDOG_TOOL_ACTIONS as readonly string[]).includes(action)) {
 				if (deps.allowMutatingManagementActions === false && MUTATING_MANAGEMENT_ACTIONS.has(action)) {
@@ -3639,7 +3668,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 				return withBudget(inspectSubagentStatus(paramsWithResolvedCwd, { state: deps.state, nested: nestedScope, sessionRoots }));
 			}
 			if (action === "resume") {
-				return resumeAsyncRun({ params: paramsWithResolvedCwd, requestCwd, ctx, deps });
+				return resumeAsyncRun({ params: paramsWithResolvedCwd, requestCwd, ctx, deps, parentModel: requestParentModel });
 			}
 			if (action === "steer") {
 				deps.state.currentSessionId = resolveCurrentSessionId(ctx.sessionManager);
@@ -3662,7 +3691,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 								? {}
 								: {
 										recover: ({ absoluteDeadlineAt, ...limits }) =>
-											resumeAsyncRun({ params: { ...limits, action: "resume", id: runId, message }, requestCwd, ctx, deps, absoluteDeadlineAt }),
+											resumeAsyncRun({ params: { ...limits, action: "resume", id: runId, message }, requestCwd, ctx, deps, parentModel: requestParentModel, absoluteDeadlineAt }),
 									}
 							),
 						});
@@ -3699,6 +3728,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 										requestCwd,
 										ctx,
 										deps,
+										parentModel: requestParentModel,
 										absoluteDeadlineAt,
 									}),
 							}
@@ -3706,7 +3736,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 				});
 			}
 			if (action === "append-step") {
-				return appendStepToAsyncChain({ params: paramsWithResolvedCwd, requestCwd, ctx, deps });
+				return appendStepToAsyncChain({ params: paramsWithResolvedCwd, requestCwd, ctx, deps, parentModel: requestParentModel });
 			}
 			if (action === "schedule" || action === "schedule-list" || action === "schedule-status" || action === "schedule-cancel") {
 				if (!deps.handleScheduledRunAction) {
@@ -3853,7 +3883,6 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		const scope: AgentScope = resolveExecutionAgentScope(effectiveParams.agentScope);
 		const effectiveCwd = effectiveParams.cwd ?? ctx.cwd;
 		const parentSessionFile = ctx.sessionManager.getSessionFile() ?? null;
-		deps.state.currentSessionId = resolveCurrentSessionId(ctx.sessionManager);
 		const discovered = deps.discoverAgents(effectiveCwd, scope);
 		const discoveredAgents = discovered.agents;
 		const modelScope = discovered.modelScope;
@@ -3913,25 +3942,26 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		const forkThinkingDowngrades = new Map<number, string>();
 		try {
 			const forkAvailableModels = contextPolicy.usesFork ? ctx.modelRegistry.getAvailable().map(toModelInfo) : [];
+			const parentModel = requestParentModel;
 			prepareForkThinking = (agentName, index, modelOverride) => {
 				const agentConfig = agents.find((agent) => agent.name === agentName);
 				const primaryModel = resolveEffectiveSubagentModel(
 					modelOverride,
 					agentConfig?.model,
-					ctx.model,
+					parentModel,
 					forkAvailableModels,
-					ctx.model?.provider,
+					parentModel?.provider,
 				);
 				const candidates = buildModelCandidates(
 					primaryModel,
 					agentConfig?.fallbackModels,
 					forkAvailableModels,
-					ctx.model?.provider,
+					parentModel?.provider,
 				);
 				forkThinkingRequirements.set(
 					index,
 					candidates.length === 0
-						|| candidates.some((candidate) => forkedChildRequiresThinkingOff(candidate, forkAvailableModels, ctx.model?.provider)),
+						|| candidates.some((candidate) => forkedChildRequiresThinkingOff(candidate, forkAvailableModels, parentModel?.provider)),
 				);
 			};
 			const forkContextResolver = createForkContextResolver(ctx.sessionManager, contextPolicy.usesFork ? "fork" : undefined, {
@@ -4044,6 +4074,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			configToolBudget: configToolBudget.toolBudget,
 			contextPolicy,
 			modelScope,
+			parentModel: requestParentModel,
 			parentSessionId: deps.state.currentSessionId,
 			capabilityCeiling: resolveCurrentSubagentCapabilityCeiling(deps.state.currentSessionId ?? undefined),
 		};

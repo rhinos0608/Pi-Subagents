@@ -3143,6 +3143,71 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		assert.deepEqual(payload.results[0].attemptedModels, ["github-copilot/gpt-5-mini"]);
 	});
 
+	it("async executor keeps the last parent session model after continuation drops ctx.model", { skip: !isAsyncAvailable() || !createSubagentExecutor ? "jiti or executor not available" : undefined }, async () => {
+		mockPi.onCall({ output: "Done asynchronously" });
+		const state = {
+			baseCwd: tempDir,
+			currentSessionId: null,
+			asyncJobs: new Map(),
+			foregroundControls: new Map(),
+			lastForegroundControlId: null,
+		};
+		const executor = createSubagentExecutor!({
+			pi: { events: createEventBus(), getSessionName: () => undefined },
+			state,
+			config: {},
+			asyncByDefault: false,
+			tempArtifactsDir: tempDir,
+			getSubagentSessionRoot: () => path.join(tempDir, "sessions"),
+			expandTilde: (p: string) => p,
+			discoverAgents: () => ({ agents: [makeAgent("worker")] }),
+		});
+		const initialCtx = makeMinimalCtx(tempDir);
+		initialCtx.sessionManager.getSessionId = () => "session-continued";
+		initialCtx.model = { provider: "deepseek", id: "deepseek-v4-flash" };
+		await executor.execute("prime-parent-model", { action: "list" }, new AbortController().signal, undefined, initialCtx);
+
+		const continuedCtx = makeMinimalCtx(tempDir);
+		continuedCtx.sessionManager.getSessionId = () => "session-continued";
+		const launch = await executor.execute(
+			"continued-async-child",
+			{ agent: "worker", task: "Do work", async: true, acceptance: false },
+			new AbortController().signal,
+			undefined,
+			continuedCtx,
+		) as AsyncExecutionResult;
+		assert.equal(launch.isError, undefined);
+		assert.ok(launch.details.asyncId);
+
+		const payload = await readAsyncPayload(launch.details.asyncId);
+		assert.equal(payload.success, true);
+		assert.equal(payload.results[0]?.model, "deepseek/deepseek-v4-flash");
+		const args = readMockPiArgs(mockPi, 0);
+		assert.equal(args[args.indexOf("--model") + 1], "deepseek/deepseek-v4-flash");
+	});
+
+	it("foreground chains keep the last parent session model after continuation drops ctx.model", { skip: !createSubagentExecutor ? "executor not available" : undefined }, async () => {
+		mockPi.onCall({ output: "Done foreground" });
+		const executor = makeAsyncExecutor([makeAgent("worker", { completionGuard: false })]);
+		const initialCtx = makeMinimalCtx(tempDir);
+		initialCtx.sessionManager.getSessionId = () => "session-continued";
+		initialCtx.model = { provider: "deepseek", id: "deepseek-v4-flash" };
+		await executor.execute("prime-parent-model", { action: "list" }, new AbortController().signal, undefined, initialCtx);
+
+		const continuedCtx = makeMinimalCtx(tempDir);
+		continuedCtx.sessionManager.getSessionId = () => "session-continued";
+		const result = await executor.execute(
+			"continued-foreground-chain",
+			{ chain: [{ agent: "worker", task: "Do work" }], acceptance: false },
+			new AbortController().signal,
+			undefined,
+			continuedCtx,
+		);
+		assert.equal(result.isError, undefined);
+		const args = readMockPiArgs(mockPi, 0);
+		assert.equal(args[args.indexOf("--model") + 1], "deepseek/deepseek-v4-flash");
+	});
+
 	it("background single runs inherit the parent session model when no model is set", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
 		mockPi.onCall({ output: "Done asynchronously" });
 
