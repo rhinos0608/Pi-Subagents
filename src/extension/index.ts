@@ -26,7 +26,7 @@ import { resolveCurrentSessionId } from "../shared/session-identity.ts";
 import { cleanupOldChainDirs } from "../shared/settings.ts";
 import { clearLegacyResultAnimationTimer, renderSubagentResult } from "../tui/render.ts";
 import { openSubagentFleet } from "../tui/fleet.ts";
-import { SubagentFleetStatus } from "../tui/fleet-status.ts";
+import { SubagentFleetStatus, resolveFleetViewPlacement } from "../tui/fleet-status.ts";
 import { SubagentParams } from "./schemas.ts";
 import { validateChainInput } from "./chain-validation.ts";
 import { createSubagentExecutor, type SubagentParamsLike } from "../runs/foreground/subagent-executor.ts";
@@ -193,6 +193,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	const waitToolConfig = resolveWaitToolConfig(config.waitTool);
 	const asyncByDefault = config.asyncByDefault === true;
 	const fleetViewEnabled = config.fleetView !== false;
+	const fleetViewPlacement = resolveFleetViewPlacement(config.fleetViewPlacement);
 	const asyncWidgetEnabled = config.asyncWidget === true || (!fleetViewEnabled && config.asyncWidget !== false);
 	const tempArtifactsDir = getArtifactsDir(null);
 	cleanupAllArtifactDirs(DEFAULT_ARTIFACT_CONFIG.cleanupDays);
@@ -236,7 +237,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 			const ctx = state.lastUiContext;
 			if (!ctx?.hasUI) return;
 			await openSubagentFleet(ctx, state, { initialKey: itemKey });
-		})
+		}, { placement: fleetViewPlacement })
 		: undefined;
 	const { startResultWatcher, primeExistingResults, stopResultWatcher } = createResultWatcher(
 		pi,

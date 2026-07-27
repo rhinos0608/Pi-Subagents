@@ -1,6 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Editor, isKeyRelease, Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import type { AsyncJobStep, SubagentState } from "../shared/types.ts";
+import type { AsyncJobStep, FleetViewPlacement, SubagentState } from "../shared/types.ts";
 
 export const FLEET_STATUS_WIDGET_KEY = "subagent-fleet-status";
 
@@ -22,6 +22,11 @@ type FleetStatusEntry = {
 export interface FleetStatusOptions {
 	refreshMs?: number;
 	maxAgentRows?: number;
+	placement?: FleetViewPlacement;
+}
+
+export function resolveFleetViewPlacement(value: unknown): FleetViewPlacement {
+	return value === "aboveEditor" ? "aboveEditor" : "belowEditor";
 }
 
 export function formatFleetElapsed(ms: number): string {
@@ -132,6 +137,7 @@ export class SubagentFleetStatus {
 	private readonly openInspector: (itemKey: string) => Promise<void> | void;
 	private readonly refreshMs: number;
 	private readonly maxAgentRows: number;
+	private readonly placement: FleetViewPlacement;
 
 	constructor(
 		state: SubagentState,
@@ -142,6 +148,7 @@ export class SubagentFleetStatus {
 		this.openInspector = openInspector;
 		this.refreshMs = options.refreshMs ?? REFRESH_MS;
 		this.maxAgentRows = options.maxAgentRows ?? MAX_AGENT_ROWS;
+		this.placement = options.placement ?? "belowEditor";
 	}
 
 	setContext(ctx: ExtensionContext): void {
@@ -215,7 +222,7 @@ export class SubagentFleetStatus {
 						this.tui = undefined;
 					},
 				};
-			}, { placement: "belowEditor" });
+			}, { placement: this.placement });
 			this.widgetRegistered = true;
 			this.lastRenderKey = renderKey;
 			return;

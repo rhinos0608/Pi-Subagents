@@ -10,6 +10,7 @@ import {
 	collectFleetStatusEntries,
 	formatFleetElapsed,
 	formatFleetTokens,
+	resolveFleetViewPlacement,
 } from "../../src/tui/fleet-status.ts";
 
 function stateForTest(): SubagentState {
@@ -43,6 +44,13 @@ describe("below-editor subagent FleetView", () => {
 		assert.equal(formatFleetTokens(999), "↓ 999 tokens");
 		assert.equal(formatFleetTokens(13_100), "↓ 13.1k tokens");
 		assert.equal(formatFleetTokens(1_250_000), "↓ 1.3M tokens");
+	});
+
+	it("resolves configured FleetView placement with a below-editor fallback", () => {
+		assert.equal(resolveFleetViewPlacement(undefined), "belowEditor");
+		assert.equal(resolveFleetViewPlacement("belowEditor"), "belowEditor");
+		assert.equal(resolveFleetViewPlacement("aboveEditor"), "aboveEditor");
+		assert.equal(resolveFleetViewPlacement("side"), "belowEditor");
 	});
 
 	it("renders main plus active children below the editor and bounds every line", () => {
@@ -89,6 +97,37 @@ describe("below-editor subagent FleetView", () => {
 			assert.ok(lines.some((line) => line.includes("11s · ↓ 13.1k tokens")));
 			assert.ok(lines.some((line) => line.includes("↓ 2 more")));
 			for (const line of lines) assert.ok(visibleWidth(line) <= 80, `line exceeded width: ${line}`);
+		} finally {
+			fleet.dispose();
+		}
+	});
+
+	it("registers above the editor when configured", () => {
+		const state = stateForTest();
+		state.foregroundControls.set("run-worker", {
+			runId: "run-worker",
+			mode: "single",
+			startedAt: 10,
+			updatedAt: 20,
+			currentAgent: "worker",
+		});
+		let placement: string | undefined;
+		const ctx = {
+			hasUI: true,
+			ui: {
+				setWidget(_key: string, content: unknown, options?: { placement?: string }) {
+					if (content) placement = options?.placement;
+				},
+				onTerminalInput() { return () => {}; },
+				getEditorText() { return ""; },
+				notify() {},
+				theme,
+			},
+		} as unknown as ExtensionContext;
+		const fleet = new SubagentFleetStatus(state, () => {}, { refreshMs: 60_000, placement: "aboveEditor" });
+		try {
+			fleet.setContext(ctx);
+			assert.equal(placement, "aboveEditor");
 		} finally {
 			fleet.dispose();
 		}
