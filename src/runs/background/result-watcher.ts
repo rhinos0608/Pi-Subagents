@@ -204,11 +204,12 @@ export function createResultWatcher(
 			}), nestedChildren);
 
 			const intercomTarget = data.intercomTarget?.trim();
+			let intercomDelivered = false;
 			if (deliverIntercomResults && intercomTarget && triggerTurn) {
 				const mode = data.mode === "single" || data.mode === "parallel" || data.mode === "chain"
 					? data.mode
 					: resultChildren.length > 1 ? "chain" : "single";
-				const delivered = await deliverSubagentResultIntercomEvent(pi.events, buildSubagentResultIntercomPayload({
+				intercomDelivered = await deliverSubagentResultIntercomEvent(pi.events, buildSubagentResultIntercomPayload({
 					to: intercomTarget,
 					runId,
 					mode,
@@ -219,7 +220,7 @@ export function createResultWatcher(
 					...(data.parallelHandoff ? { parallelHandoff: data.parallelHandoff } : {}),
 				}));
 				if (!ownsSession(data.sessionId, epoch)) return;
-				if (!delivered) console.error(`Subagent async grouped result intercom delivery was not acknowledged for '${resultPath}'.`);
+				if (!intercomDelivered) console.error(`Subagent async grouped result intercom delivery was not acknowledged for '${resultPath}'.`);
 			}
 
 			const accepted = await notifier.deliver({
@@ -227,6 +228,7 @@ export function createResultWatcher(
 				id: data.id ?? runId,
 				runId,
 				triggerTurn,
+				intercomDelivered,
 				...(nestedChildren?.length ? { nestedChildren } : {}),
 				...(Array.isArray(data.results) ? {
 					results: hasResultChildren ? normalizedChildren.map((child, index) => ({
@@ -252,6 +254,7 @@ export function createResultWatcher(
 					...data,
 					runId,
 					triggerTurn,
+					intercomDelivered,
 					...(nestedChildren?.length ? { nestedChildren } : {}),
 					...(Array.isArray(data.results) ? {
 						results: hasResultChildren ? normalizedChildren.map((child, index) => ({

@@ -230,6 +230,7 @@ interface ExecutorModule {
 		execute: (...args: unknown[]) => Promise<ExecutorToolResult>;
 		executeDelegated: (...args: unknown[]) => Promise<ExecutorToolResult>;
 	};
+	DEFAULT_FOREGROUND_TIMEOUT_MS?: number;
 }
 
 const execution = await tryImport<ExecutionModule>("./src/runs/foreground/execution.ts");
@@ -2330,6 +2331,53 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		assert.equal(result.isError, true);
 		assert.match(result.content[0]?.text ?? "", /aliases/);
 		assert.equal(mockPi.callCount(), 0);
+	});
+
+	it("applies the foreground timeout default without overriding explicit or agent values", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		mockPi.onCall({ output: "package default" });
+		mockPi.onCall({ output: "explicit timeout" });
+		mockPi.onCall({ output: "max runtime alias" });
+		mockPi.onCall({ output: "agent timeout" });
+
+		const defaultExecutor = makeExecutor();
+		const defaultResult = await defaultExecutor.execute(
+			"foreground-timeout-default",
+			{ agent: "echo", task: "Task" },
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+		assert.equal(defaultResult.details?.timeoutMs, executorMod?.DEFAULT_FOREGROUND_TIMEOUT_MS);
+		assert.equal(defaultResult.details?.timeoutMs, 30 * 60 * 1000);
+
+		const explicitResult = await defaultExecutor.execute(
+			"foreground-timeout-explicit",
+			{ agent: "echo", task: "Task", async: false, timeoutMs: 2_000 },
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+		assert.equal(explicitResult.details?.timeoutMs, 2_000);
+
+		const aliasResult = await defaultExecutor.execute(
+			"foreground-timeout-alias",
+			{ agent: "echo", task: "Task", async: false, maxRuntimeMs: 3_000 },
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+		assert.equal(aliasResult.details?.timeoutMs, 3_000);
+
+		const agentResult = await makeExecutor([
+			makeAgent("echo", { defaultTimeoutMs: 4_000 }),
+		]).execute(
+			"foreground-timeout-agent-default",
+			{ agent: "echo", task: "Task", async: false },
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+		assert.equal(agentResult.details?.timeoutMs, 4_000);
 	});
 
 	it("applies agent frontmatter defaults to single-agent launches", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {

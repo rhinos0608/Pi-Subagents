@@ -48,6 +48,8 @@ export interface CompletionNotification {
 	totalTasks?: number;
 	sessionId?: string | null;
 	triggerTurn?: boolean;
+	/** True when an acknowledged grouped intercom relay already delivered this run. */
+	intercomDelivered?: boolean;
 	parallelHandoff?: ParallelHandoffReference;
 }
 
@@ -250,6 +252,7 @@ export default function registerSubagentNotify(
 
 	const deliver = (result: CompletionNotification): Promise<boolean> => {
 		if (disposed || typeof result.sessionId !== "string" || result.sessionId !== state.currentSessionId) return Promise.resolve(false);
+		if (result.intercomDelivered === true) return Promise.resolve(true);
 		const key = buildCompletionKey(result, "notify");
 		const seenAt = seen.get(key);
 		if (seenAt !== undefined && now() - seenAt <= ttlMs) return Promise.resolve(true);

@@ -104,7 +104,7 @@ That is only a starting point. Omit `package` for the traditional unqualified ru
 - `acceptance`
 - `acceptanceRole`
 - `async` — single-agent default for background launch (`true`/`false`); explicit tool-call `async` wins
-- `timeoutMs` — single-agent default run-level max runtime in ms (tool alias `maxRuntimeMs` also accepted on calls)
+- `timeoutMs` — single-agent default run-level max runtime in ms; foreground calls use a 30-minute package default only when neither the call nor agent provides one (tool alias `maxRuntimeMs` is also accepted)
 - `turnBudget` — single-agent default `{ maxTurns, graceTurns? }` JSON object
 
 `acceptance` is a single-agent launch default. Use a scalar level such as `checked` or an inline/block YAML map such as `{ level: "none", reason: "lightweight lookup" }`. An explicit tool-call value wins; chain and parallel acceptance remains configured on the task or step. Management create/update accepts the same policy object, and `acceptance: ""` clears the frontmatter default (`false` remains the deprecated disabled-policy shorthand).
