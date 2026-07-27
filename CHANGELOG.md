@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.37.1] - 2026-07-27
+
 ### Added
 - Added package-owned resume control to the extension RPC surface, including preserved revival metadata and native result-delivery controls. Thanks to @shaneconner for #656.
 
