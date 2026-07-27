@@ -71,6 +71,48 @@ describe("result watcher", () => {
 		}
 	});
 
+	it("uses native completion delivery without attempting external grouped intercom when disabled", async () => {
+		const resultsDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-result-watcher-native-delivery-"));
+		try {
+			const emitted: Array<{ event: string; data: unknown }> = [];
+			const pi = {
+				events: {
+					on: () => () => {},
+					emit(event: string, data: unknown) { emitted.push({ event, data }); },
+				},
+			};
+			const state = createState();
+			state.currentSessionId = "session-native";
+			const resultPath = path.join(resultsDir, "native-run.json");
+			fs.writeFileSync(resultPath, JSON.stringify({
+				id: "native-run",
+				runId: "native-run",
+				sessionId: "session-native",
+				mode: "single",
+				success: true,
+				state: "complete",
+				summary: "done",
+				results: [{ agent: "worker", output: "done", success: true }],
+				intercomTarget: "native-parent",
+			}), "utf-8");
+			const watcher = createResultWatcher(pi, state, resultsDir, 60_000, {
+				deliverIntercomResults: false,
+				notifier: { deliver: async () => true },
+			});
+			try {
+				watcher.primeExistingResults();
+				await new Promise((resolve) => setTimeout(resolve, 100));
+			} finally {
+				watcher.stopResultWatcher();
+			}
+			assert.equal(emitted.some((entry) => entry.event === "subagent:result-intercom"), false);
+			assert.equal(emitted.filter((entry) => entry.event === "subagent:async-complete").length, 1);
+			assert.equal(fs.existsSync(resultPath), false);
+		} finally {
+			fs.rmSync(resultsDir, { recursive: true, force: true });
+		}
+	});
+
 	it("delivers result files only to the exact owning session when another watcher shares the same repo", async () => {
 		const resultsDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-result-watcher-scope-"));
 		const createPi = () => {

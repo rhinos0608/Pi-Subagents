@@ -114,6 +114,27 @@ function createUiContext() {
 }
 
 describe("async job tracker", { skip: !available ? "pi packages not available" : undefined }, () => {
+	it("drops stale captured extension contexts instead of crashing background timers", () => {
+		const asyncRoot = createTempDir("pi-async-job-tracker-stale-context-");
+		try {
+			const state = createState();
+			const recorder = createEventRecorder();
+			const tracker = trackerMod!.createAsyncJobTracker(recorder.pi, state as never, asyncRoot);
+			(state as { lastUiContext: unknown }).lastUiContext = {
+				get hasUI() {
+					throw new Error("This extension ctx is stale after session replacement or reload.");
+				},
+			};
+
+			tracker.handleStarted({ id: "run-stale-context", asyncDir: path.join(asyncRoot, "run-stale-context"), agent: "worker" });
+
+			assert.equal(state.lastUiContext, null);
+			if (state.poller) clearInterval(state.poller);
+		} finally {
+			removeTempDir(asyncRoot);
+		}
+	});
+
 	it("removes completed jobs after retention and requests a rerender", async () => {
 		const asyncRoot = createTempDir("pi-async-job-tracker-");
 		try {

@@ -60,6 +60,19 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 		renderWidget(ctx, options.widgetEnabled === false ? [] : jobs);
 		ctx.ui.requestRender?.();
 	};
+	const rerenderLastWidget = (jobs = Array.from(state.asyncJobs.values())) => {
+		const ctx = state.lastUiContext;
+		if (!ctx) return;
+		try {
+			if (ctx.hasUI) rerenderWidget(ctx, jobs);
+		} catch (error) {
+			if (error instanceof Error && error.message.includes("extension ctx is stale")) {
+				state.lastUiContext = null;
+				return;
+			}
+			throw error;
+		}
+	};
 	const refreshWidget = (ctx: ExtensionContext) => rerenderWidget(ctx);
 	const restoredControlEventCursor = (asyncDir: string) => {
 		try {
@@ -131,9 +144,7 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 		const timer = setTimeout(() => {
 			state.cleanupTimers.delete(asyncId);
 			state.asyncJobs.delete(asyncId);
-			if (state.lastUiContext) {
-				rerenderWidget(state.lastUiContext);
-			}
+			rerenderLastWidget();
 		}, completionRetentionMs);
 		state.cleanupTimers.set(asyncId, timer);
 	};
@@ -254,7 +265,7 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 		if (state.poller) return;
 		state.poller = setInterval(() => {
 			if (state.asyncJobs.size === 0) {
-				if (state.lastUiContext?.hasUI) rerenderWidget(state.lastUiContext, []);
+				rerenderLastWidget([]);
 				if (state.poller) {
 					clearInterval(state.poller);
 					state.poller = null;
@@ -378,7 +389,7 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 				if (widgetRenderKey(job) !== widgetStateBefore) widgetChanged = true;
 			}
 
-			if (widgetChanged && state.lastUiContext?.hasUI) rerenderWidget(state.lastUiContext);
+			if (widgetChanged) rerenderLastWidget();
 		}, pollIntervalMs);
 		state.poller.unref?.();
 	};
@@ -421,9 +432,7 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 		});
 		rememberFleetJob(state, state.asyncJobs.get(info.id)!);
 		ensurePoller();
-		if (state.lastUiContext) {
-			rerenderWidget(state.lastUiContext);
-		}
+		rerenderLastWidget();
 	};
 
 	const handleComplete = (data: unknown) => {
@@ -446,9 +455,7 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 			}
 		}
 		if (job) rememberFleetJob(state, job);
-		if (state.lastUiContext) {
-			rerenderWidget(state.lastUiContext);
-		}
+		rerenderLastWidget();
 		if (!nestedRefreshFailed && !hasLiveNestedDescendants(job?.nestedChildren)) scheduleCleanup(asyncId);
 	};
 
@@ -485,7 +492,7 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 		}
 		if (runs.length === 0) return;
 		ensurePoller();
-		if (state.lastUiContext?.hasUI) rerenderWidget(state.lastUiContext);
+		rerenderLastWidget();
 	};
 
 	return { ensurePoller, refreshWidget, handleStarted, handleComplete, resetJobs, restoreActiveJobs };

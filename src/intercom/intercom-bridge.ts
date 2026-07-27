@@ -32,6 +32,7 @@ Do not use contact_supervisor or intercom for routine completion handoffs. If no
 export interface IntercomBridgeState {
 	active: boolean;
 	mode: IntercomBridgeMode;
+	resultDelivery: boolean;
 	orchestratorTarget?: string;
 	extensionDir: string;
 	instruction: string;
@@ -78,11 +79,12 @@ export function resolveIntercomBridgeMode(value: unknown): IntercomBridgeMode {
 
 function resolveIntercomBridgeConfig(value: ExtensionConfig["intercomBridge"]): Required<IntercomBridgeConfig> {
 	if (!value || typeof value !== "object" || Array.isArray(value)) {
-		return { mode: "always", instructionFile: "" };
+		return { mode: "always", instructionFile: "", resultDelivery: true };
 	}
 	return {
 		mode: resolveIntercomBridgeMode(value.mode),
 		instructionFile: typeof value.instructionFile === "string" ? value.instructionFile : "",
+		resultDelivery: value.resultDelivery !== false,
 	};
 }
 
@@ -146,11 +148,12 @@ export function resolveIntercomBridge(input: ResolveIntercomBridgeInput): Interc
 	);
 	const reason = inactiveReason(mode, input.context, orchestratorTarget);
 	if (reason || !orchestratorTarget) {
-		return { active: false, mode, extensionDir: NATIVE_INTERCOM_EXTENSION_DIR, instruction: defaultInstruction };
+		return { active: false, mode, resultDelivery: config.resultDelivery, extensionDir: NATIVE_INTERCOM_EXTENSION_DIR, instruction: defaultInstruction };
 	}
 	return {
 		active: true,
 		mode,
+		resultDelivery: config.resultDelivery,
 		orchestratorTarget,
 		extensionDir: NATIVE_INTERCOM_EXTENSION_DIR,
 		instruction: buildIntercomBridgeInstruction(orchestratorTarget, resolveInstructionTemplate(config.instructionFile, settingsDir)),

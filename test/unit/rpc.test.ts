@@ -91,6 +91,10 @@ describe("subagent extension RPC bridge", () => {
 			(reply as { data: { capabilities?: { nonRecoveringSteer?: boolean } } }).data.capabilities?.nonRecoveringSteer,
 			true,
 		);
+		assert.equal(
+			(reply as { data: { capabilities?: { resume?: boolean } } }).data.capabilities?.resume,
+			true,
+		);
 
 		bridge.dispose();
 	});
@@ -298,6 +302,75 @@ describe("subagent extension RPC bridge", () => {
 		bridge.dispose();
 	});
 
+	it("delegates resume through the existing package-owned revival action", async () => {
+		const events = new FakeEvents();
+		let executedParams: unknown;
+		const bridge = registerSubagentRpcBridge({
+			events,
+			getContext: () => ctx(),
+			execute: async (_id, params) => {
+				executedParams = params;
+				return {
+					content: [{ type: "text", text: "Revived async subagent from run-1." }],
+					details: { mode: "single", results: [], asyncId: "run-2", asyncDir: "/tmp/run-2" },
+				} as any;
+			},
+		});
+
+		const reply = await request(events, "resume-1", "resume", {
+			id: "run-1",
+			index: 0,
+			message: " Continue with the focused review. ",
+			output: " /tmp/revived-output.md ",
+			outputMode: "file-only",
+		});
+
+		assert.equal(reply.success, true);
+		assert.deepEqual(executedParams, {
+			action: "resume",
+			id: "run-1",
+			index: 0,
+			message: "Continue with the focused review.",
+			output: "/tmp/revived-output.md",
+			outputMode: "file-only",
+		});
+		assert.equal((reply as { data: { details?: { asyncId?: string } } }).data.details?.asyncId, "run-2");
+
+		bridge.dispose();
+	});
+
+	it("rejects targetless or empty RPC resume before executor dispatch", async () => {
+		const events = new FakeEvents();
+		let executeCalls = 0;
+		const bridge = registerSubagentRpcBridge({
+			events,
+			getContext: () => ctx(),
+			execute: async () => {
+				executeCalls++;
+				return { content: [], details: { mode: "management", results: [] } } as any;
+			},
+		});
+
+		const targetless = await request(events, "resume-no-target", "resume", { message: "continue" });
+		const empty = await request(events, "resume-empty", "resume", { id: "run-1", message: "   " });
+		const inlineOutput = await request(events, "resume-inline", "resume", {
+			id: "run-1",
+			message: "continue",
+			output: "/tmp/output.md",
+			outputMode: "inline",
+		});
+
+		assert.equal(targetless.success, false);
+		assert.equal((targetless as { error: { code: string } }).error.code, "invalid_params");
+		assert.match((targetless as { error: { message: string } }).error.message, /requires id, runId, or dir/);
+		assert.equal(empty.success, false);
+		assert.equal((empty as { error: { code: string } }).error.code, "invalid_params");
+		assert.equal(inlineOutput.success, false);
+		assert.match((inlineOutput as { error: { message: string } }).error.message, /file-only/);
+		assert.equal(executeCalls, 0);
+		bridge.dispose();
+	});
+
 	it("delegates interrupt through the existing executor action", async () => {
 		const events = new FakeEvents();
 		let executedParams: unknown;
@@ -328,7 +401,7 @@ describe("subagent extension RPC bridge", () => {
 			fs.mkdirSync(asyncDir, { recursive: true });
 			fs.writeFileSync(path.join(asyncDir, "status.json"), JSON.stringify({
 				runId: "run-stop",
-				sessionId: "session-123",
+				sessionId: "/sessions/parent.jsonl",
 				mode: "single",
 				state: "running",
 				pid: 4242,

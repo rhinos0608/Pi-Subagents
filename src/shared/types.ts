@@ -877,6 +877,8 @@ export interface Details {
 		processTerminal?: ProcessTerminalV1;
 	};
 	launchContractDigest?: string;
+	/** Original launch contract whose persisted session is being revived. */
+	sourceLaunchContractDigest?: string;
 }
 
 // ============================================================================
@@ -1202,6 +1204,8 @@ export interface ForegroundResumeChild {
 	index: number;
 	context?: "fresh" | "fork";
 	sessionFile?: string;
+	model?: string;
+	thinking?: string;
 	status: SubagentResultStatus;
 	activityState?: ActivityState;
 	lastActivityAt?: number;
@@ -1223,6 +1227,7 @@ export interface ForegroundResumeChild {
 	detachedReason?: string;
 	acceptance?: AcceptanceLedger;
 	agentContract?: AgentContract;
+	launchContractDigest?: string;
 	execution?: ExecutionProjection;
 	review?: ReviewProjection;
 	effects?: EffectsProjection;
@@ -1429,6 +1434,8 @@ export type IntercomBridgeMode = "off" | "fork-only" | "always";
 export interface IntercomBridgeConfig {
 	mode?: IntercomBridgeMode;
 	instructionFile?: string;
+	/** Deliver grouped completion messages through an external acknowledged intercom listener. */
+	resultDelivery?: boolean;
 }
 
 interface TopLevelParallelConfig {
