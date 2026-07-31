@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+- Added agent frontmatter aliases and built-in worker aliases for `developer`, `coder`, `implementer`, and `develop`, while keeping canonical names in execution state. Thanks to @selimerunkut for #695.
 - Added explicit chain approval checkpoints with `{ checkpoint, message? }`, `approve-checkpoint`/`reject-checkpoint` controls, persisted checkpoint status, and terminal `rejected` outcomes. Thanks to @saleemlala for #694.
 - Added optional root `usageBudget` limits for reported token and cost totals, with soft status reporting and hard gating for later child launches without stopping already-running children. Thanks to @saleemlala for #693.
 - Added optional `launchResolvedExtensions` status/result/RPC metadata with opaque launch-resolved child extension identifiers and ambient-extension state. Thanks to @saleemlala for #691.

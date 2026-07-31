@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { AgentConfig, AgentScope } from "../../agents/agents.ts";
+import { resolveAgentName, type AgentConfig, type AgentScope } from "../../agents/agents.ts";
 import { getArtifactsDir, getProjectChainRunsDir } from "../../shared/artifacts.ts";
 import { ChainClarifyComponent, type ChainClarifyResult } from "./chain-clarify.ts";
 import { toModelInfo, type ModelInfo } from "../../shared/model-info.ts";
@@ -1508,6 +1508,67 @@ async function maybeBuildForegroundIntercomReceipt(input: {
 		text: formatSubagentResultReceipt({ mode: input.mode, runId: input.runId, payload }),
 		details: stripDetailsOutputsForIntercomReceipt(input.details),
 	};
+}
+
+function canonicalizeAgentName(name: string, agents: AgentConfig[]): { name?: string; error?: string } {
+	const resolved = resolveAgentName(name, agents);
+	if (resolved.error) return { error: resolved.error };
+	if (!resolved.agent) return { error: `Unknown agent: ${name}` };
+	return { name: resolved.agent.name };
+}
+
+function canonicalizeExecutionParams(params: SubagentParamsLike, agents: AgentConfig[]): { params?: SubagentParamsLike; error?: string } {
+	const resolve = (name: string, location?: string): { name?: string; error?: string } => {
+		const result = canonicalizeAgentName(name, agents);
+		return result.error && location ? { error: `${result.error} (${location})` } : result;
+	};
+	if (params.agent) {
+		const result = resolve(params.agent);
+		if (result.error) return { error: result.error };
+		params = { ...params, agent: result.name };
+	}
+	if (params.tasks) {
+		const tasks: TaskParam[] = [];
+		for (let index = 0; index < params.tasks.length; index++) {
+			const task = params.tasks[index]!;
+			const result = resolve(task.agent, `task ${index + 1}`);
+			if (result.error) return { error: result.error };
+			tasks.push({ ...task, agent: result.name! });
+		}
+		params = { ...params, tasks };
+	}
+	if (params.chain) {
+		const chain: ChainStep[] = [];
+		for (let index = 0; index < params.chain.length; index++) {
+			const step = params.chain[index]!;
+			if (isParallelStep(step)) {
+				const parallel: typeof step.parallel = [];
+				for (let taskIndex = 0; taskIndex < step.parallel.length; taskIndex++) {
+					const task = step.parallel[taskIndex]!;
+					const result = resolve(task.agent, `step ${index + 1}, task ${taskIndex + 1}`);
+					if (result.error) return { error: result.error };
+					parallel.push({ ...task, agent: result.name! });
+				}
+				chain.push({ ...step, parallel });
+				continue;
+			}
+			if (isDynamicParallelStep(step)) {
+				const result = resolve(step.parallel.agent, `step ${index + 1}`);
+				if (result.error) return { error: result.error };
+				chain.push({ ...step, parallel: { ...step.parallel, agent: result.name! } });
+				continue;
+			}
+			if ("agent" in step && typeof step.agent === "string") {
+				const result = resolve(step.agent, `step ${index + 1}`);
+				if (result.error) return { error: result.error };
+				chain.push({ ...step, agent: result.name! });
+				continue;
+			}
+			chain.push(step);
+		}
+		params = { ...params, chain };
+	}
+	return { params };
 }
 
 function validateExecutionInput(
@@ -3965,6 +4026,9 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		const parentSessionFile = ctx.sessionManager.getSessionFile() ?? null;
 		const discovered = deps.discoverAgents(effectiveCwd, scope);
 		const discoveredAgents = discovered.agents;
+		const canonicalParams = canonicalizeExecutionParams(effectiveParams, discoveredAgents);
+		if (canonicalParams.error) return buildRequestedModeError(effectiveParams, canonicalParams.error);
+		effectiveParams = canonicalParams.params!;
 		const modelScope = discovered.modelScope;
 		effectiveParams = applySingleAgentLaunchDefaults(effectiveParams, discoveredAgents);
 		const turnBudget = resolveTurnBudgetConfig(effectiveParams.turnBudget ?? deps.config.turnBudget);

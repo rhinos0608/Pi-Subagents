@@ -1383,6 +1383,17 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		assert.equal(result.finalOutput, "Applied edit");
 	});
 
+	it("resolves explicit agent aliases to canonical execution names", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		mockPi.onCall({ output: "Implemented" });
+		const executor = makeExecutor([makeAgent("worker", { aliases: ["developer"], completionGuard: false })]);
+
+		const result = await executor.execute("single", { agent: "developer", task: "Implement" }, new AbortController().signal, undefined, makeMinimalCtx(tempDir));
+
+		assert.equal(result.isError, undefined);
+		assert.equal(result.details?.results[0]?.agent, "worker");
+		assert.match(result.content[0]?.text ?? "", /Implemented/);
+	});
+
 	it("returns error for unknown agent", async () => {
 		const agents = makeAgentConfigs(["echo"]);
 		const result = await runSync(tempDir, agents, "nonexistent", "Do something", {});
