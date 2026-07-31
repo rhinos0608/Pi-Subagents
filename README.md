@@ -1483,6 +1483,8 @@ Requirements:
 - task-level `cwd` overrides must be omitted or match the shared cwd
 - configured `worktreeSetupHook` must return valid JSON before timeout
 
+Git worktrees start from tracked files, so ignored dependency state may be absent. `pi-subagents` attempts the `node_modules` symlink above, but if module resolution fails in a fresh worktree, first confirm dependencies were linked, installed, or provisioned by `worktreeSetupHook` before treating it as a code failure.
+
 By default, worktrees are created under the system temp directory. Set `worktreeBaseDir` in config, or `PI_SUBAGENTS_WORKTREE_DIR` when config is unset, to put them under a stable trusted directory. Missing base directories are created automatically.
 
 After a worktree parallel step completes, per-agent diff stats are appended to the output and full patch files are written to artifacts. The runtime also writes a versioned aggregate handoff manifest: foreground runs use the artifact directory's `handoffs/<run-id>.json`, while async runs use `<async-dir>/handoff.json`. The manifest records each child's terminal status, summary, output/session/structured-output references, patch stats and path, and whether its worktree and temporary branch were actually removed. Foreground `details`, async `status.json` and result files, status output, intercom delivery, and completion notifications expose the manifest path. Worktrees and temp branches still receive best-effort fallback cleanup if handoff finalization cannot run.
