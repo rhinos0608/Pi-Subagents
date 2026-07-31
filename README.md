@@ -744,6 +744,7 @@ name: scout
 # Optional: registers this as code-analysis.scout while preserving name: scout
 package: code-analysis
 description: Fast codebase recon
+aliases: explorer, code-scout
 tools: read, grep, find, ls, bash, mcp:chrome-devtools
 extensions:
 subagentOnlyExtensions: ./tools/child-only-search.ts
@@ -787,6 +788,7 @@ Important fields:
 | Field | Notes |
 |-------|-------|
 | `package` | Optional package identifier. A file with `name: scout` and `package: code-analysis` registers as `code-analysis.scout`; serialization keeps `name` and `package` separate. |
+| `aliases` | Optional comma-separated or block-list names that resolve to this agent for selection and explicit `agent`/chain/task inputs. Runtime status, persistence, and config still use the canonical `name`; exact canonical names take precedence over aliases, and alias collisions between distinct canonical agents fail as ambiguous. |
 | `tools` | Strict child tool allowlist. Named extension tools must also have their provider loaded. `mcp:` entries select direct MCP tools when `pi-mcp-adapter` is installed. |
 | `extensions` | Omitted means normal extensions; empty means no extensions; list values allowlist specific extensions. |
 | `subagentOnlyExtensions` | Extension paths loaded only in spawned child sessions for this agent. Tools registered there are unavailable to the main agent unless also installed through normal Pi extension configuration. |
@@ -1365,7 +1367,7 @@ Agent definitions are not loaded into context by default. Management actions let
 { action: "reset", agent: "reviewer" }
 ```
 
-`create` uses `config.scope`, not `agentScope`. `config.name` is the local frontmatter name; optional `config.package` registers the runtime name as `{package}.{name}` and is saved as separate `name` and `package` frontmatter. `update` and `delete` use the runtime name and `agentScope` only when the same runtime name exists in multiple scopes. To clear optional string fields, including `package`, set them to `false` or `""`.
+`create` uses `config.scope`, not `agentScope`. `config.name` is the local frontmatter name; optional `config.package` registers the runtime name as `{package}.{name}` and is saved as separate `name` and `package` frontmatter. `config.aliases` accepts a comma-separated string, string array, or `false` to clear aliases; aliases resolve to the canonical agent name for execution and are shown by `list`/`get`. `update` and `delete` use the runtime name and `agentScope` only when the same runtime name exists in multiple scopes. To clear optional string fields, including `package`, set them to `false` or `""`.
 
 `eject` copies a bundled builtin or package agent verbatim into the user or project agent dir (default `user`) as an editable custom file that shadows the original, so you can customize a builtin without hunting package files. `disable` writes a reversible `agentOverrides.<name>.disabled: true` entry to the user or project settings file (default `user`); the agent stays on disk but is hidden from runtime discovery and `list`. `enable` removes that `disabled` field while preserving any other override fields on the same entry. `reset` deletes the scope's custom agent file and/or settings override entry, restoring the bundled default; it refuses if no bundled default exists (use `delete` for purely custom agents). All four accept `agentScope: "user" | "project"` and operate in one scope at a time; project overrides still win over user ones, so a project-scope disable survives a user-scope `enable` until you target the project scope.
 
@@ -1373,7 +1375,7 @@ Agent definitions are not loaded into context by default. Management actions let
 
 | Param | Type | Default | Description |
 |-------|------|---------|-------------|
-| `agent` | string | - | Agent name for single mode, or target for management actions. |
+| `agent` | string | - | Agent name or alias for single mode, or target for management actions. Execution records use the canonical agent name. |
 | `task` | string | - | Task string for single mode. |
 | `action` | string | - | `list`, `get`, `create`, `update`, `delete`, `status`, `interrupt`, `stop`, `resume`, `steer`, `append-step`, `approve-checkpoint`, `reject-checkpoint`, or `doctor`. |
 | `chainName` | string | - | Chain name for management actions. |
