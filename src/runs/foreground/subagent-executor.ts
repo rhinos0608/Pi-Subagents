@@ -69,7 +69,7 @@ import { waitForSteeringAction } from "../background/steering.ts";
 import { steerAsyncRun } from "./async-steering-action.ts";
 import { reconcileAsyncRun } from "../background/stale-run-reconciler.ts";
 import { resolveAsyncRootResultPath } from "../background/chain-root-attachment.ts";
-import { attachRootChildrenToSteps, createNestedRoute, readNestedControlResults, resolveInheritedNestedRouteFromEnv, resolveNestedAsyncDir, resolveNestedParentAddressFromEnv, updateForegroundNestedProjection, writeNestedControlRequest, writeNestedEvent, type NestedRunResolutionScope } from "../shared/nested-events.ts";
+import { attachRootChildrenToSteps, createNestedRoute, findNestedControlResult, resolveInheritedNestedRouteFromEnv, resolveNestedAsyncDir, resolveNestedParentAddressFromEnv, snapshotNestedEventFiles, updateForegroundNestedProjection, writeNestedControlRequest, writeNestedEvent, type NestedRunResolutionScope } from "../shared/nested-events.ts";
 import { resolveSubagentRunId, type ResolvedSubagentRunId } from "../background/run-id-resolver.ts";
 import { formatNestedRunStatusLines } from "../shared/nested-render.ts";
 import { inspectSubagentStatus } from "../background/run-status.ts";
@@ -1032,10 +1032,10 @@ function resolveNestedResumeTarget(match: ResolvedSubagentRunId & { kind: "neste
 	};
 }
 
-async function waitForNestedControlResult(target: ResolvedSubagentRunId & { kind: "nested" }, requestId: string, timeoutMs = 1_000) {
+async function waitForNestedControlResult(target: ResolvedSubagentRunId & { kind: "nested" }, requestId: string, ignoredFiles: ReadonlySet<string>, timeoutMs = 1_000) {
 	const deadline = Date.now() + timeoutMs;
 	while (Date.now() < deadline) {
-		const result = readNestedControlResults(target.match.route).find((candidate) => candidate.requestId === requestId && candidate.targetRunId === target.match.run.id);
+		const result = findNestedControlResult(target.match.route, requestId, target.match.run.id, ignoredFiles);
 		if (result) return result;
 		await new Promise((resolve) => setTimeout(resolve, 50));
 	}
@@ -1044,14 +1044,16 @@ async function waitForNestedControlResult(target: ResolvedSubagentRunId & { kind
 
 async function sendNestedControlRequest(target: ResolvedSubagentRunId & { kind: "nested" }, action: "interrupt" | "resume", message?: string) {
 	const requestId = randomUUID();
+	const ignoredFiles = snapshotNestedEventFiles(target.match.route);
+	const requestedAt = Date.now();
 	writeNestedControlRequest(target.match.route, {
-		ts: Date.now(),
+		ts: requestedAt,
 		requestId,
 		targetRunId: target.match.run.id,
 		action,
 		...(message ? { message } : {}),
 	});
-	return waitForNestedControlResult(target, requestId);
+	return waitForNestedControlResult(target, requestId, ignoredFiles);
 }
 
 function directNestedAsyncInterrupt(target: ResolvedSubagentRunId & { kind: "nested" }): AgentToolResult<Details> | undefined {

@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Changed
+- Reduced repeated runtime filesystem work by caching stable Pi config-directory resolution, incrementally sanitizing run history, and limiting nested control-result polling to files created for the active request.
+
 ## [0.38.0] - 2026-07-30
 
 ### Added

@@ -788,32 +788,50 @@ export function writeNestedControlResult(route: NestedRoute, result: Omit<Nested
 	writeRouteRecord(route.eventSink, sanitized.ts, sanitized);
 }
 
-export function readNestedControlResults(route: NestedRoute): NestedControlResultRecord[] {
-	validateRouteShape(route);
-	let entries: string[] = [];
+function readControlResultsFromFile(route: NestedRoute, eventPath: string): NestedControlResultRecord[] {
+	if (!containedPath(route.eventSink, eventPath)) return [];
 	try {
-		entries = fs.readdirSync(route.eventSink).filter((entry) => entry.endsWith(".json") || entry.endsWith(".jsonl")).sort();
+		const stat = fs.statSync(eventPath);
+		if (!stat.isFile() || stat.size > MAX_EVENT_BYTES) return [];
+		const content = fs.readFileSync(eventPath, "utf-8");
+		const lines = content.includes("\n") ? content.split("\n").filter((line) => line.trim()) : [content];
+		return lines.map((line) => parseControlResult(line, route)).filter((result): result is NestedControlResultRecord => Boolean(result));
+	} catch {
+		return [];
+	}
+}
+
+function listNestedEventFiles(route: NestedRoute): string[] {
+	validateRouteShape(route);
+	try {
+		return fs.readdirSync(route.eventSink).filter((entry) => entry.endsWith(".json") || entry.endsWith(".jsonl"));
 	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+		throw error;
 	}
-	const results: NestedControlResultRecord[] = [];
+}
+
+export function snapshotNestedEventFiles(route: NestedRoute): Set<string> {
+	return new Set(listNestedEventFiles(route));
+}
+
+export function findNestedControlResult(route: NestedRoute, requestId: string, targetRunId: string, ignoredFiles: ReadonlySet<string>): NestedControlResultRecord | undefined {
+	const entries = listNestedEventFiles(route)
+		.filter((entry) => !ignoredFiles.has(entry))
+		.sort()
+		.reverse();
 	for (const entry of entries) {
-		const eventPath = path.join(route.eventSink, entry);
-		if (!containedPath(route.eventSink, eventPath)) continue;
-		try {
-			const stat = fs.statSync(eventPath);
-			if (!stat.isFile() || stat.size > MAX_EVENT_BYTES) continue;
-			const content = fs.readFileSync(eventPath, "utf-8");
-			const lines = content.includes("\n") ? content.split("\n").filter((line) => line.trim()) : [content];
-			for (const line of lines) {
-				const result = parseControlResult(line, route);
-				if (result) results.push(result);
-			}
-		} catch {
-			continue;
-		}
+		const result = readControlResultsFromFile(route, path.join(route.eventSink, entry))
+			.find((candidate) => candidate.requestId === requestId && candidate.targetRunId === targetRunId);
+		if (result) return result;
 	}
-	return results;
+	return undefined;
+}
+
+export function readNestedControlResults(route: NestedRoute): NestedControlResultRecord[] {
+	return listNestedEventFiles(route)
+		.sort()
+		.flatMap((entry) => readControlResultsFromFile(route, path.join(route.eventSink, entry)));
 }
 
 export function nestedRouteEnv(route: NestedRoute): Record<string, string> {
