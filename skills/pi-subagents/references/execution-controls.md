@@ -333,6 +333,14 @@ patch paths and stats, and whether each temporary worktree and branch was
 removed. If you want one writer thread and several advisory agents, prefer a
 single-writer pattern instead.
 
+Git worktrees start from tracked files, so ignored or untracked build state
+such as `node_modules` may be absent. `pi-subagents` attempts to symlink the
+root checkout's `node_modules` into each managed worktree when it exists, but
+agents should still treat dependency setup as an explicit bootstrap step before
+running tests, typecheck, or builds. If module resolution fails in a fresh
+worktree, first confirm dependencies were linked, installed, or provisioned by
+`worktreeSetupHook` before treating it as a code failure.
+
 ## The Oracle Workflow
 
 The intended oracle loop is:
