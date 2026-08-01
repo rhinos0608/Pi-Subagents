@@ -1173,6 +1173,8 @@ export interface AsyncStatus {
 		agent: string;
 		/** Resolved launch context for this child step. */
 		context?: "fresh" | "fork";
+		/** Short caller-facing task/goal shown in fleet surfaces when available. */
+		description?: string;
 		phase?: string;
 		label?: string;
 		outputName?: string;
@@ -1241,6 +1243,7 @@ export interface AsyncStatus {
 
 export type AsyncJobStep = NonNullable<AsyncStatus["steps"]>[number] & {
 	index?: number;
+	description?: string;
 };
 
 export interface AsyncJobState {
