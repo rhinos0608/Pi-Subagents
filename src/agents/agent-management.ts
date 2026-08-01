@@ -36,10 +36,11 @@ import { resolveTurnBudgetConfig } from "../runs/shared/turn-budget.ts";
 import { validateAcceptanceInput } from "../runs/shared/acceptance.ts";
 import type { AcceptanceInput, Details, ExtensionConfig, ToolBudgetConfig } from "../shared/types.ts";
 import { getProjectConfigDir } from "../shared/utils.ts";
+import { capabilityCeilingAgentRestrictionSources, isAgentAllowedByCapabilityCeiling, resolveCurrentSubagentCapabilityCeiling } from "../runs/shared/capability-ceiling.ts";
 
 type ManagementAction = "list" | "get" | "models" | "create" | "update" | "delete" | "eject" | "disable" | "enable" | "reset";
 type ManagementScope = "user" | "project";
-type ManagementContext = Pick<ExtensionContext, "cwd" | "modelRegistry"> & { model?: ExtensionContext["model"]; config?: ExtensionConfig };
+type ManagementContext = Pick<ExtensionContext, "cwd" | "modelRegistry"> & { model?: ExtensionContext["model"]; config?: ExtensionConfig; currentSessionId?: string };
 
 interface ManagementParams {
 	action?: string;
@@ -676,7 +677,11 @@ export function handleList(params: ManagementParams, ctx: ManagementContext): Ag
 	const d = discoverAgentsAll(ctx.cwd);
 	const scopedAgents = mergeAgentsForScope(scope, d.user, d.project, d.builtin, d.package)
 		.sort((a, b) => a.name.localeCompare(b.name));
-	const agents = scopedAgents.filter((a) => !a.disabled);
+	const capabilityCeiling = resolveCurrentSubagentCapabilityCeiling(ctx.currentSessionId);
+	const visibleAgents = scopedAgents.filter((a) => !a.disabled);
+	const agents = visibleAgents.filter((a) => isAgentAllowedByCapabilityCeiling(a.name, capabilityCeiling));
+	const restrictedAgents = visibleAgents.filter((a) => !isAgentAllowedByCapabilityCeiling(a.name, capabilityCeiling));
+	const restrictedSources = capabilityCeilingAgentRestrictionSources(capabilityCeiling);
 	const chains = d.chains.filter((c) => scope === "both" || c.source === "package" || c.source === scope).sort((a, b) => a.name.localeCompare(b.name));
 	const diagnostics = d.chainDiagnostics.filter((entry) => scope === "both" || entry.source === scope);
 	const proactiveSuggestions = buildProactiveSkillSubagentRecommendationLines({
@@ -690,6 +695,11 @@ export function handleList(params: ManagementParams, ctx: ManagementContext): Ag
 		...(agents.length
 			? agents.map((a) => `- ${a.name} (${a.source}${a.defaultContext ? `, context: ${a.defaultContext}` : ""}${a.aliases?.length ? `, aliases: ${a.aliases.join(", ")}` : ""}): ${a.description}`)
 			: ["- (none)"]),
+		...(restrictedAgents.length ? [
+			"",
+			`Restricted agents (not executable in this session${restrictedSources?.length ? `; capability ceiling: ${restrictedSources.join(", ")}` : ""}):`,
+			...restrictedAgents.map((a) => `- ${a.name} (${a.source}${a.aliases?.length ? `, aliases: ${a.aliases.join(", ")}` : ""}): ${a.description}`),
+		] : []),
 		"",
 		"Chains:",
 		...(chains.length ? chains.map((c) => `- ${c.name} (${c.source}): ${c.description}`) : ["- (none)"]),

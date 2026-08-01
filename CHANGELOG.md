@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+- Added session-scoped `allowedAgents` capability ceilings for restricting launchable agent roles without global agent disabling. Thanks to @aoguai for #719.
 - Added stable foreground result row indexes for correlating child progress and final results. Thanks to @rochecompaan (Patchmill) for #720.
 - Added watchdog current-scope context, optional every-N-tools scope-monitor cadence, and visible main-session blocker auto-follow, inspired by Scopey (github.com/ArchAstro/scopey) by Calvin Grunewald (@CalvinGrunewald).
 - Added optional `runtimeAcknowledgedExtensions` status/result/RPC metadata for cooperating child-runtime extensions that emit `subagent:acknowledge-extension`. Thanks to @saleemlala for #705.

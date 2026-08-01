@@ -4076,6 +4076,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 				...ctx,
 				cwd: requestCwd,
 				config: deps.config,
+				currentSessionId: deps.state.currentSessionId ?? ctx.sessionManager.getSessionId() ?? undefined,
 			});
 		}
 
