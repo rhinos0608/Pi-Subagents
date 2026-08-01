@@ -113,7 +113,7 @@ import { resolveSubagentIntercomTarget } from "../../intercom/intercom-bridge.ts
 import { acceptanceFailureMessage, aggregateAcceptanceReport, buildSkippedAcceptanceLedger, evaluateAcceptance, formatAcceptancePrompt, resolveEffectiveAcceptance, stripAcceptanceReport } from "../shared/acceptance.ts";
 import { attachContractProjections, isAgentContractV1 } from "../shared/agent-contract.ts";
 import { waitForImportedAsyncRoot } from "./chain-root-attachment.ts";
-import { appendRunnerStepsToStatus, consumeChainAppendRequests, countPendingChainAppendRequests } from "./chain-append.ts";
+import { appendRunnerStepsToStatus, consumeChainAppendRequests, countPendingChainAppendRequests, statusStepDescription } from "./chain-append.ts";
 import { appendTurnBudgetSystemPrompt, formatTurnBudgetOutput, initialTurnBudgetState, turnBudgetDecision, turnBudgetDeferredNote, turnBudgetDeferredState, turnBudgetExceededMessage, turnBudgetSoftNote, turnBudgetState } from "../shared/turn-budget.ts";
 import { initialToolBudgetState, toolBudgetState } from "../shared/tool-budget.ts";
 import { usageBudgetExceededMessage, usageBudgetState } from "../shared/usage-budget.ts";
@@ -1625,6 +1625,7 @@ async function runSingleStep(
 
 type RunnerStatusStep = NonNullable<AsyncStatus["steps"]>[number] & {
 	exitCode?: number | null;
+	description?: string;
 };
 
 function appendCapabilityCeilingAppliedEvent(eventsPath: string, runId: string, stepIndex: number, agent: string, result: StepResult): void {
@@ -1860,6 +1861,7 @@ async function runSubagent(
 				const transcriptPath = resolveAsyncStepTranscriptPath({ artifactsDir, artifactConfig, runId: id, agent: task.agent, flatIndex: taskFlatIndex, flatStepCount: initialFlatStepCount });
 				initialStatusSteps.push({
 					agent: task.agent,
+					...(statusStepDescription(task.task) ? { description: statusStepDescription(task.task) } : {}),
 					...(task.context ? { context: task.context } : {}),
 					phase: task.phase,
 					label: task.label,
@@ -1904,6 +1906,7 @@ async function runSubagent(
 			const transcriptPath = resolveAsyncStepTranscriptPath({ artifactsDir, artifactConfig, runId: id, agent: step.agent, flatIndex: stepFlatIndex, flatStepCount: initialFlatStepCount });
 			initialStatusSteps.push({
 				agent: step.agent,
+				...(statusStepDescription(step.task) ? { description: statusStepDescription(step.task) } : {}),
 				...(step.context ? { context: step.context } : {}),
 				phase: step.phase,
 				label: step.label,
@@ -3157,6 +3160,7 @@ async function runSubagent(
 				const transcriptPath = resolveAsyncStepTranscriptPath({ artifactsDir, artifactConfig, runId: id, agent: task.agent, flatIndex: groupStartFlatIndex + itemIndex, flatStepCount: dynamicFlatStepCount });
 				return {
 					agent: task.agent,
+					...(statusStepDescription(task.task) ? { description: statusStepDescription(task.task) } : {}),
 					...(task.context ? { context: task.context } : {}),
 					phase: task.phase ?? step.phase,
 					label: task.label,
