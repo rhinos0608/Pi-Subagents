@@ -15,7 +15,7 @@ import { CHILD_TOOL_DIAGNOSTIC_PATH_ENV, MCP_DIRECT_CHILD_TOOLS_ENV, REQUIRED_CH
 import { CHILD_WATCHDOG_CONFIG_ENV, encodeChildWatchdogConfig, type ChildWatchdogConfig } from "../../watchdog/child-status.ts";
 import { WAIT_TOOL_ENABLED_ENV } from "../background/wait-config.ts";
 import { PI_CODING_AGENT_PACKAGE_ROOT_ENV } from "../../shared/utils.ts";
-import { SUBAGENT_CAPABILITY_CEILING_ENV, decodeSubagentCapabilityCeiling, encodeSubagentCapabilityCeiling, intersectSubagentCapabilityCeilings, type ResolvedSubagentCapabilityCeiling, type SubagentCapabilityAudit } from "./capability-ceiling.ts";
+import { SUBAGENT_CAPABILITY_CEILING_ENV, capabilityCeilingAgentRestrictionSources, decodeSubagentCapabilityCeiling, encodeSubagentCapabilityCeiling, intersectSubagentCapabilityCeilings, isAgentAllowedByCapabilityCeiling, type ResolvedSubagentCapabilityCeiling, type SubagentCapabilityAudit } from "./capability-ceiling.ts";
 
 const TASK_ARG_LIMIT = 8000;
 const MAX_LAUNCH_RESOLVED_EXTENSION_IDS = 32;
@@ -128,6 +128,7 @@ export interface ResolvePiLaunchToolPlanInput {
 	structuredOutput?: boolean;
 	capabilityCeiling?: ResolvedSubagentCapabilityCeiling;
 	inheritedCapabilityCeiling?: ResolvedSubagentCapabilityCeiling;
+	agentName?: string;
 }
 
 export interface PiLaunchToolPlan {
@@ -227,6 +228,8 @@ export function resolvePiLaunchToolPlan(input: ResolvePiLaunchToolPlanInput): Pi
 		removedExtensionCount: capabilityCeiling.denyExtensions ? (input.extensions?.length ?? 0) + (input.subagentOnlyExtensions?.length ?? 0) + ((input.tools ?? []).filter((tool) => tool.includes("/") || tool.endsWith(".ts") || tool.endsWith(".js")).length) : 0,
 		requestedMcpToolCount: input.mcpDirectTools?.length ?? 0,
 		effectiveMcpTools,
+		agentAllowed: input.agentName === undefined ? true : isAgentAllowedByCapabilityCeiling(input.agentName, capabilityCeiling),
+		...(capabilityCeilingAgentRestrictionSources(capabilityCeiling) ? { agentRestrictionSources: capabilityCeilingAgentRestrictionSources(capabilityCeiling) } : {}),
 	} satisfies SubagentCapabilityAudit : undefined;
 	return {
 		...(capabilityCeiling ? { capabilityCeiling } : {}),
@@ -280,6 +283,7 @@ export function buildPiArgs(input: BuildPiArgsInput): BuildPiArgsResult {
 		structuredOutput: input.structuredOutput,
 		capabilityCeiling: input.capabilityCeiling,
 		inheritedCapabilityCeiling: decodeSubagentCapabilityCeiling(process.env[SUBAGENT_CAPABILITY_CEILING_ENV]),
+		agentName: input.childAgentName,
 	});
 	if (toolPlan.explicitToolAllowlist) {
 		args.push(toolPlan.effectiveToolAllowlist.length > 0 ? "--tools" : "--no-tools");

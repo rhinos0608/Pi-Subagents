@@ -1222,13 +1222,17 @@ import { registerSubagentCapabilityCeiling } from "pi-subagents/capability-ceili
 const restriction = registerSubagentCapabilityCeiling({
   sessionId: ctx.sessionManager.getSessionId(),
   source: "plan-mode",
-  ceiling: { allowedTools: ["read", "grep", "find", "ls"], denyExtensions: true },
+  ceiling: {
+    allowedAgents: ["plan-scout", "plan-researcher", "plan-reviewer"],
+    allowedTools: ["read", "grep", "find", "ls"],
+    denyExtensions: true,
+  },
 });
 // restriction.update(...) replaces this provider's policy atomically.
 // restriction.dispose() removes only this provider's registration.
 ```
 
-Active registrations intersect their `allowedTools` sets and OR `denyExtensions`; an explicit empty list means no caller-facing tools, while an omitted list does not restrict names. The resolved snapshot is propagated monotonically to nested and async children and is retained for recovery. `structured_output` may remain as a package-owned internal protocol tool when an output schema requires it; it is not a caller capability. A denied lazy-skill `read` requirement fails before spawn rather than widening the ceiling.
+Active registrations intersect their `allowedTools` and `allowedAgents` sets and OR `denyExtensions`; an explicit empty list means no caller-facing tools or launchable agents for that field, while an omitted list does not restrict names. `allowedAgents` entries are canonical agent names and are case-sensitive. Launching a non-allowlisted agent fails before spawn, and `{ action: "list" }` keeps restricted agents visible in a separate non-executable section instead of silently hiding them. The resolved snapshot is propagated monotonically to nested and async children and is retained for recovery. `structured_output` may remain as a package-owned internal protocol tool when an output schema requires it; it is not a caller capability. A denied lazy-skill `read` requirement fails before spawn rather than widening the ceiling.
 
 `denyExtensions` suppresses ambient, configured, and MCP provider extensions while retaining the package runtime needed for child protocol enforcement. This is a same-process policy boundary, not a sandbox against malicious code already running in the parent process. Schedules created while a ceiling is active are rejected until durable schedule persistence is available; unrestricted schedules remain subject to any policy active when they fire. Public status exposes bounded audit counts and sources, never full extension paths.
 
