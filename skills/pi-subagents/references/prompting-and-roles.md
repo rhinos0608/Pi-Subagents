@@ -31,7 +31,7 @@ Humans often use the slash-command layer instead:
 - `/subagents-stop [run-id]` — stop a current-session top-level async run; opens a selector when no id is given
 - `/subagents-detach [run-id]` — detach an active foreground single-subagent run without terminating its child
 - `/subagent-cost` — show parent plus child token usage and cost for the session
-- `/subagents-fleet` — open the live, inspection-only foreground/async fleet; `Ctrl+Alt+F` opens it during an active foreground turn, `↑↓`/`jk` selects children, and `PgUp`/`PgDn` scrolls transcript detail
+- `/subagents-fleet` — open the live fleet inspector with per-child controls; `Ctrl+Alt+F` opens it during an active foreground turn, `↑↓`/`jk` selects children, `PgUp`/`PgDn` scrolls transcript detail, `s` steers the selected live async child, and `D` stops its top-level async run after confirmation
 - `/subagents-watchdog` — inspect or configure the opt-in adversarial change watchdog (model, on/off, recommend-model, check)
 - `/subagents-doctor` — diagnose setup, discovery, async paths, and intercom bridge state
 - `/subagents-models [agent]` — show the live runtime-loaded builtin model mapping
@@ -253,11 +253,24 @@ Direct settings example:
 }
 ```
 
-Useful override fields: `model`, `fallbackModels`, `thinking`,
+Useful override fields: `description`, `model`, `fallbackModels`, `thinking`,
 `systemPromptMode`, `inheritProjectContext`, `inheritSkills`, `defaultContext`,
 `acceptanceRole`, `disabled`, `skills`, `tools`, `extensions`, and `systemPrompt`.
+`description` replaces the discovered description for builtin and custom agents
+in `list` output, which is useful for deployment-specific routing notes.
 Use `acceptanceRole: false` to clear an override. Create a user or project
 agent with the same name only when you want a substantially different agent.
+
+### Recommended model tiering (optional)
+
+When several providers are available, route agents by task shape instead of one model for everything:
+
+1. **Fast workhorse** — cheapest capable model at low thinking for recon, lookups, and mechanical edits (for example on `scout`).
+2. **Standard well-scoped** — mid-tier model at medium thinking for most delegations: routine multi-file edits, focused reviews, straightforward implementation (for example on `worker`, `reviewer`, `delegate`).
+3. **Deep but bounded** — top reasoning model at high thinking only for hard tasks that arrive with explicit goals and completion criteria; these models loop on vague goals (for example on `planner` and oracle-style agents).
+4. **Taste and intent** — a model that reads human intent well for ambiguous work: UX/design judgment, product tradeoffs, planning from vague requirements, writing quality.
+
+Routing rule: use tiers 1–3 when the task is well-scoped; use tier 4 when scoping or judging is the task itself. Give tier-4 agents cross-provider `fallbackModels` so subscription usage limits degrade gracefully; fallback triggers automatically on rate-limit and overload errors. Note that forked context over an Anthropic parent transcript with signed thinking blocks forces the child's thinking off, so intent-tier agents work best with fresh context.
 
 If a provider rejects model IDs with thinking suffixes, use
 `subagents.disableThinking: true` in user or project settings to clear bundled
