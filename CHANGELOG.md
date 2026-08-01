@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.39.0] - 2026-08-01
+
 ### Added
 - Added session-scoped `allowedAgents` capability ceilings for restricting launchable agent roles without global agent disabling. Thanks to @aoguai for #719.
 - Added stable foreground result row indexes for correlating child progress and final results. Thanks to @rochecompaan (Patchmill) for #720.
