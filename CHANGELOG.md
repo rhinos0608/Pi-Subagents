@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Added
+- Added `description` to `subagents.agentOverrides` so deployments can replace the discovered description for builtin and custom agents in list output. Thanks to @chronoAP for #724.
+
 ## [0.39.0] - 2026-08-01
 
 ### Added
