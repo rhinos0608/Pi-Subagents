@@ -59,6 +59,7 @@ export function defaultInheritSkills(): boolean {
 }
 
 export interface BuiltinAgentOverrideBase {
+	description?: string;
 	model?: string;
 	fallbackModels?: string[];
 	thinking?: string | false;
@@ -80,6 +81,7 @@ export interface BuiltinAgentOverrideBase {
 }
 
 interface BuiltinAgentOverrideConfig {
+	description?: string;
 	model?: string | false;
 	fallbackModels?: string[] | false;
 	thinking?: string | false;
@@ -545,6 +547,7 @@ function arraysEqual(a: string[] | undefined, b: string[] | undefined): boolean 
 
 function cloneOverrideBase(agent: AgentConfig): BuiltinAgentOverrideBase {
 	return {
+		description: agent.description,
 		model: agent.model,
 		fallbackModels: agent.fallbackModels ? [...agent.fallbackModels] : undefined,
 		thinking: agent.thinking,
@@ -568,6 +571,7 @@ function cloneOverrideBase(agent: AgentConfig): BuiltinAgentOverrideBase {
 
 function cloneOverrideValue(override: BuiltinAgentOverrideConfig): BuiltinAgentOverrideConfig {
 	return {
+		...(override.description !== undefined ? { description: override.description } : {}),
 		...(override.model !== undefined ? { model: override.model } : {}),
 		...(override.fallbackModels !== undefined
 			? { fallbackModels: override.fallbackModels === false ? false : [...override.fallbackModels] }
@@ -719,6 +723,14 @@ function parseBuiltinOverrideEntry(
 
 	const input = value as Record<string, unknown>;
 	const override: BuiltinAgentOverrideConfig = {};
+
+	if ("description" in input) {
+		if (typeof input.description === "string" && input.description.trim()) {
+			override.description = input.description.trim();
+		} else {
+			throw new Error(`Builtin override '${name}' in '${filePath}' has invalid 'description'; expected a non-empty string.`);
+		}
+	}
 
 	if ("model" in input) {
 		if (typeof input.model === "string" || input.model === false) override.model = input.model;
@@ -967,6 +979,7 @@ function applyBuiltinOverride(
 		override: { ...meta, base: cloneOverrideBase(agent) },
 	};
 
+	if (override.description !== undefined) next.description = override.description;
 	if (override.model !== undefined) next.model = override.model === false ? undefined : override.model;
 	if (override.fallbackModels !== undefined) {
 		next.fallbackModels = override.fallbackModels === false ? undefined : [...override.fallbackModels];
@@ -1087,6 +1100,10 @@ function applyCustomAgentOverride(
 		anyFilled = true;
 	};
 
+	if (override.description !== undefined) {
+		mutable().description = override.description;
+		anyFilled = true;
+	}
 	if (override.model !== undefined) {
 		fill("model", ["model"], override.model === false ? undefined : override.model);
 	}
@@ -1177,10 +1194,11 @@ function applyCustomAgentOverrides(
 
 export function buildBuiltinOverrideConfig(
 	base: BuiltinAgentOverrideBase,
-	draft: Pick<AgentConfig, "model" | "fallbackModels" | "thinking" | "systemPromptMode" | "inheritProjectContext" | "inheritSkills" | "defaultContext" | "acceptanceRole" | "disabled" | "systemPrompt" | "skills" | "tools" | "mcpDirectTools" | "extensions" | "subagentOnlyExtensions" | "completionGuard" | "toolBudget">,
+	draft: Pick<AgentConfig, "model" | "fallbackModels" | "thinking" | "systemPromptMode" | "inheritProjectContext" | "inheritSkills" | "defaultContext" | "acceptanceRole" | "disabled" | "systemPrompt" | "skills" | "tools" | "mcpDirectTools" | "extensions" | "subagentOnlyExtensions" | "completionGuard" | "toolBudget"> & Partial<Pick<AgentConfig, "description">>,
 ): BuiltinAgentOverrideConfig | undefined {
 	const override: BuiltinAgentOverrideConfig = {};
 
+	if (draft.description !== undefined && draft.description !== base.description) override.description = draft.description;
 	if (draft.model !== base.model) override.model = draft.model ?? false;
 	if (!arraysEqual(draft.fallbackModels, base.fallbackModels)) override.fallbackModels = draft.fallbackModels ? [...draft.fallbackModels] : false;
 	if (draft.thinking !== base.thinking) override.thinking = draft.thinking ?? false;

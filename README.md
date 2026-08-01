@@ -736,6 +736,7 @@ Example:
   "subagents": {
     "agentOverrides": {
       "reviewer": {
+        "description": "Independent review tier",
         "inheritProjectContext": false
       }
     }
@@ -743,7 +744,7 @@ Example:
 }
 ```
 
-Supported override fields are `model`, `fallbackModels`, `thinking`, `systemPromptMode`, `inheritProjectContext`, `inheritSkills`, `defaultContext`, `acceptanceRole`, `disabled`, `skills`, `tools`, and `systemPrompt`. Use `defaultContext: false` or `acceptanceRole: false` to clear an inherited override. Project overrides beat user overrides.
+Supported override fields are `description`, `model`, `fallbackModels`, `thinking`, `systemPromptMode`, `inheritProjectContext`, `inheritSkills`, `defaultContext`, `acceptanceRole`, `disabled`, `skills`, `tools`, and `systemPrompt`. `description` replaces the discovered description for builtin and custom agents, which lets list output show deployment-specific routing or model metadata. Use `defaultContext: false` or `acceptanceRole: false` to clear an inherited override. Project overrides beat user overrides.
 
 Set `subagents.defaultModel` to give all subagents without an explicit model their own default model, separate from the parent session model. Per-agent model overrides and agent frontmatter still win.
 
