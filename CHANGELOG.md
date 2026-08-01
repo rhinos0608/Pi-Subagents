@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- Collapsed running foreground subagent rows now show the model and thinking level: single-result cards include the effective thinking suffix and parallel/chain rows show the per-child model badge, matching the async widget.
+
 ### Added
 - Added `description` to `subagents.agentOverrides` so deployments can replace the discovered description for builtin and custom agents in list output. Thanks to @chronoAP for #724.
 
