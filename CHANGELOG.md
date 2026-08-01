@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Fixed
+- Grouped intercom results now report child process status separately from provenance-aware output availability, including salvage guidance when a failed process produced output. Thanks to @youlikemodernart.
 - Collapsed running foreground subagent rows now show the model and thinking level: single-result cards include the effective thinking suffix and parallel/chain rows show the per-child model badge, matching the async widget.
 
 ### Changed
