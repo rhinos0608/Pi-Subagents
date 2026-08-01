@@ -90,6 +90,13 @@ interface LaunchResolvedExtensions {
 	effective?: string[];
 }
 
+interface RuntimeAcknowledgedExtensions {
+	version?: number;
+	source?: string;
+	ids?: string[];
+	omitted?: number;
+}
+
 interface RunSyncResult {
 	exitCode: number;
 	agent: string;
@@ -132,6 +139,7 @@ interface RunSyncResult {
 		runtimeChecks?: Array<{ id?: string; status?: string; message?: string }>;
 	};
 	launchResolvedExtensions?: LaunchResolvedExtensions;
+	runtimeAcknowledgedExtensions?: RuntimeAcknowledgedExtensions;
 }
 
 interface MockPiCallRecord {
@@ -2240,7 +2248,10 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 	});
 
 	it("writes artifacts when configured", async () => {
-		mockPi.onCall({ output: "Result text" });
+		mockPi.onCall({
+			output: "Result text",
+			runtimeAcknowledgedExtensions: { version: 1, source: "child-runtime", ids: ["ext.ok"], omitted: 0 },
+		});
 		const privateExtension = path.join(tempDir, "extensions", "private-extension.ts");
 		const agents = [makeAgent("echo", { extensions: [privateExtension] })];
 		const artifactsDir = path.join(tempDir, "artifacts");
@@ -2262,11 +2273,13 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		assert.match(transcript.at(-1)?.text ?? "", /^Result text/);
 		assert.equal(result.transcriptError, undefined);
 		assert.ok(fs.existsSync(artifactsDir), "artifacts dir should exist");
-		const metadata = JSON.parse(fs.readFileSync(result.artifactPaths.metadataPath, "utf-8")) as { launchContractDigest?: string; launchResolvedExtensions?: LaunchResolvedExtensions };
+		const metadata = JSON.parse(fs.readFileSync(result.artifactPaths.metadataPath, "utf-8")) as { launchContractDigest?: string; launchResolvedExtensions?: LaunchResolvedExtensions; runtimeAcknowledgedExtensions?: RuntimeAcknowledgedExtensions };
 		assert.equal(metadata.launchContractDigest, result.launchContractDigest);
 		assert.equal(result.launchResolvedExtensions?.source, "launch-resolved");
 		assert.equal(result.launchResolvedExtensions?.disableAmbientExtensions, true);
 		assert.deepEqual(metadata.launchResolvedExtensions, result.launchResolvedExtensions);
+		assert.deepEqual(result.runtimeAcknowledgedExtensions, { version: 1, source: "child-runtime", ids: ["ext.ok"], omitted: 0 });
+		assert.deepEqual(metadata.runtimeAcknowledgedExtensions, result.runtimeAcknowledgedExtensions);
 		assert.ok(!JSON.stringify(result.launchResolvedExtensions).includes(tempDir), "projection should not expose raw extension paths");
 	});
 

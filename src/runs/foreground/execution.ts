@@ -56,6 +56,7 @@ import { getPiSpawnCommand } from "../shared/pi-spawn.ts";
 import { createJsonlWriter } from "../../shared/jsonl-writer.ts";
 import { attachPostExitStdioGuard, trySignalChild } from "../../shared/post-exit-stdio-guard.ts";
 import { applyThinkingSuffix, buildPiArgs, cleanupTempDir, projectLaunchResolvedChildExtensions, resolvePiLaunchToolPlan } from "../shared/pi-args.ts";
+import { readRuntimeAcknowledgedExtensions } from "../shared/runtime-acknowledged-extensions.ts";
 import { decodeSubagentCapabilityCeiling, resolveCurrentSubagentCapabilityCeiling, SUBAGENT_CAPABILITY_CEILING_ENV } from "../shared/capability-ceiling.ts";
 import { resolveEffectiveThinking } from "../../shared/model-info.ts";
 import { MISSING_STRUCTURED_OUTPUT_CALL_ERROR, readStructuredOutput } from "../shared/structured-output.ts";
@@ -148,6 +149,7 @@ function persistSingleResultMetadata(input: {
 		agentContract: target.agentContract,
 		launchContractDigest: target.launchContractDigest,
 		launchResolvedExtensions: target.launchResolvedExtensions,
+		runtimeAcknowledgedExtensions: target.runtimeAcknowledgedExtensions,
 		execution: target.execution,
 		acceptance: target.acceptance,
 		capabilityCeiling: target.capabilityCeiling,
@@ -300,7 +302,7 @@ async function runSingleAttempt(
 			childIndex: options.index ?? 0,
 		})
 		: undefined;
-	const { args, env: sharedEnv, tempDir, toolDiagnosticPath, capabilityAudit } = buildPiArgs({
+	const { args, env: sharedEnv, tempDir, toolDiagnosticPath, runtimeAcknowledgedExtensionsPath, capabilityAudit } = buildPiArgs({
 		baseArgs: ["--mode", "json", "-p"],
 		task,
 		sessionEnabled: shared.sessionEnabled,
@@ -1053,6 +1055,7 @@ async function runSingleAttempt(
 				// JSONL artifact flush is best effort.
 			});
 			const toolDiagnosticError = readChildToolDiagnosticError(toolDiagnosticPath);
+			result.runtimeAcknowledgedExtensions = readRuntimeAcknowledgedExtensions(runtimeAcknowledgedExtensionsPath);
 			cleanupTempDir(tempDir);
 			stdoutReader.end();
 			stderrReader.end();

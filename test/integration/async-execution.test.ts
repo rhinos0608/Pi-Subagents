@@ -35,6 +35,13 @@ interface LaunchResolvedExtensions {
 	effective?: string[];
 }
 
+interface RuntimeAcknowledgedExtensions {
+	version?: number;
+	source?: string;
+	ids?: string[];
+	omitted?: number;
+}
+
 interface UsageBudgetState {
 	version?: number;
 	source?: string;
@@ -47,7 +54,7 @@ interface UsageBudgetState {
 interface AsyncExecutionResult {
 	content: Array<{ text?: string }>;
 	isError?: boolean;
-	details: { asyncId?: string; asyncDir?: string; launchContractDigest?: string; launchResolvedExtensions?: LaunchResolvedExtensions; usageBudget?: UsageBudgetState; checkpoint?: { name?: string; status?: string } };
+	details: { asyncId?: string; asyncDir?: string; launchContractDigest?: string; launchResolvedExtensions?: LaunchResolvedExtensions; runtimeAcknowledgedExtensions?: RuntimeAcknowledgedExtensions; usageBudget?: UsageBudgetState; checkpoint?: { name?: string; status?: string } };
 }
 
 interface AsyncResultPayload {
@@ -59,6 +66,7 @@ interface AsyncResultPayload {
 	mode?: string;
 	launchContractDigest?: string;
 	launchResolvedExtensions?: LaunchResolvedExtensions;
+	runtimeAcknowledgedExtensions?: RuntimeAcknowledgedExtensions;
 	summary?: string;
 	error?: string;
 	timeoutMs?: number;
@@ -72,7 +80,7 @@ interface AsyncResultPayload {
 	totalCost?: { inputTokens: number; outputTokens: number; costUsd: number };
 	usageBudget?: UsageBudgetState;
 	checkpoint?: { name?: string; status?: string };
-	results: Array<{ agent?: string; launchContractDigest?: string; launchResolvedExtensions?: LaunchResolvedExtensions; output?: string; success?: boolean; error?: string; protocolError?: { code?: string; stream?: string; limitBytes?: number; observedBytes?: number }; timedOut?: boolean; stopped?: boolean; turnBudget?: { maxTurns: number; graceTurns: number; outcome: string; turnCount: number; wrapUpRequestedAtTurn?: number; terminationDeferredAtTurn?: number; exceededAtTurn?: number }; turnBudgetExceeded?: boolean; wrapUpRequested?: boolean; model?: string; attemptedModels?: string[]; modelAttempts?: Array<{ success?: boolean; error?: string }>; totalCost?: { inputTokens: number; outputTokens: number; costUsd: number }; structuredOutput?: unknown; agentContract?: { version: 1 }; execution?: { status?: string; success?: boolean; exitCode?: number }; effects?: { fileMutation?: { status?: string; expected?: boolean; attempted?: boolean } }; intercomTarget?: string; acceptance?: { status?: string; effectiveAcceptance?: { level?: string }; childReport?: unknown; runtimeChecks?: Array<{ id?: string; status?: string; message?: string }> }; artifactPaths?: { outputPath?: string; inputPath?: string; metadataPath?: string }; capabilityCeiling?: { version?: number; allowedTools?: string[]; denyExtensions?: boolean; sources?: string[] }; capabilityAudit?: { effectiveTools?: string[]; removedTools?: string[]; extensionsDenied?: boolean } }>;
+	results: Array<{ agent?: string; launchContractDigest?: string; launchResolvedExtensions?: LaunchResolvedExtensions; runtimeAcknowledgedExtensions?: RuntimeAcknowledgedExtensions; output?: string; success?: boolean; error?: string; protocolError?: { code?: string; stream?: string; limitBytes?: number; observedBytes?: number }; timedOut?: boolean; stopped?: boolean; turnBudget?: { maxTurns: number; graceTurns: number; outcome: string; turnCount: number; wrapUpRequestedAtTurn?: number; terminationDeferredAtTurn?: number; exceededAtTurn?: number }; turnBudgetExceeded?: boolean; wrapUpRequested?: boolean; model?: string; attemptedModels?: string[]; modelAttempts?: Array<{ success?: boolean; error?: string }>; totalCost?: { inputTokens: number; outputTokens: number; costUsd: number }; structuredOutput?: unknown; agentContract?: { version: 1 }; execution?: { status?: string; success?: boolean; exitCode?: number }; effects?: { fileMutation?: { status?: string; expected?: boolean; attempted?: boolean } }; intercomTarget?: string; acceptance?: { status?: string; effectiveAcceptance?: { level?: string }; childReport?: unknown; runtimeChecks?: Array<{ id?: string; status?: string; message?: string }> }; artifactPaths?: { outputPath?: string; inputPath?: string; metadataPath?: string }; capabilityCeiling?: { version?: number; allowedTools?: string[]; denyExtensions?: boolean; sources?: string[] }; capabilityAudit?: { effectiveTools?: string[]; removedTools?: string[]; extensionsDenied?: boolean } }>;
 	outputs?: Record<string, { text?: string; structured?: unknown }>;
 	workflowGraph?: { nodes?: Array<{ kind?: string; label?: string; phase?: string; status?: string; acceptanceStatus?: string; error?: string; outputName?: string; structured?: boolean; children?: Array<{ label?: string; outputName?: string; itemKey?: string; status?: string; acceptanceStatus?: string; error?: string }> }> };
 	parallelHandoff?: { version?: number; path?: string; groupCount?: number; childCount?: number; changedPatches?: number; cleanupState?: string };
@@ -90,6 +98,7 @@ interface AsyncStatusPayload {
 	state?: string;
 	launchContractDigest?: string;
 	launchResolvedExtensions?: LaunchResolvedExtensions;
+	runtimeAcknowledgedExtensions?: RuntimeAcknowledgedExtensions;
 	error?: string;
 	timeoutMs?: number;
 	deadlineAt?: number;
@@ -125,6 +134,7 @@ interface AsyncStatusPayload {
 		agentContract?: { version: 1 };
 		launchContractDigest?: string;
 		launchResolvedExtensions?: LaunchResolvedExtensions;
+		runtimeAcknowledgedExtensions?: RuntimeAcknowledgedExtensions;
 		execution?: { status?: string; success?: boolean; exitCode?: number };
 		effects?: { fileMutation?: { status?: string; expected?: boolean; attempted?: boolean } };
 		acceptance?: { status?: string };
@@ -511,7 +521,10 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 	});
 
 	it("persists the actual launch digest in async status and result metadata", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
-		mockPi.onCall({ output: "digest-bound async done" });
+		mockPi.onCall({
+			output: "digest-bound async done",
+			runtimeAcknowledgedExtensions: { version: 1, source: "child-runtime", ids: ["ext.async"], omitted: 0 },
+		});
 		const id = `async-launch-digest-${Date.now().toString(36)}`;
 		const privateExtension = path.join(tempDir, "extensions", "private-extension.ts");
 		const launch = executeAsyncSingle(id, {
@@ -538,6 +551,11 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		assert.deepEqual(payload.results[0]?.launchResolvedExtensions, launch.details.launchResolvedExtensions);
 		assert.deepEqual(status.launchResolvedExtensions, launch.details.launchResolvedExtensions);
 		assert.deepEqual(status.steps?.[0]?.launchResolvedExtensions, launch.details.launchResolvedExtensions);
+		const runtimeAck = { version: 1, source: "child-runtime", ids: ["ext.async"], omitted: 0 };
+		assert.deepEqual(payload.runtimeAcknowledgedExtensions, runtimeAck);
+		assert.deepEqual(payload.results[0]?.runtimeAcknowledgedExtensions, runtimeAck);
+		assert.deepEqual(status.runtimeAcknowledgedExtensions, runtimeAck);
+		assert.deepEqual(status.steps?.[0]?.runtimeAcknowledgedExtensions, runtimeAck);
 		assert.ok(!JSON.stringify(launch.details.launchResolvedExtensions).includes(tempDir), "projection should not expose raw extension paths");
 	});
 

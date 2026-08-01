@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { encodeNestedPathEnv, parseNestedPathEnv, type NestedPathEntry } from "./nested-path.ts";
 import { resolveMcpDirectToolSelections, type ResolvedMcpDirectToolSelection } from "./mcp-direct-tool-allowlist.ts";
 import { resolvePiPackageRoot } from "./pi-spawn.ts";
+import { RUNTIME_EXTENSION_ACK_PATH_ENV } from "./runtime-acknowledged-extensions.ts";
 import { STRUCTURED_OUTPUT_CAPTURE_ENV, STRUCTURED_OUTPUT_SCHEMA_ENV } from "./structured-output.ts";
 import { TEMP_ROOT_DIR, type JsonSchemaObject, type LaunchResolvedChildExtensionsV1, type ResolvedToolBudget } from "../../shared/types.ts";
 import { THINKING_LEVELS } from "../../shared/model-info.ts";
@@ -96,6 +97,7 @@ export interface BuildPiArgsResult {
 	env: Record<string, string | undefined>;
 	tempDir?: string;
 	toolDiagnosticPath?: string;
+	runtimeAcknowledgedExtensionsPath?: string;
 	capabilityAudit?: SubagentCapabilityAudit;
 }
 
@@ -318,6 +320,9 @@ export function buildPiArgs(input: BuildPiArgsInput): BuildPiArgsResult {
 	const env: Record<string, string | undefined> = {};
 	const piPackageRoot = process.env[PI_CODING_AGENT_PACKAGE_ROOT_ENV] ?? resolvePiPackageRoot();
 	if (piPackageRoot) env[PI_CODING_AGENT_PACKAGE_ROOT_ENV] = piPackageRoot;
+	if (!tempDir) tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagent-"));
+	const runtimeAcknowledgedExtensionsPath = path.join(tempDir, "runtime-acknowledged-extensions.json");
+	env[RUNTIME_EXTENSION_ACK_PATH_ENV] = runtimeAcknowledgedExtensionsPath;
 	let toolDiagnosticPath: string | undefined;
 	if (toolPlan.requiredChildTools.length > 0) {
 		if (!tempDir) tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagent-"));
@@ -415,7 +420,7 @@ export function buildPiArgs(input: BuildPiArgsInput): BuildPiArgsResult {
 
 	env[SUBAGENT_PARENT_SESSION_ENV] = input.parentSessionId ?? process.env[SUBAGENT_PARENT_SESSION_ENV] ?? "";
 
-	return { args, env, tempDir, toolDiagnosticPath, capabilityAudit: toolPlan.capabilityAudit };
+	return { args, env, tempDir, toolDiagnosticPath, runtimeAcknowledgedExtensionsPath, capabilityAudit: toolPlan.capabilityAudit };
 }
 
 export const parseParentPathEnv = parseNestedPathEnv;
