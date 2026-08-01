@@ -91,6 +91,7 @@ type TestChainStep = { checkpoint: string; message?: string; label?: string; pha
 };
 
 interface ChainResultItem {
+	index: number;
 	agent: string;
 	exitCode: number;
 	finalOutput?: string;
@@ -1383,6 +1384,7 @@ describe("chain execution — parallel steps", { skip: !available ? "pi packages
 
 		assert.ok(!result.isError, `should succeed: ${JSON.stringify(result.content)}`);
 		assert.equal(result.details.results.length, 2);
+		assert.deepEqual(result.details.results.map((row) => row.index), [0, 1]);
 	});
 
 	it("aggregates worktree handoffs across foreground chain groups", { skip: process.platform === "win32" ? "worktree paths differ on Windows" : undefined }, async () => {
@@ -1722,6 +1724,7 @@ describe("chain execution — parallel steps", { skip: !available ? "pi packages
 
 		assert.ok(!result.isError);
 		assert.equal(result.details.results.length, 4);
+		assert.deepEqual(result.details.results.map((row) => row.index), [0, 1, 2, 3]);
 		assert.equal(result.details.totalSteps, 3);
 	});
 });
