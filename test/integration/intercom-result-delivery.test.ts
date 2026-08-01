@@ -298,8 +298,8 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 		assert.equal((payload.children ?? []).every((child) => /^subagent-[ab]-[a-f0-9]+-[12]$/.test(child.intercomTarget ?? "")), true);
 		assert.match(String(payload.message ?? ""), /Intercom targets below identify child sessions used while they were running/);
 		assert.match(String(payload.message ?? ""), /Run intercom target: subagent-a-[a-f0-9]+-1/);
-		assert.match(String(payload.message ?? ""), /1\. a — completed/);
-		assert.match(String(payload.message ?? ""), /2\. b — completed/);
+		assert.match(String(payload.message ?? ""), /1\. a — process completed · output present/);
+		assert.match(String(payload.message ?? ""), /2\. b — process completed · output present/);
 		assert.match(result.content[0]?.text ?? "", /Delivered parallel subagent results via intercom\./);
 		assert.equal(result.details?.results?.every((entry) => entry.finalOutput === undefined), true);
 	});
@@ -460,9 +460,9 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 		assert.equal(payload.mode, "chain");
 		assert.deepEqual((payload.children ?? []).map((child) => child.agent).sort(), ["a", "b", "c"]);
 		assert.equal((payload.children ?? []).every((child) => /^subagent-[abc]-[a-f0-9]+-[123]$/.test(child.intercomTarget ?? "")), true);
-		assert.match(String(payload.message ?? ""), /1\. a — completed/);
-		assert.match(String(payload.message ?? ""), /2\. b — completed/);
-		assert.match(String(payload.message ?? ""), /3\. c — completed/);
+		assert.match(String(payload.message ?? ""), /1\. a — process completed · output present/);
+		assert.match(String(payload.message ?? ""), /2\. b — process completed · output present/);
+		assert.match(String(payload.message ?? ""), /3\. c — process completed · output present/);
 		assert.match(result.content[0]?.text ?? "", /Delivered chain subagent results via intercom\./);
 		assert.equal(result.details?.results?.every((entry) => entry.finalOutput === undefined), true);
 	});
@@ -1713,7 +1713,28 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 		const payload = intercomEvents[0]!.payload as { status?: string; summary?: string; message?: string };
 		assert.equal(payload.status, "failed");
 		assert.match(String(payload.summary ?? ""), /1 completed, 1 failed/);
-		assert.match(String(payload.message ?? ""), /Status: failed/);
+		assert.match(String(payload.message ?? ""), /Process status: failed/);
+		assert.match(String(payload.message ?? ""), /Outputs: 2 present \(semantic adequacy unassessed\)/);
+		assert.match(String(payload.message ?? ""), /Inspect that output before retrying/);
 		assert.match(result.content[0]?.text ?? "", /Children: 1 completed, 1 failed/);
+	});
+
+	it("does not treat a synthetic foreground startup error as child output", async () => {
+		mockPi.onCall({ output: "", stderr: "mock startup failure", exitCode: 1 });
+		const { executor, events } = makeExecutor({ agents: [makeAgent("worker")] });
+
+		await executor.execute(
+			"foreground-synthetic-error",
+			{ agent: "worker", task: "synthetic-error-task" },
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+
+		const intercomEvents = events.emitted.filter((entry) => entry.channel === "subagent:result-intercom");
+		assert.equal(intercomEvents.length, 1);
+		const message = String((intercomEvents[0]!.payload as { message?: string }).message ?? "");
+		assert.match(message, /process failed · output absent/);
+		assert.doesNotMatch(message, /Inspect that output before retrying/);
 	});
 });
