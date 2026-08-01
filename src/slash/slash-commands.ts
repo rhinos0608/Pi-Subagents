@@ -1298,7 +1298,7 @@ export function registerSlashCommands(
 	});
 
 	pi.registerCommand("subagents-fleet", {
-		description: "Open the live, inspection-only subagent fleet",
+		description: "Open the live subagent fleet inspector",
 		handler: async (_args, ctx) => showFleet(ctx),
 	});
 

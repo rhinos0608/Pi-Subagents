@@ -5,6 +5,9 @@
 ### Fixed
 - Collapsed running foreground subagent rows now show the model and thinking level: single-result cards include the effective thinking suffix and parallel/chain rows show the per-child model badge, matching the async widget.
 
+### Changed
+- Refreshed the bundled `pi-subagents` skill for the 0.39 surface: Fleet inspector live controls (`s` steer, `D` stop), the recommended model-tiering recipe, `agentOverrides.description`, `projectRootResolution: "git-root"`, running-card live-detail/model badges, and the newer extension RPC capability projections (`fleetStatus`, `launchResolvedExtensions`, `runtimeAcknowledgedExtensions`, `(runId, index)` correlation). Corrected the stale README "inspection-only" fleet inspector wording.
+
 ### Added
 - Documented an optional recommended model-tiering setup in the README: fast workhorse, standard well-scoped, deep-but-bounded, and taste/intent tiers, with cross-provider `fallbackModels` guidance for usage-limit resilience.
 - Added `description` to `subagents.agentOverrides` so deployments can replace the discovered description for builtin and custom agents in list output. Thanks to @chronoAP for #724.
