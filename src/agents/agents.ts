@@ -1198,7 +1198,10 @@ export function buildBuiltinOverrideConfig(
 ): BuiltinAgentOverrideConfig | undefined {
 	const override: BuiltinAgentOverrideConfig = {};
 
-	if (draft.description !== undefined && draft.description !== base.description) override.description = draft.description;
+	if (draft.description !== undefined) {
+		const description = draft.description.trim();
+		if (description && description !== base.description) override.description = description;
+	}
 	if (draft.model !== base.model) override.model = draft.model ?? false;
 	if (!arraysEqual(draft.fallbackModels, base.fallbackModels)) override.fallbackModels = draft.fallbackModels ? [...draft.fallbackModels] : false;
 	if (draft.thinking !== base.thinking) override.thinking = draft.thinking ?? false;

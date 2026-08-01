@@ -734,5 +734,11 @@ describe("builtin agent overrides", () => {
 		fs.mkdirSync(path.join(tempProject, ".pi"), { recursive: true });
 		saveBuiltinAgentOverride(tempProject, "reviewer", "project", override);
 		assert.equal(discoverAgents(tempProject, "both").agents.find((agent) => agent.name === "reviewer")?.description, "Override description");
+
+		const whitespaceDescription = buildBuiltinOverrideConfig(
+			{ description: "Base description" },
+			{ description: "   " } as Parameters<typeof buildBuiltinOverrideConfig>[1],
+		);
+		assert.equal(whitespaceDescription, undefined);
 	});
 });
