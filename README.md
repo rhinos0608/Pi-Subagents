@@ -155,6 +155,31 @@ For a persistent override, edit settings. This example pins the reviewer everywh
 }
 ```
 
+### Recommended model tiering (optional)
+
+A setup that works well in practice is routing agents by task shape instead of running everything on one model. Four tiers:
+
+1. **Fast workhorse** — the cheapest capable model at low thinking, for recon, lookups, and mechanical edits. Example: `openai-codex/gpt-5.6-luna:low` on `scout`.
+2. **Standard well-scoped** — a mid-tier model at medium thinking, for most delegations: routine multi-file edits, focused reviews, straightforward implementation. Example: `openai-codex/gpt-5.6-terra:medium` on `worker`, `reviewer`, and a lightweight `delegate` agent.
+3. **Deep but bounded** — a top reasoning model at high thinking, only for hard tasks that arrive with explicit goals and completion criteria. These models tend to loop on vague goals, so keep them off open-ended work. Example: `openai-codex/gpt-5.6-sol:high` on `planner` and oracle-style agents.
+4. **Taste and intent** — a model that reads human intent well and makes judgment calls without looping, for ambiguous work: UX and design decisions, product tradeoffs, planning from vague requirements, writing quality. Example: `anthropic/claude-fable-5` at `low` for lighter passes and `medium` for harder ones.
+
+The routing rule: use the capability tiers (1–3) when the task is well-scoped, and the intent tier (4) when scoping or judging is the task itself.
+
+Give tier-4 agents cross-provider `fallbackModels` so subscription usage limits degrade gracefully instead of failing the run — fallback triggers on rate-limit and overload errors automatically:
+
+```yaml
+---
+name: shaper
+description: Open-ended design/UX/product/planning agent for ambiguous tasks
+model: anthropic/claude-fable-5
+thinking: medium
+fallbackModels: openai-codex/gpt-5.5:high
+---
+```
+
+One more interaction worth knowing for tier 4: forked context over an Anthropic parent transcript with signed thinking blocks forces the child's thinking off, so intent-tier agents work best with fresh context.
+
 Use `~/.pi/agent/settings.json` for a user override or the project config settings file (`.pi/settings.json` in standard Pi) for a project override. `subagents.defaultModel` applies to builtin, package, user, and project agents that do not set `model` in frontmatter. Per-run model overrides and `agentOverrides.<name>.model` still win, and explicit agent frontmatter still wins over the global default. The same `agentOverrides` block can change `tools`, `skills`, inherited context, prompt text, or disable a builtin. Matching user and project agents also receive override fields that their frontmatter leaves unset, so a shared project config agent can keep the persona while local settings choose the model.
 
 By default, project settings resolve from the nearest parent directory that contains `.pi` or `.agents`, preserving existing nested-project behavior. In monorepos or git worktrees where an incidental nested `.pi` directory should not shadow the repository-level config, set this in the repository root `.pi/settings.json`:
