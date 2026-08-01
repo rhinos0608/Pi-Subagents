@@ -1343,6 +1343,7 @@ export interface ForegroundChildControl {
 	thinking?: string;
 	toolCount?: number;
 	interrupt?: () => boolean;
+	detach?: () => boolean;
 }
 
 export interface ForegroundRunControl {
@@ -1377,6 +1378,7 @@ export interface ForegroundRunControl {
 	nestedRoute?: NestedRouteInfo;
 	nestedChildren?: NestedRunSummary[];
 	interrupt?: () => boolean;
+	detach?: () => boolean;
 }
 
 export interface SubagentState {
