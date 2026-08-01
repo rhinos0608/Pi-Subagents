@@ -786,6 +786,14 @@ export interface LaunchResolvedChildExtensionsV1 {
 	};
 }
 
+export interface RuntimeAcknowledgedChildExtensionsV1 {
+	version: 1;
+	/** Best-effort child-runtime registration acknowledgement, not extension health. */
+	source: "child-runtime";
+	ids: string[];
+	omitted: number;
+}
+
 export interface UsageBudgetLimitConfig {
 	soft?: number;
 	hard: number;
@@ -861,6 +869,7 @@ export interface SingleResult {
 	agentContract?: AgentContract;
 	launchContractDigest?: string;
 	launchResolvedExtensions?: LaunchResolvedChildExtensionsV1;
+	runtimeAcknowledgedExtensions?: RuntimeAcknowledgedChildExtensionsV1;
 	execution?: ExecutionProjection;
 	review?: ReviewProjection;
 	effects?: EffectsProjection;
@@ -939,6 +948,7 @@ export interface Details {
 	};
 	launchContractDigest?: string;
 	launchResolvedExtensions?: LaunchResolvedChildExtensionsV1;
+	runtimeAcknowledgedExtensions?: RuntimeAcknowledgedChildExtensionsV1;
 	/** Original launch contract whose persisted session is being revived. */
 	sourceLaunchContractDigest?: string;
 }
@@ -1016,6 +1026,7 @@ export interface NestedStepSummary {
 	toolBudgetBlocked?: boolean;
 	processTerminal?: ProcessTerminalV1;
 	launchResolvedExtensions?: LaunchResolvedChildExtensionsV1;
+	runtimeAcknowledgedExtensions?: RuntimeAcknowledgedChildExtensionsV1;
 	capabilityCeiling?: ResolvedSubagentCapabilityCeiling;
 	capabilityAudit?: SubagentCapabilityAudit;
 	children?: NestedRunSummary[];
@@ -1035,6 +1046,7 @@ export interface NestedRunSummary extends NestedRunAddress {
 	mode?: SubagentRunMode;
 	processTerminal?: ProcessTerminalV1;
 	launchResolvedExtensions?: LaunchResolvedChildExtensionsV1;
+	runtimeAcknowledgedExtensions?: RuntimeAcknowledgedChildExtensionsV1;
 	capabilityCeiling?: ResolvedSubagentCapabilityCeiling;
 	capabilityAudit?: SubagentCapabilityAudit;
 	state: NestedRunState;
@@ -1098,6 +1110,7 @@ export interface AsyncStartedEvent {
 	checkpoint?: ChainCheckpointState;
 	launchContractDigest?: string;
 	launchResolvedExtensions?: LaunchResolvedChildExtensionsV1;
+	runtimeAcknowledgedExtensions?: RuntimeAcknowledgedChildExtensionsV1;
 	usageBudget?: UsageBudgetState;
 	timeoutMs?: number;
 	deadlineAt?: number;
@@ -1146,6 +1159,7 @@ export interface AsyncStatus {
 	processTerminal?: ProcessTerminalV1;
 	launchContractDigest?: string;
 	launchResolvedExtensions?: LaunchResolvedChildExtensionsV1;
+	runtimeAcknowledgedExtensions?: RuntimeAcknowledgedChildExtensionsV1;
 	capabilityCeiling?: ResolvedSubagentCapabilityCeiling;
 	capabilityAudit?: SubagentCapabilityAudit;
 	steps?: Array<{
@@ -1199,6 +1213,7 @@ export interface AsyncStatus {
 		agentContract?: AgentContract;
 		launchContractDigest?: string;
 		launchResolvedExtensions?: LaunchResolvedChildExtensionsV1;
+	runtimeAcknowledgedExtensions?: RuntimeAcknowledgedChildExtensionsV1;
 		execution?: ExecutionProjection;
 		review?: ReviewProjection;
 		effects?: EffectsProjection;
@@ -1305,6 +1320,7 @@ export interface ForegroundResumeChild {
 	agentContract?: AgentContract;
 	launchContractDigest?: string;
 	launchResolvedExtensions?: LaunchResolvedChildExtensionsV1;
+	runtimeAcknowledgedExtensions?: RuntimeAcknowledgedChildExtensionsV1;
 	execution?: ExecutionProjection;
 	review?: ReviewProjection;
 	effects?: EffectsProjection;

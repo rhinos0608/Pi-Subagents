@@ -19,6 +19,7 @@ import {
 	type ChainOutputMap,
 	type CostSummary,
 	type LaunchResolvedChildExtensionsV1,
+	type RuntimeAcknowledgedChildExtensionsV1,
 	type ModelAttempt,
 	type NestedRouteInfo,
 	type NestedRunSummary,
@@ -63,6 +64,7 @@ import {
 	Semaphore,
 } from "../shared/parallel-utils.ts";
 import { applyThinkingSuffix, buildPiArgs, cleanupTempDir, projectLaunchResolvedChildExtensions, resolvePiLaunchToolPlan } from "../shared/pi-args.ts";
+import { readRuntimeAcknowledgedExtensions } from "../shared/runtime-acknowledged-extensions.ts";
 import { outputEntryFromAsyncResult, resolveOutputReferences } from "../shared/chain-outputs.ts";
 import { createStructuredOutputRuntime, readStructuredOutput } from "../shared/structured-output.ts";
 import { formatProcessSignalError, isUnexplainedProcessSignal } from "../shared/process-signal.ts";
@@ -170,6 +172,7 @@ interface SubagentRunConfig {
 	capabilityCeiling?: ResolvedSubagentCapabilityCeiling;
 	launchContractDigest?: string;
 	launchResolvedExtensions?: LaunchResolvedChildExtensionsV1;
+	runtimeAcknowledgedExtensions?: RuntimeAcknowledgedChildExtensionsV1;
 	runnerProcessInstanceId?: string;
 }
 
@@ -179,6 +182,7 @@ interface StepResult {
 	capabilityCeiling?: ResolvedSubagentCapabilityCeiling;
 	capabilityAudit?: import("../shared/capability-ceiling.ts").SubagentCapabilityAudit;
 	launchResolvedExtensions?: LaunchResolvedChildExtensionsV1;
+	runtimeAcknowledgedExtensions?: RuntimeAcknowledgedChildExtensionsV1;
 	output: string;
 	error?: string;
 	protocolError?: ProtocolOutputLimit;
@@ -428,6 +432,7 @@ interface RunPiStreamingResult {
 	toolBudgetBlocked?: boolean;
 	observedMutationAttempt?: boolean;
 	watchdog?: ChildWatchdogStateSnapshot;
+	runtimeAcknowledgedExtensions?: RuntimeAcknowledgedChildExtensionsV1;
 	processInstanceId: string;
 	processCloseObservedAt?: number;
 	processSignal?: string | null;
@@ -1025,6 +1030,7 @@ async function runSingleStep(
 	agentContract?: import("../../shared/types.ts").AgentContract;
 	launchContractDigest?: string;
 	launchResolvedExtensions?: LaunchResolvedChildExtensionsV1;
+	runtimeAcknowledgedExtensions?: RuntimeAcknowledgedChildExtensionsV1;
 	output: string;
 	exitCode: number | null;
 	error?: string;
@@ -1202,7 +1208,7 @@ async function runSingleStep(
 				childIndex: ctx.flatIndex,
 			})
 			: undefined;
-		const { args, env, tempDir, toolDiagnosticPath, capabilityAudit: attemptCapabilityAudit } = buildPiArgs({
+		const { args, env, tempDir, toolDiagnosticPath, runtimeAcknowledgedExtensionsPath, capabilityAudit: attemptCapabilityAudit } = buildPiArgs({
 			parentSessionId: step.parentSessionId,
 			baseArgs: ["--mode", "json", "-p"],
 			task,
@@ -1324,6 +1330,7 @@ async function runSingleStep(
 		const toolAvailabilityError = run.exitCode === 0 && !run.error
 			? readChildToolDiagnosticError(toolDiagnosticPath)
 			: undefined;
+		const runtimeAcknowledgedExtensions = readRuntimeAcknowledgedExtensions(runtimeAcknowledgedExtensionsPath);
 		cleanupTempDir(tempDir);
 
 		const hiddenError = run.exitCode === 0 && !run.error && !toolAvailabilityError ? detectSubagentError(run.messages) : null;
@@ -1411,7 +1418,7 @@ async function runSingleStep(
 			toolBudgetBlocked = Boolean(blockedMessage);
 			toolBudget = toolBudgetState(step.toolBudget, toolMessages.length, blockedMessage ? (blockedMessage as { toolName?: string }).toolName : undefined);
 		}
-		finalResult = { ...run, exitCode: effectiveExitCode, model: candidate ?? run.model, error, structuredOutput, ...(step.agentContract ? { agentContract: step.agentContract } : {}), ...(fileMutationEffect ? { effects: { fileMutation: fileMutationEffect } } : {}) } as RunPiStreamingResult & { structuredOutput?: unknown; agentContract?: import("../../shared/types.ts").AgentContract; effects?: import("../../shared/types.ts").EffectsProjection };
+		finalResult = { ...run, exitCode: effectiveExitCode, model: candidate ?? run.model, error, structuredOutput, runtimeAcknowledgedExtensions, ...(step.agentContract ? { agentContract: step.agentContract } : {}), ...(fileMutationEffect ? { effects: { fileMutation: fileMutationEffect } } : {}) } as RunPiStreamingResult & { structuredOutput?: unknown; agentContract?: import("../../shared/types.ts").AgentContract; effects?: import("../../shared/types.ts").EffectsProjection };
 		if (run.turnBudgetExceeded) break modelAttemptsLoop;
 		if (run.stopped || run.timedOut || ctx.timeoutSignal?.aborted || ctx.stopSignal?.aborted || ctx.skipAcceptance?.()) break modelAttemptsLoop;
 		if (attempt.success || completionGuardTriggered) break modelAttemptsLoop;
@@ -1562,6 +1569,7 @@ async function runSingleStep(
 					...(capabilityAudit ? { capabilityCeiling: capabilityAudit.ceiling, capabilityAudit } : {}),
 					launchContractDigest: actualLaunchContractDigest,
 					launchResolvedExtensions,
+					...((finalResult as (RunPiStreamingResult & { runtimeAcknowledgedExtensions?: RuntimeAcknowledgedChildExtensionsV1 }) | undefined)?.runtimeAcknowledgedExtensions ? { runtimeAcknowledgedExtensions: (finalResult as RunPiStreamingResult & { runtimeAcknowledgedExtensions?: RuntimeAcknowledgedChildExtensionsV1 }).runtimeAcknowledgedExtensions } : {}),
 					...(transcriptWriter ? { transcriptPath: artifactPaths.transcriptPath } : {}),
 					transcriptError: transcriptWriter?.getError(),
 					skills: step.skills,
@@ -1608,6 +1616,7 @@ async function runSingleStep(
 		watchdog: finalResult?.watchdog,
 		...(capabilityAudit ? { capabilityCeiling: capabilityAudit.ceiling, capabilityAudit } : {}),
 		launchResolvedExtensions,
+		...((finalResult as (RunPiStreamingResult & { runtimeAcknowledgedExtensions?: RuntimeAcknowledgedChildExtensionsV1 }) | undefined)?.runtimeAcknowledgedExtensions ? { runtimeAcknowledgedExtensions: (finalResult as RunPiStreamingResult & { runtimeAcknowledgedExtensions?: RuntimeAcknowledgedChildExtensionsV1 }).runtimeAcknowledgedExtensions } : {}),
 		writerProcesses,
 		writerAttemptCount,
 	};
@@ -3328,6 +3337,7 @@ async function runSubagent(
 				statusPayload.steps[fi].agentContract = singleResult.agentContract;
 				statusPayload.steps[fi].launchContractDigest = singleResult.launchContractDigest;
 				statusPayload.steps[fi].launchResolvedExtensions = singleResult.launchResolvedExtensions;
+				statusPayload.steps[fi].runtimeAcknowledgedExtensions = singleResult.runtimeAcknowledgedExtensions;
 				statusPayload.steps[fi].effects = singleResult.effects;
 				statusPayload.steps[fi].execution = singleResult.execution;
 				statusPayload.steps[fi].review = singleResult.review;
@@ -3360,6 +3370,7 @@ async function runSubagent(
 					agentContract: pr.agentContract,
 					launchContractDigest: pr.launchContractDigest,
 					launchResolvedExtensions: pr.launchResolvedExtensions,
+					runtimeAcknowledgedExtensions: pr.runtimeAcknowledgedExtensions,
 					output: pr.output,
 					error: pr.error,
 					protocolError: pr.protocolError,
@@ -3699,6 +3710,7 @@ async function runSubagent(
 						statusPayload.steps[fi].transcriptError = singleResult.transcriptError;
 						statusPayload.steps[fi].agentContract = singleResult.agentContract;
 						statusPayload.steps[fi].launchResolvedExtensions = singleResult.launchResolvedExtensions;
+						statusPayload.steps[fi].runtimeAcknowledgedExtensions = singleResult.runtimeAcknowledgedExtensions;
 						statusPayload.steps[fi].effects = singleResult.effects;
 						statusPayload.steps[fi].execution = singleResult.execution;
 						statusPayload.steps[fi].review = singleResult.review;
@@ -3952,6 +3964,7 @@ async function runSubagent(
 				agentContract: singleResult.agentContract,
 				launchContractDigest: singleResult.launchContractDigest,
 				launchResolvedExtensions: singleResult.launchResolvedExtensions,
+				runtimeAcknowledgedExtensions: singleResult.runtimeAcknowledgedExtensions,
 				output: stopped || childStopped ? stopMessage : timedOut ? (timeoutMessage ?? "Subagent timed out.") : singleResult.output,
 				error: stopped || childStopped ? stopMessage : timedOut ? (timeoutMessage ?? "Subagent timed out.") : singleResult.error,
 				protocolError: singleResult.protocolError,
@@ -4043,6 +4056,7 @@ async function runSubagent(
 			statusPayload.steps[flatIndex].transcriptError = singleResult.transcriptError;
 			statusPayload.steps[flatIndex].agentContract = singleResult.agentContract;
 			statusPayload.steps[flatIndex].launchResolvedExtensions = singleResult.launchResolvedExtensions;
+			statusPayload.steps[flatIndex].runtimeAcknowledgedExtensions = singleResult.runtimeAcknowledgedExtensions;
 			statusPayload.steps[flatIndex].effects = singleResult.effects;
 			statusPayload.steps[flatIndex].execution = singleResult.execution;
 			statusPayload.steps[flatIndex].review = singleResult.review;
@@ -4113,6 +4127,7 @@ async function runSubagent(
 	}
 
 	const resultMode = config.resultMode ?? statusPayload.mode;
+	const singleRuntimeAcknowledgedExtensions = results.length === 1 ? results[0]?.runtimeAcknowledgedExtensions : undefined;
 	const totalCost = results.reduce<CostSummary>((sum, result) => ({
 		inputTokens: sum.inputTokens + (result.totalCost?.inputTokens ?? 0),
 		outputTokens: sum.outputTokens + (result.totalCost?.outputTokens ?? 0),
@@ -4209,6 +4224,7 @@ async function runSubagent(
 	statusPayload.endedAt = runEndedAt;
 	statusPayload.lastUpdate = runEndedAt;
 	statusPayload.sessionFile = effectiveSessionFile;
+	if (singleRuntimeAcknowledgedExtensions) statusPayload.runtimeAcknowledgedExtensions = singleRuntimeAcknowledgedExtensions;
 	statusPayload.totalCost = finalTotalCost;
 	statusPayload.usageBudget = usageBudgetState(config.usageBudget, currentUsageTotals());
 	statusPayload.shareUrl = shareUrl;
@@ -4303,6 +4319,7 @@ async function runSubagent(
 				agentContract: r.agentContract,
 				launchContractDigest: r.launchContractDigest,
 				launchResolvedExtensions: r.launchResolvedExtensions,
+				runtimeAcknowledgedExtensions: r.runtimeAcknowledgedExtensions,
 				execution: r.execution,
 				review: r.review,
 				effects: r.effects,
@@ -4332,6 +4349,7 @@ async function runSubagent(
 			asyncDir,
 			launchContractDigest: config.launchContractDigest,
 			launchResolvedExtensions: config.launchResolvedExtensions,
+			runtimeAcknowledgedExtensions: singleRuntimeAcknowledgedExtensions,
 			sessionId: config.sessionId,
 			sessionFile: effectiveSessionFile,
 			intercomTarget: config.controlIntercomTarget,

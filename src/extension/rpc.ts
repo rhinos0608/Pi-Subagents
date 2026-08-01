@@ -387,6 +387,7 @@ function pingData(ctx: ExtensionContext | null) {
 			stop: true,
 			resume: true,
 			launchResolvedExtensions: { version: 1, source: "launch-resolved" },
+			runtimeAcknowledgedExtensions: { version: 1, source: "child-runtime", event: "subagent:acknowledge-extension" },
 			processTerminalProof: { version: 1, lifecycleArtifactVersion: SUBAGENT_LIFECYCLE_ARTIFACT_VERSION },
 		},
 		events: {
