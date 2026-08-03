@@ -38,6 +38,21 @@ Run parallel reviewers: one for correctness, one for tests, and one for unnecess
 
 That is enough to start.
 
+## External CLI agent profiles
+
+Agent profiles can opt into a local one-shot command instead of a Pi child. External runners add no install dependency, but the configured executable must exist at runtime. They are async-only, receive one combined system/task prompt over stdin, and use argv arrays without a shell:
+
+```yaml
+runner:
+  type: external-cli
+  command: node
+  args: ["./scripts/local-reviewer.mjs"]
+  promptDelivery: stdin
+async: true
+```
+
+External CLI runners support status artifacts, stdout/stderr logs, timeout, and stop. Full stdout and stderr are written to log files, while the in-memory final stdout response and stderr error are limited to their last 64 KiB. Foreground/clarify, steer/resume/interrupt-as-pause, Pi models/tools/extensions, skills, structured output, nested subagents, and fallback models are intentionally unsupported.
+
 ## What happens
 
 Pi is the parent session. A subagent is a focused child Pi session with its own job.
