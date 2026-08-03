@@ -16,6 +16,7 @@ import { flatToLogicalStepIndex, normalizeParallelGroups } from "./parallel-grou
 import { reconcileAsyncRun, reconcileNestedAsyncDescendants } from "./stale-run-reconciler.ts";
 import { attachRootChildrenToSteps, findNestedRouteForRootId, projectNestedRegistryForRoot, type NestedRunResolutionScope } from "../shared/nested-events.ts";
 import { readMissionBinding } from "../../missions/lifecycle.ts";
+import { formatWorkflowJsonPreview } from "../../workflows/scripted-workflow.ts";
 
 interface RunStatusParams {
 	action?: "status";
@@ -66,6 +67,7 @@ function formatResumeGuidance(runId: string | undefined, children: Array<{ agent
 function stepLineLabel(status: AsyncStatus, index: number): string {
 	const steps = status.steps ?? [];
 	if (status.mode === "parallel") return `Agent ${index + 1}/${steps.length || 1}`;
+	if (status.mode === "workflow") return `Workflow child ${steps[index]?.workflowKey ?? index + 1}`;
 	if (status.mode === "chain") {
 		const chainStepCount = status.chainStepCount ?? (steps.length || 1);
 		const groups = normalizeParallelGroups(status.parallelGroups, steps.length, chainStepCount);
@@ -374,6 +376,8 @@ export function inspectSubagentStatus(params: RunStatusParams, deps: RunStatusDe
 				nestedWarning = `${nestedWarning ? `${nestedWarning}; ` : ""}Mission binding unavailable: ${error instanceof Error ? error.message : String(error)}`;
 			}
 
+			const workflowReturnPreview = status.workflow?.value !== undefined ? formatWorkflowJsonPreview(status.workflow.value, 240) : undefined;
+			const workflowEmitPreview = status.workflow?.emits.length ? formatWorkflowJsonPreview(status.workflow.emits.at(-1), 240) : undefined;
 			const lines = [
 				`Run: ${status.runId}`,
 				missionId ? `Mission: ${missionId}` : undefined,
@@ -385,6 +389,9 @@ export function inspectSubagentStatus(params: RunStatusParams, deps: RunStatusDe
 				statusActivityText ? `Activity: ${statusActivityText}` : undefined,
 				steeringText ? `Steering: ${steeringText}` : undefined,
 				`Mode: ${status.mode}`,
+				status.parentWorkflowRunId ? `Workflow parent: ${status.parentWorkflowRunId}${status.workflowKey ? ` (${status.workflowKey})` : ""}` : undefined,
+				status.mode === "workflow" && workflowReturnPreview !== undefined ? `Return: ${workflowReturnPreview}` : undefined,
+				status.mode === "workflow" && workflowEmitPreview !== undefined ? `Latest emit: ${workflowEmitPreview}` : undefined,
 				`Progress: ${progressLabel}`,
 				status.pendingAppends ? `Pending appends: ${status.pendingAppends}` : undefined,
 				`Started: ${started}`,
