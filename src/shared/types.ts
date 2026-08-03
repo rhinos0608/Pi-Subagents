@@ -229,6 +229,7 @@ export interface ControlEvent {
 export type SubagentResultStatus = "completed" | "failed" | "paused" | "stopped" | "detached";
 export type SubagentOutputState = "present" | "absent" | "unknown";
 export type SubagentRunMode = "single" | "parallel" | "chain";
+export type SubagentResultMode = SubagentRunMode | "workflow";
 
 export interface ParallelHandoffPatch {
 	path: string;
@@ -917,7 +918,7 @@ export interface SpawnBudgetSnapshot {
 }
 
 export interface Details {
-	mode: SubagentRunMode | "management";
+	mode: SubagentResultMode | "management";
 	runId?: string;
 	/** Run-level context summary. "mixed" when children resolved to different modes. */
 	context?: "fresh" | "fork" | "mixed";
@@ -974,6 +975,18 @@ export interface Details {
 	/** Non-fatal automatic mission persistence failure. */
 	missionWarning?: string;
 	mission?: MissionRecord;
+	workflow?: {
+		trace: Array<{
+			operation: "run" | "status";
+			key: string;
+			state: "started" | "completed" | "failed" | "reused";
+			runId?: string;
+			durationMs?: number;
+			error?: string;
+		}>;
+		emits: unknown[];
+		console: Array<{ level: "log" | "info" | "warn" | "error"; text: string }>;
+	};
 	missions?: {
 		records?: MissionRecord[];
 		globalEntries?: GlobalMissionIndexRecord[];
