@@ -27,6 +27,7 @@
 - Scheduled subagent runs are now enabled by default; set `{ "scheduledRuns": { "enabled": false } }` to opt out.
 
 ### Fixed
+- Normalize undefined fields in workflow child results before scripts can return them, preserving artifact-only child output.
 - Show current-session async runs in the Fleet inspector even when this Pi process did not start them.
 - Replace the duplicate advisor agent with an alias on the oracle agent.
 - Suppress stale foreground needs-attention transcript notices after the target run completes.
