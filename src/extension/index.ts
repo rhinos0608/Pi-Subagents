@@ -67,7 +67,6 @@ import {
 	resolveMaxSubagentSpawnsPerSession,
 } from "../shared/types.ts";
 import {
-	clearPendingForegroundControlNotices,
 	formatSubagentControlNotice,
 	handleSubagentControlNotice,
 	SUBAGENT_CONTROL_MESSAGE_TYPE,
@@ -221,7 +220,6 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		foregroundRuns: new Map(),
 		foregroundControls: new Map(),
 		lastForegroundControlId: null,
-		pendingForegroundControlNotices: new Map(),
 		cleanupTimers: new Map(),
 		lastUiContext: null,
 		poller: null,
@@ -263,7 +261,6 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		scheduledRunManager.stop();
 		supervisorChannel.dispose();
 		fleetStatus?.dispose();
-		clearPendingForegroundControlNotices(state);
 		if (state.poller) {
 			clearInterval(state.poller);
 			state.poller = null;
@@ -560,7 +557,6 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		}
 		state.lastUiContext = ctx;
 		cleanupSessionArtifacts(ctx);
-		clearPendingForegroundControlNotices(state);
 		state.foregroundControls.clear();
 		state.lastForegroundControlId = null;
 		resetJobs(ctx);
@@ -619,7 +615,6 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		scheduledRunManager.stop();
 		if (state.poller) clearInterval(state.poller);
 		state.poller = null;
-		clearPendingForegroundControlNotices(state);
 		for (const timer of state.cleanupTimers.values()) {
 			clearTimeout(timer);
 		}
