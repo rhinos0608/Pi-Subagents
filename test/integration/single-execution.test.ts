@@ -1832,8 +1832,8 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		assert.equal(mockPi.callCount(), 1);
 	});
 
-	it("does not retry a signaled child exit", { skip: process.platform === "win32" ? "POSIX child signal reporting is unavailable on Windows" : false }, async () => {
-		mockPi.onCall({ signal: "SIGKILL" });
+	it("does not retry non-SIGKILL signaled child exits", { skip: process.platform === "win32" ? "POSIX child signal reporting is unavailable on Windows" : false }, async () => {
+		mockPi.onCall({ signal: "SIGTERM" });
 		mockPi.onCall({ output: "must not run" });
 		const agents = [makeAgent("worker", { model: "openai/gpt-5-mini" })];
 
@@ -1843,8 +1843,8 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		});
 
 		assert.equal(result.exitCode, 1);
-		assert.equal(result.processSignal, "SIGKILL");
-		assert.equal(result.error, "Subagent process terminated by signal SIGKILL.");
+		assert.equal(result.processSignal, "SIGTERM");
+		assert.equal(result.error, "Subagent process terminated by signal SIGTERM.");
 		assert.equal(result.modelAttempts?.length, 1);
 		assert.equal(mockPi.callCount(), 1);
 	});
