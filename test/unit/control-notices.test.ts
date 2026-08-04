@@ -1,9 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import {
-	clearPendingForegroundControlNotices,
-	handleSubagentControlNotice,
-} from "../../src/extension/control-notices.ts";
+import { handleSubagentControlNotice } from "../../src/extension/control-notices.ts";
 import type { ControlEvent, SubagentState } from "../../src/shared/types.ts";
 
 function makeState(): SubagentState {
@@ -13,7 +10,6 @@ function makeState(): SubagentState {
 		asyncJobs: new Map(),
 		foregroundControls: new Map(),
 		lastForegroundControlId: null,
-		pendingForegroundControlNotices: new Map(),
 		cleanupTimers: new Map(),
 		lastUiContext: null,
 		poller: null,
@@ -60,7 +56,6 @@ describe("subagent control notice delivery", () => {
 			state,
 			visibleControlNotices: new Set(),
 			details: { source: "async", event: needsAttentionEvent() },
-			foregroundDelayMs: 20,
 		});
 
 		assert.equal(recorder.sent.length, 1);
