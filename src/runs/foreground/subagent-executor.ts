@@ -3355,20 +3355,23 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 			};
 		}
 
+		const suppressRoutineResultIntercom = shouldSuppressRoutineResultIntercom({ suppressRoutineResultIntercom: params.suppressRoutineResultIntercom, results });
 		if (foregroundControl) updateForegroundNestedProjection(foregroundControl);
-		const intercomReceipt = await maybeBuildForegroundIntercomReceipt({
-			pi: deps.pi,
-			intercomBridge: data.intercomBridge,
-			runId,
-			mode: "parallel",
-			details,
-			...(foregroundControl?.nestedChildren?.length ? { nestedChildren: foregroundControl.nestedChildren } : {}),
-		});
-		if (intercomReceipt) {
-			return {
-				content: [{ type: "text", text: intercomReceipt.text }],
-				details: intercomReceipt.details,
-			};
+		if (!suppressRoutineResultIntercom) {
+			const intercomReceipt = await maybeBuildForegroundIntercomReceipt({
+				pi: deps.pi,
+				intercomBridge: data.intercomBridge,
+				runId,
+				mode: "parallel",
+				details,
+				...(foregroundControl?.nestedChildren?.length ? { nestedChildren: foregroundControl.nestedChildren } : {}),
+			});
+			if (intercomReceipt) {
+				return {
+					content: [{ type: "text", text: intercomReceipt.text }],
+					details: intercomReceipt.details,
+				};
+			}
 		}
 
 		const worktreeSuffix = handoff?.suffix ?? "";
