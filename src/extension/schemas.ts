@@ -89,16 +89,16 @@ const AcceptanceOverride = Type.Unsafe({
 		{ type: "boolean", enum: [false] },
 		{ type: "object", additionalProperties: true },
 	],
-	description: `Optional acceptance policy. For reviewer/read-only calls, omit acceptance. Example: { level: "checked", evidence: ["commands-run", "changed-files"] }. Supported evidence kinds: ${AcceptanceEvidenceKinds.join(", ")}. Evidence levels end at verified; use acceptance.review.required for review. Omitted means auto-inferred unless agentContract.version=1.`,
+	description: `Optional acceptance policy. For reviewer/read-only calls, omit acceptance. Example: { level: "checked", evidence: ["commands-run", "changed-files"] }. Supported evidence kinds: ${AcceptanceEvidenceKinds.join(", ")}. Evidence levels end at verified; use acceptance.review.required for review. Omitted means auto-inferred unless agentContract compatibility behavior is enabled.`,
 });
 
 const AgentContractOverride = Type.Object({
-	version: Type.Integer({ enum: [1], description: "Opt into generic agent contract v1 for this run/child." }),
-}, { additionalProperties: false, description: "Opt-in compatibility contract. Omit to use current default behavior." });
+	version: Type.Integer({ enum: [1], description: "Enable compatibility behavior for this run/child." }),
+}, { additionalProperties: false, description: "Compatibility behavior. Omit for the default behavior." });
 
 const ChainGateOverride = Type.String({
 	enum: ["execution", "acceptance"],
-	description: "For agentContract.version=1 chain steps, choose whether the chain advances on execution success or acceptance success. Defaults to execution.",
+	description: "For chain steps with agentContract, choose whether the chain advances on execution success or acceptance success. Defaults to execution.",
 });
 
 const TurnBudgetOverride = Type.Object({
