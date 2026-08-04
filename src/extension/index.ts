@@ -249,7 +249,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		10 * 60 * 1000,
 		{
 			notifier: completionNotifier,
-			deliverIntercomResults: config.intercomBridge?.resultDelivery !== false,
+			deliverIntercomResults: config.intercomBridge?.resultDelivery === true,
 		},
 	);
 
