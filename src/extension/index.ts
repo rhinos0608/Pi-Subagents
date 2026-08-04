@@ -241,7 +241,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		? new SubagentFleetStatus(state, async (itemKey) => {
 			const ctx = state.lastUiContext;
 			if (!ctx?.hasUI) return;
-			await openSubagentFleet(ctx, state, { initialKey: itemKey });
+			await openSubagentFleet(ctx, state, { initialKey: itemKey, asyncDirRoot: DIRS.async, resultsDir: DIRS.results });
 		}, { placement: fleetViewPlacement })
 		: undefined;
 	const { startResultWatcher, primeExistingResults, stopResultWatcher } = createResultWatcher(
