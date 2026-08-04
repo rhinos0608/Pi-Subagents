@@ -43,6 +43,7 @@ import { clearSlashSnapshots, getSlashRenderableSnapshot, resolveSlashMessageDet
 import { inspectSubagentStatus } from "../runs/background/run-status.ts";
 import { resolveWaitToolConfig } from "../runs/background/subagent-wait.ts";
 import { registerWaitTool } from "../runs/background/wait-tool.ts";
+import { createWaitSubscriptionManager } from "../runs/background/wait-subscriptions.ts";
 import { drainOutstandingWork } from "../runs/background/auto-drain.ts";
 import registerSubagentNotify, { parseSubagentNotifyContent, type SubagentNotifyDetails } from "../runs/background/notify.ts";
 import { formatSteeringNotice, handleSubagentSteeringNotice, SUBAGENT_STEERING_MESSAGE_TYPE, type SubagentSteeringMessageDetails } from "./steering-notices.ts";
@@ -233,6 +234,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	};
 
 	const supervisorChannel = createNativeSupervisorChannel(pi, state);
+	const waitSubscriptionManager = createWaitSubscriptionManager(pi, state);
 	const mainWatchdog = registerMainWatchdog(pi);
 	const completionNotifier = registerSubagentNotify(pi, state, { batchConfig: config.completionBatch });
 	const fleetStatus = fleetViewEnabled
@@ -260,6 +262,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		mainWatchdog.dispose();
 		scheduledRunManager.stop();
 		supervisorChannel.dispose();
+		waitSubscriptionManager.dispose();
 		fleetStatus?.dispose();
 		if (state.poller) {
 			clearInterval(state.poller);
@@ -437,7 +440,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 
 	pi.registerTool(tool);
 
-	registerWaitTool(pi, state, waitToolConfig.enabled);
+	registerWaitTool(pi, state, waitToolConfig.enabled, waitSubscriptionManager);
 
 	pi.on("agent_end", async (_event, ctx) => {
 		if (ctx.hasUI) return;
@@ -563,6 +566,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		restoreActiveJobs(ctx);
 		scheduledRunManager.bindSession(ctx);
 		restoreSlashFinalSnapshots(ctx.sessionManager.getEntries());
+		waitSubscriptionManager.restore();
 		startResultWatcher();
 		primeExistingResults({ triggerTurn: !recovering });
 		fleetStatus?.setContext(ctx);
@@ -598,6 +602,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 
 	pi.on("session_shutdown", async () => {
 		stopResultWatcher();
+		waitSubscriptionManager.dispose();
 		state.currentSessionId = null;
 		state.parentSessionFile = null;
 		completionNotifier.dispose();
