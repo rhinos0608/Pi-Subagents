@@ -94,9 +94,9 @@ describe("below-editor subagent FleetView", () => {
 			const component = widgetFactory!({ requestRender() {} }, theme);
 			const lines = component.render(80);
 			assert.ok(lines.some((line) => line.includes("⏺ main")));
-			assert.ok(lines.some((line) => line.includes("worker-0 (fable-5 · thinking low)") && line.includes("Inspect module 0")));
+			assert.ok(lines.some((line) => line.includes("worker-0 (fable-5 · thinking low)")));
 			assert.ok(lines.some((line) => line.includes("11s · ↓ 13.1k tokens")));
-			assert.ok(lines.some((line) => line.includes("↓ 2 more")));
+			assert.ok(lines.some((line) => line.includes("↓ 1 more")));
 			for (const line of lines) assert.ok(visibleWidth(line) <= 80, `line exceeded width: ${line}`);
 		} finally {
 			fleet.dispose();
@@ -314,6 +314,118 @@ describe("below-editor subagent FleetView", () => {
 		}
 	});
 
+	it("renders retained nested terminal siblings under an active owner with bounded leaves", () => {
+		const state = stateForTest();
+		state.asyncJobs.set("supervisor", {
+			asyncId: "supervisor",
+			asyncDir: "/tmp/supervisor",
+			status: "running",
+			mode: "single",
+			startedAt: 10,
+			updatedAt: 20,
+			steps: [{ agent: "supervisor", index: 0, status: "running" }],
+			nestedChildren: [0, 1, 2, 3, 4].map((index) => ({
+				id: `nested-${index}`,
+				parentRunId: "supervisor",
+				parentStepIndex: 0,
+				depth: 1,
+				path: [{ runId: "supervisor", stepIndex: 0 }],
+				state: index === 0 ? "complete" as const : "running" as const,
+				agent: `leaf-${index}`,
+				model: index === 0 ? "provider/gpt-5.6-luna:medium" : "provider/gpt-5.6-luna",
+				thinking: "medium",
+				startedAt: 10,
+				lastUpdate: 20,
+			})),
+		});
+		let widgetFactory: ((tui: unknown, theme: typeof theme) => { render(width: number): string[] }) | undefined;
+		const ctx = {
+			hasUI: true,
+			ui: {
+				setWidget(_key: string, content: typeof widgetFactory | undefined) { if (content) widgetFactory = content; },
+				onTerminalInput() { return () => {}; },
+				getEditorText() { return ""; },
+				requestRender() {},
+				notify() {},
+				theme,
+			},
+		} as unknown as ExtensionContext;
+		const fleet = new SubagentFleetStatus(state, () => {}, { refreshMs: 60_000 });
+		try {
+			fleet.setContext(ctx);
+			const lines = widgetFactory!({ requestRender() {} }, theme).render(120).join("\n");
+			assert.match(lines, /supervisor/);
+			for (const [index, state] of ["complete", "running", "running", "running"].entries()) {
+				const line = lines.split("\n").find((candidate) => candidate.includes(`leaf-${index}`));
+				assert.ok(line);
+				assert.match(line!, /gpt-5.6-luna/);
+				assert.match(line!, /thinking medium/);
+				assert.match(line!, new RegExp(state));
+			}
+			assert.doesNotMatch(lines, /leaf-4.*running/);
+			assert.match(lines, /\+1 nested leaves/);
+		} finally {
+			fleet.dispose();
+		}
+	});
+
+	it("counts hidden nested leaves across multiple parallel children", () => {
+		const state = stateForTest();
+		state.asyncJobs.set("supervisor", {
+			asyncId: "supervisor",
+			asyncDir: "/tmp/supervisor",
+			status: "running",
+			mode: "single",
+			startedAt: 10,
+			updatedAt: 20,
+			steps: [{ agent: "supervisor", index: 0, status: "running" }],
+			nestedChildren: [
+				{
+					id: "nested-a",
+					parentRunId: "supervisor",
+					parentStepIndex: 0,
+					depth: 1,
+					path: [{ runId: "supervisor", stepIndex: 0 }],
+					state: "running",
+					mode: "parallel",
+					steps: [0, 1, 2, 3].map((index) => ({ agent: `child-a-${index}`, index, status: "running" as const })),
+				},
+				{
+					id: "nested-b",
+					parentRunId: "supervisor",
+					parentStepIndex: 0,
+					depth: 1,
+					path: [{ runId: "supervisor", stepIndex: 0 }],
+					state: "running",
+					mode: "parallel",
+					steps: [0, 1].map((index) => ({ agent: `child-b-${index}`, index, status: "running" as const })),
+				},
+			],
+		});
+		let widgetFactory: ((tui: unknown, theme: typeof theme) => { render(width: number): string[] }) | undefined;
+		const ctx = {
+			hasUI: true,
+			ui: {
+				setWidget(_key: string, content: typeof widgetFactory | undefined) { if (content) widgetFactory = content; },
+				onTerminalInput() { return () => {}; },
+				getEditorText() { return ""; },
+				requestRender() {},
+				notify() {},
+				theme,
+			},
+		} as unknown as ExtensionContext;
+		const fleet = new SubagentFleetStatus(state, () => {}, { refreshMs: 60_000 });
+		try {
+			fleet.setContext(ctx);
+			const lines = widgetFactory!({ requestRender() {} }, theme).render(120).join("\n");
+			for (const index of [0, 1, 2, 3]) assert.match(lines, new RegExp(`child-a-${index}`));
+			assert.doesNotMatch(lines, /child-b-[01]/);
+			assert.match(lines, /\+2 nested leaves/);
+		} finally {
+			fleet.dispose();
+		}
+	});
+
 	it("shows only the current sequential chain step while retaining active parallel siblings", () => {
 		const state = stateForTest();
 		state.asyncJobs.set("sequential", {
@@ -433,7 +545,7 @@ describe("below-editor subagent FleetView", () => {
 		} as unknown as ExtensionContext;
 		try {
 			fleet.setContext(ctx);
-			const lines = widgetFactory!({ requestRender() {} }, theme).render(100);
+			const lines = widgetFactory!({ requestRender() {} }, theme).render(180);
 			assert.ok(lines.some((line) => line.includes("reviewer (gpt-5 · thinking medium)") && line.includes("Review only authentication")));
 			assert.ok(lines.some((line) => line.includes("worker") && line.includes("Implement only billing")));
 			assert.ok(lines.every((line) => !line.includes("Review the authentication changes")), "per-child descriptions should replace the run-level fallback when present");

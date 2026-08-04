@@ -50,9 +50,11 @@ import {
 	SUBAGENT_FANOUT_CHILD_ENV,
 	SUBAGENT_PARENT_CHILD_INDEX_ENV,
 	SUBAGENT_PARENT_CONTROL_INBOX_ENV,
+	SUBAGENT_PARENT_DEPTH_ENV,
 	SUBAGENT_PARENT_EVENT_SINK_ENV,
 	SUBAGENT_PARENT_RUN_ID_ENV,
 } from "../../src/runs/shared/pi-args.ts";
+import { createNestedRoute, nestedRouteEnv, parseNestedEventRecords } from "../../src/runs/shared/nested-events.ts";
 
 interface ModelAttempt {
 	success?: boolean;
@@ -1416,6 +1418,45 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 
 		assert.equal(result.isError, undefined);
 		assert.deepEqual(result.details?.totalCost, { inputTokens: 100, outputTokens: 50, costUsd: 0.001 });
+	});
+
+	it("emits resolved model and thinking for nested foreground starts", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		mockPi.onCall({ output: "nested result" });
+		const route = createNestedRoute("root-nested-model");
+		const envPatch = {
+			...nestedRouteEnv(route),
+			[SUBAGENT_PARENT_RUN_ID_ENV]: "parent-run",
+			[SUBAGENT_PARENT_CHILD_INDEX_ENV]: "2",
+			[SUBAGENT_PARENT_DEPTH_ENV]: "1",
+		};
+		const savedEnv = Object.fromEntries(Object.keys(envPatch).map((key) => [key, process.env[key]]));
+		try {
+			Object.assign(process.env, envPatch);
+			const executor = makeExecutor([makeAgent("echo", { model: "openai/gpt-5-mini", thinking: "high" })]);
+
+			const result = await executor.execute(
+				"nested-model-start",
+				{ agent: "echo", task: "Nested task" },
+				new AbortController().signal,
+				undefined,
+				makeMinimalCtx(tempDir),
+			);
+
+			assert.equal(result.isError, undefined);
+			const records = fs.readdirSync(route.eventSink)
+				.sort()
+				.flatMap((name) => parseNestedEventRecords(fs.readFileSync(path.join(route.eventSink, name), "utf-8"), route));
+			const started = records.find((record) => record.type === "subagent.nested.started");
+			assert.equal(started?.child.model, "openai/gpt-5-mini");
+			assert.equal(started?.child.thinking, "high");
+			assert.deepEqual(started?.child.steps, [{ agent: "echo", status: "running", model: "openai/gpt-5-mini", thinking: "high" }]);
+		} finally {
+			for (const [key, value] of Object.entries(savedEnv)) {
+				if (value === undefined) delete process.env[key];
+				else process.env[key] = value;
+			}
+			fs.rmSync(path.dirname(route.eventSink), { recursive: true, force: true });
+		}
 	});
 
 	it("blocks later foreground chain children when hard reported usage is exhausted", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {

@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+- FleetView nested trees now retain and display each leaf's effective model and thinking effort, including completed siblings while the owner remains active. Thanks to @fgpaz for #776.
 - Restored same-repo watched `workflowScript` live chat progress cards, with `chatProgress` controls and Git-worktree-aware same-repo detection.
 - Enabled TypeScript `noUncheckedIndexedAccess` for production source after narrowing indexed reads at their runtime invariant boundaries.
 - Added managed per-child worktree isolation to scripted workflows through `worktree: true` on `runs.run` / `runs.all` items or as a workflow-level default, with child overrides and handoff paths preserved in child artifacts.
