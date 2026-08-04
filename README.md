@@ -409,7 +409,7 @@ Foreground and async runners share bounded child-protocol handling. A child JSON
 
 The stable v1 status/result fields are `lifecycleArtifactVersion`, `runId`/`id`, `sessionId`, `mode`, `state`, `startedAt`, `lastUpdate`, `endedAt`, `durationMs`, `cwd`, `asyncDir`, `sessionFile`, `outputFile`, `workflowGraph`, `steps`, `results`, `totalTokens`, `totalCost`, `model`/`attemptedModels`/`modelAttempts`, `toolCount`, `turnCount`, optional `launchResolvedExtensions`, optional `runtimeAcknowledgedExtensions`, and nested `children` when a child is allowed to launch subagents. `launchResolvedExtensions` is parent-resolved launch intent only: it reports opaque extension identifiers and whether ambient extensions were disabled, without exposing raw extension paths or claiming the child runtime acknowledged that those extensions loaded. Cooperating child extensions can acknowledge child-runtime registration by emitting `subagent:acknowledge-extension` on the child process `pi.events` bus with payload `{ id: string }`. Acknowledgement ids are self-declared opaque strings, must be non-empty, at most 128 characters, contain only `A-Z`, `a-z`, `0-9`, `.`, `_`, `:`, `@`, `+`, or `-`, and must not contain `/`, `\\`, or `..`. The reported `runtimeAcknowledgedExtensions` projection is `{ version: 1, source: "child-runtime", ids, omitted }`, deduplicates ids, keeps at most 32 ids, and counts additional valid unique ids in `omitted`. It is best-effort observability only: absence means no cooperating extension acknowledged, and presence means only that the extension registered in the child runtime, not that its tools, health checks, or features succeeded. Late acknowledgements after terminal serialization are ignored. `events.jsonl` records lifecycle transitions such as `subagent.run.started`, `subagent.step.started`, `subagent.step.completed`/`failed`/`paused`/`stopped`, control attention events, nested interrupt failures, and `subagent.run.completed`/`stopped`; run boundary events include the lifecycle artifact version. Consumers should read these JSON files instead of scraping terminal output; unknown fields and event types should be ignored for forward compatibility.
 
-Other Pi extensions can use the versioned in-process event-bus RPC instead of scraping slash output or calling internal modules. Listen for `subagents:rpc:v1:ready`, send requests on `subagents:rpc:v1:request`, and read replies from `subagents:rpc:v1:reply:<requestId>`. The `ping` capability metadata also advertises `events.asyncComplete` for exact process-local completion correlation after RPC `spawn`. Delegation v1/v2 progress updates carry `runId` as soon as foreground execution allocates it, so a caller can retain the package-owned revival target even if its own tool turn is interrupted before the terminal response. Foreground `details.results[]` rows also include a numeric `index` that is unique within the run and stable across partial progress snapshots and the final result; use `(runId, index)` instead of row position to correlate single, counted parallel, and chain children.
+Other Pi extensions can use the versioned in-process event-bus RPC instead of scraping slash output or calling internal modules. Listen for `subagents:rpc:v1:ready`, send requests on `subagents:rpc:v1:request`, and read replies from `subagents:rpc:v1:reply:<requestId>`. The `ping` capability metadata also advertises `events.asyncComplete` for exact process-local completion correlation after RPC `spawn`. Structured delegation progress updates carry `runId` as soon as foreground execution allocates it, so a caller can retain the package-owned revival target even if its own tool turn is interrupted before the terminal response. Foreground `details.results[]` rows also include a numeric `index` that is unique within the run and stable across partial progress snapshots and the final result; use `(runId, index)` instead of row position to correlate single, counted parallel, and chain children.
 
 ```typescript
 const requestId = crypto.randomUUID();
@@ -748,7 +748,7 @@ Important fields:
 | `acceptance` | Acceptance default for single-agent launches. Use a scalar level such as `checked` or an inline/block YAML map such as `{ level: "none", reason: "lightweight lookup" }`. Explicit call values win; chain and parallel acceptance remains task/step configuration. |
 | `acceptanceRole` | Optional `read-only` or `writer` role for automatic acceptance inference. Explicit task mutation or no-edit intent wins; otherwise the declared role replaces agent-name guessing. This does not grant or revoke tools. |
 | `completionGuard` | Set `false` only for non-implementation agents that may mention implementation words while using mutation-capable tools such as `bash`. |
-| `interactive` | Parsed for compatibility but not enforced in v1. |
+| `interactive` | Parsed for compatibility but not currently enforced. |
 | `maxSubagentDepth` | Tightens nested delegation for this agent's children. |
 | `memory` | Opt-in role-specific persistent memory. `memory: { scope: "project" \| "user", path: "<name>" }` injects the first lines of a `MEMORY.md` from a dedicated `agent-memory/` directory into the child system prompt. Agents with write tools (`edit`/`write`/`bash`) get a read-write block; read-only agents get a read-only fallback. Project scope resolves under `<project>/.pi/agent-memory/`, user scope under `~/.pi/agent/agent-memory/`. Paths are validated against traversal and symlink escape. |
 
@@ -893,9 +893,12 @@ console.log(result.contract.digest, result.contract.tools.effectiveAllowlist);
 
 Preflight covers ordinary single-agent launch resolution under public contract version 2: selected agent identity and shadowed candidates, a versioned parsed-definition digest (including system prompt and launch-affecting model, tool, skill, extension, output, and memory fields), fresh/fork context, effective model and thinking, skill and tool resolution, direct MCP selections, runtime/configured extensions, artifact/session paths, async lifecycle/status/result/event/process-terminal paths, package/lifecycle versions, capability-ceiling audit data, and stable digests. `launchContractDigest` is the canonical digest of the caller task, effective system prompt (including the resolved `turnBudget` prompt augmentation when supplied), model candidates, effective tools/extensions/MCP (including inherited capability ceilings), output binding, and structured-output schema that ordinary foreground and async execution report in results/status/events and metadata. Runtime acceptance prose and output-task annotations are intentionally excluded because side-effect-free preflight does not resolve those host/runtime augmentations; the contract version and task digest make that boundary explicit. Raw prompts are not exposed in public contract output. It is side-effect-free for launch state: it does not create child sessions, temp prompt files, structured-output runtimes, tool-diagnostic files, or run artifacts. Some host-owned facts, such as exact fork snapshots, nested async roots, and live model registries, can only be proven by the Pi host; those appear as `host_required` diagnostics instead of silently pretending to be exact.
 
-### Delegation v1
+### Structured delegation API
 
-The compatibility v1 contract runs one configured foreground agent per request:
+Other Pi extensions can ask `pi-subagents` to run one configured foreground leaf
+agent through the structured delegation API. It uses the established
+`prompt-template:subagent:*` event family and the same executor as the
+`subagent` tool; it does not add another launcher.
 
 ```ts
 import {
@@ -906,51 +909,6 @@ import {
 } from "pi-subagents/delegation";
 
 const request: SubagentDelegationRequest = {
-  version: 1,
-  requestId: crypto.randomUUID(),
-  agent: "reviewer",
-  task: "Review the supplied evidence.",
-  context: "fresh",
-  cwd: ctx.cwd,
-  timeoutMs: 120_000,
-  toolBudget: { soft: 10, hard: 16, block: "*" },
-};
-
-const unsubscribe = pi.events.on(SUBAGENT_DELEGATION_RESPONSE_EVENT, (payload) => {
-  const response = payload as SubagentDelegationResponse;
-  if (response.requestId !== request.requestId) return;
-  unsubscribe();
-  // Inspect response.status and the metadata present for this run.
-});
-pi.events.emit(SUBAGENT_DELEGATION_REQUEST_EVENT, request);
-```
-
-The contract uses the established `prompt-template:subagent:*` event transport and the same executor as the `subagent` tool; it does not add another launcher. New integrations must send `version: 1`. Requests are strict and single-agent only. They can set fresh or fork context, model, cwd, timeout, turn and tool-call budgets, skills, output behavior, acceptance, and artifact capture. Unknown or malformed fields return `invalid_request` before execution.
-
-Responses distinguish completion, failure, timeout, cancellation, interruption,
-turn or tool-budget exhaustion, explicit acceptance failure, invalid requests,
-and unavailable active context. Optional metadata is omitted when unavailable.
-Request IDs must be unique while active; duplicate active IDs are ignored so the
-original request keeps ownership of its terminal response. Emit
-`SUBAGENT_DELEGATION_CANCEL_EVENT` with the same version and request ID to cancel
-queued or active work.
-
-### Delegation v2
-
-V2 is the owned-leaf contract for workflow supervisors. Independent requests
-can overlap through the delegated executor without weakening the ordinary
-model-facing tool's one-foreground-call-per-turn guard.
-
-```ts
-import {
-  SUBAGENT_DELEGATION_REQUEST_EVENT,
-  SUBAGENT_DELEGATION_RESPONSE_EVENT,
-  type SubagentDelegationV2Request,
-  type SubagentDelegationV2Response,
-} from "pi-subagents/delegation";
-
-const request: SubagentDelegationV2Request = {
-  version: 2,
   requestId: crypto.randomUUID(),
   ownerRunId: workflowRunId,
   nodeId: "review-accuracy",
@@ -971,8 +929,8 @@ const request: SubagentDelegationV2Request = {
 };
 
 const unsubscribe = pi.events.on(SUBAGENT_DELEGATION_RESPONSE_EVENT, (payload) => {
-  const response = payload as SubagentDelegationV2Response;
-  if (response.version !== 2 || response.requestId !== request.requestId) return;
+  const response = payload as SubagentDelegationResponse;
+  if (response.requestId !== request.requestId) return;
   if (response.ownerRunId !== request.ownerRunId || response.nodeId !== request.nodeId) return;
   unsubscribe();
   // Inspect response.status, response.result, response.usage, model, and thinking.
@@ -993,22 +951,28 @@ Terminal usage reports input, output, cache-read, cache-write, cost, turns, tool
 calls, and duration alongside the effective model and thinking level when
 known. Schemas are capped at 64 KiB; tasks and returned text/structured values
 are capped at 1 MiB, with smaller bounds on identity/configuration strings and
-a maximum v2 `timeoutMs` of 2,147,483,647. V2 alone accepts
+a maximum `timeoutMs` of 2,147,483,647. Structured delegation accepts
 `toolBudget: { hard: 0, block: "*" }` to block the first tool call and run a
-zero-tool leaf; delegation v1 and ordinary model-facing/configured budgets keep
-their existing minimum of one. The foreground bridge retains up to 8,192 exact
-pending-cancellation and settled-attempt identities per extension
-context. If either history fills, it fails closed with `unavailable_context`
-for later v2 starts rather than evicting identity facts; lifecycle reset clears
-the bounded history.
+zero-tool leaf; ordinary model-facing/configured budgets keep their existing
+minimum of one. The foreground bridge retains up to 8,192 exact
+pending-cancellation and settled-attempt identities per extension context. If
+either history fills, it fails closed with `unavailable_context` for later
+starts rather than evicting identity facts; lifecycle reset clears the bounded
+history.
 
-Delegation requires an active extension context. Emit requests from a supported event callback or queued application step, not by recursively invoking the `subagent` tool inside another tool's `tool_call` hook. The caller selects a configured agent, but agent discovery and effective tools remain package-owned. A request cannot grant arbitrary tools, and tool restrictions are not an operating-system sandbox. The detached RPC remains async-only; this API is foreground-only.
+Delegation requires an active extension context. Emit requests from a supported
+event callback or queued application step, not by recursively invoking the
+`subagent` tool inside another tool's `tool_call` hook. The caller selects a
+configured agent, but agent discovery and effective tools remain package-owned.
+A request cannot grant arbitrary tools, and tool restrictions are not an
+operating-system sandbox. The detached RPC remains async-only; this API is
+foreground-only.
 
-Existing prompt-template payloads and delegation v1 continue over the same event
-family. V2 remains foreground-only and inherits the configured agent's current
-tools, skills, context, model policy, and workspace authority; it is not a
-sandbox or a durable task broker. `pi-subagents/delegation` is the canonical
-contract for extension integrations.
+Unversioned prompt-template payloads with `requestId`, `agent`, `task`,
+`context`, `model`, and `cwd` are still accepted as a legacy bridge while we
+validate whether any integrations still use them. New integrations should use
+the structured owned-leaf request above. `pi-subagents/delegation` is the
+canonical contract for extension integrations.
 
 ## Capability ceilings
 

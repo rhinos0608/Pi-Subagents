@@ -28,17 +28,12 @@ import {
 } from "../support/helpers.ts";
 import registerSubagentExtension from "../../src/extension/index.ts";
 import {
-	SUBAGENT_DELEGATION_PROTOCOL_VERSION,
-	SUBAGENT_DELEGATION_V2_PROTOCOL_VERSION,
 	SUBAGENT_DELEGATION_REQUEST_EVENT,
 	SUBAGENT_DELEGATION_RESPONSE_EVENT,
 	SUBAGENT_DELEGATION_STARTED_EVENT,
-	SUBAGENT_DELEGATION_UPDATE_EVENT,
+	type SubagentDelegationRequest,
 	type SubagentDelegationResponse,
-	type SubagentDelegationUpdate,
-	type SubagentDelegationV2Request,
-	type SubagentDelegationV2Response,
-	type SubagentDelegationV2Started,
+	type SubagentDelegationStarted,
 } from "../../src/api/delegation.ts";
 import { CHAIN_RUNS_DIR, DIRS, INTERCOM_DETACH_REQUEST_EVENT, INTERCOM_DETACH_RESPONSE_EVENT, type SubagentState } from "../../src/shared/types.ts";
 import { CHILD_WATCHDOG_STATUS_EVENT } from "../../src/watchdog/child-status.ts";
@@ -726,7 +721,7 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		assert.equal(result.details.usageBudget?.exhausted, true);
 	});
 
-	it("admits a zero run-level tool budget only for marked v2 delegated execution", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+	it("admits a zero run-level tool budget only for marked structured delegated execution", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
 		const zeroBudget = { hard: 0, block: "*" as const };
 		const params = { agent: "echo", task: "Answer without tools", toolBudget: zeroBudget };
 		const ctx = makeMinimalCtx(tempDir);
@@ -742,27 +737,27 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		assert.equal(ordinary.isError, true);
 		assert.match(ordinary.content[0]?.text ?? "", /toolBudget\.hard must be an integer >= 1/);
 
-		const v1Delegated = await executor.executeDelegated(
-			"v1-delegated-zero-budget",
+		const unmarkedDelegated = await executor.executeDelegated(
+			"unmarked-delegated-zero-budget",
 			params,
 			new AbortController().signal,
 			undefined,
 			ctx,
 		);
-		assert.equal(v1Delegated.isError, true);
-		assert.match(v1Delegated.content[0]?.text ?? "", /toolBudget\.hard must be an integer >= 1/);
+		assert.equal(unmarkedDelegated.isError, true);
+		assert.match(unmarkedDelegated.content[0]?.text ?? "", /toolBudget\.hard must be an integer >= 1/);
 
 		mockPi.onCall({ echoEnv: [TOOL_BUDGET_ENV, TOOL_BUDGET_ZERO_AUTH_ENV] });
-		const v2Delegated = await executor.executeDelegated(
-			"v2-delegated-zero-budget",
+		const structuredDelegated = await executor.executeDelegated(
+			"structured-delegated-zero-budget",
 			{ ...params, delegatedAllowZeroToolBudget: true },
 			new AbortController().signal,
 			undefined,
 			ctx,
 		);
-		assert.equal(v2Delegated.isError, undefined);
-		assert.deepEqual(v2Delegated.details.toolBudget, zeroBudget);
-		const env = JSON.parse(v2Delegated.content[0]?.text ?? "{}") as Record<string, string>;
+		assert.equal(structuredDelegated.isError, undefined);
+		assert.deepEqual(structuredDelegated.details.toolBudget, zeroBudget);
+		const env = JSON.parse(structuredDelegated.content[0]?.text ?? "{}") as Record<string, string>;
 		assert.deepEqual(JSON.parse(env[TOOL_BUDGET_ENV] ?? "null"), zeroBudget);
 		assert.equal(env[TOOL_BUDGET_ZERO_AUTH_ENV], "1");
 		assert.equal(mockPi.callCount(), 1);
@@ -890,101 +885,7 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		assert.equal(mockPi.callCount(), 2);
 	});
 
-	it("routes registered strict v1 delegation through the concurrent executor", async () => {
-		mockPi.onCall({
-			steps: [
-				{ jsonl: [events.toolStart("read", { path: "package.json" })], delay: 20 },
-				{ jsonl: [events.toolEnd("read"), events.toolResult("read", "{}")], delay: 20 },
-				{ jsonl: [events.assistantMessage("registered first delegated call")] },
-			],
-		});
-		mockPi.onCall({ output: "registered second delegated call", delay: 100 });
-		const extensionEvents = createEventBus();
-		const runtimeHandlers = new Map<string, Array<(event: unknown, ctx: ReturnType<typeof makeMinimalCtx>) => void>>();
-		const fakePi = new Proxy({
-			events: extensionEvents,
-			on(event: string, handler: (event: unknown, ctx: ReturnType<typeof makeMinimalCtx>) => void) {
-				const handlers = runtimeHandlers.get(event) ?? [];
-				handlers.push(handler);
-				runtimeHandlers.set(event, handlers);
-				return () => runtimeHandlers.set(event, (runtimeHandlers.get(event) ?? []).filter((entry) => entry !== handler));
-			},
-			registerTool() {},
-			registerCommand() {},
-			registerShortcut() {},
-			registerMessageRenderer() {},
-			sendMessage() {},
-			getSessionName() { return undefined; },
-		}, {
-			get(target, prop) {
-				if (prop in target) return target[prop as keyof typeof target];
-				return () => undefined;
-			},
-		});
-		const ctx = {
-			...makeMinimalCtx(tempDir),
-			sessionManager: {
-				getSessionId: () => "registered-delegation-session",
-				getSessionFile: () => path.join(tempDir, "registered-delegation-session.jsonl"),
-				getEntries: () => [],
-			},
-		};
-		const responses: SubagentDelegationResponse[] = [];
-		const updates: SubagentDelegationUpdate[] = [];
-		extensionEvents.on(SUBAGENT_DELEGATION_RESPONSE_EVENT, (payload) => responses.push(payload as SubagentDelegationResponse));
-		extensionEvents.on(SUBAGENT_DELEGATION_UPDATE_EVENT, (payload) => updates.push(payload as SubagentDelegationUpdate));
-
-		try {
-			registerSubagentExtension(fakePi as never);
-			for (const handler of runtimeHandlers.get("session_start") ?? []) {
-				await handler({ reason: "startup" }, ctx);
-			}
-			extensionEvents.emit(SUBAGENT_DELEGATION_REQUEST_EVENT, {
-				version: SUBAGENT_DELEGATION_PROTOCOL_VERSION,
-				requestId: "registered-a",
-				agent: "worker",
-				task: "First registered delegated call",
-				context: "fresh",
-				cwd: tempDir,
-				agentContract: { version: 1 },
-			});
-			extensionEvents.emit(SUBAGENT_DELEGATION_REQUEST_EVENT, {
-				version: SUBAGENT_DELEGATION_PROTOCOL_VERSION,
-				requestId: "registered-b",
-				agent: "reviewer",
-				task: "Second registered delegated call",
-				context: "fresh",
-				cwd: tempDir,
-				agentContract: { version: 1 },
-			});
-
-			const callDeadlineAt = Date.now() + 30_000;
-			while (mockPi.callCount() < 2 && Date.now() < callDeadlineAt) {
-				await new Promise((resolve) => setTimeout(resolve, 20));
-			}
-			assert.equal(mockPi.callCount(), 2, "registered strict v1 requests should bypass the ordinary one-call guard");
-
-			const responseDeadlineAt = Date.now() + 30_000;
-			while (responses.length < 2 && Date.now() < responseDeadlineAt) {
-				await new Promise((resolve) => setTimeout(resolve, 20));
-			}
-			assert.deepEqual(responses.map((response) => response.requestId).sort(), ["registered-a", "registered-b"]);
-			assert.ok(responses.every((response) => response.status === "completed"));
-			assert.deepEqual(responses.map((response) => response.output).sort(), [
-				"registered first delegated call",
-				"registered second delegated call",
-			]);
-			const toolResponse = responses.find((response) => response.output === "registered first delegated call");
-			assert.ok(toolResponse);
-			assert.equal(updates.some((update) => update.requestId === toolResponse.requestId && update.currentTool === "read"), true);
-		} finally {
-			for (const handler of runtimeHandlers.get("session_shutdown") ?? []) {
-				await handler({}, ctx);
-			}
-		}
-	});
-
-	it("routes registered strict v2 text delegation through the concurrent executor", async () => {
+	it("routes registered structured text delegation through the concurrent executor", async () => {
 		const literalJsonText = '{"looks":"json"}';
 		mockPi.onCall({
 			steps: [
@@ -1011,7 +912,7 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 				},
 			],
 		});
-		mockPi.onCall({ output: "registered v2 second node", delay: 100 });
+		mockPi.onCall({ output: "registered structured second node", delay: 100 });
 		const extensionEvents = createEventBus();
 		const runtimeHandlers = new Map<string, Array<(event: unknown, ctx: ReturnType<typeof makeMinimalCtx>) => void>>();
 		const fakePi = new Proxy({
@@ -1040,28 +941,27 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 				getAvailable: () => [{ provider: "mock", id: "test-model", reasoning: true }],
 			},
 			sessionManager: {
-				getSessionId: () => "registered-delegation-v2-session",
-				getSessionFile: () => path.join(tempDir, "registered-delegation-v2-session.jsonl"),
+				getSessionId: () => "registered-delegation-session",
+				getSessionFile: () => path.join(tempDir, "registered-delegation-session.jsonl"),
 				getEntries: () => [],
 			},
 		};
-		const started: SubagentDelegationV2Started[] = [];
-		const responses: SubagentDelegationV2Response[] = [];
+		const started: SubagentDelegationStarted[] = [];
+		const responses: SubagentDelegationResponse[] = [];
 		extensionEvents.on(SUBAGENT_DELEGATION_STARTED_EVENT, (payload) => {
-			if ((payload as { version?: unknown }).version === SUBAGENT_DELEGATION_V2_PROTOCOL_VERSION) {
-				started.push(payload as SubagentDelegationV2Started);
+			if ((payload as { ownerRunId?: unknown }).ownerRunId === "owner-delegation") {
+				started.push(payload as SubagentDelegationStarted);
 			}
 		});
 		extensionEvents.on(SUBAGENT_DELEGATION_RESPONSE_EVENT, (payload) => {
-			if ((payload as { version?: unknown }).version === SUBAGENT_DELEGATION_V2_PROTOCOL_VERSION) {
-				responses.push(payload as SubagentDelegationV2Response);
+			if ((payload as { ownerRunId?: unknown }).ownerRunId === "owner-delegation") {
+				responses.push(payload as SubagentDelegationResponse);
 			}
 		});
 
 		const firstRequest = {
-			version: SUBAGENT_DELEGATION_V2_PROTOCOL_VERSION,
-			requestId: "registered-v2-a",
-			ownerRunId: "owner-v2",
+			requestId: "registered-a",
+			ownerRunId: "owner-delegation",
 			nodeId: "node-a",
 			agent: "worker",
 			task: "Return literal JSON-looking text",
@@ -1070,11 +970,10 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 			model: "mock/test-model",
 			thinking: "high",
 			result: { kind: "text" },
-		} satisfies SubagentDelegationV2Request;
+		} satisfies SubagentDelegationRequest;
 		const secondRequest = {
-			version: SUBAGENT_DELEGATION_V2_PROTOCOL_VERSION,
-			requestId: "registered-v2-b",
-			ownerRunId: "owner-v2",
+			requestId: "registered-b",
+			ownerRunId: "owner-delegation",
 			nodeId: "node-b",
 			agent: "reviewer",
 			task: "Run the second logical node",
@@ -1083,7 +982,7 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 			model: "mock/test-model",
 			thinking: "high",
 			result: { kind: "text" },
-		} satisfies SubagentDelegationV2Request;
+		} satisfies SubagentDelegationRequest;
 
 		try {
 			registerSubagentExtension(fakePi as never);
@@ -1097,10 +996,10 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 			while (mockPi.callCount() < 2 && responses.length < 2 && Date.now() < callDeadlineAt) {
 				await new Promise((resolve) => setTimeout(resolve, 20));
 			}
-			assert.equal(mockPi.callCount(), 2, `different V2 logical nodes should use the concurrent delegated execution path: ${JSON.stringify(responses)}`);
+			assert.equal(mockPi.callCount(), 2, `different logical nodes should use the concurrent delegated execution path: ${JSON.stringify(responses)}`);
 			assert.deepEqual(started.map(({ requestId, ownerRunId, nodeId }) => ({ requestId, ownerRunId, nodeId })).sort((a, b) => a.nodeId.localeCompare(b.nodeId)), [
-				{ requestId: "registered-v2-a", ownerRunId: "owner-v2", nodeId: "node-a" },
-				{ requestId: "registered-v2-b", ownerRunId: "owner-v2", nodeId: "node-b" },
+				{ requestId: "registered-a", ownerRunId: "owner-delegation", nodeId: "node-a" },
+				{ requestId: "registered-b", ownerRunId: "owner-delegation", nodeId: "node-b" },
 			]);
 
 			const responseDeadlineAt = Date.now() + 30_000;
@@ -1112,7 +1011,7 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 			const terminalResponses = responses.filter((response) => response.status !== "invalid_request");
 			assert.equal(terminalResponses.length, 2);
 			for (const response of terminalResponses) {
-				assert.equal(response.ownerRunId, "owner-v2");
+				assert.equal(response.ownerRunId, "owner-delegation");
 				assert.equal(response.model, "mock/test-model:high");
 				assert.equal(response.thinking, "high");
 				assert.match(response.launchContractDigest ?? "", /^[0-9a-f]{64}$/);
@@ -1138,7 +1037,7 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 				toolCalls: 1,
 			});
 			assert.equal(typeof literalResponse.usage?.durationMs, "number");
-			const plainResponse = terminalResponses.find((response) => response.result?.kind === "text" && response.result.text === "registered v2 second node");
+			const plainResponse = terminalResponses.find((response) => response.result?.kind === "text" && response.result.text === "registered structured second node");
 			assert.ok(plainResponse);
 		} finally {
 			for (const handler of runtimeHandlers.get("session_shutdown") ?? []) {
