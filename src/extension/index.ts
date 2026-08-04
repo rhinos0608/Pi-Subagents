@@ -576,6 +576,19 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		herdrStatusBridge.agentStarted();
 	});
 
+	pi.on("session_compact", () => {
+		const hasActiveAsyncWork = [...state.asyncJobs.values()].some((job) => job.status === "queued" || job.status === "running");
+		if (!hasActiveAsyncWork || state.lastUiContext?.hasUI !== true) return;
+		pi.sendMessage(
+			{
+				customType: "subagent-compaction-resume",
+				content: "Compaction is complete. Resume the parent task now; background subagent results will arrive separately when ready.",
+				display: false,
+			},
+			{ triggerTurn: true },
+		);
+	});
+
 	pi.on("session_start", (event, ctx) => {
 		const recovering = event.reason === "startup" || event.reason === "reload" || event.reason === "resume";
 		resetSessionState(ctx, recovering);
