@@ -132,6 +132,50 @@ describe("mission launch lifecycle", () => {
 		}
 	});
 
+	it("records a bounded warning when an async mission record disappeared before completion", () => {
+		const test = projectFixture();
+		try {
+			const asyncDir = path.join(test.root, "async-run-missing-mission");
+			fs.mkdirSync(asyncDir, { recursive: true });
+			const binding = prepareMissionLaunch({
+				params: { mission: { title: "Disposable mission record" }, task: "Run later" },
+				projectRoot: test.projectRoot,
+				config: test.missionConfig,
+			});
+			assert.ok(binding);
+			attachMissionToLaunchResult({
+				binding,
+				result: {
+					content: [{ type: "text", text: "Async started" }],
+					details: { mode: "single", runId: "async-missing-mission", asyncId: "async-missing-mission", asyncDir, results: [] },
+				},
+			});
+			fs.rmSync(binding.location.missionDir, { recursive: true, force: true });
+
+			const completed = syncMissionFromAsyncCompletion({
+				runId: "async-missing-mission",
+				asyncDir,
+				mode: "single",
+				state: "complete",
+				success: true,
+			});
+
+			assert.equal(completed, undefined);
+			const events = fs.readFileSync(path.join(asyncDir, "events.jsonl"), "utf-8").trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
+			assert.deepEqual(events, [{
+				type: "subagent.mission.sync.skipped",
+				ts: events[0]?.ts,
+				runId: "async-missing-mission",
+				missionId: binding.missionId,
+				reason: "mission-record-missing",
+				missionPath: path.join(binding.location.missionDir, `${binding.missionId}.json`),
+			}]);
+			assert.equal(typeof events[0]?.ts, "number");
+		} finally {
+			fs.rmSync(test.root, { recursive: true, force: true });
+		}
+	});
+
 	it("binds an async launch and reconciles terminal status and artifacts", () => {
 		const test = projectFixture();
 		try {
