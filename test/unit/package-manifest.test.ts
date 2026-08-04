@@ -59,6 +59,10 @@ test("published extension APIs use supported package entrypoints", async () => {
 		"./capability-ceiling": "./src/api/capability-ceiling.ts",
 		"./delegation": "./src/api/delegation.ts",
 		"./preflight": "./src/api/preflight.ts",
+		"./control-channel": "./src/runs/background/control-channel.ts",
+		"./intercom-bridge": "./src/intercom/intercom-bridge.ts",
+		"./pi-args": "./src/runs/shared/pi-args.ts",
+		"./shared-types": "./src/shared/types.ts",
 	});
 	const backgroundWork = await import("pi-subagents/background-work");
 	assert.equal(backgroundWork.BACKGROUND_WORK_PROTOCOL_VERSION, 1);
