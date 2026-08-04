@@ -5017,16 +5017,22 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			const errorText = result?.isError
 				? result.content.find((item) => item.type === "text")?.text
 				: undefined;
-			const startedLaunches = collectStaticLaunchSummaries({
-				params: effectiveParams,
-				agents,
-				parentModel: requestParentModel,
-				availableModels: ctx.modelRegistry.getAvailable().map(toModelInfo),
-				currentProvider: requestParentModel?.provider,
-				modelScope,
-				thinkingOverrideForTask: forkThinkingOverrideForTask,
-				dynamicFanoutMaxItems: deps.config.chain?.dynamicFanout?.maxItems,
-			});
+			let startedLaunches: StaticLaunchSummary[];
+			try {
+				startedLaunches = collectStaticLaunchSummaries({
+					params: effectiveParams,
+					agents,
+					parentModel: requestParentModel,
+					availableModels: ctx.modelRegistry.getAvailable().map(toModelInfo),
+					currentProvider: requestParentModel?.provider,
+					modelScope,
+					thinkingOverrideForTask: forkThinkingOverrideForTask,
+					dynamicFanoutMaxItems: deps.config.chain?.dynamicFanout?.maxItems,
+				});
+			} catch (error) {
+				console.error("Failed to resolve nested foreground launch metadata:", error);
+				startedLaunches = selectedAgentNames.map((agent) => ({ agent }));
+			}
 			const agentsForSummary = startedLaunches.map((launch) => launch.agent);
 			const leafIntercomTarget = intercomBridge.active && agentsForSummary[0]
 				? resolveSubagentIntercomTarget(runId, agentsForSummary[0], 0)
