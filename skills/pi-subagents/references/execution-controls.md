@@ -325,8 +325,8 @@ subagent({
 worktree branched from HEAD. A top-level workflow `worktree: true` makes this the
 default for every child, and a child can opt out with `worktree: false`. This
 requires a clean git state and is mainly for intentionally parallel write
-workflows. On completion, use each child's versioned handoff path from its
-`artifactPaths` instead of scraping combined text. Each versioned manifest records child status and output references, full
+workflows. On completion, use each child's handoff path from its
+`artifactPaths` instead of scraping combined text. Each manifest records child status and output references, full
 patch paths and stats, and whether each temporary worktree and branch was
 removed. The manifest is journaled immediately after managed worktree setup, before children run, so abrupt exits retain owned paths and branches for recovery. Dirty or divergent work without a successfully captured patch is preserved with a partial-cleanup warning. Permanently discard recorded preserved work with `subagent({ action: "worktree.discard", handoffPath: "<child handoff path>" })`; authority defaults to interactive confirmation and refuses headlessly, and partial results print manual Git recovery commands. If you want one writer thread and several advisory agents, prefer a
 single-writer pattern instead.
