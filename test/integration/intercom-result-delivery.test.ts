@@ -206,7 +206,7 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 
 	it("single foreground runs emit one grouped event and return a compact receipt", async () => {
 		mockPi.onCall({ output: "Full child output from worker" });
-		const { executor, events } = makeExecutor();
+		const { executor, events } = makeExecutor({ resultDelivery: true });
 
 		const result = await executor.execute(
 			"single-intercom",
@@ -265,7 +265,7 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 
 	it("falls back to legacy foreground output when grouped delivery is not acknowledged", async () => {
 		mockPi.onCall({ output: "Unacknowledged foreground output" });
-		const { executor, events } = makeExecutor({ acknowledgeResults: false });
+		const { executor, events } = makeExecutor({ resultDelivery: true, acknowledgeResults: false });
 
 		const result = await executor.execute(
 			"single-no-ack",
@@ -281,7 +281,7 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 
 	it("top-level parallel runs emit one grouped event containing all children", async () => {
 		mockPi.onCall({ output: "Parallel child output" });
-		const { executor, events } = makeExecutor({ agents: [makeAgent("a"), makeAgent("b")] });
+		const { executor, events } = makeExecutor({ resultDelivery: true, agents: [makeAgent("a"), makeAgent("b")] });
 
 		const result = await executor.execute(
 			"parallel-intercom",
@@ -313,7 +313,7 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 		execFileSync("git", ["add", "base.txt"], { cwd: tempDir });
 		execFileSync("git", ["commit", "-m", "base"], { cwd: tempDir, stdio: "ignore" });
 		mockPi.onCall({ output: "Worktree child output" });
-		const { executor, events } = makeExecutor();
+		const { executor, events } = makeExecutor({ resultDelivery: true });
 
 		const result = await executor.execute(
 			"workflow-worktree-live-card",
@@ -464,7 +464,7 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 
 	it("chain runs emit one grouped event containing all executed children", async () => {
 		mockPi.onCall({ output: "Chain child output" });
-		const { executor, events } = makeExecutor({ agents: [makeAgent("a"), makeAgent("b"), makeAgent("c")] });
+		const { executor, events } = makeExecutor({ resultDelivery: true, agents: [makeAgent("a"), makeAgent("b"), makeAgent("c")] });
 
 		const result = await executor.execute(
 			"chain-intercom",
@@ -1723,7 +1723,7 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 	it("mixed foreground outcomes produce failed grouped status and receipt counts", async () => {
 		mockPi.onCall({ matchArgIncludes: "task-a", output: "Parallel child success", exitCode: 0 });
 		mockPi.onCall({ matchArgIncludes: "task-b", output: "Parallel child failure", stderr: "Parallel child failure", exitCode: 1 });
-		const { executor, events } = makeExecutor({ agents: [makeAgent("a"), makeAgent("b")] });
+		const { executor, events } = makeExecutor({ resultDelivery: true, agents: [makeAgent("a"), makeAgent("b")] });
 
 		const result = await executor.execute(
 			"parallel-mixed-intercom",
@@ -1746,7 +1746,7 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 
 	it("does not treat a synthetic foreground startup error as child output", async () => {
 		mockPi.onCall({ output: "", stderr: "mock startup failure", exitCode: 1 });
-		const { executor, events } = makeExecutor({ agents: [makeAgent("worker")] });
+		const { executor, events } = makeExecutor({ resultDelivery: true, agents: [makeAgent("worker")] });
 
 		await executor.execute(
 			"foreground-synthetic-error",
