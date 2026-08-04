@@ -11,10 +11,10 @@
     "./delegation": "./src/api/delegation.ts",
     "./capability-ceiling": "./src/api/capability-ceiling.ts",
     "./preflight": "./src/api/preflight.ts",
-    "./control-channel": "./src/runs/background/control-channel.ts",
-    "./intercom-bridge": "./src/intercom/intercom-bridge.ts",
-    "./pi-args": "./src/runs/shared/pi-args.ts",
-    "./shared-types": "./src/shared/types.ts"
+    "./control-channel": "./src/api/control-channel.ts",
+    "./intercom-bridge": "./src/api/intercom-bridge.ts",
+    "./pi-args": "./src/api/pi-args.ts",
+    "./shared-types": "./src/api/shared-types.ts"
   },
   "repository": {
     "type": "git",
