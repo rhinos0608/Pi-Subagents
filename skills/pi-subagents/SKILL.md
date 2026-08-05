@@ -12,7 +12,7 @@ description: |
 
 This skill is for the main parent orchestrator only. Do not inject or follow it inside spawned child subagents. The parent session owns delegation, orchestration, review fanout, and final fix-worker launches. Ordinary children should not run their own subagent workflows; the explicit exception is a delegated fanout child whose resolved builtin `tools` includes `subagent`, and that child may use `subagent` only for the fanout work the parent assigned.
 
-Use this skill when the parent orchestrator needs one specialized child or composed orchestration. Use `{ agent, task }` for one child and `workflowScript` for sequence, parallelism, branching, retries, or aggregation. Scripted workflows start asynchronously by default; pass `async:false` only for a small foreground run. `workflowScript` is the only public multi-agent orchestration surface.
+Use this skill when the parent orchestrator needs one specialized child or composed orchestration. Use `{ agent, task }` for one isolated child with no sibling lane, monitor, dependency, or aggregation. Use `workflowScript` proactively for coordinated waves: sequence, parallelism, branching, retries, gate monitors, and aggregation. Scripted workflows start asynchronously by default; pass `async:false` only for a small foreground run. `workflowScript` is the only public multi-agent orchestration surface.
 
 ## How to use this router
 
@@ -31,7 +31,7 @@ For broad or uncertain requests, read more than one reference. For complex work,
 
 - Keep the parent as orchestrator and final decision-maker.
 - Use one writer per cwd/worktree unless isolated worktrees are intentional.
-- For parallel fanout, compare child prompts before launch. Do not send clone prompts with only issue numbers, titles, or broad file globs swapped; each child needs a lane-specific task, source seam, prior evidence, and decision that remains distinct without the item number.
+- For parallel fanout, compare child prompts before launch. Do not send clone prompts with only issue numbers, titles, or broad file globs swapped; each child needs a lane-specific task, source seam, prior evidence, and decision that remains distinct without the item number. Launch that fanout as one `workflowScript` with stable keys and aggregate output unless there is truly only one child.
 - Prefer fresh-context review/validation fanout, then synthesize and apply fixes in the parent.
 - Use async/background only when work can proceed independently; do not poll just to wait. For adaptive gates, branch in `workflowScript`. Approval controls remain available only for already-running durable legacy chains.
 - Preserve capability ceilings, including child tool restrictions and session-scoped allowed-agent restrictions.
