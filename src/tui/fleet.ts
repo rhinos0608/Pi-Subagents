@@ -123,6 +123,14 @@ function asyncItems(run: AsyncRunSummary, description?: string): FleetItem[] {
 	}));
 }
 
+function orderFleetAsyncRuns(runs: AsyncRunSummary[], terminalLimit: number): AsyncRunSummary[] {
+	const updatedAt = (run: AsyncRunSummary) => run.lastUpdate ?? run.endedAt ?? run.startedAt;
+	const byNewest = (left: AsyncRunSummary, right: AsyncRunSummary) => updatedAt(right) - updatedAt(left);
+	const active = runs.filter((run) => run.state === "queued" || run.state === "running").sort(byNewest);
+	const terminal = runs.filter((run) => run.state !== "queued" && run.state !== "running").sort(byNewest);
+	return [...active, ...terminal.slice(0, terminalLimit)];
+}
+
 export function collectFleetSnapshot(
 	state: SubagentState,
 	options: { asyncDirRoot?: string; resultsDir?: string; limit?: number } = {},
@@ -168,7 +176,6 @@ export function collectFleetSnapshot(
 		if (options.asyncDirRoot !== undefined) {
 			runs = listAsyncRuns(options.asyncDirRoot, {
 				...(state.currentSessionId ? { sessionId: state.currentSessionId } : {}),
-				limit: options.limit ?? MAX_RECENT_ASYNC_RUNS,
 				resultsDir: options.resultsDir ?? DIRS.results,
 				reconcile: false,
 			});
@@ -188,7 +195,9 @@ export function collectFleetSnapshot(
 				}
 			}
 		}
-		for (const run of runs) items.push(...asyncItems(run, descriptions.get(run.id)));
+		for (const run of orderFleetAsyncRuns(runs, options.limit ?? MAX_RECENT_ASYNC_RUNS)) {
+			items.push(...asyncItems(run, descriptions.get(run.id)));
+		}
 	} catch (cause) {
 		error = cause instanceof Error ? cause.message : String(cause);
 	}
