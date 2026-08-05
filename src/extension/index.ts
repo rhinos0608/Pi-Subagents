@@ -602,7 +602,6 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 
 	pi.on("session_shutdown", async () => {
 		stopResultWatcher();
-		waitSubscriptionManager.dispose();
 		state.currentSessionId = null;
 		state.parentSessionFile = null;
 		completionNotifier.dispose();
