@@ -3978,6 +3978,13 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		onUpdate: ((r: AgentToolResult<Details>) => void) | undefined,
 		ctx: ExtensionContext,
 	) => Promise<AgentToolResult<Details>>;
+	/** Scheduled launches retain their owning context without replacing the live active session. */
+	executeScheduled: (
+		id: string,
+		params: SubagentParamsLike,
+		signal: AbortSignal,
+		ctx: ExtensionContext,
+	) => Promise<AgentToolResult<Details>>;
 } {
 	const delegatedThinkingOverrides = new WeakMap<object, AgentConfig["thinking"]>();
 	const delegatedZeroToolBudgets = new WeakSet<object>();
@@ -3987,10 +3994,11 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		signal: AbortSignal,
 		onUpdate: ((r: AgentToolResult<Details>) => void) | undefined,
 		ctx: ExtensionContext,
+		preserveActiveSession = false,
 	): Promise<AgentToolResult<Details>> => {
 		const delegatedThinkingOverride = delegatedThinkingOverrides.get(params);
 		const allowZeroToolBudget = delegatedZeroToolBudgets.has(params);
-		deps.state.baseCwd = ctx.cwd;
+		if (!preserveActiveSession) deps.state.baseCwd = ctx.cwd;
 		deps.state.foregroundRuns ??= new Map();
 		deps.state.foregroundControls ??= new Map();
 		deps.state.lastForegroundControlId ??= null;
@@ -4101,7 +4109,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 								const budgetState = usageBudgetState(workflowUsageBudget.budget, sumResultsCost(workflowResults));
 								if (budgetState?.exhausted) return workflowChildResult(key, buildRequestedModeError(childParams as SubagentParamsLike, usageBudgetExceededMessage(budgetState)));
 								const childRequest = prepareWorkflowChildParams({ ...workflowChildDefaults, ...childParams, workflowParentRunId: workflowRunId, workflowKey: key } as SubagentParamsLike);
-								const result = await execute(randomUUID(), childRequest, workflowSignal, undefined, ctx);
+								const result = await execute(randomUUID(), childRequest, workflowSignal, undefined, ctx, preserveActiveSession);
 								workflowResults.push(...result.details.results);
 								const child = workflowChildResult(key, result);
 								if (result.details.asyncId) {
@@ -4110,7 +4118,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 								}
 								return child;
 							},
-							status: async (keyOrRunId, workflowSignal) => workflowChildResult(keyOrRunId, await execute(randomUUID(), { action: "status", id: keyOrRunId }, workflowSignal, undefined, ctx)),
+							status: async (keyOrRunId, workflowSignal) => workflowChildResult(keyOrRunId, await execute(randomUUID(), { action: "status", id: keyOrRunId }, workflowSignal, undefined, ctx, preserveActiveSession)),
 						});
 						const returnPreview = formatWorkflowValue(workflow.value).slice(0, 1_000);
 						const emitPreview = workflow.emits.length > 0 ? ` Emitted: ${workflow.emits.map(formatWorkflowValue).join(", ").slice(0, 1_000)}` : "";
@@ -4161,11 +4169,11 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 						const budgetState = usageBudgetState(workflowUsageBudget.budget, sumResultsCost(workflowResults));
 						if (budgetState?.exhausted) return workflowChildResult(key, buildRequestedModeError(childParams as SubagentParamsLike, usageBudgetExceededMessage(budgetState)));
 						const childRequest = prepareWorkflowChildParams({ ...workflowChildDefaults, ...childParams, workflowParentRunId: _id, workflowKey: key, suppressRoutineResultIntercom: chatProgress.mode === "live-card" } as SubagentParamsLike);
-						const result = await execute(randomUUID(), childRequest, workflowSignal, undefined, ctx);
+						const result = await execute(randomUUID(), childRequest, workflowSignal, undefined, ctx, preserveActiveSession);
 						workflowResults.push(...result.details.results);
 						return workflowChildResult(key, result);
 					},
-					status: async (keyOrRunId, workflowSignal) => workflowChildResult(keyOrRunId, await execute(randomUUID(), { action: "status", id: keyOrRunId }, workflowSignal, undefined, ctx)),
+					status: async (keyOrRunId, workflowSignal) => workflowChildResult(keyOrRunId, await execute(randomUUID(), { action: "status", id: keyOrRunId }, workflowSignal, undefined, ctx, preserveActiveSession)),
 				});
 				const traceLines = workflow.trace.map((entry) => `- ${entry.operation} ${entry.key}: ${entry.state}${entry.runId ? ` (${entry.runId})` : ""}${entry.durationMs !== undefined ? ` in ${entry.durationMs}ms` : ""}${entry.error ? ` — ${entry.error}` : ""}`);
 				const sections = ["Workflow completed.", `Return:\n${formatWorkflowValue(workflow.value)}`];
@@ -4201,7 +4209,9 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		try {
 			requestSessionId = resolveCurrentSessionId(ctx.sessionManager);
 			requestPiSessionId = ctx.sessionManager.getSessionId() ?? undefined;
-			requestParentModel = rememberParentModel(deps.state, requestSessionId, ctx.model);
+			requestParentModel = preserveActiveSession
+				? normalizeParentModel(ctx.model)
+				: rememberParentModel(deps.state, requestSessionId, ctx.model);
 		} catch (error) {
 			if (action?.toLowerCase() !== "doctor") throw error;
 			requestParentModel = normalizeParentModel(ctx.model);
@@ -4399,7 +4409,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 				};
 			}
 			if (action === "status") {
-				deps.state.currentSessionId = resolveCurrentSessionId(ctx.sessionManager);
+				if (!preserveActiveSession) deps.state.currentSessionId = resolveCurrentSessionId(ctx.sessionManager);
 				const withBudget = (result: AgentToolResult<Details>) => withSpawnBudgetStatus(
 					result,
 					deps.state,
@@ -5188,5 +5198,12 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		return execute(id, delegatedParams, signal, onUpdate, ctx);
 	};
 
-	return { execute: executeWithSingleDispatchGuard, executeDelegated };
+	const executeScheduled = (
+		id: string,
+		params: SubagentParamsLike,
+		signal: AbortSignal,
+		ctx: ExtensionContext,
+	) => execute(id, params, signal, undefined, ctx, true);
+
+	return { execute: executeWithSingleDispatchGuard, executeDelegated, executeScheduled };
 }
