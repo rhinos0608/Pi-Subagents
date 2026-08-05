@@ -1554,6 +1554,43 @@ function renderMultiCompact(d: Details, theme: Theme, frame?: number): Component
 	return c;
 }
 
+export function renderSubagentSummary(
+	result: AgentToolResult<Details>,
+	options: { isPartial?: boolean },
+	theme: Theme,
+): Component {
+	const details = result.details;
+	const results = details?.results ?? [];
+	const running = options.isPartial === true
+		|| Boolean(details?.asyncId && details.mode !== "management")
+		|| details?.progress?.some((progress) => progress.status === "running")
+		|| results.some((entry) => entry.progress?.status === "running")
+		|| Boolean(details && workflowGraphHasStatus(details, ["running"]));
+	const stopped = results.some((entry) => entry.stopped && entry.progress?.status !== "running")
+		|| Boolean(details && workflowGraphHasStatus(details, ["stopped"]));
+	const paused = results.some((entry) => (entry.interrupted || entry.detached) && entry.progress?.status !== "running")
+		|| Boolean(details && workflowGraphHasStatus(details, ["paused", "detached"]));
+	const failed = result.isError === true
+		|| results.some((entry) => !entry.stopped && !entry.interrupted && !entry.detached && entry.exitCode !== 0 && entry.progress?.status !== "running")
+		|| Boolean(details && workflowGraphHasStatus(details, ["failed"]));
+	const state = running ? "running" : failed ? "failed" : stopped ? "stopped" : paused ? "paused" : "completed";
+	const glyph = state === "running"
+		? theme.fg("accent", STATIC_RUNNING_GLYPH)
+		: state === "completed"
+			? theme.fg("success", "✓")
+			: state === "failed"
+				? theme.fg("error", "✗")
+				: theme.fg("warning", "■");
+	const label = details?.mode === "single" && results.length === 1
+		? results[0]?.agent || "subagent"
+		: details?.mode || "subagent";
+	return new Text(
+		truncLine(`${glyph} ${theme.fg("toolTitle", theme.bold(label))} ${theme.fg("dim", "·")} ${theme.fg(state === "failed" ? "error" : state === "completed" ? "success" : state === "running" ? "accent" : "warning", state)}`, getTermWidth() - 4),
+		0,
+		0,
+	);
+}
+
 /**
  * Render a subagent result
  */
