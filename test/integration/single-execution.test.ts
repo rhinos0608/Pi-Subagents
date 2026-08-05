@@ -338,7 +338,7 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 			config,
 			asyncByDefault,
 			tempArtifactsDir: tempDir,
-			getSubagentSessionRoot: () => tempDir,
+			getSubagentSessionRoot: () => path.join(tempDir, ".pi-subagents", "sessions"),
 			expandTilde: (value: string) => value,
 			discoverAgents: () => ({ agents }),
 			allowMutatingManagementActions,
@@ -698,7 +698,7 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		);
 
 		assert.equal(result.isError, undefined);
-		assert.equal(mockPi.callCount(), 2);
+		assert.equal(mockPi.callCount(), 2, result.content[0]?.text ?? "workflow produced no output");
 		assert.equal(fs.existsSync(path.join(tempDir, "feature-a.txt")), false);
 		assert.equal(fs.existsSync(path.join(tempDir, "feature-b.txt")), false);
 		const output = result.content[0]?.text ?? "";
