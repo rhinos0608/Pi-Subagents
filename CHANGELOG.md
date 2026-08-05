@@ -25,6 +25,7 @@
 - Added optional `thinking` and `fallbackModels` fields to `/subagents` profile agent overrides, so a saved profile can pin reasoning effort and fallbacks (not just the model) — important for reasoning-sensitive models where the thinking level is load-bearing. Thanks to @dt-benedict for #741.
 
 ### Changed
+- Collapsed the inactive FleetView roster to one active-work summary line while preserving keyboard expansion and inspector state restoration. Thanks to @xz-dev for #826.
 - Clarified when direct single-child calls are appropriate versus coordinated `workflowScript` orchestration, including stable keys and durable child outputs.
 - Documented the headless pi-guard compatibility path for child-specific explicit allow/deny policy. Thanks to @chama-chomo for #742.
 - Replaced session-scoped one-shot schedule actions with the `schedule.*` API and project-local schedule records. Calendar recurrence and the schedule inspector remain deferred to the next slice.
