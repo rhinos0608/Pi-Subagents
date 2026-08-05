@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.41.0] - 2026-08-05
+
 ### Added
 - Added live status streaming for `subagent_wait` while it waits on subagent runs. Thanks to @walter-erquinigo for #832.
 - Added opt-in `inlineToolDisplay: "summary"` for a stable one-row inline subagent result while FleetView remains the live progress surface. Thanks to @ryanbbrown for #805.
