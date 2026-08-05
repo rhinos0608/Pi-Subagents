@@ -76,6 +76,139 @@ import {
 
 export { loadConfig, resolveAsyncByDefault } from "./config.ts";
 
+function workflowLaneKeys(script: string): string[] {
+	const keys: string[] = [];
+	const seen = new Set<string>();
+	const add = (key: string): void => {
+		if (!seen.has(key)) {
+			seen.add(key);
+			keys.push(key);
+		}
+	};
+	const isIdentifier = (char: string | undefined): boolean => char !== undefined && /[\w$]/.test(char);
+	const skipTrivia = (start: number): number => {
+		let index = start;
+		while (index < script.length) {
+			if (/\s/.test(script[index]!)) index += 1;
+			else if (script.startsWith("//", index)) {
+				const end = script.indexOf("\n", index + 2);
+				index = end === -1 ? script.length : end + 1;
+			} else if (script.startsWith("/*", index)) {
+				const end = script.indexOf("*/", index + 2);
+				index = end === -1 ? script.length : end + 2;
+			} else break;
+		}
+		return index;
+	};
+	const readLiteral = (start: number): { key?: string; end: number } | undefined => {
+		const quote = script[start];
+		if (quote !== "'" && quote !== '"' && quote !== "`") return undefined;
+		let index = start + 1;
+		let dynamicTemplate = false;
+		while (index < script.length) {
+			if (script[index] === "\\") {
+				index += 2;
+				continue;
+			}
+			if (quote === "`" && script.startsWith("${", index)) dynamicTemplate = true;
+			if (script[index] === quote) return { key: dynamicTemplate ? undefined : script.slice(start + 1, index), end: index + 1 };
+			if (quote !== "`" && /[\r\n]/.test(script[index]!)) return { end: index + 1 };
+			index += 1;
+		}
+		return { end: script.length };
+	};
+
+	const collectRunsAllKeys = (start: number): number => {
+		let index = skipTrivia(start);
+		if (script[index] !== "(") return start;
+		index = skipTrivia(index + 1);
+		if (script[index] !== "[") return start;
+		let arrayDepth = 1;
+		let objectDepth = 0;
+		let directChildObject = false;
+		let expectingElement = true;
+		for (index += 1; index < script.length; index += 1) {
+			index = skipTrivia(index);
+			const literal = readLiteral(index);
+			if (literal) {
+				index = literal.end - 1;
+				continue;
+			}
+			if (script[index] === "[") {
+				arrayDepth += 1;
+				expectingElement = false;
+				continue;
+			}
+			if (script[index] === "]") {
+				arrayDepth -= 1;
+				if (arrayDepth === 0) return index + 1;
+				continue;
+			}
+			if (script[index] === "{") {
+				objectDepth += 1;
+				if (objectDepth === 1) directChildObject = arrayDepth === 1 && expectingElement;
+				expectingElement = false;
+				continue;
+			}
+			if (script[index] === "}") {
+				objectDepth -= 1;
+				if (objectDepth === 0) directChildObject = false;
+				continue;
+			}
+			if (script[index] === "," && arrayDepth === 1 && objectDepth === 0) {
+				expectingElement = true;
+				continue;
+			}
+			if (directChildObject && objectDepth === 1 && !isIdentifier(script[index - 1]) && script.startsWith("key", index) && !isIdentifier(script[index + 3])) {
+				const colon = skipTrivia(index + 3);
+				const key = script[colon] === ":" ? readLiteral(skipTrivia(colon + 1)) : undefined;
+				if (key) {
+					const next = skipTrivia(key.end);
+					if (key.key !== undefined && (script[next] === "," || script[next] === "}")) add(key.key);
+					index = key.end - 1;
+				}
+			}
+		}
+		return index;
+	};
+
+	for (let index = 0; index < script.length;) {
+		index = skipTrivia(index);
+		const literal = readLiteral(index);
+		if (literal) {
+			index = literal.end;
+			continue;
+		}
+		if (!isIdentifier(script[index - 1]) && script.startsWith("runs.run", index) && !isIdentifier(script[index + 8])) {
+			const open = skipTrivia(index + 8);
+			const key = script[open] === "(" ? readLiteral(skipTrivia(open + 1)) : undefined;
+			if (key) {
+				const next = skipTrivia(key.end);
+				if (key.key !== undefined && (script[next] === "," || script[next] === ")")) add(key.key);
+				index = key.end;
+				continue;
+			}
+		}
+		if (!isIdentifier(script[index - 1]) && script.startsWith("runs.all", index) && !isIdentifier(script[index + 8])) {
+			index = collectRunsAllKeys(index + 8);
+			continue;
+		}
+		index += 1;
+	}
+	return keys;
+}
+
+function formatWorkflowManifest(script: string, async: unknown, clarify: unknown): string {
+	if (clarify === true) return "workflow script · rejected: clarify UI unsupported";
+	const keys = workflowLaneKeys(script);
+	// The workflow executor starts background work unless callers pass async:false.
+	const mode = async === false ? "foreground" : "background";
+	if (keys.length === 0) return `workflow script · ${mode}`;
+	const visibleKeys = keys.slice(0, 4).join(", ");
+	const remainder = keys.length > 4 ? `, +${keys.length - 4}` : "";
+	return `workflow · ${mode} · ${keys.length} lane${keys.length === 1 ? "" : "s"}: ${visibleKeys}${remainder}`;
+}
+
 /**
  * Derive subagent session base directory from parent session file.
  * If parent session is ~/.pi/agent/sessions/abc123.jsonl,
@@ -419,7 +552,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 			}
 			if (args.workflowScript)
 				return new Text(
-					`${theme.fg("toolTitle", theme.bold("subagent "))}workflow script`,
+					`${theme.fg("toolTitle", theme.bold("subagent "))}${formatWorkflowManifest(args.workflowScript, args.async, args.clarify)}`,
 					0,
 					0,
 				);
