@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- Stream immediate and periodic progress for blocking foreground subagent runs, so long reasoning intervals remain visibly active. Thanks to @walter-erquinigo for #833.
+
 ## [0.41.0] - 2026-08-05
 
 ### Added
