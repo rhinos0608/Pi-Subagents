@@ -144,7 +144,7 @@ import {
 	wrapForkTask,
 } from "../../shared/types.ts";
 
-const MUTATING_MANAGEMENT_ACTIONS = new Set(["create", "update", "delete", "eject", "disable", "enable", "reset", "grant-spawn-budget", "watchdog.configure", "mission.create", "mission.update", "mission.attach-run", "mission.close", "inspector.open", "inspector.close", "project.open", "project.close", "worktree.discard"]);
+const MUTATING_MANAGEMENT_ACTIONS = new Set(["create", "update", "delete", "eject", "disable", "enable", "reset", "grant-spawn-budget", "watchdog.configure", "mission.create", "mission.update", "mission.attach-run", "mission.close", "inspector.open", "inspector.close", "project.open", "project.close", "worktree.discard", "schedule.create", "schedule.pause", "schedule.resume", "schedule.run", "schedule.run-due", "schedule.delete"]);
 
 type UndefinedOmitted<T extends object> = {
 	[K in keyof T as undefined extends T[K] ? never : K]: T[K];
@@ -256,6 +256,12 @@ export interface SubagentParamsLike {
 	agentContract?: AgentContract;
 	schedule?: string;
 	scheduleName?: string;
+	at?: string;
+	every?: string;
+	on?: string | number;
+	timezone?: string;
+	overlap?: "skip";
+	catchUp?: "none" | "latest";
 	additional?: number;
 	missionId?: string;
 	mission?: unknown;
@@ -327,6 +333,7 @@ interface ExecutionContextData {
 	modelScope?: ModelScopeConfig;
 	parentModel?: ParentModel;
 	parentSessionId: string | null;
+	parentPiSessionId?: string;
 	capabilityCeiling?: ResolvedSubagentCapabilityCeiling;
 }
 
@@ -2351,8 +2358,8 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 	const asyncCtx = compactOptional<Parameters<typeof executeAsyncSingle>[1]["ctx"]>({
 		pi: deps.pi,
 		cwd: ctx.cwd,
-		currentSessionId: deps.state.currentSessionId!,
-		parentSessionId: ctx.sessionManager.getSessionId() ?? undefined,
+		currentSessionId: data.parentSessionId!,
+		parentSessionId: data.parentPiSessionId,
 		currentModelProvider: parentModel?.provider,
 		currentModel: parentModel,
 		modelScope: data.modelScope,
@@ -2630,8 +2637,8 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 		const asyncCtx = compactOptional<Parameters<typeof executeAsyncSingle>[1]["ctx"]>({
 			pi: deps.pi,
 			cwd: ctx.cwd,
-			currentSessionId: deps.state.currentSessionId!,
-			parentSessionId: ctx.sessionManager.getSessionId() ?? undefined,
+			currentSessionId: data.parentSessionId!,
+			parentSessionId: data.parentPiSessionId,
 			currentModelProvider: parentModel?.provider,
 			currentModel: parentModel,
 			modelScope: data.modelScope,
@@ -3207,8 +3214,8 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 			const asyncCtx = compactOptional<Parameters<typeof executeAsyncSingle>[1]["ctx"]>({
 				pi: deps.pi,
 				cwd: ctx.cwd,
-				currentSessionId: deps.state.currentSessionId!,
-				parentSessionId: ctx.sessionManager.getSessionId() ?? undefined,
+				currentSessionId: data.parentSessionId!,
+				parentSessionId: data.parentPiSessionId,
 				currentModelProvider: parentModel?.provider,
 				currentModel: parentModel,
 				modelScope: data.modelScope,
@@ -3578,8 +3585,8 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 			const asyncCtx = compactOptional<Parameters<typeof executeAsyncSingle>[1]["ctx"]>({
 				pi: deps.pi,
 				cwd: ctx.cwd,
-				currentSessionId: deps.state.currentSessionId!,
-				parentSessionId: ctx.sessionManager.getSessionId() ?? undefined,
+				currentSessionId: data.parentSessionId!,
+				parentSessionId: data.parentPiSessionId,
 				currentModelProvider: parentModel?.provider,
 				currentModel: parentModel,
 				modelScope: data.modelScope,
@@ -3951,6 +3958,36 @@ function omitExecutionModeActionAlias(params: SubagentParamsLike): SubagentParam
 	return params;
 }
 
+function createScheduledOwnerState(source: SubagentState, ownerSessionId: string, ctx: ExtensionContext): SubagentState {
+	const ownerSpawns = source.subagentSpawns?.sessionId === ownerSessionId
+		? {
+			...source.subagentSpawns,
+			grantHistory: [...(source.subagentSpawns.grantHistory ?? [])],
+		}
+		: undefined;
+	return {
+		...source,
+		baseCwd: ctx.cwd,
+		currentSessionId: ownerSessionId,
+		parentSessionFile: ctx.sessionManager.getSessionFile() ?? null,
+		subagentInProgress: false,
+		...(ownerSpawns ? { subagentSpawns: ownerSpawns } : { subagentSpawns: undefined }),
+		asyncJobs: new Map(),
+		fleetJobs: new Map(),
+		foregroundRuns: new Map(),
+		foregroundControls: new Map(),
+		lastForegroundControlId: null,
+		cleanupTimers: new Map(),
+		lastUiContext: null,
+		poller: null,
+		completionSeen: new Map(),
+		watcher: null,
+		watcherRestartTimer: null,
+		waitSubscriptions: new Map(),
+		workflowControllers: new Map(),
+	};
+}
+
 export function createSubagentExecutor(deps: ExecutorDeps): {
 	execute: (
 		id: string,
@@ -3971,19 +4008,28 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		onUpdate: ((r: AgentToolResult<Details>) => void) | undefined,
 		ctx: ExtensionContext,
 	) => Promise<AgentToolResult<Details>>;
+	/** Scheduled launches retain their owning context without replacing the live active session. */
+	executeScheduled: (
+		id: string,
+		params: SubagentParamsLike,
+		signal: AbortSignal,
+		ctx: ExtensionContext,
+	) => Promise<AgentToolResult<Details>>;
 } {
 	const delegatedThinkingOverrides = new WeakMap<object, AgentConfig["thinking"]>();
 	const delegatedZeroToolBudgets = new WeakSet<object>();
+	const scheduledOwnerExecutors = new Map<string, ReturnType<typeof createSubagentExecutor>>();
 	const execute = async (
 		_id: string,
 		params: SubagentParamsLike,
 		signal: AbortSignal,
 		onUpdate: ((r: AgentToolResult<Details>) => void) | undefined,
 		ctx: ExtensionContext,
+		preserveActiveSession = false,
 	): Promise<AgentToolResult<Details>> => {
 		const delegatedThinkingOverride = delegatedThinkingOverrides.get(params);
 		const allowZeroToolBudget = delegatedZeroToolBudgets.has(params);
-		deps.state.baseCwd = ctx.cwd;
+		if (!preserveActiveSession) deps.state.baseCwd = ctx.cwd;
 		deps.state.foregroundRuns ??= new Map();
 		deps.state.foregroundControls ??= new Map();
 		deps.state.lastForegroundControlId ??= null;
@@ -4094,7 +4140,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 								const budgetState = usageBudgetState(workflowUsageBudget.budget, sumResultsCost(workflowResults));
 								if (budgetState?.exhausted) return workflowChildResult(key, buildRequestedModeError(childParams as SubagentParamsLike, usageBudgetExceededMessage(budgetState)));
 								const childRequest = prepareWorkflowChildParams({ ...workflowChildDefaults, ...childParams, workflowParentRunId: workflowRunId, workflowKey: key } as SubagentParamsLike);
-								const result = await execute(randomUUID(), childRequest, workflowSignal, undefined, ctx);
+								const result = await execute(randomUUID(), childRequest, workflowSignal, undefined, ctx, preserveActiveSession);
 								workflowResults.push(...result.details.results);
 								const child = workflowChildResult(key, result);
 								if (result.details.asyncId) {
@@ -4103,7 +4149,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 								}
 								return child;
 							},
-							status: async (keyOrRunId, workflowSignal) => workflowChildResult(keyOrRunId, await execute(randomUUID(), { action: "status", id: keyOrRunId }, workflowSignal, undefined, ctx)),
+							status: async (keyOrRunId, workflowSignal) => workflowChildResult(keyOrRunId, await execute(randomUUID(), { action: "status", id: keyOrRunId }, workflowSignal, undefined, ctx, preserveActiveSession)),
 						});
 						const returnPreview = formatWorkflowValue(workflow.value).slice(0, 1_000);
 						const emitPreview = workflow.emits.length > 0 ? ` Emitted: ${workflow.emits.map(formatWorkflowValue).join(", ").slice(0, 1_000)}` : "";
@@ -4154,11 +4200,11 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 						const budgetState = usageBudgetState(workflowUsageBudget.budget, sumResultsCost(workflowResults));
 						if (budgetState?.exhausted) return workflowChildResult(key, buildRequestedModeError(childParams as SubagentParamsLike, usageBudgetExceededMessage(budgetState)));
 						const childRequest = prepareWorkflowChildParams({ ...workflowChildDefaults, ...childParams, workflowParentRunId: _id, workflowKey: key, suppressRoutineResultIntercom: chatProgress.mode === "live-card" } as SubagentParamsLike);
-						const result = await execute(randomUUID(), childRequest, workflowSignal, undefined, ctx);
+						const result = await execute(randomUUID(), childRequest, workflowSignal, undefined, ctx, preserveActiveSession);
 						workflowResults.push(...result.details.results);
 						return workflowChildResult(key, result);
 					},
-					status: async (keyOrRunId, workflowSignal) => workflowChildResult(keyOrRunId, await execute(randomUUID(), { action: "status", id: keyOrRunId }, workflowSignal, undefined, ctx)),
+					status: async (keyOrRunId, workflowSignal) => workflowChildResult(keyOrRunId, await execute(randomUUID(), { action: "status", id: keyOrRunId }, workflowSignal, undefined, ctx, preserveActiveSession)),
 				});
 				const traceLines = workflow.trace.map((entry) => `- ${entry.operation} ${entry.key}: ${entry.state}${entry.runId ? ` (${entry.runId})` : ""}${entry.durationMs !== undefined ? ` in ${entry.durationMs}ms` : ""}${entry.error ? ` — ${entry.error}` : ""}`);
 				const sections = ["Workflow completed.", `Return:\n${formatWorkflowValue(workflow.value)}`];
@@ -4188,9 +4234,15 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		const requestCwd = resolveRequestedCwd(ctx.cwd, directParams.cwd);
 		const paramsWithResolvedCwd = directParams.cwd === undefined ? directParams : { ...directParams, cwd: requestCwd };
 		const action = paramsWithResolvedCwd.action;
+		let requestSessionId = "";
+		let requestPiSessionId: string | undefined;
 		let requestParentModel: ParentModel | undefined;
 		try {
-			requestParentModel = rememberParentModel(deps.state, resolveCurrentSessionId(ctx.sessionManager), ctx.model);
+			requestSessionId = resolveCurrentSessionId(ctx.sessionManager);
+			requestPiSessionId = ctx.sessionManager.getSessionId() ?? undefined;
+			requestParentModel = preserveActiveSession
+				? normalizeParentModel(ctx.model)
+				: rememberParentModel(deps.state, requestSessionId, ctx.model);
 		} catch (error) {
 			if (action?.toLowerCase() !== "doctor") throw error;
 			requestParentModel = normalizeParentModel(ctx.model);
@@ -4257,7 +4309,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 					...(currentSessionId ? { currentSessionId } : {}),
 				});
 			}
-			const policyAction = action === "stop" ? "stopRun" : action === "steer" ? "steerRun" : action === "schedule" ? "scheduleCreate" : undefined;
+			const policyAction = action === "stop" ? "stopRun" : action === "steer" ? "steerRun" : action === "schedule.create" ? "scheduleCreate" : undefined;
 			if (policyAction) {
 				const decision = resolveAuthorityDecision({ action: policyAction, ...(deps.config.authorityPolicy === undefined ? {} : { policy: deps.config.authorityPolicy }) });
 				if (decision === "forbid") {
@@ -4388,7 +4440,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 				};
 			}
 			if (action === "status") {
-				deps.state.currentSessionId = resolveCurrentSessionId(ctx.sessionManager);
+				if (!preserveActiveSession) deps.state.currentSessionId = resolveCurrentSessionId(ctx.sessionManager);
 				const withBudget = (result: AgentToolResult<Details>) => withSpawnBudgetStatus(
 					result,
 					deps.state,
@@ -4566,7 +4618,14 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			if (action === "append-step") {
 				return appendStepToAsyncChain(omitUndefinedProperties({ params: paramsWithResolvedCwd, requestCwd, ctx, deps, parentModel: requestParentModel }));
 			}
-			if (action === "schedule" || action === "schedule-list" || action === "schedule-status" || action === "schedule-cancel") {
+			if (action.startsWith("schedule.")) {
+				if (deps.allowMutatingManagementActions === false && MUTATING_MANAGEMENT_ACTIONS.has(action)) {
+					return {
+						content: [{ type: "text", text: `Action '${action}' is not available from child-safe subagent fanout mode.` }],
+						isError: true,
+						details: { mode: "management", results: [] },
+					};
+				}
 				if (!deps.handleScheduledRunAction) {
 					return {
 						content: [{ type: "text", text: `Action '${action}' is not available in this subagent context.` }],
@@ -4774,7 +4833,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		const spawnPreflight = preflightSpawnBudget(
 			deps.state,
 			deps.config,
-			deps.state.currentSessionId,
+			requestSessionId,
 			requestedSpawns,
 		);
 		if (spawnPreflight.error) return spawnBudgetErrorResult(spawnPreflight.error, foregroundMode);
@@ -4906,7 +4965,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 				params: effectiveParams,
 				projectRoot: effectiveCwd,
 				...(deps.config.missions ? { config: deps.config.missions } : {}),
-				...(deps.state.currentSessionId ? { ownerSessionId: deps.state.currentSessionId } : {}),
+				ownerSessionId: requestSessionId,
 			});
 		} catch (error) {
 			if (explicitMission) return toExecutionErrorResult(effectiveParams, error, contextPolicy.contextSummary);
@@ -4934,7 +4993,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		const reservation = reserveSpawnBudget(
 			deps.state,
 			deps.config,
-			deps.state.currentSessionId,
+			requestSessionId,
 			requestedSpawns,
 		);
 		if (reservation.error) return attachMission(spawnBudgetErrorResult(reservation.error, foregroundMode));
@@ -4969,8 +5028,9 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			contextPolicy,
 			modelScope,
 			parentModel: requestParentModel,
-			parentSessionId: deps.state.currentSessionId,
-			capabilityCeiling: resolveCurrentSubagentCapabilityCeiling(deps.state.currentSessionId ?? undefined),
+			parentSessionId: requestSessionId,
+			parentPiSessionId: requestPiSessionId,
+			capabilityCeiling: resolveCurrentSubagentCapabilityCeiling(requestSessionId),
 		});
 
 		const foregroundDescription = effectiveParams.task?.trim()
@@ -4980,7 +5040,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			? undefined
 			: compactOptional<ForegroundRunControl>({
 				runId,
-				...(deps.state.currentSessionId ? { sessionId: deps.state.currentSessionId } : {}),
+				sessionId: requestSessionId,
 				mode: foregroundMode,
 				startedAt: Date.now(),
 				updatedAt: Date.now(),
@@ -5169,5 +5229,23 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		return execute(id, delegatedParams, signal, onUpdate, ctx);
 	};
 
-	return { execute: executeWithSingleDispatchGuard, executeDelegated };
+	const executeScheduled = (
+		id: string,
+		params: SubagentParamsLike,
+		signal: AbortSignal,
+		ctx: ExtensionContext,
+	) => {
+		const ownerSessionId = resolveCurrentSessionId(ctx.sessionManager);
+		let ownerExecutor = scheduledOwnerExecutors.get(ownerSessionId);
+		if (!ownerExecutor) {
+			ownerExecutor = createSubagentExecutor({
+				...deps,
+				state: createScheduledOwnerState(deps.state, ownerSessionId, ctx),
+			});
+			scheduledOwnerExecutors.set(ownerSessionId, ownerExecutor);
+		}
+		return ownerExecutor.execute(id, params, signal, undefined, ctx);
+	};
+
+	return { execute: executeWithSingleDispatchGuard, executeDelegated, executeScheduled };
 }
