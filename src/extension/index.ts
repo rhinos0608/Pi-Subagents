@@ -517,6 +517,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		if (event.toolName !== "subagent") return;
 		if (!ctx.hasUI) return;
 		state.lastUiContext = ctx;
+		restoreActiveJobs(ctx);
 		fleetStatus?.setContext(ctx);
 		fleetStatus?.refresh();
 		if (state.asyncJobs.size > 0) {
