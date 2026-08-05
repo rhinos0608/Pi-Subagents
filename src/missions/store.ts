@@ -309,13 +309,26 @@ export function createMission(location: MissionStoreLocation, input: MissionCrea
 	return created;
 }
 
+export class MissionNotFoundError extends Error {
+	readonly code = "MISSION_NOT_FOUND";
+	readonly missionId: string;
+	readonly missionDir: string;
+
+	constructor(missionId: string, missionDir: string) {
+		super(`Mission '${missionId}' was not found in ${missionDir}`);
+		this.name = "MissionNotFoundError";
+		this.missionId = missionId;
+		this.missionDir = missionDir;
+	}
+}
+
 export function readMission(location: MissionStoreLocation, missionId: string): MissionRecord {
 	const filePath = missionRecordPath(location, missionId);
 	let raw: string;
 	try {
 		raw = fs.readFileSync(filePath, "utf-8");
 	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new Error(`Mission '${missionId}' was not found in ${location.missionDir}`);
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new MissionNotFoundError(missionId, location.missionDir);
 		throw error;
 	}
 	try {

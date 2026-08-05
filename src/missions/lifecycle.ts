@@ -5,7 +5,7 @@ import { writePrivateAtomicJson } from "../shared/atomic-json.ts";
 import type { Details, SubagentRunMode } from "../shared/types.ts";
 import { validateMissionLaunch } from "./actions.ts";
 import type { MissionArtifact, MissionRecord, MissionRunLink, MissionRunMode, MissionStatus, MissionStoreConfig, MissionStoreLocation } from "./types.ts";
-import { createMission, missionRecordPath, readMission, resolveMissionStoreLocation, updateMission, validateMissionId } from "./store.ts";
+import { createMission, MissionNotFoundError, missionRecordPath, readMission, resolveMissionStoreLocation, updateMission, validateMissionId } from "./store.ts";
 
 export const MISSION_BINDING_FILE = "mission.json";
 
@@ -267,7 +267,25 @@ export function syncMissionFromAsyncCompletion(value: unknown): MissionRecord | 
 	const runId = typeof event.runId === "string" ? event.runId : typeof event.id === "string" ? event.id : undefined;
 	if (!runId) throw new Error("Async mission completion is missing runId");
 	const runStatus = typeof event.state === "string" ? event.state : event.success === true ? "completed" : "failed";
-	const current = readMission(binding.location, binding.missionId);
+	let current: MissionRecord;
+	try {
+		current = readMission(binding.location, binding.missionId);
+	} catch (error) {
+		if (!(error instanceof MissionNotFoundError)) throw error;
+		try {
+			fs.appendFileSync(path.join(event.asyncDir, "events.jsonl"), `${JSON.stringify({
+				type: "subagent.mission.sync.skipped",
+				ts: Date.now(),
+				runId,
+				missionId: binding.missionId,
+				reason: "mission-record-missing",
+				missionPath: missionRecordPath(binding.location, binding.missionId),
+			})}\n`, "utf-8");
+		} catch {
+			// Mission bookkeeping is secondary to preserving the completed async result.
+		}
+		return undefined;
+	}
 	const completedAt = new Date().toISOString();
 	const artifacts: MissionArtifact[] = [
 		{ kind: "status", path: path.join(event.asyncDir, "status.json") },
