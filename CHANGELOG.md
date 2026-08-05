@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Added
+- Added live status streaming for `subagent_wait` while it waits on subagent runs. Thanks to @walter-erquinigo for #832.
 - Added opt-in `inlineToolDisplay: "summary"` for a stable one-row inline subagent result while FleetView remains the live progress surface. Thanks to @ryanbbrown for #805.
 - Added project-scoped durable schedules with one-shot and fixed-interval triggers, `workflowScript` or agent targets, overlap/catch-up policy, text management actions, external `schedule.run-due`, and durable history/event/run receipts. Thanks to @nicobailon for #815.
 - Added an observational `pi-subagents/external-runs` provider API for visible terminal work, without taking process ownership. Thanks to @nicobailon for #795.
