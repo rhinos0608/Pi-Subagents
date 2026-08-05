@@ -333,6 +333,7 @@ interface ExecutionContextData {
 	modelScope?: ModelScopeConfig;
 	parentModel?: ParentModel;
 	parentSessionId: string | null;
+	parentPiSessionId?: string;
 	capabilityCeiling?: ResolvedSubagentCapabilityCeiling;
 }
 
@@ -2357,8 +2358,8 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 	const asyncCtx = compactOptional<Parameters<typeof executeAsyncSingle>[1]["ctx"]>({
 		pi: deps.pi,
 		cwd: ctx.cwd,
-		currentSessionId: deps.state.currentSessionId!,
-		parentSessionId: ctx.sessionManager.getSessionId() ?? undefined,
+		currentSessionId: data.parentSessionId!,
+		parentSessionId: data.parentPiSessionId,
 		currentModelProvider: parentModel?.provider,
 		currentModel: parentModel,
 		modelScope: data.modelScope,
@@ -2636,8 +2637,8 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 		const asyncCtx = compactOptional<Parameters<typeof executeAsyncSingle>[1]["ctx"]>({
 			pi: deps.pi,
 			cwd: ctx.cwd,
-			currentSessionId: deps.state.currentSessionId!,
-			parentSessionId: ctx.sessionManager.getSessionId() ?? undefined,
+			currentSessionId: data.parentSessionId!,
+			parentSessionId: data.parentPiSessionId,
 			currentModelProvider: parentModel?.provider,
 			currentModel: parentModel,
 			modelScope: data.modelScope,
@@ -3213,8 +3214,8 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 			const asyncCtx = compactOptional<Parameters<typeof executeAsyncSingle>[1]["ctx"]>({
 				pi: deps.pi,
 				cwd: ctx.cwd,
-				currentSessionId: deps.state.currentSessionId!,
-				parentSessionId: ctx.sessionManager.getSessionId() ?? undefined,
+				currentSessionId: data.parentSessionId!,
+				parentSessionId: data.parentPiSessionId,
 				currentModelProvider: parentModel?.provider,
 				currentModel: parentModel,
 				modelScope: data.modelScope,
@@ -3584,8 +3585,8 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 			const asyncCtx = compactOptional<Parameters<typeof executeAsyncSingle>[1]["ctx"]>({
 				pi: deps.pi,
 				cwd: ctx.cwd,
-				currentSessionId: deps.state.currentSessionId!,
-				parentSessionId: ctx.sessionManager.getSessionId() ?? undefined,
+				currentSessionId: data.parentSessionId!,
+				parentSessionId: data.parentPiSessionId,
 				currentModelProvider: parentModel?.provider,
 				currentModel: parentModel,
 				modelScope: data.modelScope,
@@ -4194,9 +4195,13 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		const requestCwd = resolveRequestedCwd(ctx.cwd, directParams.cwd);
 		const paramsWithResolvedCwd = directParams.cwd === undefined ? directParams : { ...directParams, cwd: requestCwd };
 		const action = paramsWithResolvedCwd.action;
+		let requestSessionId = "";
+		let requestPiSessionId: string | undefined;
 		let requestParentModel: ParentModel | undefined;
 		try {
-			requestParentModel = rememberParentModel(deps.state, resolveCurrentSessionId(ctx.sessionManager), ctx.model);
+			requestSessionId = resolveCurrentSessionId(ctx.sessionManager);
+			requestPiSessionId = ctx.sessionManager.getSessionId() ?? undefined;
+			requestParentModel = rememberParentModel(deps.state, requestSessionId, ctx.model);
 		} catch (error) {
 			if (action?.toLowerCase() !== "doctor") throw error;
 			requestParentModel = normalizeParentModel(ctx.model);
@@ -4787,7 +4792,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		const spawnPreflight = preflightSpawnBudget(
 			deps.state,
 			deps.config,
-			deps.state.currentSessionId,
+			requestSessionId,
 			requestedSpawns,
 		);
 		if (spawnPreflight.error) return spawnBudgetErrorResult(spawnPreflight.error, foregroundMode);
@@ -4919,7 +4924,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 				params: effectiveParams,
 				projectRoot: effectiveCwd,
 				...(deps.config.missions ? { config: deps.config.missions } : {}),
-				...(deps.state.currentSessionId ? { ownerSessionId: deps.state.currentSessionId } : {}),
+				ownerSessionId: requestSessionId,
 			});
 		} catch (error) {
 			if (explicitMission) return toExecutionErrorResult(effectiveParams, error, contextPolicy.contextSummary);
@@ -4947,7 +4952,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		const reservation = reserveSpawnBudget(
 			deps.state,
 			deps.config,
-			deps.state.currentSessionId,
+			requestSessionId,
 			requestedSpawns,
 		);
 		if (reservation.error) return attachMission(spawnBudgetErrorResult(reservation.error, foregroundMode));
@@ -4982,8 +4987,9 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			contextPolicy,
 			modelScope,
 			parentModel: requestParentModel,
-			parentSessionId: deps.state.currentSessionId,
-			capabilityCeiling: resolveCurrentSubagentCapabilityCeiling(deps.state.currentSessionId ?? undefined),
+			parentSessionId: requestSessionId,
+			parentPiSessionId: requestPiSessionId,
+			capabilityCeiling: resolveCurrentSubagentCapabilityCeiling(requestSessionId),
 		});
 
 		const foregroundDescription = effectiveParams.task?.trim()
@@ -4993,7 +4999,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			? undefined
 			: compactOptional<ForegroundRunControl>({
 				runId,
-				...(deps.state.currentSessionId ? { sessionId: deps.state.currentSessionId } : {}),
+				sessionId: requestSessionId,
 				mode: foregroundMode,
 				startedAt: Date.now(),
 				updatedAt: Date.now(),
