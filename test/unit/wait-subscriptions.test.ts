@@ -256,6 +256,37 @@ describe("non-blocking wait subscriptions", () => {
 		}
 	});
 
+	it("keeps a subscription armed when cleanup fails before delivery", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-wait-subscribe-cleanup-failure-"));
+		const asyncRoot = path.join(root, "runs");
+		const subscriptionsDir = path.join(root, "subscriptions");
+		const sent: string[] = [];
+		const state = makeState();
+		const manager = createWaitSubscriptionManager({
+			events: new TestBus(),
+			sendMessage(message: { content?: unknown }) { sent.push(String(message.content)); },
+		} as never, state, { asyncDirRoot: asyncRoot, subscriptionsDir, pollIntervalMs: 60_000 });
+		try {
+			const registration = manager.arm({ targetKind: "async", runId: "run-missing", requestedId: "run-missing", timeoutMs: 30_000 });
+			const file = path.join(subscriptionsDir, `${registration.token}.json`);
+			fs.unlinkSync(file);
+			fs.mkdirSync(file);
+
+			manager.reconcile();
+			assert.equal(sent.length, 0);
+			assert.equal(state.waitSubscriptions?.has(registration.token), true);
+
+			fs.rmdirSync(file);
+			manager.reconcile();
+			assert.match(sent[0] ?? "", /could not be reconciled/);
+			assert.equal(sent.length, 1);
+			assert.equal(state.waitSubscriptions?.has(registration.token), false);
+		} finally {
+			manager.dispose();
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("wakes when async reconciliation throws", () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-wait-subscribe-reconcile-error-"));
 		const asyncRoot = path.join(root, "not-a-directory");
