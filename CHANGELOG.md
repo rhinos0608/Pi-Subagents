@@ -7,6 +7,7 @@
 - Verified scripted workflows can mix dynamic parallel and sequential phases with managed worktree isolation.
 
 ### Fixed
+- Keep async subagent widget spinners moving during quiet running periods without adding extra polling.
 - Preserve workflow child output after grouped intercom delivery, so scripts can consume `runs.run(...).output`. Thanks to @kaushal9696 for #846.
 - Let the Fleet inspector use the full 85% terminal-height budget on tall terminals. Thanks to @xz-dev for #839.
 - Launch Herdr inspector panes through a JavaScript bootstrap instead of asking Node to type-strip TypeScript installed under `node_modules`. Thanks to @williamleong for #837.
