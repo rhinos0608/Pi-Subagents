@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.42.0] - 2026-08-06
+
 ### Added
 - Split the README reference material into focused docs and keep the README as a concise quick-start guide.
 - Verified scripted workflows can mix dynamic parallel and sequential phases with managed worktree isolation.
