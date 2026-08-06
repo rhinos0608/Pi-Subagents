@@ -3,6 +3,16 @@ import { describe, it } from "node:test";
 import { formatWorkflowJsonPreview, runWorkflowScript, WorkflowScriptError } from "../../src/workflows/scripted-workflow.ts";
 
 describe("scripted workflow runtime", () => {
+	it("allows scripts to run without a timeout", async () => {
+		const result = await runWorkflowScript({
+			script: `return "done";`,
+			async launch(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
+			async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
+		});
+
+		assert.equal(result.value, "done");
+	});
+
 	it("runs keyed children, streams progress, and exposes no host capabilities", async () => {
 		const launches: Array<{ key: string; params: Record<string, unknown> }> = [];
 		const traceSnapshots: number[] = [];

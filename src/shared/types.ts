@@ -1007,7 +1007,7 @@ export interface Details {
 		console: Array<{ level: "log" | "info" | "warn" | "error"; text: string }>;
 	};
 	chatProgress?: {
-		mode: "off" | "terminal" | "milestones" | "live-card";
+		mode: "off" | "live-card";
 		repoRelation: "same" | "other";
 		repoLabel?: string;
 	};
