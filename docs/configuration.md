@@ -264,6 +264,8 @@ This preference also controls the default chain scratch directory. `"project"` u
 
 The `"session"` option uses the same directory that `cleanupAllArtifactDirs` already scans for age-based cleanup, so artifacts are still cleaned up automatically. Temporary chain directories are cleaned up separately after 24 hours.
 
+When a project-scoped launch runs from an npm package directory, pi-subagents warns if package settings can include `.pi-subagents/` in the published package. Add `.pi-subagents/` to `.npmignore` (or `.gitignore` when no `.npmignore` exists), use a `files` allowlist that does not include `.pi-subagents/`, or select `"session"` or `"temp"`.
+
 ## `completionBatch`
 
 ```json

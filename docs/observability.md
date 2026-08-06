@@ -135,6 +135,8 @@ Debug artifacts live under `{sessionDir}/subagent-artifacts/`, `.pi-subagents/ar
 
 Metadata records timing, usage, exit code, final model, attempted models, fallback attempt outcomes, and the resolved acceptance ledger with its parsed child report.
 
+For npm package projects, project-scoped artifacts need a `.npmignore` rule (or `.gitignore` when no `.npmignore` exists) or a `files` allowlist that does not include `.pi-subagents/`. pi-subagents warns at launch when these package settings can include the artifacts. Use `artifactDir: "session"` or `"temp"` to keep them outside the package worktree.
+
 ## Sessions
 
 Session files are stored under a per-run session directory. With `context: "fork"`, each child starts with `--session <branched-session-file>` produced from the parent's current leaf. That is a real session fork, not an injected summary.
