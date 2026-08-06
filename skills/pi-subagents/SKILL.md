@@ -31,9 +31,11 @@ For broad or uncertain requests, read more than one reference. For complex work,
 
 - Keep the parent as orchestrator and final decision-maker.
 - Use one writer per cwd/worktree unless isolated worktrees are intentional.
-- For parallel fanout, compare child prompts before launch. Do not send clone prompts with only issue numbers, titles, or broad file globs swapped; each child needs a lane-specific task, source seam, prior evidence, and decision that remains distinct without the item number. Launch that fanout as one `workflowScript` with stable keys and aggregate output unless there is truly only one child.
+- For cross-codebase work, record the target repo, explicit `cwd`, authority boundary, and expected output before launch. Do not assume the parent session cwd is the child repo.
+- For parallel fanout, compare child prompts before launch. Do not send clone prompts with only issue numbers, titles, or broad file globs swapped; each child needs a lane-specific task, source seam, prior evidence, and decision that remains distinct without the item number. Launch that fanout as one async `workflowScript` with stable keys and aggregate output unless there is truly only one child.
 - Prefer fresh-context review/validation fanout, then synthesize and apply fixes in the parent.
-- Use async/background only when work can proceed independently; do not poll just to wait. For adaptive gates, branch in `workflowScript`. Approval controls remain available only for already-running durable legacy chains.
+- Use async/background by default when work can proceed independently; do not poll just to wait. For adaptive gates, branch in `workflowScript`. Approval controls remain available only for already-running durable legacy chains.
 - Preserve capability ceilings, including child tool restrictions and session-scoped allowed-agent restrictions.
-- Escalate unresolved product, architecture, or safety decisions upward instead of letting a child decide silently.
+- Escalate unresolved product, architecture, authority, release, merge, or safety decisions upward instead of letting a child decide silently.
+- Treat receipts, CI, review bots, and external-run records as evidence, not authority to merge, close, comment, publish, or release.
 - As a conservative orchestration policy, do not pass `turnBudget`, a hard `toolBudget`, or a tight `usageBudget` to mutation-capable workers. The default tool budget blocks read/search tools rather than mutation tools, and reported usage has no reservation model. If a worker is interrupted after a tool call starts, checkpoint after the current tool returns with changed files, build/test state, and commit or PR state.
