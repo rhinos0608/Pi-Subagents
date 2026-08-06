@@ -180,7 +180,7 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 		assert.match(String(workflowScript?.description ?? ""), /no filesystem, shell, Pi tools, or host globals/i);
 		const chatProgress = SubagentParams?.properties?.chatProgress;
 		assert.equal(chatProgress?.type, "string");
-		assert.deepEqual(chatProgress?.enum, ["auto", "off", "terminal", "milestones", "live-card"]);
+		assert.deepEqual(chatProgress?.enum, ["auto", "off", "live-card"]);
 		assert.match(String(chatProgress?.description ?? ""), /same Git repository/i);
 		const worktree = SubagentParams?.properties?.worktree;
 		assert.equal(worktree?.type, "boolean");
@@ -209,7 +209,7 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 		assert.doesNotMatch(description, /orchestration\./);
 	});
 
-	it("includes foreground timeout aliases and turn budget", () => {
+	it("documents workflow timeout aliases and turn budget", () => {
 		const timeoutSchema = SubagentParams?.properties?.timeoutMs;
 		const maxRuntimeSchema = SubagentParams?.properties?.maxRuntimeMs;
 		const turnBudgetSchema = SubagentParams?.properties?.turnBudget;
@@ -219,9 +219,10 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 		assert.equal(timeoutSchema.minimum, 1);
 		assert.equal(maxRuntimeSchema.minimum, 1);
 		assert.match(String(timeoutSchema.description ?? ""), /foreground and async\/background/i);
+		assert.match(String(timeoutSchema.description ?? ""), /async workflows have no default timeout/i);
 		assert.doesNotMatch(String(timeoutSchema.description ?? ""), /foreground-only/i);
 		assert.match(String(maxRuntimeSchema.description ?? ""), /timeoutMs/i);
-		assert.match(String(maxRuntimeSchema.description ?? ""), /foreground and async\/background/i);
+		assert.match(String(maxRuntimeSchema.description ?? ""), /async workflows have no default timeout/i);
 		assert.equal(turnBudgetSchema?.properties?.maxTurns?.minimum, 1);
 		assert.equal(turnBudgetSchema?.properties?.graceTurns?.minimum, 0);
 		assert.equal(toolBudgetSchema?.properties?.soft?.minimum, 1);

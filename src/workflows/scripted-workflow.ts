@@ -175,7 +175,7 @@ export class WorkflowScriptError extends Error {
 
 export interface RunWorkflowScriptOptions {
 	script: string;
-	timeoutMs: number;
+	timeoutMs?: number;
 	signal?: AbortSignal;
 	launch: (key: string, params: Record<string, unknown>, signal: AbortSignal) => Promise<WorkflowScriptChildResult>;
 	status: (keyOrRunId: string, signal: AbortSignal) => Promise<WorkflowScriptChildResult>;
@@ -261,7 +261,7 @@ function workflowStringMetadata(params: Record<string, unknown>): Pick<WorkflowS
 
 export async function runWorkflowScript(options: RunWorkflowScriptOptions): Promise<WorkflowScriptResult> {
 	if (!options.script.trim()) throw new Error("workflowScript must not be empty.");
-	if (!Number.isInteger(options.timeoutMs) || options.timeoutMs < 1) throw new Error("workflow script timeout must be a positive integer.");
+	if (options.timeoutMs !== undefined && (!Number.isInteger(options.timeoutMs) || options.timeoutMs < 1)) throw new Error("workflow script timeout must be a positive integer.");
 
 	const worker = new Worker(WORKER_SOURCE, { eval: true });
 	const emits: unknown[] = [];
@@ -283,7 +283,7 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 		const finish = (outcome: { value: unknown } | { error: Error }) => {
 			if (settled) return;
 			settled = true;
-			clearTimeout(timer);
+			if (timer) clearTimeout(timer);
 			options.signal?.removeEventListener("abort", onAbort);
 			void worker.terminate();
 			childController.abort("error" in outcome ? outcome.error : new Error("Workflow script completed; unawaited child launches are aborted."));
@@ -291,7 +291,9 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 			else resolve({ value: outcome.value, ...partial() });
 		};
 		const onAbort = () => finish({ error: new Error("Workflow script aborted.") });
-		const timer = setTimeout(() => finish({ error: new Error(`Workflow script timed out after ${options.timeoutMs}ms.`) }), options.timeoutMs);
+		const timer = options.timeoutMs === undefined
+			? undefined
+			: setTimeout(() => finish({ error: new Error(`Workflow script timed out after ${options.timeoutMs}ms.`) }), options.timeoutMs);
 		options.signal?.addEventListener("abort", onAbort, { once: true });
 		if (options.signal?.aborted) return onAbort();
 
