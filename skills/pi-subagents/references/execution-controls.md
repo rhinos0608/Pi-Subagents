@@ -56,7 +56,7 @@ its resolved launch context as `[fresh]` or `[fork]`. Aggregate headers show
 
 ### Scripted workflows
 
-`workflowScript` is the sole public orchestration surface. Use `runs.run(key, { agent, task, ... })` for one child, `runs.all([...])` for parallel children, and ordinary JavaScript for sequence, branching, filtering, retries, and aggregation. Prefer a single scripted workflow whenever the parent is starting a coordinated wave, such as multiple reviews, review plus gate monitor, worker then monitor setup, or a fanout that the parent will consume together. Use a direct `{ agent, task }` call only for one isolated child with no sibling work or aggregate handoff.
+`workflowScript` is the sole public orchestration surface. Use `runs.run(key, { agent, task, ... })` for one child, `runs.all([...])` for parallel children, and ordinary JavaScript for sequence, branching, filtering, retries, and aggregation. Prefer a single scripted workflow whenever the parent is starting a coordinated wave, such as multiple reviews, review plus gate monitor, worker then monitor setup, cross-repo prep lanes, or a fanout that the parent will consume together. Use a direct `{ agent, task }` call only for one isolated child with no sibling work or aggregate handoff.
 
 ```js
 subagent({
@@ -93,7 +93,7 @@ subagent({
 })
 ```
 
-File-only output mode works for async single runs and workflowScript child launches. Use distinct absolute or durable output paths when later script steps need stable references.
+File-only output mode works for async single runs and workflowScript child launches. Use distinct absolute or durable output paths when later script steps need stable references. For cross-codebase waves, include the repo slug or lane key in each output path so reports from different repositories cannot collide.
 
 For review fanout where the parent continues a local audit:
 
@@ -298,10 +298,11 @@ After compaction, restart, or confusing history, recover from durable state firs
 
 Routing rule:
 - Same project: ordinary mission-backed subagents.
-- Different project, small/bounded task: ordinary subagent with explicit `cwd`.
-- Different project, substantial or long-running work: open a project-owned Herdr pane rooted there, then give that project Pi session a narrow mission/result contract. Do not model it as ordinary child nesting, and do not expect existing headless runs to move into the pane.
+- Different project, small/bounded task: ordinary async subagent with explicit `cwd`, an authority boundary, and durable output.
+- Several projects with independent work: one async `workflowScript` whose child keys include repo slugs and whose child calls set explicit `cwd`; keep publication and merge decisions serial per repo.
+- Different project, substantial or long-running work: open a project-owned Herdr pane rooted there when a separate visible project session is useful, then give that project Pi session a narrow mission/result contract. Do not model it as ordinary child nesting, and do not expect existing headless runs to move into the pane.
 
-Project panes run a separate Pi session from the target directory. Subagents launched inside that pane use that project's config, agents, skills, files, git state, and mission records. The pane binding lives under `<projectRoot>/.pi-subagents/project-panes/herdr.json`.
+Project panes run a separate Pi session from the target directory. Subagents launched inside that pane use that project's config, agents, skills, files, git state, and mission records. The pane binding lives under `<projectRoot>/.pi-subagents/project-panes/herdr.json`. For ordinary headless delegation to another repo, prefer explicit `cwd` first; reserve project panes for visible or persistent project ownership.
 
 ```typescript
 subagent({ action: "mission.create", mission: { title: "Ship auth refresh", goal: "Implement and validate refresh handling" } })
