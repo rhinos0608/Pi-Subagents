@@ -384,7 +384,10 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 
 		const result = await executor.execute(
 			runId,
-			{ workflowScript: `emit("starting"); await runs.run("work", { agent: "echo", task: "Async work" }); return { answer: 42 };` },
+			{
+				workflowScript: `emit("starting"); await runs.run("work", { agent: "echo", task: "Async work" }); return { answer: 42 };`,
+				mission: { summary: "Review the active backlog", labels: ["github-backlog", "review"] },
+			},
 			new AbortController().signal,
 			undefined,
 			makeMinimalCtx(tempDir),
@@ -404,6 +407,7 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		assert.equal(status.state, "complete");
 		assert.deepEqual(status.workflow?.value, { answer: 42 });
 		assert.deepEqual(status.workflow?.emits, ["starting"]);
+		assert.equal(mockPi.callCount(), 1);
 		assert.ok(status.workflow?.trace?.some((entry) => entry.key === "work" && entry.state === "completed"));
 		const persistedResult = JSON.parse(fs.readFileSync(path.join(DIRS.results, `${runId}.json`), "utf-8")) as { agent?: string; summary?: string; workflow?: { value?: unknown } };
 		assert.equal(persistedResult.agent, "workflow");

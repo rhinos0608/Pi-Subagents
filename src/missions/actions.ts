@@ -101,17 +101,19 @@ export function validateMissionLaunch(value: unknown): MissionLaunchInput {
 	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("mission must be an object");
 	const input = value as Record<string, unknown>;
 	for (const key of Object.keys(input)) {
-		if (key !== "title" && key !== "goal" && key !== "labels") throw new Error(`mission.${key} is unknown`);
+		if (key !== "title" && key !== "summary" && key !== "goal" && key !== "labels") throw new Error(`mission.${key} is unknown`);
 	}
-	if (typeof input.title !== "string" || !input.title.trim()) throw new Error("mission.title must be a non-empty string");
+	if (input.title !== undefined && input.summary !== undefined) throw new Error("mission.title and mission.summary cannot both be set");
+	const title = input.title ?? input.summary;
+	if (typeof title !== "string" || !title.trim()) throw new Error("mission.title or mission.summary must be a non-empty string");
 	if (input.goal !== undefined && (typeof input.goal !== "string" || !input.goal.trim())) throw new Error("mission.goal must be a non-empty string");
 	if (input.labels !== undefined && (!Array.isArray(input.labels) || input.labels.some((label) => typeof label !== "string" || !label.trim()))) {
 		throw new Error("mission.labels must contain only non-empty strings");
 	}
 	return {
-		title: input.title.trim(),
-		...(typeof input.goal === "string" ? { goal: input.goal.trim() } : {}),
-		...(Array.isArray(input.labels) ? { labels: input.labels as string[] } : {}),
+		title: title.trim(),
+		...(input.goal !== undefined ? { goal: input.goal.trim() } : {}),
+		...(input.labels !== undefined ? { labels: input.labels.map((label) => label.trim()) } : {}),
 	};
 }
 

@@ -8,6 +8,7 @@
 - Added native `@gotgenes/pi-permission-system` compatibility for child processes. Thanks to @jagaliano for #847.
 
 ### Fixed
+- Accept `mission.summary` as a title alias for workflow launches, so child runs start normally.
 - Keep async subagent widget spinners moving during quiet running periods without adding extra polling.
 - Preserve workflow child output after grouped intercom delivery, so scripts can consume `runs.run(...).output`. Thanks to @kaushal9696 for #846.
 - Match pi-mcp-adapter cache identities that include `protocolVersion`, so direct MCP tool selections resolve from current adapter caches. Thanks to @ProCleiton for #848.

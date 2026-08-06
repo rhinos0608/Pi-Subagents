@@ -71,6 +71,15 @@ describe("mission launch lifecycle", () => {
 				config: { ...test.missionConfig, enabled: false },
 			});
 			assert.ok(explicit);
+
+			const summaryAlias = prepareMissionLaunch({
+				params: { mission: { summary: "Review active backlog", labels: ["review"] }, task: "Review the current diff" },
+				projectRoot: test.projectRoot,
+				config: test.missionConfig,
+			});
+			assert.ok(summaryAlias);
+			assert.deepEqual(readMission(summaryAlias.location, summaryAlias.missionId).labels, ["review"]);
+			assert.equal(readMission(summaryAlias.location, summaryAlias.missionId).title, "Review active backlog");
 		} finally {
 			fs.rmSync(test.root, { recursive: true, force: true });
 		}
