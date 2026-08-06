@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.42.1] - 2026-08-06
+
 ### Fixed
 - Prevent Pi from crashing when subagent status widgets and overlays are shown in narrow or resized terminal layouts. Thanks to @alanvardy for the report in #858 and @meatcar for the fix.
 - Keep async scripted workflows running without an implicit 30-minute timeout, while preserving the foreground default and explicit timeout controls.
