@@ -14,6 +14,7 @@ const PROJECT_ARTIFACT_PATHS = [
 	`${PROJECT_ARTIFACT_ROOT}/artifacts/run_worker_meta.json`,
 	`${PROJECT_ARTIFACT_ROOT}/artifacts/progress/run/progress.md`,
 	`${PROJECT_ARTIFACT_ROOT}/artifacts/outputs/output.md`,
+	`${PROJECT_ARTIFACT_ROOT}/artifacts/outputs/run/output.md`,
 	`${PROJECT_ARTIFACT_ROOT}/chain-runs/run.json`,
 ];
 
@@ -91,7 +92,18 @@ function ignoreFileExcludesProjectArtifacts(filePath: string): boolean {
 
 function filesIncludeProjectArtifacts(files: unknown): boolean | undefined {
 	if (!Array.isArray(files)) return undefined;
-	return files.some((entry) => typeof entry === "string" && !entry.startsWith("!") && patternMatchesProjectArtifacts(entry));
+	const included = new Set<string>();
+	for (const entry of files) {
+		if (typeof entry !== "string") continue;
+		const negated = entry.startsWith("!");
+		const pattern = negated ? entry.slice(1) : entry;
+		for (const artifactPath of PROJECT_ARTIFACT_PATHS) {
+			if (!patternMatchesArtifactPath(pattern, artifactPath)) continue;
+			if (negated) included.delete(artifactPath);
+			else included.add(artifactPath);
+		}
+	}
+	return included.size > 0;
 }
 
 /** Returns a package-publishing warning when project artifacts can enter npm packages. */
