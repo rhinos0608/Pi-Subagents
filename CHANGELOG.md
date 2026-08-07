@@ -3,10 +3,11 @@
 ## [Unreleased]
 
 ### Changed
-- Made `workflowScript` the only public subagent execution surface, including one-child and scheduled runs, with automatic return of single-expression scripts.
+- Made `workflowScript` the only public subagent execution surface, including one-child and scheduled runs. Scripts now use ordinary JavaScript statement-body semantics and require an explicit `return` for useful results.
+- Require workflowScript-only persisted schedule targets. Removed legacy agent-target restore conversion.
 
 ### Fixed
-- Preserve released agent-target schedule records by migrating them to `workflowScript` during restore.
+- Show the target agent for simple scheduled one-child workflow scripts and mark dynamic scripts clearly.
 - Stop quiet async status widget animation redraws from spilling progress updates into the editor input area.
 
 ## [0.42.1] - 2026-08-06

@@ -93,7 +93,7 @@ describe("result watcher", () => {
 		});
 		try {
 			manager.bindSession(ctx);
-			await manager.handleToolCall({ action: "schedule.create", id: "retained", every: "1h", workflowScript: "runs.run('main', { agent: 'worker' })" }, ctx);
+			await manager.handleToolCall({ action: "schedule.create", id: "retained", every: "1h", workflowScript: "return runs.run('main', { agent: 'worker' })" }, ctx);
 			await manager.handleToolCall({ action: "schedule.run", id: "retained" }, ctx);
 			const scheduleDir = path.join(scheduledRunStorePath(project, undefined, path.join(root, "stores")), "retained");
 			assert.equal(fs.existsSync(path.join(scheduleDir, "active.lock")), true);

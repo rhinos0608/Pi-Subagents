@@ -37,7 +37,7 @@ Add `autofix` to `/parallel-review` or `/parallel-cleanup` to apply only the syn
 
 ## Scripted workflows (workflowScript)
 
-All model-facing subagent execution is expressed through `workflowScript` in the `subagent` tool. Use stable keys and ordinary JavaScript for one child, sequence, and parallelism. A single-expression script is returned automatically:
+All model-facing subagent execution is expressed through `workflowScript` in the `subagent` tool. Use stable keys and ordinary JavaScript for one child, sequence, and parallelism. Scripts are ordinary JavaScript statement bodies. Use an explicit `return` for a useful result:
 
 ```js
 subagent({ workflowScript: `

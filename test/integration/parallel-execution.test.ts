@@ -337,12 +337,12 @@ describe("parallel agent execution", { skip: !piAvailable ? "pi packages not ava
 		}
 	});
 
-	it("rejects removed parallel action aliases with tasks", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+	it("rejects removed parallel action aliases with tasks at the public boundary", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
 		for (const action of ["parallel", "PARALLEL", "tasks"]) {
 			mockPi.reset();
 			const executor = makeExecutor();
 
-			const result = await executor.execute(
+			const result = await executor.executePublic(
 				`parallel-alias-${action}`,
 				{ action, tasks: [{ agent: "echo", task: `Run ${action}` }] },
 				new AbortController().signal,

@@ -20,6 +20,7 @@ import {
 import { resolveExecutionAgentScope } from "../../agents/agent-scope.ts";
 import { handleManagementAction } from "../../agents/agent-management.ts";
 import { buildDoctorReport } from "../../extension/doctor.ts";
+import { normalizePublicSubagentExecution } from "../../extension/public-execution.ts";
 import { runSync } from "./execution.ts";
 import { handleWatchdogToolAction, WATCHDOG_TOOL_ACTIONS } from "../../watchdog/tool-actions.ts";
 import type { MainWatchdogRuntime } from "../../watchdog/runtime.ts";
@@ -3949,17 +3950,6 @@ function workflowChatProgressUpdate(
 	};
 }
 
-function removedExecutionAliasError(params: SubagentParamsLike): AgentToolResult<Details> | undefined {
-	const action = params.action?.toLowerCase();
-	if (action === "single" && (params.agent !== undefined || params.task !== undefined)) {
-		return { content: [{ type: "text", text: "Direct execution was removed. Use workflowScript: \"return runs.run('main', { agent, task })\"." }], isError: true, details: { mode: "workflow", results: [] } };
-	}
-	if ((action === "parallel" || action === "tasks") && (params.tasks?.length ?? 0) > 0) {
-		return { content: [{ type: "text", text: "Legacy top-level chain and parallel inputs were removed; use workflowScript." }], isError: true, details: { mode: "workflow", results: [] } };
-	}
-	return undefined;
-}
-
 function createScheduledOwnerState(source: SubagentState, ownerSessionId: string, ctx: ExtensionContext): SubagentState {
 	const ownerSpawns = source.subagentSpawns?.sessionId === ownerSessionId
 		? {
@@ -3992,6 +3982,14 @@ function createScheduledOwnerState(source: SubagentState, ownerSessionId: string
 
 export function createSubagentExecutor(deps: ExecutorDeps): {
 	execute: (
+		id: string,
+		params: SubagentParamsLike,
+		signal: AbortSignal,
+		onUpdate: ((r: AgentToolResult<Details>) => void) | undefined,
+		ctx: ExtensionContext,
+	) => Promise<AgentToolResult<Details>>;
+	/** Public/model-facing execution boundary. Internal direct launch primitives use execute or executeDelegated. */
+	executePublic: (
 		id: string,
 		params: SubagentParamsLike,
 		signal: AbortSignal,
@@ -4038,19 +4036,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		deps.state.lastForegroundControlId ??= null;
 		const requestParams = params;
 		const normalizedAction = typeof requestParams.action === "string" ? requestParams.action.trim() : requestParams.action;
-		const aliasError = removedExecutionAliasError(requestParams);
-		if (aliasError) return aliasError;
-		if (requestParams.action !== undefined && normalizedAction === "") {
-			return { content: [{ type: "text", text: "action must be a non-empty management/control action, or omit action and use workflowScript." }], isError: true, details: { mode: "management", results: [] } };
-		}
-		if (requestParams.workflowScript !== undefined && !normalizedAction?.startsWith("schedule.")) {
-			const invalidMode = requestParams.action !== undefined || requestParams.agent !== undefined || requestParams.step !== undefined || requestParams.tasks !== undefined || requestParams.chain !== undefined;
-			if (invalidMode) {
-				return { content: [{ type: "text", text: "workflowScript is its own execution mode; do not combine it with action, agent, step, tasks, or chain." }], isError: true, details: { mode: "workflow", results: [] } };
-			}
-			if (requestParams.clarify === true) {
-				return { content: [{ type: "text", text: "workflowScript does not support clarify UI." }], isError: true, details: { mode: "workflow", results: [] } };
-			}
+		if (requestParams.workflowScript !== undefined && normalizedAction === undefined) {
 			const timeout = requestParams.timeoutMs ?? requestParams.maxRuntimeMs ?? (requestParams.async === false ? DEFAULT_FOREGROUND_TIMEOUT_MS : undefined);
 			const workflowUsageBudget = validateUsageBudgetConfig(requestParams.usageBudget ?? deps.config.usageBudget, requestParams.usageBudget ? "usageBudget" : "config.usageBudget");
 			if (workflowUsageBudget.error) return buildRequestedModeError(requestParams, workflowUsageBudget.error);
@@ -5206,14 +5192,9 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		onUpdate: ((r: AgentToolResult<Details>) => void) | undefined,
 		ctx: ExtensionContext,
 	): Promise<AgentToolResult<Details>> => {
-		const requestParams = params;
-		const normalizedAction = typeof requestParams.action === "string" ? requestParams.action.trim() : requestParams.action;
-		const aliasError = removedExecutionAliasError(requestParams);
-		if (aliasError) return aliasError;
-		if (requestParams.action !== undefined && normalizedAction === "") {
-			return { content: [{ type: "text", text: "action must be a non-empty management/control action, or omit action and use workflowScript." }], isError: true, details: { mode: "management", results: [] } };
-		}
-		if (normalizedAction) return execute(id, { ...requestParams, action: normalizedAction }, signal, onUpdate, ctx);
+		const normalizedAction = typeof params.action === "string" ? params.action.trim() : params.action;
+		const requestParams = normalizedAction ? { ...params, action: normalizedAction } : params;
+		if (normalizedAction) return execute(id, requestParams, signal, onUpdate, ctx);
 		const { depth } = checkSubagentDepth(deps.config.maxSubagentDepth);
 		const dispatchParams = applyForceTopLevelAsyncOverride(requestParams, depth, deps.config.forceTopLevelAsync === true);
 		const runsForeground = dispatchParams.clarify === true || (dispatchParams.async ?? deps.asyncByDefault) !== true;
@@ -5225,6 +5206,20 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		} finally {
 			deps.state.subagentInProgress = false;
 		}
+	};
+
+	const executePublic = (
+		id: string,
+		params: SubagentParamsLike,
+		signal: AbortSignal,
+		onUpdate: ((r: AgentToolResult<Details>) => void) | undefined,
+		ctx: ExtensionContext,
+	): Promise<AgentToolResult<Details>> => {
+		const normalized = normalizePublicSubagentExecution(params);
+		if (!normalized.ok) {
+			return Promise.resolve({ content: [{ type: "text", text: normalized.error }], isError: true, details: { mode: normalized.mode, results: [] } });
+		}
+		return executeWithSingleDispatchGuard(id, normalized.params, signal, onUpdate, ctx);
 	};
 
 	const executeDelegated = async (
@@ -5266,5 +5261,5 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		return ownerExecutor.execute(id, params, signal, undefined, ctx);
 	};
 
-	return { execute: executeWithSingleDispatchGuard, executeDelegated, executeScheduled };
+	return { execute: executeWithSingleDispatchGuard, executePublic, executeDelegated, executeScheduled };
 }

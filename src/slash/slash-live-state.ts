@@ -1,6 +1,7 @@
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Message } from "@earendil-works/pi-ai";
 import type { SubagentParamsLike } from "../runs/foreground/subagent-executor.ts";
+import { previewSimpleWorkflowRun } from "../workflows/scripted-workflow.ts";
 import type { SlashSubagentResponse, SlashSubagentUpdate } from "./slash-bridge.ts";
 import { type Details, type SingleResult, type Usage, SLASH_RESULT_TYPE } from "../shared/types.ts";
 
@@ -155,22 +156,8 @@ function buildChainInitialResult(params: SubagentParamsLike): AgentToolResult<De
 	};
 }
 
-function workflowRunPreview(script: string | undefined): { agent?: string; task?: string } {
-	const match = script?.match(/^runs\.run\([^,]+,\s*(\{.*\})\)$/s);
-	if (!match) return {};
-	try {
-		const child = JSON.parse(match[1]!) as { agent?: unknown; task?: unknown };
-		return {
-			...(typeof child.agent === "string" ? { agent: child.agent } : {}),
-			...(typeof child.task === "string" ? { task: child.task } : {}),
-		};
-	} catch {
-		return {};
-	}
-}
-
 function buildSingleInitialResult(params: SubagentParamsLike): AgentToolResult<Details> {
-	const preview = workflowRunPreview(params.workflowScript);
+	const preview = previewSimpleWorkflowRun(params.workflowScript) ?? {};
 	const agent = params.agent ?? preview.agent ?? "subagent";
 	const task = params.task ?? preview.task ?? "";
 	return {

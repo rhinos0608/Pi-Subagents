@@ -366,7 +366,7 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 	it("rejects action='single' with execution fields", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
 		const executor = makeExecutor([makeAgent("echo")]);
 
-		const result = await executor.execute(
+		const result = await executor.executePublic(
 			"single-alias",
 			{ action: "single", agent: "echo", task: "Run through alias" },
 			new AbortController().signal,
@@ -388,7 +388,7 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 
 		const result = await executor.execute(
 			"schedule-create",
-			{ action: "schedule.create", id: "nightly", every: "1h", workflowScript: "runs.run('main', { agent: 'echo' })" },
+			{ action: "schedule.create", id: "nightly", every: "1h", workflowScript: "return runs.run('main', { agent: 'echo' })" },
 			new AbortController().signal,
 			undefined,
 			makeMinimalCtx(tempDir),
@@ -396,7 +396,7 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 
 		assert.equal(result.isError, undefined);
 		assert.equal(result.content[0]?.text, "created");
-		assert.equal(forwarded?.workflowScript, "runs.run('main', { agent: 'echo' })");
+		assert.equal(forwarded?.workflowScript, "return runs.run('main', { agent: 'echo' })");
 	});
 
 	it("starts workflow scripts asynchronously by default and persists live status", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {

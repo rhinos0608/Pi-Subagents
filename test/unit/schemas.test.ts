@@ -498,7 +498,7 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 			{ action: "append-step", id: "run-1", step: { agent: "reviewer", task: "Continue" } },
 			{ skill: false },
 			{ action: "get", agent: "worker" },
-			{ workflowScript: "runs.run('main', { agent: 'worker', task: 'Fix', acceptance: false })", timeoutMs: 1000 },
+			{ workflowScript: "return runs.run('main', { agent: 'worker', task: 'Fix', acceptance: false })", timeoutMs: 1000 },
 			{ action: "steer", id: "run-1", message: "focus on tests" },
 			{ action: "steer", id: "run-1", index: 0, message: "focus on tests" },
 			{ action: "not-a-real-action" },

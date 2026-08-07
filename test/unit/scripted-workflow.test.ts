@@ -1,16 +1,29 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { formatWorkflowJsonPreview, runWorkflowScript, WorkflowScriptError } from "../../src/workflows/scripted-workflow.ts";
+import { formatWorkflowJsonPreview, previewSimpleWorkflowRun, runWorkflowScript, WorkflowScriptError } from "../../src/workflows/scripted-workflow.ts";
 
 describe("scripted workflow runtime", () => {
-	it("automatically returns a single-expression script", async () => {
-		const result = await runWorkflowScript({
-			script: `runs.run("main", { agent: "worker", task: "do work" })`,
+	it("uses ordinary statement-body return semantics", async () => {
+		const implicit = await runWorkflowScript({
+			script: `({ answer: 42 });`,
+			async launch(key) { return { key, ok: true, output: "done", artifactPaths: [] }; },
+			async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
+		});
+		const explicit = await runWorkflowScript({
+			script: `return ({ answer: 42 });`,
 			async launch(key) { return { key, ok: true, output: "done", artifactPaths: [] }; },
 			async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
 		});
 
-		assert.deepEqual(result.value, { key: "main", ok: true, output: "done", artifactPaths: [] });
+		assert.equal(implicit.value, null);
+		assert.deepEqual(explicit.value, { answer: 42 });
+	});
+
+	it("previews only simple explicit-return child scripts", () => {
+		assert.deepEqual(previewSimpleWorkflowRun(`return runs.run('main', { agent: 'worker', task: 'Review' });`), { agent: "worker", task: "Review" });
+		assert.deepEqual(previewSimpleWorkflowRun(`return runs.run("main", {"agent":"scout","task":"Scan"})`), { agent: "scout", task: "Scan" });
+		assert.equal(previewSimpleWorkflowRun(`const agent = "worker"; return runs.run("main", { agent });`), undefined);
+		assert.deepEqual(previewSimpleWorkflowRun(`return runs.run("main", { agent: selected });`), {});
 	});
 
 	it("allows scripts to run without a timeout", async () => {

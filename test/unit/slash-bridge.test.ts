@@ -68,7 +68,7 @@ describe("slash subagent bridge requester context", () => {
       events.on(RESPONSE, (data: any) => {
         try {
           assert.equal(data.isError, true);
-          assert.match(data.errorText, /Direct slash-event execution was removed/);
+          assert.match(data.errorText, /Direct execution was removed/);
           assert.equal(executeCalls, 0);
           resolve();
         } catch (error) {

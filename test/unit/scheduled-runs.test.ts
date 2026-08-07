@@ -130,7 +130,7 @@ describe("schedule helpers", () => {
 describe("project schedule management", () => {
 	it("creates a project one-shot schedule and restores it in another session", async () => {
 		const first = harness();
-		const result = await first.manager.handleToolCall({ action: "schedule.create", id: "night-review", name: "Night review", at: "+10m", workflowScript: "runs.run('main', { agent: 'reviewer', task: 'Review the diff' })" }, first.ctx);
+		const result = await first.manager.handleToolCall({ action: "schedule.create", id: "night-review", name: "Night review", at: "+10m", workflowScript: "return runs.run('main', { agent: 'reviewer', task: 'Review the diff' })" }, first.ctx);
 		assert.equal(result.isError, undefined);
 		assert.match(text(result), /Created schedule night-review/);
 		assert.equal(first.timers.values.size, 1);
@@ -159,7 +159,7 @@ describe("project schedule management", () => {
 		fs.mkdirSync(target);
 		h.manager.bindSession(context(target, "target-session"));
 		h.manager.bindSession(h.ctx);
-		await h.manager.handleToolCall({ action: "schedule.create", id: "other", cwd: target, every: "1h", workflowScript: "runs.run('main', { agent: 'worker' })" }, h.ctx);
+		await h.manager.handleToolCall({ action: "schedule.create", id: "other", cwd: target, every: "1h", workflowScript: "return runs.run('main', { agent: 'worker' })" }, h.ctx);
 		assert.equal(listScheduledRunSummaries(h.ctx.cwd, path.join(h.root, "stores")).length, 0);
 		assert.equal(listScheduledRunSummaries(target, path.join(h.root, "stores"))[0]?.cwd, target);
 		const listed = await h.manager.handleToolCall({ action: "schedule.list", cwd: target }, h.ctx);
@@ -173,7 +173,7 @@ describe("project schedule management", () => {
 		assert.match(text(result), /requires workflowScript/);
 	});
 
-	it("restores released agent-target schedules as workflow scripts", async () => {
+	it("fails closed on persisted legacy agent targets", () => {
 		const h = harness();
 		h.manager.stop();
 		const root = scheduledRunStorePath(h.ctx.cwd, undefined, path.join(h.root, "stores"));
@@ -192,40 +192,33 @@ describe("project schedule management", () => {
 			createdAt: new Date(h.clock.now).toISOString(),
 			updatedAt: new Date(h.clock.now).toISOString(),
 		}), "utf-8");
-		const launches: Record<string, unknown>[] = [];
 		const manager = createScheduledRunManager({
 			config: { scheduledRuns: { enabled: true } },
 			storeRoot: path.join(h.root, "stores"),
 			now: () => h.clock.now,
 			timers: h.timers,
-			launch: async (params) => {
-				launches.push(params as Record<string, unknown>);
-				return { content: [{ type: "text", text: "Async" }], details: { mode: "single", results: [], asyncId: "async-legacy" } };
-			},
+			launch: async () => ({ content: [{ type: "text", text: "unused" }], details: { mode: "management", results: [] } }),
 		});
-		manager.bindSession(context(h.ctx.cwd, "session-b"));
 
-		const listed = await manager.handleToolCall({ action: "schedule.list" }, context(h.ctx.cwd, "session-b"));
-		assert.equal(listed.isError, undefined);
-		assert.match(text(listed), /legacy/);
-		const run = await manager.handleToolCall({ action: "schedule.run", id: "legacy" }, context(h.ctx.cwd, "session-b"));
-		assert.equal(run.isError, undefined);
-		assert.deepEqual(launches[0], { workflowScript: "return runs.run('main', { agent: \"worker\", task: \"Review backlog\" })", async: true, context: "fresh", cwd: h.ctx.cwd, mission: false });
+		assert.throws(() => manager.bindSession(context(h.ctx.cwd, "session-b")), /removed legacy agent target.*target\.workflowScript/i);
 	});
 
 	it("supports workflowScript targets and rejects unsafe or deferred shapes", async () => {
 		const h = harness();
 		const workflow = await h.manager.handleToolCall({ action: "schedule.create", id: "workflow", every: "6h", workflowScript: "return await runs.run('review', {agent:'reviewer'})" }, h.ctx);
 		assert.equal(workflow.isError, undefined);
-		assert.match(text(workflow), /workflowScript/);
+		assert.match(text(workflow), /workflowScript -> agent reviewer/);
+		const dynamic = await h.manager.handleToolCall({ action: "schedule.create", id: "dynamic", every: "6h", workflowScript: "const agent = 'worker'; return runs.run('main', { agent })" }, h.ctx);
+		assert.equal(dynamic.isError, undefined);
+		assert.match(text(dynamic), /workflowScript \(dynamic\)/);
 		for (const params of [
-			{ action: "schedule.create", id: "../escape", every: "1h", workflowScript: "runs.run('main', { agent: 'worker' })" },
-			{ action: "schedule.create", id: "both", at: "+1h", every: "1h", workflowScript: "runs.run('main', { agent: 'worker' })" },
-			{ action: "schedule.create", id: "calendar", every: "day", at: "09:00", timezone: "UTC", workflowScript: "runs.run('main', { agent: 'worker' })" },
+			{ action: "schedule.create", id: "../escape", every: "1h", workflowScript: "return runs.run('main', { agent: 'worker' })" },
+			{ action: "schedule.create", id: "both", at: "+1h", every: "1h", workflowScript: "return runs.run('main', { agent: 'worker' })" },
+			{ action: "schedule.create", id: "calendar", every: "day", at: "09:00", timezone: "UTC", workflowScript: "return runs.run('main', { agent: 'worker' })" },
 			{ action: "schedule.create", id: "two-targets", every: "1h", agent: "worker", workflowScript: "return 1" },
-			{ action: "schedule.create", id: "fork", every: "1h", workflowScript: "runs.run('main', { agent: 'worker' })", context: "fork" },
-			{ action: "schedule.create", id: "mission-id", every: "1h", workflowScript: "runs.run('main', { agent: 'worker' })", missionId: "mission-1" },
-			{ action: "schedule.create", id: "mission-off", every: "1h", workflowScript: "runs.run('main', { agent: 'worker' })", mission: false },
+			{ action: "schedule.create", id: "fork", every: "1h", workflowScript: "return runs.run('main', { agent: 'worker' })", context: "fork" },
+			{ action: "schedule.create", id: "mission-id", every: "1h", workflowScript: "return runs.run('main', { agent: 'worker' })", missionId: "mission-1" },
+			{ action: "schedule.create", id: "mission-off", every: "1h", workflowScript: "return runs.run('main', { agent: 'worker' })", mission: false },
 		] as const) {
 			const result = await h.manager.handleToolCall(params, h.ctx);
 			assert.equal(result.isError, true, JSON.stringify(params));
@@ -234,7 +227,7 @@ describe("project schedule management", () => {
 
 	it("pauses, resumes, lists, and deletes an inactive schedule", async () => {
 		const h = harness();
-		await h.manager.handleToolCall({ action: "schedule.create", id: "maintenance", every: "1h", workflowScript: "runs.run('main', { agent: 'worker' })" }, h.ctx);
+		await h.manager.handleToolCall({ action: "schedule.create", id: "maintenance", every: "1h", workflowScript: "return runs.run('main', { agent: 'worker' })" }, h.ctx);
 		assert.match(text(await h.manager.handleToolCall({ action: "schedule.list" }, h.ctx)), /maintenance/);
 		assert.match(text(await h.manager.handleToolCall({ action: "schedule.pause", id: "maintenance" }, h.ctx)), /Paused/);
 		assert.equal(h.timers.values.size, 0);
@@ -262,7 +255,7 @@ describe("project schedule management", () => {
 		fs.mkdirSync(root, { recursive: true });
 		fs.mkdirSync(outside);
 		fs.symlinkSync(outside, path.join(root, "escaped"), process.platform === "win32" ? "junction" : "dir");
-		const result = await h.manager.handleToolCall({ action: "schedule.create", id: "escaped", every: "1h", workflowScript: "runs.run('main', { agent: 'worker' })" }, h.ctx);
+		const result = await h.manager.handleToolCall({ action: "schedule.create", id: "escaped", every: "1h", workflowScript: "return runs.run('main', { agent: 'worker' })" }, h.ctx);
 		assert.equal(result.isError, true);
 		assert.match(text(result), /must be a real directory/);
 		assert.equal(fs.existsSync(path.join(outside, "schedule.json")), false);
@@ -283,7 +276,7 @@ describe("project schedule management", () => {
 		manager.bindSession(ctx);
 		fs.symlinkSync(outside, path.join(project, ".pi-subagents"), process.platform === "win32" ? "junction" : "dir");
 
-		const result = await manager.handleToolCall({ action: "schedule.create", id: "escaped-root", every: "1h", workflowScript: "runs.run('main', { agent: 'worker' })" }, ctx);
+		const result = await manager.handleToolCall({ action: "schedule.create", id: "escaped-root", every: "1h", workflowScript: "return runs.run('main', { agent: 'worker' })" }, ctx);
 		assert.equal(result.isError, true);
 		assert.match(text(result), /resolves outside the real project/);
 		assert.equal(fs.existsSync(path.join(outside, "schedules")), false);
@@ -293,11 +286,11 @@ describe("project schedule management", () => {
 describe("recurring schedule execution", () => {
 	it("launches a fixed interval from its planned time and records durable history/events", async () => {
 		const h = harness();
-		await h.manager.handleToolCall({ action: "schedule.create", id: "hourly", every: "1h", workflowScript: "runs.run('main', { agent: 'worker', task: 'Maintain backlog' })" }, h.ctx);
+		await h.manager.handleToolCall({ action: "schedule.create", id: "hourly", every: "1h", workflowScript: "return runs.run('main', { agent: 'worker', task: 'Maintain backlog' })" }, h.ctx);
 		h.clock.now += 3_600_000;
 		h.timers.fireAll();
 		assert.equal(h.launches.length, 1);
-		assert.deepEqual(h.launches[0]?.params, { workflowScript: "runs.run('main', { agent: 'worker', task: 'Maintain backlog' })", async: true, context: "fresh", cwd: h.ctx.cwd, mission: false });
+		assert.deepEqual(h.launches[0]?.params, { workflowScript: "return runs.run('main', { agent: 'worker', task: 'Maintain backlog' })", async: true, context: "fresh", cwd: h.ctx.cwd, mission: false });
 		h.launches[0]!.resolve({ content: [{ type: "text", text: "Async worker" }], details: { mode: "single", results: [], asyncId: "async-1", asyncDir: "/tmp/async-1" } });
 		await flush();
 
@@ -319,7 +312,7 @@ describe("recurring schedule execution", () => {
 
 	it("run-due launches the latest missed occurrence while catchUp none records a miss", async () => {
 		const latest = harness();
-		await latest.manager.handleToolCall({ action: "schedule.create", id: "latest", every: "1h", catchUp: "latest", workflowScript: "runs.run('main', { agent: 'worker' })" }, latest.ctx);
+		await latest.manager.handleToolCall({ action: "schedule.create", id: "latest", every: "1h", catchUp: "latest", workflowScript: "return runs.run('main', { agent: 'worker' })" }, latest.ctx);
 		latest.manager.stop();
 		latest.clock.now += 3 * 3_600_000;
 		latest.manager.bindSession(latest.ctx);
@@ -331,7 +324,7 @@ describe("recurring schedule execution", () => {
 		assert.match(text(await latest.manager.handleToolCall({ action: "schedule.history", id: "latest" }, latest.ctx)), /2030-01-01T03:00:00.000Z/, "latest catch-up selects the latest missed slot");
 
 		const none = harness();
-		await none.manager.handleToolCall({ action: "schedule.create", id: "none", every: "1h", catchUp: "none", workflowScript: "runs.run('main', { agent: 'worker' })" }, none.ctx);
+		await none.manager.handleToolCall({ action: "schedule.create", id: "none", every: "1h", catchUp: "none", workflowScript: "return runs.run('main', { agent: 'worker' })" }, none.ctx);
 		none.manager.stop();
 		none.clock.now += 3 * 3_600_000;
 		none.manager.bindSession(none.ctx);
@@ -341,7 +334,7 @@ describe("recurring schedule execution", () => {
 
 	it("keeps project timers, contexts, and completion ownership across session_start bindings", async () => {
 		const h = harness();
-		await h.manager.handleToolCall({ action: "schedule.create", id: "project-a", every: "1h", workflowScript: "runs.run('main', { agent: 'worker' })" }, h.ctx);
+		await h.manager.handleToolCall({ action: "schedule.create", id: "project-a", every: "1h", workflowScript: "return runs.run('main', { agent: 'worker' })" }, h.ctx);
 
 		const projectB = path.join(h.root, "project-b");
 		fs.mkdirSync(projectB);
@@ -352,7 +345,7 @@ describe("recurring schedule execution", () => {
 		sourceSessionManager.getSessionId = () => "session-b";
 		sourceSessionManager.getSessionFile = () => path.join(projectB, "session-b.jsonl");
 		h.manager.bindSession(projectBCtx);
-		await h.manager.handleToolCall({ action: "schedule.create", id: "project-b", every: "1h", workflowScript: "runs.run('main', { agent: 'worker' })" }, projectBCtx);
+		await h.manager.handleToolCall({ action: "schedule.create", id: "project-b", every: "1h", workflowScript: "return runs.run('main', { agent: 'worker' })" }, projectBCtx);
 		assert.equal(h.timers.values.size, 2, "both project timers remain armed after session_start binds project B");
 
 		h.clock.now += 3_600_000;
@@ -382,14 +375,14 @@ describe("recurring schedule execution", () => {
 		const h = harness();
 		const target = path.join(h.root, "explicit-target");
 		fs.mkdirSync(target);
-		const unbound = await h.manager.handleToolCall({ action: "schedule.create", id: "targeted", cwd: target, every: "1h", workflowScript: "runs.run('main', { agent: 'worker' })" }, h.ctx);
+		const unbound = await h.manager.handleToolCall({ action: "schedule.create", id: "targeted", cwd: target, every: "1h", workflowScript: "return runs.run('main', { agent: 'worker' })" }, h.ctx);
 		assert.equal(unbound.isError, true);
 		assert.match(text(unbound), /until that project has been opened/);
 
 		const targetCtx = context(target, "target-session");
 		h.manager.bindSession(targetCtx);
 		h.manager.bindSession(h.ctx);
-		await h.manager.handleToolCall({ action: "schedule.create", id: "targeted", cwd: target, every: "1h", workflowScript: "runs.run('main', { agent: 'worker' })" }, h.ctx);
+		await h.manager.handleToolCall({ action: "schedule.create", id: "targeted", cwd: target, every: "1h", workflowScript: "return runs.run('main', { agent: 'worker' })" }, h.ctx);
 		h.clock.now += 3_600_000;
 		h.timers.fireAll();
 		await flush();
@@ -421,7 +414,7 @@ describe("recurring schedule execution", () => {
 		});
 		manager.bindSession(badCtx);
 		manager.bindSession(ownerCtx);
-		await manager.handleToolCall({ action: "schedule.create", id: "owner", every: "1h", workflowScript: "runs.run('main', { agent: 'worker' })" }, ownerCtx);
+		await manager.handleToolCall({ action: "schedule.create", id: "owner", every: "1h", workflowScript: "return runs.run('main', { agent: 'worker' })" }, ownerCtx);
 		const manual = manager.handleToolCall({ action: "schedule.run", id: "owner" }, ownerCtx);
 		await flush();
 		launches[0]!.resolve({ content: [{ type: "text", text: "Async" }], details: { mode: "single", results: [], asyncId: "owner-async" } });
@@ -448,7 +441,7 @@ describe("recurring schedule execution", () => {
 
 	it("reconciles a terminal async status after a new session binds", async () => {
 		const h = harness();
-		await h.manager.handleToolCall({ action: "schedule.create", id: "restart", every: "1h", workflowScript: "runs.run('main', { agent: 'worker' })" }, h.ctx);
+		await h.manager.handleToolCall({ action: "schedule.create", id: "restart", every: "1h", workflowScript: "return runs.run('main', { agent: 'worker' })" }, h.ctx);
 		h.clock.now += 3_600_000;
 		h.timers.fireAll();
 		const asyncDir = path.join(h.root, "async-restart");
@@ -474,7 +467,7 @@ describe("recurring schedule execution", () => {
 
 	it("records elapsed overlap and catch-up-none slots without an immediate rerun", async () => {
 		const latest = harness();
-		await latest.manager.handleToolCall({ action: "schedule.create", id: "overlap", every: "1h", catchUp: "latest", workflowScript: "runs.run('main', { agent: 'worker' })" }, latest.ctx);
+		await latest.manager.handleToolCall({ action: "schedule.create", id: "overlap", every: "1h", catchUp: "latest", workflowScript: "return runs.run('main', { agent: 'worker' })" }, latest.ctx);
 		latest.clock.now += 3_600_000;
 		latest.timers.fireAll();
 		latest.launches[0]!.resolve({ content: [{ type: "text", text: "Async" }], details: { mode: "single", results: [], asyncId: "long-run" } });
@@ -489,7 +482,7 @@ describe("recurring schedule execution", () => {
 		assert.match(text(await latest.manager.handleToolCall({ action: "schedule.show", id: "overlap" }, latest.ctx)), /2030-01-01T05:00:00.000Z/);
 
 		const none = harness();
-		await none.manager.handleToolCall({ action: "schedule.create", id: "none-overlap", every: "1h", catchUp: "none", workflowScript: "runs.run('main', { agent: 'worker' })" }, none.ctx);
+		await none.manager.handleToolCall({ action: "schedule.create", id: "none-overlap", every: "1h", catchUp: "none", workflowScript: "return runs.run('main', { agent: 'worker' })" }, none.ctx);
 		none.clock.now += 3_600_000;
 		none.timers.fireAll();
 		none.launches[0]!.resolve({ content: [{ type: "text", text: "Async" }], details: { mode: "single", results: [], asyncId: "none-long-run" } });
@@ -517,7 +510,7 @@ describe("recurring schedule execution", () => {
 
 	it("distinguishes failed launch from failed async completion", async () => {
 		const h = harness();
-		await h.manager.handleToolCall({ action: "schedule.create", id: "failures", every: "1h", workflowScript: "runs.run('main', { agent: 'worker' })" }, h.ctx);
+		await h.manager.handleToolCall({ action: "schedule.create", id: "failures", every: "1h", workflowScript: "return runs.run('main', { agent: 'worker' })" }, h.ctx);
 		const first = h.manager.handleToolCall({ action: "schedule.run", id: "failures" }, h.ctx);
 		await flush();
 		h.launches[0]!.resolve({ content: [{ type: "text", text: "spawn failed" }], details: { mode: "management", results: [] }, isError: true });

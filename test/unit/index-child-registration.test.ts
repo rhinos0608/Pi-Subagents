@@ -180,7 +180,7 @@ describe("subagent extension child mode", () => {
 		);
 	});
 
-	it("rejects blank action direct execution before executor dispatch", () => {
+	it("rejects blank action at the public executor boundary", () => {
 		const script = String.raw`
 			import registerSubagentExtension from "./index.ts";
 			const events = { on() { return () => {}; }, emit() {} };
@@ -193,9 +193,9 @@ describe("subagent extension child mode", () => {
 			registerSubagentExtension(fakePi);
 			if (!registeredTool) throw new Error("tool not registered");
 			const result = await registeredTool.execute("blank-action", { action: "", agent: "reviewer" }, new AbortController().signal, undefined, { cwd: process.cwd(), hasUI: false });
-			if (!result.isError) throw new Error("blank action direct execution should be rejected");
+			if (!result.isError) throw new Error("blank action should be rejected");
 			const text = result.content?.[0]?.text ?? "";
-			if (!text.includes("Direct execution was removed")) throw new Error("unexpected blank action error: " + text);
+			if (!text.includes("action must be a non-empty")) throw new Error("unexpected blank action error: " + text);
 		`;
 
 		execFileSync(
