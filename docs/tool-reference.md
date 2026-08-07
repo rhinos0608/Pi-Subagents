@@ -5,8 +5,8 @@ Parameters and actions for the `subagent` tool. These are what the LLM passes wh
 ## Execution examples
 
 ```js
-// Single child
-{ agent: "scout", task: "Analyze the auth flow", async: true }
+// One child; a single expression is returned automatically
+{ workflowScript: `runs.run("main", { agent: "scout", task: "Analyze the auth flow" })` }
 
 // Sequential workflow
 { workflowScript: `
@@ -28,27 +28,19 @@ Parameters and actions for the `subagent` tool. These are what the LLM passes wh
 
 | Param | Type | Default | Description |
 |-------|------|---------|-------------|
-| `agent` | string | - | Agent name or alias for single mode, or target for management actions. Execution records use the canonical agent name. |
-| `task` | string | - | Task string for single mode. |
+| `agent` | string | - | Agent target for management actions. Workflow child agents are set inside `runs.run` or `runs.all`. |
 | `action` | string | - | Agent, mission (`mission.create/list/show/update/attach-run/close`), Herdr inspector (`inspector.open/status/close`), status/control, schedule, watchdog, or doctor action. |
 | `chainName` | string | - | Chain name for management actions. |
 | `config` | object/string | - | Agent or existing durable chain config for management create/update. |
-| `output` | `string \| false` | agent default | Override single-agent output file. |
-| `outputMode` | `"inline" \| "file-only"` | `inline` | Return saved output inline or as a concise saved-file reference. `file-only` requires an `output` path. |
-| `skill` | `string \| string[] \| false` | agent default | Override skills or disable all. |
-| `model` | string | agent default | Override model. |
-| `outputSchema` | object | - | Require schema-valid structured output for a direct single-agent run. |
-| `agentContract` | `{ version: 1 }` | - | Enable the compatibility behavior for this run. Omit for the default behavior. |
-| `context` | `fresh \| fork` | per-agent default or `fresh` | Explicit `fresh` or `fork` overrides every child. When omitted, each agent uses its own `defaultContext`; `fork` creates real branched sessions from the parent leaf. Packaged `planner`, `worker`, `oracle`, and `advisor` default to `fork`. |
-| `missionId` | string | - | Attach a single-agent or workflow launch to an existing project mission. |
+| `context` | `fresh \| fork` | per-agent default or `fresh` | Explicit `fresh` or `fork` overrides every workflow child. When omitted, each child agent uses its own `defaultContext`; `fork` creates real branched sessions from the parent leaf. Packaged `planner`, `worker`, `oracle`, and `advisor` default to `fork`. |
+| `missionId` | string | - | Attach a workflow launch to an existing project mission. |
 | `mission` | object/false | - | Create-and-attach shortcut: `{ title, goal?, labels? }`; pass `false` for an intentionally ephemeral launch with no mission record. Explicit mission persistence failures are strict. |
 | `handoffPath` | string | - | Aggregate handoff manifest required by `action: "worktree.discard"`. |
 | `focus` | boolean | true | Focus the newly split pane for `action: "inspector.open"`; not a standalone action. |
 | `view` | `fleet \| transcript` | - | Optional `status` view for the active fleet surface or transcript tail inspection. |
 | `lines` | number | `80` | Maximum transcript lines for `action: "status", view: "transcript"`; capped at 500. |
-| `clarify` | boolean | false | Show TUI preview/edit flow. Explicit `clarify: true` keeps the run foreground for the clarify UI. |
 | `agentScope` | `user \| project \| both` | `both` | Agent discovery scope. Project wins on collisions. |
-| `async` | boolean | default-on | Background execution. Scripted workflows always default to background and accept `async:false` as an explicit foreground escape hatch. `clarify:true` applies only to single-agent execution; workflowScript does not open clarify UI. |
+| `async` | boolean | default-on | Background execution. Workflows default to background and accept `async:false` as an explicit foreground escape hatch. |
 | `chatProgress` | `auto \| off \| live-card` | `auto` | WorkflowScript chat projection. `auto` renders a live in-chat card only for watched foreground workflows in the same Git repository, including managed worktrees; it is off otherwise. Explicit `live-card` requires `async:false` and the same Git repository. |
 | `timeoutMs` / `maxRuntimeMs` | number | 30 min foreground; none async | Optional run-level max runtime in milliseconds. Foreground uses 30 minutes when omitted. Async runs have no default timeout, including async workflows. |
 | `turnBudget` | object | none | Optional assistant-turn budget `{ maxTurns, graceTurns }`. At `maxTurns` the child is warned to wrap up. After the grace window (default 1), termination occurs at the next assistant boundary; a response that starts tool work records `termination-deferred` until a later boundary. Partial output is returned on abort. |
@@ -294,7 +286,7 @@ Intentionally unsupported: foreground/clarify, steer/resume/interrupt-as-pause, 
 Pass `share: true` to export a full session to HTML, upload it to a secret GitHub Gist through your `gh` credentials, and return a `https://shittycodingagent.ai/session/?<gistId>` URL.
 
 ```ts
-{ agent: "scout", task: "...", share: true }
+{ workflowScript: `runs.run("main", { agent: "scout", task: "..." })`, share: true }
 ```
 
 This is disabled by default. Session data may contain source code, paths, environment variables, credentials, or other sensitive output. You need `gh` installed and authenticated.

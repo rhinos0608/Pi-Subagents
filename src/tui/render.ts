@@ -144,22 +144,9 @@ function runningGlyph(seed?: number): string {
 	return RUNNING_FRAMES[Math.abs(seed) % RUNNING_FRAMES.length]!;
 }
 
-const WIDGET_ANIMATION_FRAME_MS = 500;
-let widgetRequestRender: (() => void) | undefined;
-
 function animatedSeed(seed: number | undefined, frame: number | undefined): number | undefined {
 	if (frame === undefined) return seed;
 	return (seed ?? 0) + frame;
-}
-
-function widgetAnimationFrame(): number {
-	return Math.floor(Date.now() / WIDGET_ANIMATION_FRAME_MS);
-}
-
-export function requestWidgetRender(): boolean {
-	if (!widgetRequestRender) return false;
-	widgetRequestRender();
-	return true;
 }
 
 function progressRunningSeed(progress: ProgressSeedSource | undefined): number | undefined {
@@ -1347,26 +1334,19 @@ function fitAdaptiveWidgetLines(jobs: AsyncJobState[], lines: string[], theme: T
 	return rendered.lines;
 }
 
-function buildWidgetComponent(jobs: AsyncJobState[], expanded: boolean): (tui: { requestRender(): void }, theme: Theme) => Component & { dispose?(): void } {
-	return (tui, theme) => {
-		const requestRender = () => tui.requestRender();
-		widgetRequestRender = requestRender;
+function buildWidgetComponent(jobs: AsyncJobState[], expanded: boolean): (_tui: unknown, theme: Theme) => Component {
+	return (_tui, theme) => {
 		const container = new Container();
 		container.render = (renderWidth: number): string[] => {
 			const width = Math.max(0, renderWidth - 2);
-			const frame = widgetAnimationFrame();
 			const lines = expanded
-				? buildWidgetLines(jobs, theme, width, true, frame)
+				? buildWidgetLines(jobs, theme, width, true)
 				: jobs.length === 1
-					? compactSingleWidgetLines(jobs[0]!, theme, width, frame)
-					: buildWidgetLines(jobs, theme, width, false, frame);
-			return fitAdaptiveWidgetLines(jobs, lines, theme, width, expanded, frame).map((line) => paddedWidgetLine(line, renderWidth));
+					? compactSingleWidgetLines(jobs[0]!, theme, width)
+					: buildWidgetLines(jobs, theme, width, false);
+			return fitAdaptiveWidgetLines(jobs, lines, theme, width, expanded).map((line) => paddedWidgetLine(line, renderWidth));
 		};
-		const component = container as Component & { dispose?(): void };
-		component.dispose = () => {
-			if (widgetRequestRender === requestRender) widgetRequestRender = undefined;
-		};
-		return component;
+		return container;
 	};
 }
 
@@ -1446,7 +1426,6 @@ export function buildWidgetLines(jobs: AsyncJobState[], theme: Theme, width = ge
 export function renderWidget(ctx: ExtensionContext, jobs: AsyncJobState[]): void {
 	if (jobs.length === 0) {
 		resetWidgetLayoutSession();
-		widgetRequestRender = undefined;
 		if (ctx.hasUI) ctx.ui.setWidget(WIDGET_KEY, undefined);
 		return;
 	}

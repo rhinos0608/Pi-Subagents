@@ -184,7 +184,11 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 		assert.match(String(chatProgress?.description ?? ""), /same Git repository/i);
 		const worktree = SubagentParams?.properties?.worktree;
 		assert.equal(worktree?.type, "boolean");
-		assert.match(String(worktree?.description ?? ""), /direct single child/i);
+		assert.match(String(worktree?.description ?? ""), /each workflow child/i);
+		const properties = SubagentParams?.properties as Record<string, unknown> | undefined;
+		assert.equal(properties?.task, undefined, "task should only exist inside workflowScript children");
+		assert.equal(properties?.clarify, undefined, "clarify should not be model-facing");
+		assert.ok(properties?.output, "output remains a workflow child default");
 	});
 
 	it("removes legacy top-level orchestration parameters", () => {
@@ -200,11 +204,12 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 		const actionSchema = SubagentParams?.properties?.action;
 		assert.ok(actionSchema, "action schema should exist");
 		assert.equal(actionSchema.type, "string");
+		assert.equal(actionSchema.minLength, 1);
 		assert.equal(actionSchema.enum, undefined);
 		const description = String(actionSchema.description ?? "");
 		assert.match(description, /Optional management\/control action/);
-		assert.match(description, /Omit this field entirely for execution\/delegation/);
-		assert.match(description, /\{agent, task\} or \{workflowScript\}/);
+		assert.match(description, /Omit this field for workflowScript execution/);
+		assert.doesNotMatch(description, /\{agent, task\}/);
 		assert.match(description, /use it only for management\/control actions/);
 		assert.doesNotMatch(description, /orchestration\./);
 	});
@@ -363,7 +368,7 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 		assert.equal(serialized.includes('"$ref"'), false);
 		assert.equal(serialized.includes('"$defs"'), false);
 		assert.equal(serialized.split("Optional acceptance policy.").length - 1, 1);
-		assert.match(String((schema.properties as Record<string, JsonSchemaNode> | undefined)?.agent?.description ?? ""), /SINGLE mode/);
+		assert.match(String((schema.properties as Record<string, JsonSchemaNode> | undefined)?.agent?.description ?? ""), /management actions/);
 		const acceptanceDescription = String((schema.properties as Record<string, JsonSchemaNode> | undefined)?.acceptance?.description ?? "");
 		assert.match(acceptanceDescription, /acceptance policy/);
 		assert.match(acceptanceDescription, /Supported evidence kinds:/);
@@ -492,24 +497,13 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 			{ workflowScript: "return await runs.run(\"one\", {agent: \"reviewer\", task: \"check\"})" },
 			{ action: "append-step", id: "run-1", step: { agent: "reviewer", task: "Continue" } },
 			{ skill: false },
-			{ agent: "worker", task: "Fix", acceptance: false },
-			{ agent: "worker", task: "Fix", timeoutMs: 1000 },
+			{ action: "get", agent: "worker" },
+			{ workflowScript: "runs.run('main', { agent: 'worker', task: 'Fix', acceptance: false })", timeoutMs: 1000 },
 			{ action: "steer", id: "run-1", message: "focus on tests" },
 			{ action: "steer", id: "run-1", index: 0, message: "focus on tests" },
-			{ action: "single", agent: "worker", task: "Fix" },
 			{ action: "not-a-real-action" },
-			{ agent: "worker", task: "Fix", acceptance: "checked" },
-			{ agent: "worker", task: "Fix", acceptance: "reviewed" },
-			{ agent: "worker", task: "Fix", acceptance: { level: "verified", verify: [{ id: "tests", command: "npm test" }] } },
-			{ agent: "worker", task: "Fix", acceptance: { level: "none", reason: "parent will verify manually" } },
-			{ agent: "worker", task: "Fix", acceptance: { level: "checked", review: false } },
 			{ config: { name: "reviewer", description: "Review things" } },
 			{ config: JSON.stringify({ name: "reviewer", description: "Review things" }) },
-			{ agent: "worker", task: "Fix", turnBudget: { maxTurns: 5, graceTurns: 1 } },
-			{ agent: "worker", task: "Fix", turnBudget: { maxTurns: 1 } },
-			{ agent: "worker", task: "Fix", turnBudget: { maxTurns: 3, graceTurns: 0 } },
-			{ agent: "worker", task: "Fix", toolBudget: { soft: 5, hard: 8, block: ["read", "grep"] } },
-			{ agent: "worker", task: "Fix", toolBudget: { hard: 8, block: "*" } },
 		];
 		const invalidValues = [
 			{ skill: 123 },

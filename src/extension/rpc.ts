@@ -420,11 +420,14 @@ async function executeChecked(
 
 function spawnParams(params: unknown): SubagentParamsLike {
 	const input = assertRecordParams(params, "spawn");
-	if (input.tasks !== undefined || input.chain !== undefined || input.concurrency !== undefined || input.chainDir !== undefined || (input.worktree !== undefined && !(input.worktree === true && input.agent))) {
+	if (input.tasks !== undefined || input.chain !== undefined || input.concurrency !== undefined || input.chainDir !== undefined || (input.worktree !== undefined && input.workflowScript === undefined)) {
 		throw new SubagentRpcError("invalid_params", "RPC spawn no longer accepts top-level chain or parallel inputs; use workflowScript.");
 	}
 	if (input.action !== undefined) {
 		throw new SubagentRpcError("invalid_params", "RPC spawn does not accept management/control actions. Use status or interrupt RPC methods instead.");
+	}
+	if (typeof input.workflowScript !== "string" || !input.workflowScript.trim()) {
+		throw new SubagentRpcError("invalid_params", "RPC spawn requires workflowScript. Direct execution was removed; use workflowScript: \"return runs.run('main', { agent, task })\".");
 	}
 	if (input.async === false) {
 		throw new SubagentRpcError("invalid_params", "RPC spawn only supports detached async launches; omit async or set async: true.");

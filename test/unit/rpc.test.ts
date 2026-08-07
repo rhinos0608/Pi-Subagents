@@ -306,11 +306,10 @@ describe("subagent extension RPC bridge", () => {
 			},
 		});
 
-		const reply = await request(events, "spawn-1", "spawn", { agent: "worker", task: "Do work" });
+		const reply = await request(events, "spawn-1", "spawn", { workflowScript: "runs.run('main', { agent: 'worker', task: 'Do work' })" });
 
 		assert.equal(reply.success, true);
-		assert.equal(executedParams.agent, "worker");
-		assert.equal(executedParams.task, "Do work");
+		assert.equal(executedParams.workflowScript, "runs.run('main', { agent: 'worker', task: 'Do work' })");
 		assert.equal(executedParams.async, true);
 		assert.equal(executedParams.clarify, false);
 		assert.equal((reply as { data: { details?: { asyncId?: string } } }).data.details?.asyncId, "run-1");
@@ -330,7 +329,7 @@ describe("subagent extension RPC bridge", () => {
 			},
 		});
 
-		const reply = await request(events, "spawn-worktree", "spawn", { agent: "worker", task: "Do work", worktree: true });
+		const reply = await request(events, "spawn-worktree", "spawn", { workflowScript: "runs.run('main', { agent: 'worker', task: 'Do work' })", worktree: true });
 
 		assert.equal(reply.success, true);
 		assert.equal(executedParams.worktree, true);
@@ -371,8 +370,12 @@ describe("subagent extension RPC bridge", () => {
 			},
 		});
 
-		const foreground = await request(events, "spawn-foreground", "spawn", { agent: "worker", task: "Do work", async: false });
+		const direct = await request(events, "spawn-direct", "spawn", { agent: "worker", task: "Do work" });
+		const foreground = await request(events, "spawn-foreground", "spawn", { workflowScript: "runs.run('main', { agent: 'worker' })", async: false });
 		const management = await request(events, "spawn-management", "spawn", { action: "list" });
+
+		assert.equal(direct.success, false);
+		assert.match((direct as { error: { message: string } }).error.message, /Direct execution was removed/);
 
 		assert.equal(foreground.success, false);
 		assert.equal((foreground as { error: { code: string; message: string } }).error.code, "invalid_params");

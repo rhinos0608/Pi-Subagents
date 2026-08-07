@@ -25,10 +25,16 @@ const created = subagent({
   action: "mission.create",
   mission: { title: "Ship auth refresh", goal: "Implement and validate token refresh" }
 })
-subagent({ agent: "worker", task: "Implement the approved auth refresh plan", missionId: "<mission-id>" })
+subagent({
+  workflowScript: `runs.run("main", { agent: "worker", task: "Implement the approved auth refresh plan" })`,
+  missionId: "<mission-id>"
+})
 
 // Or create and attach in one launch
-subagent({ agent: "worker", task: "Implement the approved plan", mission: { title: "Ship auth refresh" } })
+subagent({
+  workflowScript: `runs.run("main", { agent: "worker", task: "Implement the approved plan" })`,
+  mission: { title: "Ship auth refresh" }
+})
 ```
 
 ### Managing missions
@@ -60,8 +66,7 @@ subagent({
   id: "evening-review",
   name: "Evening review",
   at: "+30m",
-  agent: "reviewer",
-  task: "Review the current diff."
+  workflowScript: `runs.run("main", { agent: "reviewer", task: "Review the current diff." })`
 })
 ```
 

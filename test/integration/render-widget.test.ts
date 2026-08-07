@@ -2,11 +2,10 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
 
-const { buildWidgetLines, clearLegacyResultAnimationTimer, renderWidget, requestWidgetRender } = await import("../../src/tui/render.ts") as {
+const { buildWidgetLines, clearLegacyResultAnimationTimer, renderWidget } = await import("../../src/tui/render.ts") as {
 	buildWidgetLines: (jobs: Array<Record<string, unknown>>, theme: { fg(name: string, text: string): string; bold(text: string): string }, width?: number, expanded?: boolean, frame?: number) => string[];
 	clearLegacyResultAnimationTimer: (context: { state: { subagentResultAnimationTimer?: ReturnType<typeof setInterval> } }) => void;
 	renderWidget: (ctx: Record<string, unknown>, jobs: Array<Record<string, unknown>>) => void;
-	requestWidgetRender: () => void;
 };
 
 const theme = {
@@ -711,14 +710,14 @@ describe("subagent async widget rendering", () => {
 		assert.equal(firstGrapheme(first[1] ?? ""), firstGrapheme(second[1] ?? ""));
 	});
 
-	it("advances component widget glyphs without job data changes", () => {
+	it("keeps component widget output stable without job data changes", () => {
 		const originalNow = Date.now;
 		let renderRequests = 0;
 		try {
 			Date.now = () => 1_000;
 			const ui = createUiContext();
 			renderWidget(ui.ctx as never, [{
-				asyncId: "run-animated",
+				asyncId: "run-stable",
 				asyncDir: "/tmp/run",
 				status: "running",
 				mode: "parallel",
@@ -730,21 +729,17 @@ describe("subagent async widget rendering", () => {
 				updatedAt: 1_000,
 				steps: [{ index: 0, agent: "reviewer", status: "running" }],
 			}]);
-			const component = (ui.widgets.at(-1) as (_tui: { requestRender(): void }, widgetTheme: typeof theme) => { render(width: number): string[]; dispose?(): void })(
+			const component = (ui.widgets.at(-1) as (_tui: { requestRender(): void }, widgetTheme: typeof theme) => { render(width: number): string[] })(
 				{ requestRender: () => { renderRequests += 1; } },
 				theme,
 			);
 			const first = component.render(180).join("\n");
 
 			Date.now = () => 1_600;
-			requestWidgetRender();
 			const second = component.render(180).join("\n");
 
-			assert.equal(renderRequests, 1);
-			assert.notEqual(firstRunningGlyph(first), firstRunningGlyph(second));
-			component.dispose?.();
-			requestWidgetRender();
-			assert.equal(renderRequests, 1, "disposed widget should not accept animation requests");
+			assert.equal(renderRequests, 0, "quiet progress must not schedule editor-wide redraws");
+			assert.equal(second, first, "elapsed wall time alone must not change the widget");
 		} finally {
 			Date.now = originalNow;
 			renderWidget(createUiContext().ctx as never, []);

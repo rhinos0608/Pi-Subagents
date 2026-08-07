@@ -1,6 +1,6 @@
 # Workflows and orchestration
 
-How to compose subagents: the recommended pattern, packaged prompt shortcuts, scripted workflows, direct commands, the clarify UI, worktree isolation, and child-to-parent coordination.
+How to compose subagents: the recommended pattern, packaged prompt shortcuts, scripted workflows, direct commands, worktree isolation, and child-to-parent coordination.
 
 ## Recommended orchestration pattern
 
@@ -37,7 +37,7 @@ Add `autofix` to `/parallel-review` or `/parallel-cleanup` to apply only the syn
 
 ## Scripted workflows (workflowScript)
 
-Multi-agent orchestration is expressed through `workflowScript` in the `subagent` tool. Use stable keys and ordinary JavaScript for sequence and parallelism:
+All model-facing subagent execution is expressed through `workflowScript` in the `subagent` tool. Use stable keys and ordinary JavaScript for one child, sequence, and parallelism. A single-expression script is returned automatically:
 
 ```js
 subagent({ workflowScript: `
@@ -57,26 +57,6 @@ The legacy `/chain`, `/parallel`, and `/run-chain` commands are not registered.
 ## Direct commands
 
 Use `/run <agent> [task] [--bg] [--fork]` for one child.
-
-## Clarify and launch UI
-
-Tool calls start background work by default. Set `async: false` when the current turn needs a foreground result, or `clarify: true` on single, parallel, or chain runs when you want to preview and edit the workflow before it runs. Clarify stays foreground.
-
-Common clarify keys:
-
-- `Enter` runs in the foreground, or in the background if background is toggled on
-- `Esc` cancels or backs out
-- `↑↓` or `j`/`k` moves between steps or tasks
-- `e` edits the task/template
-- `m` selects a model
-- `t` selects thinking level
-- `s` selects skills
-- `b` toggles background execution
-- `w` edits output/write behavior where supported
-- `r` edits reads where supported
-- `p` toggles progress tracking where supported
-
-Picker screens use `↑↓`, `Enter`, `Esc`, and type-to-filter. The full-screen editor supports word wrapping, paste, `Esc` to save, and `Ctrl+C` to discard.
 
 ## Worktree isolation
 

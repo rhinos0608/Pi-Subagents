@@ -323,6 +323,7 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		allowMutatingManagementActions = true,
 		initialAsyncJobs: SubagentState["asyncJobs"] = new Map(),
 		workflowControllers?: Map<string, AbortController>,
+		handleScheduledRunAction?: Parameters<typeof createSubagentExecutor>[0]["handleScheduledRunAction"],
 	) {
 		return createSubagentExecutor!({
 			pi: { events: createEventBus(), getSessionName: () => undefined },
@@ -342,6 +343,7 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 			expandTilde: (value: string) => value,
 			discoverAgents: () => ({ agents }),
 			allowMutatingManagementActions,
+			...(handleScheduledRunAction ? { handleScheduledRunAction } : {}),
 		});
 	}
 
@@ -361,8 +363,7 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		assert.equal(output, "Hello from mock agent");
 	});
 
-	it("treats action='single' with execution fields as single execution", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
-		mockPi.onCall({ output: "single alias finished" });
+	it("rejects action='single' with execution fields", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
 		const executor = makeExecutor([makeAgent("echo")]);
 
 		const result = await executor.execute(
@@ -373,8 +374,29 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 			makeMinimalCtx(tempDir),
 		);
 
+		assert.equal(result.isError, true);
+		assert.match(result.content[0]?.text ?? "", /Direct execution was removed/);
+		assert.equal(mockPi.callCount(), 0);
+	});
+
+	it("allows schedule.create to carry the required workflowScript target", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		let forwarded;
+		const executor = makeExecutor([makeAgent("echo")], {}, false, undefined, true, new Map(), undefined, async (params) => {
+			forwarded = params;
+			return { content: [{ type: "text", text: "created" }], details: { mode: "management", results: [] } };
+		});
+
+		const result = await executor.execute(
+			"schedule-create",
+			{ action: "schedule.create", id: "nightly", every: "1h", workflowScript: "runs.run('main', { agent: 'echo' })" },
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+
 		assert.equal(result.isError, undefined);
-		assert.match(result.content[0]?.text ?? "", /single alias finished/);
+		assert.equal(result.content[0]?.text, "created");
+		assert.equal(forwarded?.workflowScript, "runs.run('main', { agent: 'echo' })");
 	});
 
 	it("starts workflow scripts asynchronously by default and persists live status", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {

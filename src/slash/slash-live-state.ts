@@ -155,9 +155,24 @@ function buildChainInitialResult(params: SubagentParamsLike): AgentToolResult<De
 	};
 }
 
+function workflowRunPreview(script: string | undefined): { agent?: string; task?: string } {
+	const match = script?.match(/^runs\.run\([^,]+,\s*(\{.*\})\)$/s);
+	if (!match) return {};
+	try {
+		const child = JSON.parse(match[1]!) as { agent?: unknown; task?: unknown };
+		return {
+			...(typeof child.agent === "string" ? { agent: child.agent } : {}),
+			...(typeof child.task === "string" ? { task: child.task } : {}),
+		};
+	} catch {
+		return {};
+	}
+}
+
 function buildSingleInitialResult(params: SubagentParamsLike): AgentToolResult<Details> {
-	const agent = params.agent ?? "subagent";
-	const task = params.task ?? "";
+	const preview = workflowRunPreview(params.workflowScript);
+	const agent = params.agent ?? preview.agent ?? "subagent";
+	const task = params.task ?? preview.task ?? "";
 	return {
 		content: [{ type: "text", text: task }],
 		details: {
