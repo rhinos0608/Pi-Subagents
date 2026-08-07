@@ -52,6 +52,20 @@ describe("mission launch lifecycle", () => {
 			});
 			assert.equal(disabled, undefined);
 
+			const parallelOnly = prepareMissionLaunch({
+				params: { chain: [{ parallel: [{ task: "" }, { task: "Review parallel work" }] }] },
+				projectRoot: test.projectRoot,
+				config: test.missionConfig,
+			});
+			assert.ok(parallelOnly);
+			assert.equal(readMission(parallelOnly.location, parallelOnly.missionId).goal, "Review parallel work");
+
+			assert.throws(() => prepareMissionLaunch({
+				params: { missionId: "" },
+				projectRoot: test.projectRoot,
+				config: test.missionConfig,
+			}), /missionId/);
+
 			const perLaunchDisabled = prepareMissionLaunch({
 				params: { mission: false, task: "Ephemeral check" },
 				projectRoot: test.projectRoot,
