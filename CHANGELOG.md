@@ -7,6 +7,7 @@
 - Require workflowScript-only persisted schedule targets. Removed legacy agent-target restore conversion.
 
 ### Fixed
+- Prevent path-resolution tests from modifying or deleting the user's real `~/.agents` directory. Thanks to @meatcar for the report and fix in #865.
 - Show the target agent for simple scheduled one-child workflow scripts and mark dynamic scripts clearly.
 - Stop quiet async status widget animation redraws from spilling progress updates into the editor input area.
 
