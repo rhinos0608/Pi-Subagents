@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.43.0] - 2026-08-07
+
 ### Added
 - Added explicit project-local subagent refinement overlays through `/subagents-refine <agent>` and `refine`, `refine.show`, and `refine.rollback` actions.
 - Added opt-in goal missions that send one needs-attention continuation notice after idle parent turns, account linked-run token usage against a mission budget, pause or stop through `mission.update`, and name retained children when resume is the next ready action.
