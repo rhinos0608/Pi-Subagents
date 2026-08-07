@@ -35,9 +35,16 @@ interface PersistedMissionBinding {
 }
 
 function workflowGoal(params: MissionLaunchParams): string | undefined {
-	return params.task?.trim()
+	const goal = params.task?.trim()
 		|| params.tasks?.find((task) => task.task?.trim())?.task?.trim()
 		|| params.chain?.find((step) => step.task?.trim())?.task?.trim();
+	if (goal) return goal;
+	for (const step of params.chain ?? []) {
+		const parallel = Array.isArray(step.parallel) ? step.parallel : step.parallel ? [step.parallel] : [];
+		const task = parallel.find((child) => child.task?.trim())?.task?.trim();
+		if (task) return task;
+	}
+	return undefined;
 }
 
 function conciseTitle(goal: string): string {
@@ -51,14 +58,15 @@ export function prepareMissionLaunch(input: {
 	config?: MissionStoreConfig;
 	ownerSessionId?: string;
 }): MissionLaunchBinding | undefined {
-	if (input.params.missionId && input.params.mission !== undefined) throw new Error("Use missionId or mission, not both");
+	const hasMissionId = input.params.missionId !== undefined;
+	if (hasMissionId && input.params.mission !== undefined) throw new Error("Use missionId or mission, not both");
 	if (input.params.mission === false) return undefined;
 	const goal = workflowGoal(input.params);
 	const missionsEnabled = input.config?.enabled !== false;
 	const shouldCreate = input.params.mission !== undefined || (missionsEnabled && goal !== undefined);
-	if (!input.params.missionId && !shouldCreate) return undefined;
+	if (!hasMissionId && !shouldCreate) return undefined;
 	const location = resolveMissionStoreLocation({ projectRoot: input.projectRoot, ...(input.config ? { config: input.config } : {}) });
-	if (input.params.missionId) {
+	if (hasMissionId) {
 		const missionId = validateMissionId(input.params.missionId);
 		readMission(location, missionId);
 		updateMission(location, missionId, { status: "active" });

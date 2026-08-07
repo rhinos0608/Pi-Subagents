@@ -37,7 +37,7 @@ const runFingerprints = new Map();
 function validateRunCall(key, params, label, fingerprints) {
   if (typeof key !== "string" || !runKeyPattern.test(key)) throw new Error(label + " has an invalid key.");
   if (!params || typeof params !== "object" || Array.isArray(params)) throw new Error(label + " requires a params object.");
-  if (Object.prototype.hasOwnProperty.call(params, "action") || Object.prototype.hasOwnProperty.call(params, "workflowScript") || Object.prototype.hasOwnProperty.call(params, "tasks") || Object.prototype.hasOwnProperty.call(params, "chain") || Object.prototype.hasOwnProperty.call(params, "concurrency") || Object.prototype.hasOwnProperty.call(params, "chainDir")) {
+  if (Object.prototype.hasOwnProperty.call(params, "action") || Object.prototype.hasOwnProperty.call(params, "workflowScript") || Object.prototype.hasOwnProperty.call(params, "tasks") || Object.prototype.hasOwnProperty.call(params, "chain") || Object.prototype.hasOwnProperty.call(params, "parallel") || Object.prototype.hasOwnProperty.call(params, "concurrency") || Object.prototype.hasOwnProperty.call(params, "chainDir")) {
     const hint = label === "runs.run" ? "; use runs.all(...) and JavaScript control flow for orchestration." : ".";
     throw new Error(label + " accepts one child via { agent, task } and execution controls only" + hint);
   }
@@ -392,7 +392,7 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 			if (!isRecord(params)) return respond(Promise.reject(new Error(`runs.run('${key}', params) requires a params object.`)));
 			if (params.action !== undefined) return respond(Promise.reject(new Error(`runs.run('${key}') accepts execution params only; management action is not allowed.`)));
 			if (params.workflowScript !== undefined) return respond(Promise.reject(new Error(`runs.run('${key}') cannot start a nested workflow script.`)));
-			if (params.tasks !== undefined || params.chain !== undefined || params.concurrency !== undefined || params.chainDir !== undefined) {
+			if (params.tasks !== undefined || params.chain !== undefined || params.parallel !== undefined || params.concurrency !== undefined || params.chainDir !== undefined) {
 				return respond(Promise.reject(new Error(`runs.run('${key}') accepts one child via { agent, task }; use runs.all(...) and JavaScript control flow for orchestration.`)));
 			}
 			if (params.worktree !== undefined && typeof params.worktree !== "boolean") {

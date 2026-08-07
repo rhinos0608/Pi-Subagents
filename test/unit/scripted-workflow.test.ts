@@ -168,6 +168,7 @@ describe("scripted workflow runtime", () => {
 			`return await runs.all([{ key: "valid", agent: "worker", task: "run" }, { key: "bad key", agent: "worker", task: "run" }]);`,
 			`return await runs.all([{ key: "same", agent: "worker", task: "one" }, { key: "same", agent: "worker", task: "two" }]);`,
 			`return await runs.all([{ key: "valid", agent: "worker", task: "run" }, { key: "nested", workflowScript: "return null" }]);`,
+			`return await runs.all([{ key: "valid", agent: "worker", task: "run" }, { key: "legacy", agent: "worker", task: "run", parallel: [{ task: "nested" }] }]);`,
 			`return await runs.all([{ key: "valid", agent: "worker", task: "run" }, { key: "undefined-action", agent: "worker", task: "run", action: undefined }]);`,
 			`return await runs.all([{ key: "valid", agent: "worker", task: "run" }, { key: "uncloneable", agent: "worker", task: () => "run" }]);`,
 			`const items = []; items[1] = { key: "valid", agent: "worker", task: "run" }; return await runs.all(items);`,
@@ -325,17 +326,19 @@ describe("scripted workflow runtime", () => {
 	});
 
 	it("rejects legacy orchestration params in runs.run", async () => {
-		let launches = 0;
-		await assert.rejects(
-			runWorkflowScript({
-				script: `return await runs.run("legacy", { tasks: [{ agent: "scout", task: "scan" }] });`,
-				timeoutMs: 2_000,
-				launch: async () => { launches++; return { ok: true, output: "unexpected" }; },
-				status: async () => ({ ok: true, output: "unused" }),
-			}),
-			(error: unknown) => error instanceof WorkflowScriptError && /accepts one child.*runs\.all/i.test(error.message),
-		);
-		assert.equal(launches, 0);
+		for (const params of [`tasks: [{ agent: "scout", task: "scan" }]`, `parallel: [{ agent: "scout", task: "scan" }]`]) {
+			let launches = 0;
+			await assert.rejects(
+				runWorkflowScript({
+					script: `return await runs.run("legacy", { ${params} });`,
+					timeoutMs: 2_000,
+					launch: async () => { launches++; return { ok: true, output: "unexpected" }; },
+					status: async () => ({ ok: true, output: "unused" }),
+				}),
+				(error: unknown) => error instanceof WorkflowScriptError && /accepts one child.*runs\.all/i.test(error.message),
+			);
+			assert.equal(launches, 0);
+		}
 	});
 
 	it("rejects a duplicate key with incompatible params", async () => {
