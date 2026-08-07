@@ -53,6 +53,7 @@ const ansiStylePattern = /\x1b\[[0-9;]*m/y;
  * Uses Intl.Segmenter for proper Unicode/emoji handling (not char-by-char).
  */
 export function truncLine(text: string, maxWidth: number): string {
+	if (maxWidth <= 0) return "";
 	if (visibleWidth(text) <= maxWidth) return text;
 
 	const targetWidth = maxWidth - 1;
@@ -83,7 +84,7 @@ export function truncLine(text: string, maxWidth: number): string {
 		const textPortion = text.slice(i, end);
 		for (const seg of segmenter.segment(textPortion)) {
 			const grapheme = seg.segment;
-			const graphemeWidth = visibleWidth(grapheme);
+			const graphemeWidth = grapheme === "\x1b" ? 0 : visibleWidth(grapheme);
 
 			if (currentWidth + graphemeWidth > targetWidth) {
 				return result + activeStyles.join("") + "…";
@@ -111,6 +112,7 @@ function wrapPlainText(text: string, maxWidth: number): string[] {
 		for (const seg of segmenter.segment(rawLine)) {
 			const grapheme = seg.segment;
 			const graphemeWidth = visibleWidth(grapheme);
+			if (graphemeWidth > maxWidth) continue;
 			if (currentWidth > 0 && currentWidth + graphemeWidth > maxWidth) {
 				lines.push(current);
 				current = grapheme;

@@ -8,6 +8,7 @@
 
 ### Fixed
 - Create default missions for static parallel-only chain launches, reject invalid explicit mission ids, and reject legacy `parallel` workflow child params.
+- Keep very narrow TUI result wrapping within its width budget and simplify Fleet nested status row construction.
 - Prevent path-resolution tests from modifying or deleting the user's real `~/.agents` directory. Thanks to @meatcar for the report and fix in #865.
 - Show the target agent for simple scheduled one-child workflow scripts and mark dynamic scripts clearly.
 - Stop quiet async status widget animation redraws from spilling progress updates into the editor input area.
