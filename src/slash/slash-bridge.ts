@@ -78,6 +78,21 @@ export function registerSlashSubagentBridge(options: SlashBridgeOptions): {
 		const request = data as Partial<SlashSubagentRequest>;
 		if (typeof request.requestId !== "string" || !request.params) return;
 		const { requestId, params } = request as SlashSubagentRequest;
+		if (params.agent !== undefined || params.task !== undefined || params.clarify !== undefined) {
+			const message = "Direct slash-event execution was removed; use workflowScript.";
+			options.events.emit(SLASH_SUBAGENT_RESPONSE_EVENT, {
+				requestId,
+				result: {
+					content: [{ type: "text", text: message }],
+					isError: true,
+					details: { mode: "workflow", results: [] },
+				},
+				isError: true,
+				errorText: message,
+			} satisfies SlashSubagentResponse);
+			return;
+		}
+
 		if (params.tasks !== undefined || params.chain !== undefined || params.concurrency !== undefined || params.worktree !== undefined || params.chainDir !== undefined) {
 			const message = "Legacy slash-event chain and parallel inputs were removed; use workflowScript.";
 			options.events.emit(SLASH_SUBAGENT_RESPONSE_EVENT, {

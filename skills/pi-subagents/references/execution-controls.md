@@ -30,8 +30,7 @@ External CLI profiles are async-only and one-shot. They support lifecycle artifa
 
 ```typescript
 subagent({
-  agent: "oracle",
-  task: "Review my current direction and challenge assumptions."
+  workflowScript: `runs.run("oracle-check", { agent: "oracle", task: "Review my current direction and challenge assumptions." })`
 })
 ```
 
@@ -39,9 +38,7 @@ subagent({
 
 ```typescript
 subagent({
-  agent: "oracle",
-  task: "Review my current direction and challenge assumptions.",
-  context: "fork"
+  workflowScript: `runs.run("oracle-check", { agent: "oracle", task: "Review my current direction and challenge assumptions.", context: "fork" })`
 })
 ```
 
@@ -56,7 +53,7 @@ its resolved launch context as `[fresh]` or `[fork]`. Aggregate headers show
 
 ### Scripted workflows
 
-`workflowScript` is the sole public orchestration surface. Use `runs.run(key, { agent, task, ... })` for one child, `runs.all([...])` for parallel children, and ordinary JavaScript for sequence, branching, filtering, retries, and aggregation. Prefer a single scripted workflow whenever the parent is starting a coordinated wave, such as multiple reviews, review plus gate monitor, worker then monitor setup, cross-repo prep lanes, or a fanout that the parent will consume together. Use a direct `{ agent, task }` call only for one isolated child with no sibling work or aggregate handoff.
+`workflowScript` is the sole public execution surface. Use `runs.run(key, { agent, task, ... })` for one child, `runs.all([...])` for parallel children, and ordinary JavaScript for sequence, branching, filtering, retries, and aggregation. A single expression is returned automatically, so `workflowScript: "runs.run('main', { agent: 'worker', task: '...' })"` is enough for one isolated child. Prefer a single scripted workflow whenever the parent is starting a coordinated wave, such as multiple reviews, review plus gate monitor, worker then monitor setup, cross-repo prep lanes, or a fanout that the parent will consume together.
 
 ```js
 subagent({
@@ -87,20 +84,18 @@ In an interactive chat, normally return control when ready to yield and let Pi w
 
 ```typescript
 subagent({
-  agent: "worker",
-  task: "Run the full test suite",
+  workflowScript: `runs.run("main", { agent: "worker", task: "Run the full test suite" })`,
   async: true
 })
 ```
 
-File-only output mode works for async single runs and workflowScript child launches. Use distinct absolute or durable output paths when later script steps need stable references. For cross-codebase waves, include the repo slug or lane key in each output path so reports from different repositories cannot collide.
+File-only output mode works for workflowScript child launches. Use distinct absolute or durable output paths when later script steps need stable references. For cross-codebase waves, include the repo slug or lane key in each output path so reports from different repositories cannot collide.
 
 For review fanout where the parent continues a local audit:
 
 ```typescript
 const run = subagent({
-  agent: "reviewer",
-  task: "Review the current diff for correctness issues. Do not edit files.",
+  workflowScript: `runs.run("correctness", { agent: "reviewer", task: "Review the current diff for correctness issues. Do not edit files." })`,
   async: true,
   context: "fresh"
 })
@@ -163,7 +158,7 @@ Schedules are durable project records under `.pi-subagents/schedules/`. They are
 
 ```typescript
 // One-shot reviewer
-subagent({ action: "schedule.create", id: "evening-review", name: "Evening review", at: "+30m", agent: "reviewer", task: "Review the diff." })
+subagent({ action: "schedule.create", id: "evening-review", name: "Evening review", at: "+30m", workflowScript: "runs.run('main', { agent: 'reviewer', task: 'Review the diff.' })" })
 
 // Fixed recurring workflow
 subagent({ action: "schedule.create", id: "backlog", every: "6h", catchUp: "latest", workflowScript: "..." })
@@ -178,7 +173,7 @@ subagent({ action: "schedule.run-due" })
 subagent({ action: "schedule.delete", id: "backlog" })
 ```
 
-`schedule.create` accepts exactly one target (`workflowScript`, or `agent` with optional `task`) and exactly one trigger (`at`, or a fixed `every` interval using `m`, `h`, `d`, or `w`). Runs always launch async with fresh context and no automatic mission; mission attachment is deferred from this first slice. `overlap` is currently `skip`; `catchUp` supports `latest` and `none`. `schedule.run-due` is the headless external-launcher seam. Calendar recurrence, cron, and the schedule inspector are deferred from this first safe slice. Definitions, bounded history, append-only events, and per-run receipts remain project-scoped across Pi sessions.
+`schedule.create` accepts exactly one target, `workflowScript`, and exactly one trigger (`at`, or a fixed `every` interval using `m`, `h`, `d`, or `w`). Runs always launch async with fresh context and no automatic mission; mission attachment is deferred from this first slice. `overlap` is currently `skip`; `catchUp` supports `latest` and `none`. `schedule.run-due` is the headless external-launcher seam. Calendar recurrence, cron, and the schedule inspector are deferred from this first safe slice. Definitions, bounded history, append-only events, and per-run receipts remain project-scoped across Pi sessions.
 
 Humans can use `/subagents-doctor` for the same read-only report. It checks runtime paths, discovery counts, async support, current session context, and intercom bridge state.
 
@@ -207,12 +202,14 @@ Per-run control thresholds can be overridden when a task legitimately runs witho
 
 ```typescript
 subagent({
-  agent: "worker",
-  task: "Run the slow migration test suite",
-  control: {
-    needsAttentionAfterMs: 300000,
-    notifyOn: ["needs_attention"]
-  }
+  workflowScript: `runs.run("slow-tests", {
+    agent: "worker",
+    task: "Run the slow migration test suite",
+    control: {
+      needsAttentionAfterMs: 300000,
+      notifyOn: ["needs_attention"]
+    }
+  })`
 })
 ```
 
@@ -266,21 +263,6 @@ subagent({ action: "watchdog.check" })
 when the user asked. Use ordinary fresh-context `reviewer` fanout for planned review
 waves; enable the watchdog when you want an automatic second pass on real edits.
 
-## Clarify TUI
-
-Single and parallel runs support a clarification TUI when you want to preview or
-edit parameters before launch:
-
-```typescript
-subagent({
-  agent: "worker",
-  task: "Implement feature X",
-  clarify: true
-})
-```
-
-Ordinary tool calls launch in the background by default. Set `async: false` when the current turn needs a foreground result, or `clarify: true` when you want the clarify UI; clarify always stays foreground. Clarify edits affect only the next run; use management actions, settings, or markdown files for persistent changes.
-
 ## Missions and cross-project routing
 
 Missions are the durable orchestration layer. Use this noun map:
@@ -306,8 +288,8 @@ Project panes run a separate Pi session from the target directory. Subagents lau
 
 ```typescript
 subagent({ action: "mission.create", mission: { title: "Ship auth refresh", goal: "Implement and validate refresh handling" } })
-subagent({ agent: "worker", task: "Implement the approved plan", missionId: "<mission-id>" })
-subagent({ agent: "scout", task: "Quickly answer whether this file exists", mission: false })
+subagent({ workflowScript: `runs.run("main", { agent: "worker", task: "Implement the approved plan" })`, missionId: "<mission-id>" })
+subagent({ workflowScript: `runs.run("main", { agent: "scout", task: "Quickly answer whether this file exists" })`, mission: false })
 subagent({ action: "mission.list", missionScope: "global" })
 subagent({ action: "project.open", cwd: "/path/to/other-repo", message: "Own this mission for the project and report back with receipts." })
 subagent({ action: "project.status", cwd: "/path/to/other-repo" })
@@ -364,14 +346,12 @@ The intended oracle loop is:
 ```typescript
 // Advisory review in a branched thread. Oracle defaults to forked context.
 subagent({
-  agent: "oracle",
-  task: "Review my current direction, challenge assumptions, and propose the best next move."
+  workflowScript: `runs.run("oracle-check", { agent: "oracle", task: "Review my current direction, challenge assumptions, and propose the best next move." })`
 })
 
 // Implementation only after explicit approval. Worker defaults to forked context.
 subagent({
-  agent: "worker",
-  task: "Implement the approved approach: ..."
+  workflowScript: `runs.run("implementation", { agent: "worker", task: "Implement the approved approach: ..." })`
 })
 ```
 

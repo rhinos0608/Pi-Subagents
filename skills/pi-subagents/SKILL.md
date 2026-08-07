@@ -12,7 +12,7 @@ description: |
 
 This skill is for the main parent orchestrator only. Do not inject or follow it inside spawned child subagents. The parent session owns delegation, orchestration, review fanout, and final fix-worker launches. Ordinary children should not run their own subagent workflows; the explicit exception is a delegated fanout child whose resolved builtin `tools` includes `subagent`, and that child may use `subagent` only for the fanout work the parent assigned.
 
-Use this skill when the parent orchestrator needs one specialized child or composed orchestration. Use `{ agent, task }` for one isolated child with no sibling lane, monitor, dependency, or aggregation. Use `workflowScript` proactively for coordinated waves: sequence, parallelism, branching, retries, gate monitors, and aggregation. Scripted workflows start asynchronously by default; pass `async:false` only for a small foreground run. `workflowScript` is the only public multi-agent orchestration surface.
+Use this skill when the parent orchestrator needs one specialized child or composed orchestration. Use `workflowScript` for all execution, including one isolated child. Use `runs.run("main", { agent, task })` for one child and `runs.all([...])` for coordinated waves: sequence, parallelism, branching, retries, gate monitors, and aggregation. Scripted workflows start asynchronously by default; pass `async:false` only for a small foreground run.
 
 ## How to use this router
 
@@ -21,7 +21,7 @@ Read the matching reference file before acting. Paths are relative to this `SKIL
 | Task | Read |
 | --- | --- |
 | Decide whether to delegate, choose agents, compare tool versus slash commands, apply prompt techniques, or understand builtin roles | `references/prompting-and-roles.md` |
-| Run single, scripted, async, scheduled, mission-backed, forked, watchdog, clarify, oracle, or intercom-coordinated workflows | `references/execution-controls.md` |
+| Run one-child, scripted, async, scheduled, mission-backed, forked, watchdog, oracle, or intercom-coordinated workflows | `references/execution-controls.md` |
 | List/create/update/delete/eject/disable agents or chains, edit agent files, use prompt-template integration, or expose extension RPC | `references/management-authoring-rpc.md` |
 | Check safety constraints, best practices, standard workflows, or error handling | `references/constraints-and-recipes.md` |
 

@@ -3949,19 +3949,15 @@ function workflowChatProgressUpdate(
 	};
 }
 
-function omitExecutionModeActionAlias(params: SubagentParamsLike): SubagentParamsLike {
+function removedExecutionAliasError(params: SubagentParamsLike): AgentToolResult<Details> | undefined {
 	const action = params.action?.toLowerCase();
 	if (action === "single" && (params.agent !== undefined || params.task !== undefined)) {
-		const rest = { ...params };
-		delete rest.action;
-		return rest;
+		return { content: [{ type: "text", text: "Direct execution was removed. Use workflowScript: \"return runs.run('main', { agent, task })\"." }], isError: true, details: { mode: "workflow", results: [] } };
 	}
 	if ((action === "parallel" || action === "tasks") && (params.tasks?.length ?? 0) > 0) {
-		const rest = { ...params };
-		delete rest.action;
-		return rest;
+		return { content: [{ type: "text", text: "Legacy top-level chain and parallel inputs were removed; use workflowScript." }], isError: true, details: { mode: "workflow", results: [] } };
 	}
-	return params;
+	return undefined;
 }
 
 function createScheduledOwnerState(source: SubagentState, ownerSessionId: string, ctx: ExtensionContext): SubagentState {
@@ -4040,8 +4036,14 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		deps.state.foregroundRuns ??= new Map();
 		deps.state.foregroundControls ??= new Map();
 		deps.state.lastForegroundControlId ??= null;
-		const requestParams = omitExecutionModeActionAlias(params);
-		if (requestParams.workflowScript !== undefined) {
+		const requestParams = params;
+		const normalizedAction = typeof requestParams.action === "string" ? requestParams.action.trim() : requestParams.action;
+		const aliasError = removedExecutionAliasError(requestParams);
+		if (aliasError) return aliasError;
+		if (requestParams.action !== undefined && normalizedAction === "") {
+			return { content: [{ type: "text", text: "action must be a non-empty management/control action, or omit action and use workflowScript." }], isError: true, details: { mode: "management", results: [] } };
+		}
+		if (requestParams.workflowScript !== undefined && !normalizedAction?.startsWith("schedule.")) {
 			const invalidMode = requestParams.action !== undefined || requestParams.agent !== undefined || requestParams.step !== undefined || requestParams.tasks !== undefined || requestParams.chain !== undefined;
 			if (invalidMode) {
 				return { content: [{ type: "text", text: "workflowScript is its own execution mode; do not combine it with action, agent, step, tasks, or chain." }], isError: true, details: { mode: "workflow", results: [] } };
@@ -5204,8 +5206,14 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		onUpdate: ((r: AgentToolResult<Details>) => void) | undefined,
 		ctx: ExtensionContext,
 	): Promise<AgentToolResult<Details>> => {
-		const requestParams = omitExecutionModeActionAlias(params);
-		if (requestParams.action) return execute(id, requestParams, signal, onUpdate, ctx);
+		const requestParams = params;
+		const normalizedAction = typeof requestParams.action === "string" ? requestParams.action.trim() : requestParams.action;
+		const aliasError = removedExecutionAliasError(requestParams);
+		if (aliasError) return aliasError;
+		if (requestParams.action !== undefined && normalizedAction === "") {
+			return { content: [{ type: "text", text: "action must be a non-empty management/control action, or omit action and use workflowScript." }], isError: true, details: { mode: "management", results: [] } };
+		}
+		if (normalizedAction) return execute(id, { ...requestParams, action: normalizedAction }, signal, onUpdate, ctx);
 		const { depth } = checkSubagentDepth(deps.config.maxSubagentDepth);
 		const dispatchParams = applyForceTopLevelAsyncOverride(requestParams, depth, deps.config.forceTopLevelAsync === true);
 		const runsForeground = dispatchParams.clarify === true || (dispatchParams.async ?? deps.asyncByDefault) !== true;

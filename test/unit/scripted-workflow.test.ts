@@ -3,6 +3,16 @@ import { describe, it } from "node:test";
 import { formatWorkflowJsonPreview, runWorkflowScript, WorkflowScriptError } from "../../src/workflows/scripted-workflow.ts";
 
 describe("scripted workflow runtime", () => {
+	it("automatically returns a single-expression script", async () => {
+		const result = await runWorkflowScript({
+			script: `runs.run("main", { agent: "worker", task: "do work" })`,
+			async launch(key) { return { key, ok: true, output: "done", artifactPaths: [] }; },
+			async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
+		});
+
+		assert.deepEqual(result.value, { key: "main", ok: true, output: "done", artifactPaths: [] });
+	});
+
 	it("allows scripts to run without a timeout", async () => {
 		const result = await runWorkflowScript({
 			script: `return "done";`,

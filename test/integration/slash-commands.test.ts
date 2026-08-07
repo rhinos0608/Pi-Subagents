@@ -582,7 +582,7 @@ describe("slash command custom message delivery", { skip: !available ? "slash-co
 		await commands.get("run")!.handler("scout", ctx);
 		await new Promise<void>((resolve) => setImmediate(resolve));
 
-		assert.deepEqual(requestedParams, { agent: "scout", task: "", clarify: false, agentScope: "both" });
+		assert.deepEqual(requestedParams, { workflowScript: "runs.run(\"run\", {\"agent\":\"scout\",\"task\":\"\",\"agentScope\":\"both\"})", async: false });
 		assert.equal(requestedCtx, ctx);
 		assert.equal(sent.length, 2);
 		assert.equal((sent[0] as { display?: boolean }).display, true);
@@ -749,7 +749,7 @@ Inspect
 `, "utf-8");
 
 			const run = await captureSlashCommandParams("run", "code-analysis.scout Investigate", root);
-			assert.deepEqual(run.params, { agent: "code-analysis.scout", task: "Investigate", clarify: false, agentScope: "both" });
+			assert.deepEqual(run.params, { workflowScript: "runs.run(\"run\", {\"agent\":\"code-analysis.scout\",\"task\":\"Investigate\",\"agentScope\":\"both\"})", async: false });
 
 			await withIsolatedHome(async () => {
 				const commands = new Map<string, RegisteredSlashCommand>();

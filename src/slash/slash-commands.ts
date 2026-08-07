@@ -621,6 +621,9 @@ function launchSlashSubagent(
 	void runSlashSubagent(pi, ctx, params);
 }
 
+function slashRunWorkflowScript(key: string, child: Record<string, unknown>): string {
+	return `runs.run(${JSON.stringify(key)}, ${JSON.stringify(child)})`;
+}
 
 export function registerSlashCommands(
 	pi: ExtensionAPI,
@@ -653,7 +656,7 @@ export function registerSlashCommands(
 	});
 
 	pi.registerCommand("run", {
-		description: "Run a subagent directly: /run agent[output=file] [task] [--bg] [--fork]",
+		description: "Run one subagent through workflowScript: /run agent[output=file] [task] [--bg] [--fork]",
 		getArgumentCompletions: makeAgentCompletions(state),
 		handler: async (args, ctx) => {
 			const { args: cleanedArgs, bg, fork } = extractExecutionFlags(args);
@@ -671,14 +674,13 @@ export function registerSlashCommands(
 			if (inline.reads && Array.isArray(inline.reads) && inline.reads.length > 0) {
 				finalTask = `[Read from: ${inline.reads.join(", ")}]\n\n${finalTask}`;
 			}
-			const params: SubagentParamsLike = { agent: agentName, task: finalTask, clarify: false, agentScope: "both" };
-			if (inline.output !== undefined) params.output = inline.output;
-			if (inline.outputMode !== undefined) params.outputMode = inline.outputMode;
-			if (inline.skill !== undefined) params.skill = inline.skill;
-			if (inline.model) params.model = inline.model;
-			if (bg) params.async = true;
-			if (fork) params.context = "fork";
-			launchSlashSubagent(pi, ctx, params);
+			const child: Record<string, unknown> = { agent: agentName, task: finalTask, agentScope: "both" };
+			if (inline.output !== undefined) child.output = inline.output;
+			if (inline.outputMode !== undefined) child.outputMode = inline.outputMode;
+			if (inline.skill !== undefined) child.skill = inline.skill;
+			if (inline.model) child.model = inline.model;
+			if (fork) child.context = "fork";
+			launchSlashSubagent(pi, ctx, { workflowScript: slashRunWorkflowScript("run", child), async: bg ? true : false });
 		},
 	});
 

@@ -255,11 +255,10 @@ const ControlOverrides = Type.Object({
 });
 
 const SubagentParamsSchema = Type.Object({
-	agent: Type.Optional(Type.String({ description: "Agent name (SINGLE mode) or target for management get/update/delete" })),
-	task: Type.Optional(Type.String({ description: "Task (SINGLE mode, optional for self-contained agents)" })),
+	agent: Type.Optional(Type.String({ description: "Agent target for management actions such as get, update, delete, and models." })),
 	// Management action (when present, tool operates in management mode)
-	action: Type.Optional(Type.String({
-		description: "Optional management/control action. Omit this field entirely for execution/delegation ({agent, task} or {workflowScript}); use it only for management/control actions."
+	action: Type.Optional(Type.String({ minLength: 1,
+		description: "Optional management/control action. Omit this field for workflowScript execution; use it only for management/control actions."
 	})),
 	name: Type.Optional(Type.String({ description: "Human-readable name for action='schedule.create'." })),
 	id: Type.Optional(Type.String({
@@ -315,7 +314,7 @@ const SubagentParamsSchema = Type.Object({
 	})),
 	workflowScript: Type.Optional(Type.String({ minLength: 1, description: "Trusted inline JavaScript orchestration. Starts asynchronously by default; pass async:false for a small foreground run. Use await runs.run(key, {agent, task, worktree?}), runs.all([...]), runs.status(id), runs.ref(s), emit(value), console, and return. Use ordinary JavaScript loops, branches, awaits, and arrays to mix sequential and parallel phases dynamically. Set worktree:true at workflow or child level for a separate managed worktree per child; child fields override workflow defaults. runs.run accepts one child only. No filesystem, shell, Pi tools, or host globals." })),
 	chatProgress: Type.Optional(Type.String({ enum: ["auto", "off", "live-card"], description: "WorkflowScript chat progress projection. auto shows a live in-chat card only for watched foreground workflows in the same Git repository; it is off otherwise." })),
-	worktree: Type.Optional(Type.Boolean({ description: "Managed child isolation. true gives a direct single child or each workflow child a separate git worktree; an individual runs.run/runs.all item can override a workflow default with worktree:false." })),
+	worktree: Type.Optional(Type.Boolean({ description: "Managed child isolation. true gives each workflow child a separate git worktree; an individual runs.run/runs.all item can override a workflow default with worktree:false." })),
 	step: Type.Optional(Type.Unsafe({ ...ChainItem, description: "One chain step for action='append-step' only. Not an execution mode." })),
 	context: Type.Optional(Type.String({
 		enum: ["fresh", "fork"],
@@ -335,20 +334,18 @@ const SubagentParamsSchema = Type.Object({
 	sessionDir: Type.Optional(
 		Type.String({ description: "Directory to store session logs (default: temp; enables sessions even if share=false)" }),
 	),
-	// Clarification TUI
-	clarify: Type.Optional(Type.Boolean({ description: "Show TUI to preview/edit before execution. Explicit clarify: true keeps the run foreground for the clarify UI; omitted clarify can still run in the background when async: true is set." })),
 	control: Type.Optional(ControlOverrides),
-	// Solo agent overrides
+	// Workflow defaults forwarded to each runs.run/runs.all child unless overridden there.
 	output: Type.Optional(Type.Unsafe({
 		anyOf: [
 			{ type: "string" },
 			{ type: "boolean" },
 		],
-		description: "Output file for single agent (string), or false to disable. Relative paths resolve against cwd.",
+		description: "Default child output file (string), or false to disable. Relative paths resolve against cwd.",
 	})),
 	outputMode: Type.Optional(OutputModeOverride),
 	skill: Type.Optional(SkillOverride),
-	model: Type.Optional(Type.String({ description: "Override model for single agent (e.g. 'anthropic/claude-sonnet-4')" })),
+	model: Type.Optional(Type.String({ description: "Default child model override (e.g. 'anthropic/claude-sonnet-4')" })),
 	outputSchema: Type.Optional(JsonSchemaObject),
 	agentContract: Type.Optional(AgentContractOverride),
 	acceptance: Type.Optional(AcceptanceOverride),

@@ -5,7 +5,7 @@
  * - Sync (default): Streams output, renders markdown, tracks usage
  * - Async: Background execution, emits events when done
  *
- * Public execution modes: single (agent + task) and workflow (workflowScript)
+ * Public execution mode: workflow (workflowScript)
  * Toggle: async parameter (default: true; set asyncByDefault:false in config.json to opt out)
  *
  * Config file: ~/.pi/agent/extensions/subagent/config.json
@@ -538,7 +538,11 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 
 		execute(id, params, signal, onUpdate, ctx) {
 			const input = params as SubagentParamsLike;
-			if (input.tasks !== undefined || input.chain !== undefined || input.concurrency !== undefined || input.chainDir !== undefined || (input.worktree !== undefined && !(input.worktree === true && input.agent))) {
+			const action = typeof input.action === "string" ? input.action.trim() : input.action;
+			if ((action === undefined || action === "") && input.workflowScript === undefined) {
+				return Promise.resolve({ content: [{ type: "text", text: "Direct execution was removed. Use workflowScript: \"return runs.run('main', { agent, task })\"." }], isError: true, details: { mode: "workflow", results: [] } });
+			}
+			if (input.tasks !== undefined || input.chain !== undefined || input.concurrency !== undefined || input.chainDir !== undefined || (input.worktree !== undefined && input.workflowScript === undefined)) {
 				return Promise.resolve({ content: [{ type: "text", text: "Legacy top-level chain and parallel inputs were removed; use workflowScript." }], isError: true, details: { mode: "management", results: [] } });
 			}
 			return executeSubagentCollapsed(id, input, signal ?? new AbortController().signal, onUpdate, ctx);
@@ -554,11 +558,11 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 			}
 			if (args.workflowScript)
 				return new Text(
-					`${theme.fg("toolTitle", theme.bold("subagent "))}${formatWorkflowManifest(args.workflowScript, args.async, args.clarify)}`,
+					`${theme.fg("toolTitle", theme.bold("subagent "))}${formatWorkflowManifest(args.workflowScript, args.async, false)}`,
 					0,
 					0,
 				);
-			const asyncLabel = args.async === true && args.clarify !== true ? theme.fg("warning", " [async]") : "";
+			const asyncLabel = args.async === true ? theme.fg("warning", " [async]") : "";
 			return new Text(
 				`${theme.fg("toolTitle", theme.bold("subagent "))}${theme.fg("accent", args.agent || "?")}${asyncLabel}`,
 				0,

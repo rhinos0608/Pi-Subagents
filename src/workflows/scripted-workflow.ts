@@ -122,7 +122,12 @@ parentPort.on("message", async (message) => {
     const sandbox = { runs, emit(value) { assertJsonValue(value); parentPort.postMessage({ type: "emit", value }); }, console: capturedConsole };
     const context = vm.createContext(sandbox, { codeGeneration: { strings: false, wasm: false } });
     contextObjectPrototype = vm.runInContext("Object.prototype", context);
-    const compiled = new vm.Script("(async () => {\n" + message.script + "\n})()", { filename: "workflow-script.js" });
+    let compiled;
+    try {
+      compiled = new vm.Script("(async () => { return (" + message.script + ");\n})()", { filename: "workflow-script.js" });
+    } catch {
+      compiled = new vm.Script("(async () => {\n" + message.script + "\n})()", { filename: "workflow-script.js" });
+    }
     const value = await compiled.runInContext(context);
     const persistedValue = value === undefined ? null : value;
     assertJsonValue(persistedValue, "return");
