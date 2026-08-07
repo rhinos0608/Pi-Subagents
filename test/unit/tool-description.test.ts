@@ -34,7 +34,7 @@ describe("registered subagent tool description", () => {
 		assert.doesNotMatch(description, /SINGLE:|direct single child/i);
 		assert.match(description, /runs\.run for one child and runs\.all for parallel children/i);
 		assert.match(description, /repository mutation lanes.*worktree:true.*runs\.run\/runs\.all.*managed isolation/i);
-		assert.match(description, /single expression is returned automatically/i);
+		assert.match(description, /ordinary JavaScript statement body.*explicit return/i);
 		assert.match(description, /Sequential example/i);
 		assert.match(description, /Parallel example/i);
 		assert.doesNotMatch(description, /Compatibility tasks\[\]|CHAIN EXAMPLES|PARALLEL \(compatibility\)/i);

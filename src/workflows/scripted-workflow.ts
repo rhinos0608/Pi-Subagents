@@ -122,12 +122,7 @@ parentPort.on("message", async (message) => {
     const sandbox = { runs, emit(value) { assertJsonValue(value); parentPort.postMessage({ type: "emit", value }); }, console: capturedConsole };
     const context = vm.createContext(sandbox, { codeGeneration: { strings: false, wasm: false } });
     contextObjectPrototype = vm.runInContext("Object.prototype", context);
-    let compiled;
-    try {
-      compiled = new vm.Script("(async () => { return (" + message.script + ");\n})()", { filename: "workflow-script.js" });
-    } catch {
-      compiled = new vm.Script("(async () => {\n" + message.script + "\n})()", { filename: "workflow-script.js" });
-    }
+    const compiled = new vm.Script("(async () => {\n" + message.script + "\n})()", { filename: "workflow-script.js" });
     const value = await compiled.runInContext(context);
     const persistedValue = value === undefined ? null : value;
     assertJsonValue(persistedValue, "return");
@@ -242,6 +237,30 @@ export function formatWorkflowJsonPreview(value: unknown, maxLength: number): st
 	} catch {
 		return undefined;
 	}
+}
+
+export interface SimpleWorkflowRunPreview {
+	agent?: string;
+	task?: string;
+}
+
+/** Display-only preview for the exact simple `return runs.run(key, {...})` form. */
+export function previewSimpleWorkflowRun(script: string | undefined): SimpleWorkflowRunPreview | undefined {
+	const body = script?.match(/^\s*return\s+(?:await\s+)?runs\.run\s*\(\s*(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`[^`$\\]*`)\s*,\s*\{([\s\S]*)\}\s*\)\s*;?\s*$/)?.[1];
+	if (body === undefined) return undefined;
+	const readProperty = (name: "agent" | "task"): string | undefined => {
+		const match = body.match(new RegExp(`(?:^|,)\\s*(?:${name}|["']${name}["'])\\s*:\\s*("(?:\\\\.|[^"\\\\])*"|'(?:\\\\.|[^'\\\\])*'|\u0060[^\u0060$\\\\]*\u0060)`));
+		if (!match?.[1]) return undefined;
+		const literal = match[1];
+		if (literal.startsWith('"')) {
+			try { return JSON.parse(literal) as string; } catch { return undefined; }
+		}
+		if (literal.slice(1, -1).includes("\\")) return undefined;
+		return literal.slice(1, -1);
+	};
+	const agent = readProperty("agent");
+	const task = readProperty("task");
+	return { ...(agent !== undefined ? { agent } : {}), ...(task !== undefined ? { task } : {}) };
 }
 
 function stableJson(value: unknown): string {

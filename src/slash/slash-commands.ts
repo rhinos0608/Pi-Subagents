@@ -622,7 +622,7 @@ function launchSlashSubagent(
 }
 
 function slashRunWorkflowScript(key: string, child: Record<string, unknown>): string {
-	return `runs.run(${JSON.stringify(key)}, ${JSON.stringify(child)})`;
+	return `return runs.run(${JSON.stringify(key)}, ${JSON.stringify(child)})`;
 }
 
 export function registerSlashCommands(

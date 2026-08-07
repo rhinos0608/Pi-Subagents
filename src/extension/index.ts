@@ -501,7 +501,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 
 	const executeSubagentCollapsed = (id: string, params: SubagentParamsLike, signal: AbortSignal, onUpdate: ((result: AgentToolResult<Details>) => void) | undefined, ctx: ExtensionContext) => {
 		if (ctx.hasUI) ctx.ui.setToolsExpanded(false);
-		return executor.execute(id, params, signal, onUpdate, ctx);
+		return executor.executePublic(id, params, signal, onUpdate, ctx);
 	};
 
 	const slashBridge = registerSlashSubagentBridge({
@@ -525,7 +525,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	const rpcBridge = registerSubagentRpcBridge({
 		events: pi.events,
 		getContext: () => state.lastUiContext,
-		execute: (id, params, signal, onUpdate, ctx) => executor.execute(id, params, signal, onUpdate, ctx),
+		execute: (id, params, signal, onUpdate, ctx) => executor.executePublic(id, params, signal, onUpdate, ctx),
 		state,
 	});
 
@@ -537,15 +537,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		parameters: SubagentParams,
 
 		execute(id, params, signal, onUpdate, ctx) {
-			const input = params as SubagentParamsLike;
-			const action = typeof input.action === "string" ? input.action.trim() : input.action;
-			if ((action === undefined || action === "") && input.workflowScript === undefined) {
-				return Promise.resolve({ content: [{ type: "text", text: "Direct execution was removed. Use workflowScript: \"return runs.run('main', { agent, task })\"." }], isError: true, details: { mode: "workflow", results: [] } });
-			}
-			if (input.tasks !== undefined || input.chain !== undefined || input.concurrency !== undefined || input.chainDir !== undefined || (input.worktree !== undefined && input.workflowScript === undefined)) {
-				return Promise.resolve({ content: [{ type: "text", text: "Legacy top-level chain and parallel inputs were removed; use workflowScript." }], isError: true, details: { mode: "management", results: [] } });
-			}
-			return executeSubagentCollapsed(id, input, signal ?? new AbortController().signal, onUpdate, ctx);
+			return executeSubagentCollapsed(id, params as SubagentParamsLike, signal ?? new AbortController().signal, onUpdate, ctx);
 		},
 
 		renderCall(args, theme) {

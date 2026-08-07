@@ -5,8 +5,8 @@ Parameters and actions for the `subagent` tool. These are what the LLM passes wh
 ## Execution examples
 
 ```js
-// One child; a single expression is returned automatically
-{ workflowScript: `runs.run("main", { agent: "scout", task: "Analyze the auth flow" })` }
+// One child; return the child promise explicitly
+{ workflowScript: `return runs.run("main", { agent: "scout", task: "Analyze the auth flow" })` }
 
 // Sequential workflow
 { workflowScript: `
@@ -286,7 +286,7 @@ Intentionally unsupported: foreground/clarify, steer/resume/interrupt-as-pause, 
 Pass `share: true` to export a full session to HTML, upload it to a secret GitHub Gist through your `gh` credentials, and return a `https://shittycodingagent.ai/session/?<gistId>` URL.
 
 ```ts
-{ workflowScript: `runs.run("main", { agent: "scout", task: "..." })`, share: true }
+{ workflowScript: `return runs.run("main", { agent: "scout", task: "..." })`, share: true }
 ```
 
 This is disabled by default. Session data may contain source code, paths, environment variables, credentials, or other sensitive output. You need `gh` installed and authenticated.

@@ -9,6 +9,7 @@ import type { AsyncStatus, Details, ExtensionConfig } from "../../shared/types.t
 import type { SubagentParamsLike } from "../foreground/subagent-executor.ts";
 import { validateExecutionAcceptance } from "../shared/acceptance.ts";
 import type { ResolvedSubagentCapabilityCeiling } from "../shared/capability-ceiling.ts";
+import { previewSimpleWorkflowRun } from "../../workflows/scripted-workflow.ts";
 
 export const SCHEDULED_RUN_ACTIONS = [
 	"schedule.create",
@@ -35,7 +36,6 @@ export type ScheduleTrigger =
 	| { kind: "once"; at: string; nextRunAt?: string }
 	| { kind: "interval"; every: string; everyMs: number; anchorAt: string; nextRunAt: string };
 export type ScheduleTarget = { workflowScript: string };
-type LegacyScheduleTarget = { agent: string; task?: string };
 
 export interface ScheduleRecord {
 	schemaVersion: 1;
@@ -189,19 +189,11 @@ function readJson(file: string, label: string): unknown {
 	}
 }
 
-function legacyScheduleWorkflowScript(target: LegacyScheduleTarget): string {
-	const fields = [`agent: ${JSON.stringify(target.agent)}`];
-	if (target.task !== undefined) fields.push(`task: ${JSON.stringify(target.task)}`);
-	return `return runs.run('main', { ${fields.join(", ")} })`;
-}
-
 function parseScheduleTarget(value: unknown, file: string): ScheduleTarget {
 	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`Schedule record '${file}' has invalid trigger or target.`);
 	const target = value as { workflowScript?: unknown; agent?: unknown; task?: unknown };
 	if (typeof target.workflowScript === "string" && target.workflowScript.trim()) return { workflowScript: target.workflowScript.trim() };
-	if (typeof target.agent === "string" && target.agent.trim() && (target.task === undefined || typeof target.task === "string")) {
-		return { workflowScript: legacyScheduleWorkflowScript({ agent: target.agent.trim(), ...(target.task === undefined ? {} : { task: target.task }) }) };
-	}
+	if (target.agent !== undefined || target.task !== undefined) throw new Error(`Schedule record '${file}' uses a removed legacy agent target; recreate it with target.workflowScript.`);
 	throw new Error(`Schedule record '${file}' requires a workflowScript target.`);
 }
 
@@ -317,8 +309,9 @@ function textResult(text: string, schedules?: ScheduleRecord[], runs?: ScheduleR
 	};
 }
 
-function targetLabel(_target: ScheduleTarget): string {
-	return "workflowScript";
+function targetLabel(target: ScheduleTarget): string {
+	const preview = previewSimpleWorkflowRun(target.workflowScript);
+	return preview?.agent ? `workflowScript -> agent ${preview.agent}` : "workflowScript (dynamic)";
 }
 
 function sanitizeTarget(params: SubagentParamsLike): { target?: ScheduleTarget; error?: string } {
