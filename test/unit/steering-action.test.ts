@@ -28,9 +28,16 @@ function createState(): SubagentState {
 	};
 }
 
+let statusWriteMtimeMs = Date.now();
+
 function writeStatus(asyncDir: string, status: AsyncStatus): void {
 	fs.mkdirSync(asyncDir, { recursive: true });
-	writeAtomicJson(path.join(asyncDir, "status.json"), status);
+	const statusPath = path.join(asyncDir, "status.json");
+	writeAtomicJson(statusPath, status);
+	// readStatus is metadata-cached. Keep fast test rewrites monotonic.
+	statusWriteMtimeMs = Math.max(statusWriteMtimeMs + 1, Date.now());
+	const mtime = new Date(statusWriteMtimeMs);
+	fs.utimesSync(statusPath, mtime, mtime);
 }
 
 function runningStatus(runId: string, mode: AsyncStatus["mode"] = "single", count = 1): AsyncStatus {
@@ -364,9 +371,10 @@ describe("acknowledged steering action", () => {
 		writeStatus(asyncDir, runningStatus(runId));
 		writePrivateAtomicJson(path.join(asyncDir, "recovery-descriptor.json"), recoveryDescriptor(runId));
 		let recovered = false;
+		let recoveryCommitted = false;
 		let routed: AsyncStatus | undefined;
 		try {
-			const action = steerAsyncRun({
+			const result = await steerAsyncRun({
 				state: createState(), runId, message: "correct course", location: { asyncDir }, ackTimeoutMs: 25, recoveryTimeoutMs: 500, kill: () => true,
 				onRequestQueued: (requestPath) => {
 					const request = JSON.parse(fs.readFileSync(requestPath, "utf-8")) as SteerRequest;
@@ -374,12 +382,15 @@ describe("acknowledged steering action", () => {
 					projectRequest(routed, request, ["routed"]);
 					writeStatus(asyncDir, routed);
 				},
+				onRecoveryCommitted: () => {
+					recoveryCommitted = true;
+					if (routed) writeStatus(asyncDir, { ...routed, state: "paused", endedAt: Date.now(), steps: [{ ...routed.steps![0]!, status: "paused" }] });
+				},
 				recover: async () => { recovered = true; return successResult("replacement"); },
 			});
-			await waitUntil(() => fs.existsSync(interruptRequestPath(asyncDir)) ? true : undefined);
+			assert.ok(recoveryCommitted);
 			assert.ok(routed);
-			writeStatus(asyncDir, { ...routed, state: "paused", endedAt: Date.now(), steps: [{ ...routed.steps![0]!, status: "paused" }] });
-			const result = await action;
+			assert.equal(fs.existsSync(interruptRequestPath(asyncDir)), true);
 			assert.equal(result.isError, true);
 			assert.equal(recovered, false);
 			assert.match(result.content[0]!.text, /no persisted child session|does not have a persisted session file/i);
