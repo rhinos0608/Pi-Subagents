@@ -8,6 +8,9 @@
 ### Changed
 - Clarified mission-use policy in the packaged `pi-subagents` skill.
 
+### Fixed
+- Stabilize steering recovery tests by invalidating cached status metadata after fast test rewrites.
+
 ## [0.44.0] - 2026-08-08
 
 ### Added
