@@ -2942,7 +2942,6 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 			exitCode: 0,
 		});
 		const id = `async-zero-exit-provider-error-${Date.now().toString(36)}`;
-		const asyncDir = path.join(ASYNC_DIR, id);
 		executeAsyncSingle(id, {
 			agent: "worker",
 			task: "Do work",
@@ -2964,8 +2963,7 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8")) as AsyncResultPayload;
 		assert.equal(payload.success, false);
 		assert.match(payload.results[0]?.error ?? "", /429 quota exceeded/);
-		const statusPayload = JSON.parse(fs.readFileSync(path.join(asyncDir, "status.json"), "utf-8")) as AsyncStatusPayload;
-		assert.equal(statusPayload.state, "failed");
+		const statusPayload = await waitForAsyncState(id, (status) => status.state === "failed");
 		assert.match(statusPayload.steps?.[0]?.error ?? "", /429 quota exceeded/);
 	});
 
