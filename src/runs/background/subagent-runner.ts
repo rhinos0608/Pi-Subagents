@@ -4439,40 +4439,6 @@ async function runSubagent(
 			statusPayload.error = `Step failed: ${failedStep.agent}`;
 		}
 	}
-	writeStatusPayload();
-	appendJsonl(
-		eventsPath,
-		JSON.stringify({
-			type: "subagent.run.completed",
-			lifecycleArtifactVersion: SUBAGENT_LIFECYCLE_ARTIFACT_VERSION,
-			ts: runEndedAt,
-			runId: id,
-			status: statusPayload.state,
-			durationMs: runEndedAt - overallStartTime,
-			totalTokens: statusPayload.totalTokens,
-			totalCost: finalTotalCost,
-			usageBudget: statusPayload.usageBudget,
-		}),
-	);
-	writeRunLog(logPath, omitUndefinedProperties({
-		id,
-		mode: statusPayload.mode,
-		cwd,
-		startedAt: overallStartTime,
-		endedAt: runEndedAt,
-		steps: statusPayload.steps.map((step) => omitUndefinedProperties({
-			agent: step.agent,
-			status: step.status,
-			durationMs: step.durationMs,
-		})),
-		summary,
-		truncated,
-		artifactsDir,
-		sessionFile: effectiveSessionFile,
-		shareUrl,
-		shareError,
-	}));
-
 	try {
 		writeAtomicJson(resultPath, {
 			lifecycleArtifactVersion: SUBAGENT_LIFECYCLE_ARTIFACT_VERSION,
@@ -4572,6 +4538,38 @@ async function runSubagent(
 	} catch (err) {
 		console.error(`Failed to write result file ${resultPath}:`, err);
 	}
+	appendJsonl(
+		eventsPath,
+		JSON.stringify({
+			type: "subagent.run.completed",
+			lifecycleArtifactVersion: SUBAGENT_LIFECYCLE_ARTIFACT_VERSION,
+			ts: runEndedAt,
+			runId: id,
+			status: statusPayload.state,
+			durationMs: runEndedAt - overallStartTime,
+			totalTokens: statusPayload.totalTokens,
+			totalCost: finalTotalCost,
+			usageBudget: statusPayload.usageBudget,
+		}),
+	);
+	writeRunLog(logPath, omitUndefinedProperties({
+		id,
+		mode: statusPayload.mode,
+		cwd,
+		startedAt: overallStartTime,
+		endedAt: runEndedAt,
+		steps: statusPayload.steps.map((step) => omitUndefinedProperties({
+			agent: step.agent,
+			status: step.status,
+			durationMs: step.durationMs,
+		})),
+		summary,
+		truncated,
+		artifactsDir,
+		sessionFile: effectiveSessionFile,
+		shareUrl,
+		shareError,
+	}));
 	if (config.runnerProcessInstanceId) {
 		const writers: Record<string, Array<{ processInstanceId: string; kind: "pi-writer"; attempt: number; closeObservedAt: number; exitCode: number | null; signal: string | null }>> = {};
 		const expectedWriters: Record<string, number> = {};
@@ -4594,6 +4592,7 @@ async function runSubagent(
 			console.error(`Failed to write process-terminal candidate for '${id}':`, error);
 		}
 	}
+	writeStatusPayload();
 }
 
 async function waitForStartupControl(
