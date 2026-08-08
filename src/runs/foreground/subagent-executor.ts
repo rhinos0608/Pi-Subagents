@@ -36,6 +36,7 @@ import {
 	getStepAgents,
 	isParallelStep,
 	isDynamicParallelStep,
+	resolveChainPath,
 	resolveStepBehavior,
 	suppressProgressForReadOnlyTask,
 	taskDisallowsFileUpdates,
@@ -256,6 +257,8 @@ export interface SubagentParamsLike {
 	focus?: boolean;
 	skill?: string | string[] | boolean;
 	output?: string | boolean;
+	/** Internal-only; not part of the public tool schema. Wired for single-run reads (chain steps use their own field). */
+	reads?: string[] | false;
 	outputMode?: "inline" | "file-only";
 	outputSchema?: JsonSchemaObject;
 	agentScope?: unknown;
@@ -2562,6 +2565,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 			skills,
 			output: effectiveOutput,
 			outputMode: effectiveOutputMode,
+			...(params.reads !== undefined ? { reads: params.reads } : {}),
 			outputBaseDir: resolveSingleRunOutputBaseDir(deps, artifactsDir, id),
 			modelOverride,
 			thinkingOverride: thinkingOverrideForTask(params.agent!, 0, modelOverride),
@@ -3590,6 +3594,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 		data.modelScope === undefined ? {} : { scope: data.modelScope },
 	);
 	let skillOverride: string[] | false | undefined = normalizeSkillInput(params.skill);
+	let readsOverride: string[] | false | undefined = params.reads;
 	const rawOutput = params.output !== undefined ? params.output : agentConfig.output;
 	let effectiveOutput = normalizeSingleOutputOverride(rawOutput, agentConfig.output);
 	const effectiveOutputMode = params.outputMode ?? "inline";
@@ -3627,6 +3632,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 		if (override?.model !== undefined) modelOverride = resolveEffectiveSubagentModel(override.model, agentConfig.model, parentModel, availableModels, currentProvider, data.modelScope === undefined ? {} : { scope: data.modelScope });
 		if (override?.output !== undefined) effectiveOutput = normalizeSingleOutputOverride(override.output, agentConfig.output);
 		if (override?.skills !== undefined) skillOverride = override.skills;
+		if (override?.reads !== undefined) readsOverride = override.reads;
 
 		if (result.runInBackground) {
 			if (!isAsyncAvailable()) {
@@ -3666,6 +3672,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 				skills: skillOverride === false ? [] : skillOverride,
 				output: effectiveOutput,
 				outputMode: effectiveOutputMode,
+				...(readsOverride !== undefined ? { reads: readsOverride } : {}),
 				outputBaseDir: resolveSingleRunOutputBaseDir(deps, artifactsDir, id),
 				modelOverride,
 				thinkingOverride: thinkingOverrideForTask(params.agent!, 0, modelOverride),
@@ -3702,6 +3709,13 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 	const structuredRuntime = params.outputSchema
 		? createStructuredOutputRuntime(params.outputSchema, artifactConfig.enabled ? path.join(artifactsDir, "structured-output", runId) : undefined)
 		: undefined;
+	// Reads: caller override > agent defaultReads > none. `~`/`~/` expand to home;
+	// absolute paths pass through; relative paths resolve against the child cwd.
+	const reads = readsOverride !== undefined ? readsOverride : agentConfig.defaultReads ?? false;
+	const readsInstruction = Array.isArray(reads) && reads.length > 0
+		? `[Read from: ${reads.map((f) => resolveChainPath(f, effectiveCwd)).join(", ")}]\n\n`
+		: "";
+	task = readsInstruction + task;
 	task = injectSingleOutputInstruction(task, outputPath, agentConfig);
 
 	let effectiveSkills: string[] | undefined;
@@ -4016,6 +4030,7 @@ function prepareWorkflowChildParams(params: SubagentParamsLike): SubagentParamsL
 		acceptance,
 		agentContract,
 		toolBudget,
+		reads,
 		...runParams
 	} = params;
 	return {
@@ -4027,6 +4042,7 @@ function prepareWorkflowChildParams(params: SubagentParamsLike): SubagentParamsL
 			...(model !== undefined ? { model } : {}),
 			...(skill !== undefined ? { skill } : {}),
 			...(output !== undefined ? { output } : {}),
+			...(reads !== undefined ? { reads } : {}),
 			...(outputMode !== undefined ? { outputMode } : {}),
 			...(outputSchema !== undefined ? { outputSchema } : {}),
 			...(acceptance !== undefined ? { acceptance } : {}),

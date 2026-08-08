@@ -15,7 +15,7 @@ import { appendAgentRefinementOverlay } from "../../agents/agent-refinements.ts"
 import { writePrivateAtomicJson } from "../../shared/atomic-json.ts";
 import { applyThinkingSuffix, projectLaunchResolvedChildExtensions, resolvePiLaunchToolPlan } from "../shared/pi-args.ts";
 import { injectOutputPathSystemPrompt, injectSingleOutputInstruction, normalizeSingleOutputOverride, resolveSingleOutputPath, validateFileOnlyOutputMode } from "../shared/single-output.ts";
-import { buildChainInstructions, isCheckpointStep, isDynamicParallelStep, isParallelStep, resolveStepBehavior, suppressProgressForReadOnlyTask, writeInitialProgressFile, type ChainStep, type ResolvedStepBehavior, type SequentialStep, type StepOverrides } from "../../shared/settings.ts";
+import { buildChainInstructions, isCheckpointStep, isDynamicParallelStep, isParallelStep, resolveChainPath, resolveStepBehavior, suppressProgressForReadOnlyTask, writeInitialProgressFile, type ChainStep, type ResolvedStepBehavior, type SequentialStep, type StepOverrides } from "../../shared/settings.ts";
 import type { RunnerStep } from "../shared/parallel-utils.ts";
 import type { ContextMode } from "../shared/context-mode.ts";
 import { resolvePiPackageRoot } from "../shared/pi-spawn.ts";
@@ -192,6 +192,7 @@ interface AsyncSingleParams {
 	context?: ContextMode;
 	skills?: string[];
 	output?: string | boolean;
+	reads?: string[] | false;
 	outputMode?: "inline" | "file-only";
 	outputBaseDir?: string;
 	agentContract?: AgentContract;
@@ -1288,6 +1289,13 @@ export function executeAsyncSingle(
 	const validationError = validateFileOnlyOutputMode(outputMode, outputPath, `Async single run (${agent})`);
 	if (validationError) return formatAsyncStartError("single", validationError);
 	const taskWithOutputInstruction = injectSingleOutputInstruction(task, outputPath, agentConfig);
+	// Reads: caller override > agent defaultReads > none. `~`/`~/` expand to home;
+	// absolute paths pass through; relative paths resolve against the child cwd.
+	const reads = params.reads !== undefined ? params.reads : agentConfig.defaultReads ?? false;
+	const readsInstruction = Array.isArray(reads) && reads.length > 0
+		? `[Read from: ${reads.map((f) => resolveChainPath(f, runnerCwd)).join(", ")}]\n\n`
+		: "";
+	const taskText = readsInstruction + taskWithOutputInstruction;
 	const primaryModel = externalRunner ? undefined : resolveSubagentModelOverride(
 		params.modelOverride ?? agentConfig.model,
 		ctx.currentModel,
@@ -1415,7 +1423,7 @@ export function executeAsyncSingle(
 						permissionRules,
 						...(capabilityCeiling ? { capabilityCeiling } : {}),
 						agent,
-						task: taskWithOutputInstruction,
+						task: taskText,
 						...(agentConfig.runner ? { runner: agentConfig.runner } : {}),
 						...(params.context ? { context: params.context } : {}),
 						cwd: runnerCwd,
