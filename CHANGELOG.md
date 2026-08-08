@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.44.0] - 2026-08-08
+
 ### Added
 - Added one automatic enclosing mission and durable workflow state to plain `workflowScript` launches; child runs no longer create separate missions.
 - Added `scheduledRuns.storeRoot` for durable schedules outside project repositories. Thanks to @ProCleiton for #891 and the prior #890 implementation.
