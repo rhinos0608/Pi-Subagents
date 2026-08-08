@@ -1095,7 +1095,7 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		await waitForMockPiCall(mockPi, 1, 10_000);
 		const resultPath = await waitForAsyncResultFile(id, 8_000);
 		const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8")) as AsyncResultPayload;
-		const status = JSON.parse(fs.readFileSync(path.join(ASYNC_DIR, id, "status.json"), "utf-8")) as AsyncStatusPayload;
+		const status = await waitForAsyncState(id, (candidate) => candidate.state === "failed");
 		assert.equal(payload.state, "failed");
 		assert.equal(payload.success, false);
 		assert.equal(payload.exitCode, 1);
@@ -1140,7 +1140,7 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		const resultPath = await waitForAsyncResultFile(id, 10_000);
 		const elapsedMs = Date.now() - startedAt;
 		const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8")) as AsyncResultPayload;
-		const status = JSON.parse(fs.readFileSync(path.join(ASYNC_DIR, id, "status.json"), "utf-8")) as AsyncStatusPayload;
+		const status = await waitForAsyncState(id, (candidate) => candidate.state === "failed");
 		assert.equal(payload.state, "failed");
 		assert.equal(payload.timedOut, true);
 		assert.equal(payload.results[0]?.timedOut, true);
@@ -1182,7 +1182,7 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		const resultPath = await waitForAsyncResultFile(id, 5_000);
 		const elapsedMs = Date.now() - startedAt;
 		const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8")) as AsyncResultPayload;
-		const status = JSON.parse(fs.readFileSync(path.join(ASYNC_DIR, id, "status.json"), "utf-8")) as AsyncStatusPayload;
+		const status = await waitForAsyncState(id, (candidate) => candidate.state === "failed");
 		assert.equal(payload.state, "failed");
 		assert.equal(payload.timedOut, true);
 		assert.equal(payload.results[0]?.timedOut, true);
@@ -1218,7 +1218,7 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 
 		const resultPath = await waitForAsyncResultFile(id, 10_000);
 		const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8")) as AsyncResultPayload;
-		const status = JSON.parse(fs.readFileSync(path.join(ASYNC_DIR, id, "status.json"), "utf-8")) as AsyncStatusPayload;
+		const status = await waitForAsyncState(id, (candidate) => candidate.state === "complete");
 		assert.equal(payload.success, true);
 		assert.equal(payload.state, "complete");
 		assert.equal(payload.turnBudgetExceeded, undefined);
@@ -1257,7 +1257,7 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 
 		const resultPath = await waitForAsyncResultFile(id, 10_000);
 		const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8")) as AsyncResultPayload;
-		const status = JSON.parse(fs.readFileSync(path.join(ASYNC_DIR, id, "status.json"), "utf-8")) as AsyncStatusPayload;
+		const status = await waitForAsyncState(id, (candidate) => candidate.state === "complete");
 		assert.equal(payload.success, true);
 		assert.equal(payload.state, "complete");
 		assert.equal(payload.exitCode, 0);
@@ -1319,7 +1319,7 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 
 		const resultPath = await waitForAsyncResultFile(id, 10_000);
 		const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8")) as AsyncResultPayload;
-		const status = JSON.parse(fs.readFileSync(path.join(ASYNC_DIR, id, "status.json"), "utf-8")) as AsyncStatusPayload;
+		const status = await waitForAsyncState(id, (candidate) => candidate.state === "complete");
 		assert.equal(payload.state, "complete");
 		assert.equal(payload.turnBudgetExceeded, undefined);
 		assert.equal(payload.turnBudget?.outcome, "wrap-up-requested");
@@ -1361,7 +1361,7 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		deliverTimeoutRequest({ asyncDir, pid: pending.pid, source: "test" });
 		const resultPath = await waitForAsyncResultFile(id, 10_000);
 		const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8")) as AsyncResultPayload;
-		const status = JSON.parse(fs.readFileSync(path.join(asyncDir, "status.json"), "utf-8")) as AsyncStatusPayload;
+		const status = await waitForAsyncState(id, (candidate) => candidate.state === "failed");
 		assert.equal(payload.state, "failed");
 		assert.equal(payload.timedOut, true);
 		assert.equal(payload.turnBudgetExceeded, undefined);
@@ -1402,7 +1402,7 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		deliverStopRequest({ asyncDir, pid: pending.pid, source: "test" });
 		const resultPath = await waitForAsyncResultFile(id, 10_000);
 		const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8")) as AsyncResultPayload;
-		const status = JSON.parse(fs.readFileSync(path.join(asyncDir, "status.json"), "utf-8")) as AsyncStatusPayload;
+		const status = await waitForAsyncState(id, (candidate) => candidate.state === "stopped");
 		assert.equal(payload.state, "stopped");
 		assert.equal(payload.stopped, true);
 		assert.equal(payload.turnBudgetExceeded, undefined);
@@ -2349,7 +2349,7 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		const resultPath = await waitForAsyncResultFile(id, 5_000);
 		const elapsedMs = Date.now() - startedAt;
 		const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8")) as AsyncResultPayload;
-		const status = JSON.parse(fs.readFileSync(path.join(ASYNC_DIR, id, "status.json"), "utf-8")) as AsyncStatusPayload;
+		const status = await waitForAsyncState(id, (candidate) => candidate.state === "failed");
 		const dynamicNode = payload.workflowGraph?.nodes?.[1] as { status?: string; error?: string; acceptanceStatus?: string } | undefined;
 		assert.equal(payload.state, "failed");
 		assert.equal(payload.timedOut, true);
@@ -2419,7 +2419,7 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		assert.ok(!result.isError);
 		const resultPath = await waitForAsyncResultFile(id, 10_000);
 		const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8")) as AsyncResultPayload;
-		const status = JSON.parse(fs.readFileSync(path.join(ASYNC_DIR, id, "status.json"), "utf-8")) as AsyncStatusPayload & { workflowGraph?: AsyncResultPayload["workflowGraph"]; error?: string };
+		const status = await waitForAsyncState(id, (candidate) => candidate.state === "failed") as AsyncStatusPayload & { workflowGraph?: AsyncResultPayload["workflowGraph"]; error?: string };
 		assert.equal(payload.success, false);
 		assert.match(payload.results.at(-1)?.error ?? "", /exceeding maxItems 1/);
 		assert.equal(payload.workflowGraph?.nodes?.[1]?.status, "failed");
@@ -2497,7 +2497,7 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 			assert.ok(taskArg.includes(`Write your findings to exactly this path: ${path.join(repoDir, ".pi-subagents", "artifacts", "outputs", asyncId, "report.md")}`));
 			const resultPath = await waitForAsyncResultFile(asyncId, 90_000);
 			const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8")) as AsyncResultPayload;
-			const status = JSON.parse(fs.readFileSync(path.join(result.details!.asyncDir!, "status.json"), "utf-8")) as AsyncStatusPayload;
+			const status = await waitForAsyncState(asyncId, (candidate) => candidate.state === "complete");
 			assert.equal(payload.parallelHandoff?.version, 1);
 			assert.equal(payload.parallelHandoff?.path, path.join(result.details!.asyncDir!, "handoff.json"));
 			assert.deepEqual(status.parallelHandoff, payload.parallelHandoff);
@@ -3012,7 +3012,7 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		assert.equal(payload.results[0]?.success, true);
 		assert.equal(payload.results[0]?.error, undefined);
 		assert.equal(payload.results[0]?.output, "Recovered asynchronously");
-		const statusPayload = JSON.parse(fs.readFileSync(path.join(asyncDir, "status.json"), "utf-8")) as AsyncStatusPayload;
+		const statusPayload = await waitForAsyncState(id, (candidate) => candidate.state === "complete");
 		assert.equal(statusPayload.state, "complete");
 		assert.equal(statusPayload.steps?.[0]?.status, "complete");
 		assert.equal(statusPayload.steps?.[0]?.exitCode, 0);
@@ -3062,7 +3062,7 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		assert.equal(payload.results[0]?.success, false);
 		assert.match(payload.results[0]?.error ?? "", /provider transport failed/);
 		assert.equal(payload.results[0]?.output, "");
-		const statusPayload = JSON.parse(fs.readFileSync(path.join(asyncDir, "status.json"), "utf-8")) as AsyncStatusPayload;
+		const statusPayload = await waitForAsyncState(id, (candidate) => candidate.state === "failed");
 		assert.equal(statusPayload.state, "failed");
 		assert.equal(statusPayload.steps?.[0]?.status, "failed");
 		assert.equal(statusPayload.steps?.[0]?.exitCode, 1);
@@ -3341,7 +3341,7 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 
 		const resultPath = await waitForAsyncResultFile(id, 10_000);
 		const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8")) as AsyncResultPayload;
-		const statusPayload = JSON.parse(fs.readFileSync(path.join(ASYNC_DIR, id, "status.json"), "utf-8")) as AsyncStatusPayload;
+		const statusPayload = await waitForAsyncState(id, (candidate) => candidate.state === "complete");
 
 		assert.equal(payload.success, true);
 		assert.equal(payload.state, "complete");
