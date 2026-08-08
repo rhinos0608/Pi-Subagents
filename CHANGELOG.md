@@ -8,6 +8,7 @@
 
 ### Changed
 - Clarified native supervisor messaging and optional external intercom result delivery in the docs and packaged skill.
+- Point interactive async-launch guidance to `subagent_wait({ id, nonBlocking: true })` when an explicit wake is needed without blocking the current turn.
 
 ### Fixed
 - Preserve `workflow` mode when asynchronous workflow mission runs complete.
