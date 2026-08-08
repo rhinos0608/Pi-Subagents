@@ -303,6 +303,8 @@ describe("acknowledged steering action", () => {
 		if (process.platform !== "win32") assert.equal(fs.statSync(descriptorPath).mode & 0o777, 0o600);
 		let receivedLimits: unknown;
 		let recoveryStarted = false;
+		let request: SteerRequest | undefined;
+		let routed: AsyncStatus | undefined;
 		try {
 			const action = steerAsyncRun({
 				state: createState(),
@@ -312,13 +314,17 @@ describe("acknowledged steering action", () => {
 				ackTimeoutMs: 25,
 				recoveryTimeoutMs: 500,
 				kill: () => true,
+				onRequestQueued: (requestPath) => {
+					request = JSON.parse(fs.readFileSync(requestPath, "utf-8")) as SteerRequest;
+					routed = runningStatus(runId);
+					projectRequest(routed, request, ["routed"]);
+					writeStatus(asyncDir, routed);
+				},
 				recover: async (limits) => { recoveryStarted = true; receivedLimits = limits; return successResult("replacement"); },
 			});
-			const request = await readRequest(asyncDir);
-			const routed = runningStatus(runId);
-			projectRequest(routed, request, ["routed"]);
-			writeStatus(asyncDir, routed);
 			await waitUntil(() => fs.existsSync(interruptRequestPath(asyncDir)) ? true : undefined);
+			assert.ok(request);
+			assert.ok(routed);
 			writeSteerAck(asyncDir, { requestId: request.id, index: 0, ts: Date.now(), state: "delivered", message: "accepted after runner pause" });
 			const paused: AsyncStatus = {
 				...routed,
@@ -358,16 +364,20 @@ describe("acknowledged steering action", () => {
 		writeStatus(asyncDir, runningStatus(runId));
 		writePrivateAtomicJson(path.join(asyncDir, "recovery-descriptor.json"), recoveryDescriptor(runId));
 		let recovered = false;
+		let routed: AsyncStatus | undefined;
 		try {
 			const action = steerAsyncRun({
 				state: createState(), runId, message: "correct course", location: { asyncDir }, ackTimeoutMs: 25, recoveryTimeoutMs: 500, kill: () => true,
+				onRequestQueued: (requestPath) => {
+					const request = JSON.parse(fs.readFileSync(requestPath, "utf-8")) as SteerRequest;
+					routed = runningStatus(runId);
+					projectRequest(routed, request, ["routed"]);
+					writeStatus(asyncDir, routed);
+				},
 				recover: async () => { recovered = true; return successResult("replacement"); },
 			});
-			const request = await readRequest(asyncDir);
-			const routed = runningStatus(runId);
-			projectRequest(routed, request, ["routed"]);
-			writeStatus(asyncDir, routed);
 			await waitUntil(() => fs.existsSync(interruptRequestPath(asyncDir)) ? true : undefined);
+			assert.ok(routed);
 			writeStatus(asyncDir, { ...routed, state: "paused", endedAt: Date.now(), steps: [{ ...routed.steps![0]!, status: "paused" }] });
 			const result = await action;
 			assert.equal(result.isError, true);
