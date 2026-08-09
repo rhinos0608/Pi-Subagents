@@ -20,6 +20,29 @@ describe("scripted workflow runtime", () => {
 		assert.deepEqual(explicit.value, { answer: 42 });
 	});
 
+	it("guides invalid JavaScript caused by Markdown fence backticks", async () => {
+		const script = [
+			"const task = `Run:",
+			"```bash",
+			"npm test",
+			"```;",
+			"return task;",
+		].join("\n");
+
+		await assert.rejects(
+			runWorkflowScript({
+				script,
+				async launch(key) { return { key, ok: true, output: "unexpected", artifactPaths: [] }; },
+				async status(key) { return { key, ok: true, output: "unexpected", artifactPaths: [] }; },
+			}),
+			(error: unknown) => error instanceof WorkflowScriptError
+				&& error.message.includes("workflowScript must be valid JavaScript")
+				&& error.message.includes('array joined with "\\n"')
+				&& /workflow-script\.js:\d+/.test(error.message)
+				&& error.message.includes("SyntaxError"),
+		);
+	});
+
 	it("previews only simple explicit-return child scripts", () => {
 		assert.deepEqual(previewSimpleWorkflowRun(`return runs.run('main', { agent: 'worker', task: 'Review' });`), { agent: "worker", task: "Review" });
 		assert.deepEqual(previewSimpleWorkflowRun(`return runs.run("main", {"agent":"scout","task":"Scan"})`), { agent: "scout", task: "Scan" });
