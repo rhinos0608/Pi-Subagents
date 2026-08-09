@@ -93,7 +93,7 @@ function inspectorCommand(input: { runnerPath: string; asyncDir: string; runId: 
 	const args = [process.execPath, input.runnerPath, "--async-dir", input.asyncDir, "--run-id", input.runId, "--allow-steer", String(input.allowSteer), "--allow-stop", String(input.allowStop)];
 	if (input.index !== undefined) args.push("--index", String(input.index));
 	if (input.missionPath) args.push("--mission-path", input.missionPath);
-	return args.map(shellQuote).join(" ");
+	return `${process.platform === "win32" ? "& " : ""}${args.map(shellQuote).join(" ")}`;
 }
 
 function missionForRun(asyncDir: string, cwd: string, config: MissionStoreConfig | undefined, runId: string): { id: string; path: string } | undefined {
