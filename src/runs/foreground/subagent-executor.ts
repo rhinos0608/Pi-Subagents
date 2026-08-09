@@ -868,8 +868,15 @@ function interruptAsyncRun(
 			details: { mode: "management", results: [] },
 		};
 	}
+	if (status.mode === "workflow") {
+		return {
+			content: [{ type: "text", text: `Interrupt is unsupported for async workflow ${target.asyncId}; use stop instead.` }],
+			isError: true,
+			details: { mode: "management", results: [] },
+		};
+	}
 	try {
-		deliverInterruptRequest(omitUndefinedProperties({ asyncDir: target.asyncDir, pid: status.pid, kill, source: "interrupt-action" }));
+		deliverInterruptRequest({ asyncDir: target.asyncDir, source: "interrupt-action" });
 		const tracked = state.asyncJobs.get(target.asyncId);
 		if (tracked) {
 			delete tracked.activityState;
@@ -1178,7 +1185,7 @@ function directNestedAsyncInterrupt(target: ResolvedSubagentRunId & { kind: "nes
 	const pid = typeof status?.pid === "number" && status.pid > 0 ? status.pid : run.pid;
 	if (!status || status.state !== "running" || typeof pid !== "number" || pid <= 0) return undefined;
 	try {
-		deliverInterruptRequest({ asyncDir, pid, source: "nested-interrupt" });
+		deliverInterruptRequest({ asyncDir, source: "nested-interrupt" });
 		return { content: [{ type: "text", text: `Interrupt requested for nested async run ${run.id}.` }], details: { mode: "management", results: [] } };
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);

@@ -173,7 +173,7 @@ export async function steerAsyncRun(input: {
 				return { content: [{ type: "text", text: `Steering delivered for async run ${status.runId} (request ${requestId}).` }], details: { mode: "management", results: [], steering: preCommitResult } };
 			}
 			try {
-				deliverInterruptRequest({ asyncDir, pid: latest?.pid ?? status.pid, kill: input.kill, source: "steering-recovery" });
+				deliverInterruptRequest({ asyncDir, source: "steering-recovery" });
 			} catch (error) {
 				fs.rmSync(markerPath, { force: true });
 				fs.rmSync(claimPath, { force: true });

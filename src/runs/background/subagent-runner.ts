@@ -2287,7 +2287,7 @@ async function runSubagent(
 			const nestedAsyncDir = run.asyncDir ?? resolveNestedAsyncDir(config.nestedRoute.rootRunId, run);
 			if (!nestedAsyncDir) continue;
 			try {
-				deliverInterruptRequest(omitUndefinedProperties({ asyncDir: nestedAsyncDir, pid: run.pid, source: "ancestor-interrupt" }));
+				deliverInterruptRequest({ asyncDir: nestedAsyncDir, source: "ancestor-interrupt" });
 			} catch (error) {
 				appendJsonl(eventsPath, JSON.stringify({
 					type: "subagent.nested.interrupt_failed",

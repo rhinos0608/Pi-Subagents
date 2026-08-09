@@ -236,52 +236,17 @@ describe("acknowledged steering action", () => {
 		}
 	});
 
-	it("releases the recovery claim when interrupt delivery definitively fails", async () => {
-		const runId = `steer-interrupt-failed-${Date.now().toString(36)}`;
-		const asyncDir = path.join(ASYNC_DIR, runId);
-		writeStatus(asyncDir, runningStatus(runId));
-		try {
-			let request: SteerRequest | undefined;
-			const action = steerAsyncRun({
-				state: createState(),
-				runId,
-				message: "correct course",
-				location: { asyncDir },
-				ackTimeoutMs: 25,
-				onRequestQueued: (requestPath) => {
-					request = JSON.parse(fs.readFileSync(requestPath, "utf-8")) as SteerRequest;
-					const routed = runningStatus(runId);
-					projectRequest(routed, request, ["routed"]);
-					writeStatus(asyncDir, routed);
-				},
-				kill: (_pid, signal) => {
-					if (signal === 0) return true;
-					const error = new Error("runner disappeared") as NodeJS.ErrnoException;
-					error.code = "ESRCH";
-					throw error;
-				},
-				recover: async () => successResult("replacement"),
-			});
-			const result = await action;
-			assert.ok(request);
-			assert.equal(result.isError, true);
-			assert.match(result.content[0]!.text, /Failed to commit steering recovery interrupt/);
-			const recoveryDir = path.join(asyncDir, "control", "steer-recovery");
-			assert.equal(fs.existsSync(path.join(recoveryDir, "claim.json")), false);
-			assert.equal(fs.existsSync(path.join(recoveryDir, `${Buffer.from(request.id).toString("base64url")}.json`)), false);
-		} finally {
-			fs.rmSync(asyncDir, { recursive: true, force: true });
-		}
-	});
-
 	it("keeps the claim after an unconfirmed pause to prevent delayed duplicate recovery", async () => {
 		const runId = `steer-pause-unconfirmed-${Date.now().toString(36)}`;
 		const asyncDir = path.join(ASYNC_DIR, runId);
 		writeStatus(asyncDir, runningStatus(runId));
+		const kills: Array<{ pid: number; signal?: NodeJS.Signals | 0 }> = [];
 		try {
 			const action = steerAsyncRun({
 				state: createState(), runId, message: "correct course", location: { asyncDir },
-				ackTimeoutMs: 25, recoveryTimeoutMs: 50, kill: () => true,
+				ackTimeoutMs: 25,
+				recoveryTimeoutMs: 50,
+				kill: (pid, signal) => { kills.push({ pid, signal }); return true; },
 				onRequestQueued: (requestPath) => {
 					const request = JSON.parse(fs.readFileSync(requestPath, "utf-8")) as SteerRequest;
 					const routed = runningStatus(runId);
@@ -293,6 +258,8 @@ describe("acknowledged steering action", () => {
 			const result = await action;
 			assert.equal(result.isError, true);
 			assert.match(result.content[0]!.text, /claim remains committed to prevent a delayed duplicate/);
+			assert.equal(fs.existsSync(interruptRequestPath(asyncDir)), true);
+			assert.deepEqual(kills, [{ pid: 12345, signal: 0 }]);
 			assert.equal(fs.existsSync(path.join(asyncDir, "control", "steer-recovery", "claim.json")), true);
 		} finally {
 			fs.rmSync(asyncDir, { recursive: true, force: true });
