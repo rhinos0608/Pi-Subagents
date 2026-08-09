@@ -11,6 +11,7 @@
 ### Fixed
 - Prefix quoted Herdr pane commands with PowerShell's call operator on Windows. Thanks to @qsgy-edge for #921.
 - Expand `reads` home paths and apply configured reads to single-run launches. Thanks to @Adjuvant (Thomas Deacon) for #916.
+- Drop late workflow child responses after worker settlement. Thanks to @xz-dev (Xiangzhe) for #922.
 - Stabilize steering recovery tests by invalidating cached status metadata after fast test rewrites.
 
 ## [0.44.0] - 2026-08-08
