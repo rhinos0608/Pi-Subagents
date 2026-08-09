@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.45.1] - 2026-08-09
+
 ### Changed
 - Simplified async workflow activity projection and its regression test to reuse canonical status types.
 
