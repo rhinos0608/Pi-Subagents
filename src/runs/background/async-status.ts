@@ -207,7 +207,10 @@ function deriveAsyncActivityState(asyncDir: string, status: AsyncStatus): { acti
 	const currentStep = typeof status.currentStep === "number" ? status.steps?.[status.currentStep] : undefined;
 	return {
 		activityState: status.activityState,
-		lastActivityAt: status.lastActivityAt ?? outputFileMtime(outputPath) ?? currentStep?.lastActivityAt ?? currentStep?.startedAt ?? status.startedAt,
+		lastActivityAt: status.lastActivityAt
+			?? outputFileMtime(outputPath)
+			?? currentStep?.lastActivityAt
+			?? (status.mode === "workflow" ? undefined : currentStep?.startedAt ?? status.startedAt),
 	};
 }
 

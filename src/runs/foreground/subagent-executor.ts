@@ -4254,6 +4254,14 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 					if (job) {
 						job.status = status.state;
 						job.updatedAt = status.lastUpdate;
+						job.activityState = status.activityState;
+						job.lastActivityAt = status.lastActivityAt;
+						job.currentTool = status.currentTool;
+						job.currentToolStartedAt = status.currentToolStartedAt;
+						job.currentPath = status.currentPath;
+						job.turnCount = status.turnCount;
+						job.toolCount = status.toolCount;
+						job.currentStep = status.currentStep;
 						if (status.steps) {
 							job.steps = status.steps.map((step, index) => ({ ...step, index }));
 							job.agents = status.steps.map((step) => step.agent);
@@ -4263,6 +4271,26 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 						}
 						job.workflow = status.workflow;
 					}
+				};
+				const projectWorkflowActivity = () => {
+					const runningSteps = (status.steps ?? []).filter((step) => step.status === "running");
+					const lastActivityAt = runningSteps.reduce<number | undefined>((latest, step) => step.lastActivityAt === undefined ? latest : Math.max(latest ?? step.lastActivityAt, step.lastActivityAt), undefined);
+					const activeToolStep = runningSteps
+						.filter((step) => step.currentTool)
+						.sort((left, right) => (left.lastActivityAt ?? 0) - (right.lastActivityAt ?? 0))
+						.at(-1);
+					status.activityState = runningSteps.some((step) => step.activityState === "needs_attention")
+						? "needs_attention"
+						: runningSteps.some((step) => step.activityState === "active_long_running") ? "active_long_running" : undefined;
+					status.lastActivityAt = lastActivityAt;
+					status.currentTool = activeToolStep?.currentTool;
+					status.currentToolStartedAt = activeToolStep?.currentToolStartedAt;
+					status.currentPath = activeToolStep?.currentPath;
+					const turnCounts = (status.steps ?? []).flatMap((step) => step.turnCount === undefined ? [] : [step.turnCount]);
+					const toolCounts = (status.steps ?? []).flatMap((step) => step.toolCount === undefined ? [] : [step.toolCount]);
+					status.turnCount = turnCounts.length > 0 ? turnCounts.reduce((total, count) => total + count, 0) : undefined;
+					status.toolCount = toolCounts.length > 0 ? toolCounts.reduce((total, count) => total + count, 0) : undefined;
+					status.currentStep = runningSteps.length === 1 ? status.steps?.indexOf(runningSteps[0]!) : undefined;
 				};
 				const workflowJob: AsyncJobState = { asyncId: workflowRunId, asyncDir, cwd: workflowCwd, status: "running", sessionId: currentSessionId ?? undefined, mode: "workflow", agents: [], steps: [], startedAt, updatedAt: startedAt, ...(timeout !== undefined ? { timeoutMs: timeout, deadlineAt: startedAt + timeout } : {}), workflow: status.workflow };
 				deps.state.asyncJobs.set(workflowRunId, workflowJob);
@@ -4287,9 +4315,10 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 								if (entry.durationMs === undefined) delete existing.durationMs;
 								else existing.durationMs = entry.durationMs;
 							} else {
-								status.steps?.push({ agent: entry.key, label: entry.key, workflowKey: entry.key, parentWorkflowRunId: workflowRunId, status: mapped });
+								status.steps?.push({ agent: entry.key, label: entry.key, workflowKey: entry.key, parentWorkflowRunId: workflowRunId, status: mapped, startedAt: Date.now() });
 							}
 						}
+						projectWorkflowActivity();
 						persist();
 						appendWorkflowEvent({ type: "subagent.workflow.trace", trace });
 					};
@@ -4312,7 +4341,27 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 								if (budgetState?.exhausted) return workflowChildResult(key, buildRequestedModeError(childParams as SubagentParamsLike, usageBudgetExceededMessage(budgetState)));
 								patchMissionObjective(childParams.task);
 								const childRequest = prepareWorkflowLaunchParams(workflowChildDefaults, childParams, workflowRunId, key, { missionDetached: detachWorkflowChildMissions });
-								const result = await execute(randomUUID(), childRequest, workflowSignal, undefined, ctx, preserveActiveSession);
+								const result = await execute(randomUUID(), childRequest, workflowSignal, (update) => {
+									const progress = update.details.progress?.[0];
+									const step = status.steps?.find((candidate) => candidate.workflowKey === key);
+									if (!progress || !step) return;
+									step.status = progress.status === "completed" ? "completed" : progress.status === "failed" ? "failed" : "running";
+									step.activityState = progress.activityState;
+									step.lastActivityAt = progress.lastActivityAt;
+									step.currentTool = progress.currentTool;
+									step.currentToolArgs = progress.currentToolArgs;
+									step.currentToolStartedAt = progress.currentToolStartedAt;
+									step.currentPath = progress.currentPath;
+									step.recentTools = progress.recentTools.map((tool) => ({ ...tool }));
+									step.recentOutput = [...progress.recentOutput];
+									step.turnCount = progress.turnCount;
+									step.toolCount = progress.toolCount;
+									step.model = progress.model;
+									step.thinking = progress.thinking;
+									step.error = progress.error;
+									projectWorkflowActivity();
+									persist();
+								}, ctx, preserveActiveSession);
 								workflowResults.push(...result.details.results);
 								const child = workflowChildResult(key, result);
 								if (result.details.asyncId) {

@@ -466,6 +466,79 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		fs.rmSync(resultPath, { force: true });
 	});
 
+	it("projects live child activity into async workflow status", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		mockPi.onCall({
+			steps: [
+				{ jsonl: [events.toolStart("read", { path: "src/example.ts" })] },
+				{ delay: 2_500, jsonl: [events.toolEnd("read"), events.toolResult("read", "contents")] },
+				{ jsonl: [events.assistantMessage("Done")] },
+			],
+		});
+		const asyncJobs: SubagentState["asyncJobs"] = new Map();
+		const executor = makeExecutor([makeAgent("echo")], {
+			control: {
+				enabled: true,
+				needsAttentionAfterMs: 100,
+				activeNoticeAfterMs: 100,
+				activeNoticeAfterTurns: 999_999,
+				activeNoticeAfterTokens: 999_999,
+				notifyOn: ["active_long_running", "needs_attention"],
+				notifyChannels: ["event"],
+			},
+		}, false, undefined, true, asyncJobs);
+
+		const result = await executor.execute(
+			"workflow-live-activity",
+			{ workflowScript: `return await runs.run("main", { agent: "echo", task: "Inspect the file" });` },
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+		const workflowRunId = result.details.asyncId!;
+		const statusPath = path.join(result.details.asyncDir!, "status.json");
+		const resultPath = path.join(DIRS.results, `${workflowRunId}.json`);
+		type WorkflowActivityStatus = {
+			state?: string;
+			activityState?: string;
+			lastActivityAt?: number;
+			currentTool?: string;
+			currentPath?: string;
+			toolCount?: number;
+			steps?: Array<{ status?: string; activityState?: string; lastActivityAt?: number; currentTool?: string; currentPath?: string; toolCount?: number }>;
+		};
+		let liveStatus: WorkflowActivityStatus | undefined;
+		const activityDeadline = Date.now() + 5_000;
+		while (Date.now() < activityDeadline && !fs.existsSync(resultPath)) {
+			const candidate = JSON.parse(fs.readFileSync(statusPath, "utf-8")) as WorkflowActivityStatus;
+			if (candidate.activityState === "active_long_running" && candidate.steps?.[0]?.currentTool === "read") {
+				liveStatus = candidate;
+				break;
+			}
+			await new Promise((resolve) => setTimeout(resolve, 50));
+		}
+
+		assert.ok(liveStatus, "expected workflow status to expose live child activity");
+		assert.equal(liveStatus.activityState, "active_long_running");
+		assert.equal(typeof liveStatus.lastActivityAt, "number");
+		assert.equal(liveStatus.currentTool, "read");
+		assert.match(liveStatus.currentPath ?? "", /src[/\\]example\.ts$/);
+		assert.equal(liveStatus.toolCount, 1);
+		assert.equal(liveStatus.steps?.[0]?.status, "running");
+		assert.equal(liveStatus.steps?.[0]?.activityState, "active_long_running");
+		assert.equal(typeof liveStatus.steps?.[0]?.lastActivityAt, "number");
+		assert.equal(liveStatus.steps?.[0]?.toolCount, 1);
+		assert.equal(asyncJobs.get(workflowRunId)?.activityState, "active_long_running");
+		assert.equal(asyncJobs.get(workflowRunId)?.steps?.[0]?.currentTool, "read");
+
+		const completionDeadline = Date.now() + 5_000;
+		while (!fs.existsSync(resultPath)) {
+			if (Date.now() > completionDeadline) assert.fail("Timed out waiting for async workflow completion");
+			await new Promise((resolve) => setTimeout(resolve, 50));
+		}
+		fs.rmSync(result.details.asyncDir!, { recursive: true, force: true });
+		fs.rmSync(resultPath, { force: true });
+	});
+
 	it("rejects an invalid async workflow usage budget before creating run state", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
 		const asyncJobs: SubagentState["asyncJobs"] = new Map();
 		const executor = makeExecutor([makeAgent("echo")], {}, false, undefined, true, asyncJobs);
