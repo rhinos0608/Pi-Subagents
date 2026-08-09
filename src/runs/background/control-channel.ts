@@ -9,9 +9,8 @@
  * This module adds a portable, file-based control inbox inside the run directory.
  * The parent drops an interrupt request file; the runner watches the inbox and
  * routes the request into its existing graceful `interruptRunner()` (pause +
- * resumable), identically on every platform. The OS signal is kept only as an
- * opportunistic fast-path; its failure is non-fatal because the file inbox is
- * authoritative.
+ * resumable), identically on every platform. The file inbox is authoritative and
+ * avoids signaling a PID that the extension cannot prove belongs to the runner.
  */
 
 import { randomUUID } from "node:crypto";
@@ -20,13 +19,6 @@ import * as path from "node:path";
 import { writeAtomicJson } from "../../shared/atomic-json.ts";
 import { POLL_INTERVAL_MS } from "../../shared/types.ts";
 import { resolveWatchPath } from "../../shared/utils.ts";
-
-/**
- * Opportunistic fast-path interrupt signal. On Unix `SIGUSR2` is trapped by the
- * runner; on Windows `process.kill(pid, "SIGBREAK")` is not deliverable
- * cross-process and throws `ENOSYS`, so the file inbox below is the real channel.
- */
-export const INTERRUPT_SIGNAL: NodeJS.Signals = process.platform === "win32" ? "SIGBREAK" : "SIGUSR2";
 
 export type ControlChannelFs = Pick<typeof fs, "mkdirSync" | "existsSync" | "rmSync" | "watch" | "readdirSync" | "readFileSync" | "realpathSync">;
 export type ControlChannelTimers = { setInterval: typeof setInterval; clearInterval: typeof clearInterval };
@@ -545,38 +537,13 @@ export function consumeCheckpointDecisionRequest(
 	return undefined;
 }
 
-/**
- * Parent side: portable interrupt = authoritative file request + best-effort OS
- * signal. The signal is only a latency optimization on Unix; ENOSYS on Windows
- * is swallowed because the file inbox is authoritative there. Other signal
- * failures are surfaced because they usually mean the runner is not alive to
- * consume the request.
- */
+/** Parent side: write the authoritative portable interrupt request. */
 export function deliverInterruptRequest(input: {
 	asyncDir: string;
-	pid?: number;
-	kill?: KillFn;
-	signal?: NodeJS.Signals;
 	now?: () => number;
 	source?: string;
 }): void {
-	const requestPath = requestAsyncInterrupt(input.asyncDir, input.source ? { source: input.source } : {}, { now: input.now });
-	if (typeof input.pid === "number" && input.pid > 0) {
-		try {
-			(input.kill ?? process.kill)(input.pid, input.signal ?? INTERRUPT_SIGNAL);
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOSYS") {
-				// File inbox is authoritative when custom cross-process signals are unavailable.
-				return;
-			}
-			try {
-				fs.rmSync(requestPath, { force: true });
-			} catch {
-				// Best effort cleanup; the caller still gets the signal failure.
-			}
-			throw error;
-		}
-	}
+	requestAsyncInterrupt(input.asyncDir, input.source ? { source: input.source } : {}, { now: input.now });
 }
 
 export function deliverTimeoutRequest(input: {

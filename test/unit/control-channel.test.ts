@@ -287,75 +287,22 @@ describe("control channel: request file", () => {
 });
 
 describe("control channel: deliverInterruptRequest", () => {
-	it("writes the portable request and signals best-effort when kill succeeds", () => {
-		const asyncDir = tmpAsyncDir("pi-control-deliver-ok-");
+	it("writes the portable request without signaling an unverified pid", () => {
+		const asyncDir = tmpAsyncDir("pi-control-deliver-file-only-");
 		try {
 			const kills: Array<{ pid: number; signal?: NodeJS.Signals | 0 }> = [];
-			deliverInterruptRequest({
+			const unverifiedInput = {
 				asyncDir,
 				pid: 4242,
-				signal: "SIGUSR2",
-				kill: (pid, signal) => {
+				signal: "SIGUSR2" as NodeJS.Signals,
+				kill: (pid: number, signal?: NodeJS.Signals | 0) => {
 					kills.push({ pid, signal });
 					return true;
 				},
-			});
+			};
+			deliverInterruptRequest(unverifiedInput);
 			assert.equal(fs.existsSync(interruptRequestPath(asyncDir)), true);
-			assert.deepEqual(kills, [{ pid: 4242, signal: "SIGUSR2" }]);
-		} finally {
-			cleanup(asyncDir);
-		}
-	});
-
-	it("still writes the request when the OS signal throws ENOSYS (Windows)", () => {
-		const asyncDir = tmpAsyncDir("pi-control-deliver-enosys-");
-		try {
-			assert.doesNotThrow(() =>
-				deliverInterruptRequest({
-					asyncDir,
-					pid: 4242,
-					kill: () => {
-						const error = new Error("kill ENOSYS") as NodeJS.ErrnoException;
-						error.code = "ENOSYS";
-						throw error;
-					},
-				}),
-			);
-			assert.equal(fs.existsSync(interruptRequestPath(asyncDir)), true);
-		} finally {
-			cleanup(asyncDir);
-		}
-	});
-
-	it("surfaces non-portability signal failures and removes the stale request", () => {
-		const asyncDir = tmpAsyncDir("pi-control-deliver-esrch-");
-		try {
-			assert.throws(
-				() =>
-					deliverInterruptRequest({
-						asyncDir,
-						pid: 4242,
-						kill: () => {
-							const error = new Error("missing process") as NodeJS.ErrnoException;
-							error.code = "ESRCH";
-							throw error;
-						},
-					}),
-				/missing process/,
-			);
-			assert.equal(fs.existsSync(interruptRequestPath(asyncDir)), false);
-		} finally {
-			cleanup(asyncDir);
-		}
-	});
-
-	it("skips signalling when no live pid is provided", () => {
-		const asyncDir = tmpAsyncDir("pi-control-deliver-nopid-");
-		try {
-			let killed = false;
-			deliverInterruptRequest({ asyncDir, kill: () => { killed = true; return true; } });
-			assert.equal(killed, false);
-			assert.equal(fs.existsSync(interruptRequestPath(asyncDir)), true);
+			assert.deepEqual(kills, []);
 		} finally {
 			cleanup(asyncDir);
 		}

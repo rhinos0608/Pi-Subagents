@@ -5,6 +5,9 @@
 ### Changed
 - Simplified async workflow activity projection and its regression test to reuse canonical status types.
 
+### Fixed
+- Prevent async interrupt requests from signaling unverified runner PIDs, including the shared host PID stored by workflows. Thanks to @kdasme for #925.
+
 ## [0.45.0] - 2026-08-09
 
 ### Added
