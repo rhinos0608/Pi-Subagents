@@ -385,8 +385,12 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 
 			const respond = (promise: Promise<unknown>) => {
 				void promise.then(
-					(value) => worker.postMessage({ type: "response", callId: message.callId, ok: true, value: omitUndefinedWorkflowValues(value) }),
-					(error: unknown) => worker.postMessage({ type: "response", callId: message.callId, ok: false, error: error instanceof Error ? error.message : String(error) }),
+					(value) => {
+						if (!settled) worker.postMessage({ type: "response", callId: message.callId, ok: true, value: omitUndefinedWorkflowValues(value) });
+					},
+					(error: unknown) => {
+						if (!settled) worker.postMessage({ type: "response", callId: message.callId, ok: false, error: error instanceof Error ? error.message : String(error) });
+					},
 				);
 			};
 

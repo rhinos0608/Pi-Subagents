@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { Worker } from "node:worker_threads";
 import { formatWorkflowJsonPreview, previewSimpleWorkflowRun, runWorkflowScript, WorkflowScriptError } from "../../src/workflows/scripted-workflow.ts";
 
 describe("scripted workflow runtime", () => {
@@ -570,5 +571,41 @@ describe("scripted workflow runtime", () => {
 			(error: unknown) => error instanceof WorkflowScriptError && /timed out after 500ms/.test(error.message),
 		);
 		assert.equal(childAborted, true);
+	});
+
+	it("drops a child response that settles after the workflow aborts", async () => {
+		const workerPrototype = Worker.prototype as unknown as { postMessage(value: unknown, ...args: unknown[]): void };
+		const originalPostMessage = workerPrototype.postMessage;
+		const controller = new AbortController();
+		let workflowSettled = false;
+		let postSettlementResponses = 0;
+		let resolveLaunch!: (result: { key: string; ok: true; output: string; artifactPaths: string[]; results: never[] }) => void;
+		let markLaunchStarted!: () => void;
+		const launchStarted = new Promise<void>((resolve) => { markLaunchStarted = resolve; });
+		workerPrototype.postMessage = function (value, ...args) {
+			if (workflowSettled && typeof value === "object" && value !== null && "type" in value && value.type === "response") postSettlementResponses++;
+			originalPostMessage.call(this, value, ...args);
+		};
+
+		try {
+			const workflow = runWorkflowScript({
+				script: `await runs.run("slow", { agent: "worker", task: "wait" });`,
+				signal: controller.signal,
+				launch() {
+					markLaunchStarted();
+					return new Promise((resolve) => { resolveLaunch = resolve; });
+				},
+				async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
+			});
+			await launchStarted;
+			controller.abort();
+			await assert.rejects(workflow, (error: unknown) => error instanceof WorkflowScriptError && /aborted/.test(error.message));
+			workflowSettled = true;
+			resolveLaunch({ key: "slow", ok: true, output: "done", artifactPaths: [], results: [] });
+			await new Promise((resolve) => queueMicrotask(resolve));
+			assert.equal(postSettlementResponses, 0);
+		} finally {
+			workerPrototype.postMessage = originalPostMessage;
+		}
 	});
 });
