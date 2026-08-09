@@ -3,6 +3,7 @@
  */
 
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentConfig } from "../agents/agents.ts";
 import { normalizeSkillInput } from "../agents/skills.ts";
@@ -334,10 +335,22 @@ export function suppressProgressForReadOnlyTask(behavior: ResolvedStepBehavior, 
 // =============================================================================
 
 /**
- * Resolve a file path: absolute paths pass through, relative paths get chainDir prepended.
+ * Expand a leading `~`/`~/` to the user's home directory. Other forms (relative,
+ * absolute, `~user/`) pass through unchanged.
  */
-function resolveChainPath(filePath: string, chainDir: string): string {
-	return path.isAbsolute(filePath) ? filePath : path.join(chainDir, filePath);
+export function expandHomePath(filePath: string): string {
+	if (filePath === "~") return os.homedir();
+	if (filePath.startsWith("~/")) return path.join(os.homedir(), filePath.slice(2));
+	return filePath;
+}
+
+/**
+ * Resolve a file path: `~`/`~/` expand to home first, then absolute paths pass
+ * through and relative paths get chainDir prepended.
+ */
+export function resolveChainPath(filePath: string, chainDir: string): string {
+	const expanded = expandHomePath(filePath);
+	return path.isAbsolute(expanded) ? expanded : path.join(chainDir, expanded);
 }
 
 /**
