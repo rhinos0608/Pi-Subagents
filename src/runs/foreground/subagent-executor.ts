@@ -4273,7 +4273,8 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 					}
 				};
 				const projectWorkflowActivity = () => {
-					const runningSteps = (status.steps ?? []).filter((step) => step.status === "running");
+					const steps = status.steps ?? [];
+					const runningSteps = steps.filter((step) => step.status === "running");
 					const lastActivityAt = runningSteps.reduce<number | undefined>((latest, step) => step.lastActivityAt === undefined ? latest : Math.max(latest ?? step.lastActivityAt, step.lastActivityAt), undefined);
 					const activeToolStep = runningSteps
 						.filter((step) => step.currentTool)
@@ -4286,11 +4287,11 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 					status.currentTool = activeToolStep?.currentTool;
 					status.currentToolStartedAt = activeToolStep?.currentToolStartedAt;
 					status.currentPath = activeToolStep?.currentPath;
-					const turnCounts = (status.steps ?? []).flatMap((step) => step.turnCount === undefined ? [] : [step.turnCount]);
-					const toolCounts = (status.steps ?? []).flatMap((step) => step.toolCount === undefined ? [] : [step.toolCount]);
+					const turnCounts = steps.flatMap((step) => step.turnCount === undefined ? [] : [step.turnCount]);
+					const toolCounts = steps.flatMap((step) => step.toolCount === undefined ? [] : [step.toolCount]);
 					status.turnCount = turnCounts.length > 0 ? turnCounts.reduce((total, count) => total + count, 0) : undefined;
 					status.toolCount = toolCounts.length > 0 ? toolCounts.reduce((total, count) => total + count, 0) : undefined;
-					status.currentStep = runningSteps.length === 1 ? status.steps?.indexOf(runningSteps[0]!) : undefined;
+					status.currentStep = runningSteps.length === 1 ? steps.indexOf(runningSteps[0]!) : undefined;
 				};
 				const workflowJob: AsyncJobState = { asyncId: workflowRunId, asyncDir, cwd: workflowCwd, status: "running", sessionId: currentSessionId ?? undefined, mode: "workflow", agents: [], steps: [], startedAt, updatedAt: startedAt, ...(timeout !== undefined ? { timeoutMs: timeout, deadlineAt: startedAt + timeout } : {}), workflow: status.workflow };
 				deps.state.asyncJobs.set(workflowRunId, workflowJob);

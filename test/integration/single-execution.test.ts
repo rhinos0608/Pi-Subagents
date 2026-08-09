@@ -35,7 +35,7 @@ import {
 	type SubagentDelegationResponse,
 	type SubagentDelegationStarted,
 } from "../../src/api/delegation.ts";
-import { CHAIN_RUNS_DIR, DIRS, INTERCOM_DETACH_REQUEST_EVENT, INTERCOM_DETACH_RESPONSE_EVENT, type SubagentState } from "../../src/shared/types.ts";
+import { CHAIN_RUNS_DIR, DIRS, INTERCOM_DETACH_REQUEST_EVENT, INTERCOM_DETACH_RESPONSE_EVENT, type AsyncStatus, type SubagentState } from "../../src/shared/types.ts";
 import { CHILD_WATCHDOG_STATUS_EVENT } from "../../src/watchdog/child-status.ts";
 import { WAIT_TOOL_ENABLED_ENV } from "../../src/runs/background/wait-config.ts";
 import { TOOL_BUDGET_ENV, TOOL_BUDGET_ZERO_AUTH_ENV } from "../../src/runs/shared/tool-budget.ts";
@@ -489,27 +489,20 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 
 		const result = await executor.execute(
 			"workflow-live-activity",
-			{ workflowScript: `return await runs.run("main", { agent: "echo", task: "Inspect the file" });` },
+			{ workflowScript: `return runs.run("main", { agent: "echo", task: "Inspect the file" });` },
 			new AbortController().signal,
 			undefined,
 			makeMinimalCtx(tempDir),
 		);
-		const workflowRunId = result.details.asyncId!;
-		const statusPath = path.join(result.details.asyncDir!, "status.json");
+		const { asyncId: workflowRunId, asyncDir } = result.details;
+		assert.ok(workflowRunId);
+		assert.ok(asyncDir);
+		const statusPath = path.join(asyncDir, "status.json");
 		const resultPath = path.join(DIRS.results, `${workflowRunId}.json`);
-		type WorkflowActivityStatus = {
-			state?: string;
-			activityState?: string;
-			lastActivityAt?: number;
-			currentTool?: string;
-			currentPath?: string;
-			toolCount?: number;
-			steps?: Array<{ status?: string; activityState?: string; lastActivityAt?: number; currentTool?: string; currentPath?: string; toolCount?: number }>;
-		};
-		let liveStatus: WorkflowActivityStatus | undefined;
+		let liveStatus: AsyncStatus | undefined;
 		const activityDeadline = Date.now() + 5_000;
 		while (Date.now() < activityDeadline && !fs.existsSync(resultPath)) {
-			const candidate = JSON.parse(fs.readFileSync(statusPath, "utf-8")) as WorkflowActivityStatus;
+			const candidate = JSON.parse(fs.readFileSync(statusPath, "utf-8")) as AsyncStatus;
 			if (candidate.activityState === "active_long_running" && candidate.steps?.[0]?.currentTool === "read") {
 				liveStatus = candidate;
 				break;
@@ -535,7 +528,7 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 			if (Date.now() > completionDeadline) assert.fail("Timed out waiting for async workflow completion");
 			await new Promise((resolve) => setTimeout(resolve, 50));
 		}
-		fs.rmSync(result.details.asyncDir!, { recursive: true, force: true });
+		fs.rmSync(asyncDir, { recursive: true, force: true });
 		fs.rmSync(resultPath, { force: true });
 	});
 
