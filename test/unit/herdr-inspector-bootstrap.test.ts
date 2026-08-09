@@ -46,6 +46,7 @@ describe("Herdr inspector bootstrap", () => {
 			});
 			assert.equal(opened.isError, undefined);
 			const command = calls.find((args) => args[0] === "pane" && args[1] === "run")?.[3] ?? "";
+			assert.equal(command.startsWith("& "), process.platform === "win32");
 			assert.doesNotMatch(command, /--experimental-strip-types/);
 			assert.match(command, /inspector-runner\.mjs/);
 		} finally {

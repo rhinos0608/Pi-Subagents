@@ -9,6 +9,7 @@
 - Clarified mission-use policy in the packaged `pi-subagents` skill.
 
 ### Fixed
+- Prefix quoted Herdr pane commands with PowerShell's call operator on Windows.
 - Expand `reads` home paths and apply configured reads to single-run launches. Thanks to @Adjuvant (Thomas Deacon) for #916.
 - Stabilize steering recovery tests by invalidating cached status metadata after fast test rewrites.
 
