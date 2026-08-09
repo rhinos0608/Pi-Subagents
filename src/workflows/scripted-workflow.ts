@@ -105,6 +105,17 @@ const capturedConsole = Object.freeze(Object.fromEntries(
   }]),
 ));
 
+function formatWorkflowScriptSyntaxError(error) {
+  const details = error && error.stack ? error.stack : String(error);
+  return [
+    "workflowScript must be valid JavaScript.",
+    "If task text contains Markdown fences or backticks, use an array joined with \"\\n\" or escaped strings instead of a raw backtick template literal.",
+    "",
+    "Original SyntaxError:",
+    details,
+  ].join("\n");
+}
+
 function assertJsonValue(value, path = "emit", seen = new Set()) {
   if (value === null || typeof value === "string" || typeof value === "boolean") return;
   if (typeof value === "number") {
@@ -143,7 +154,14 @@ parentPort.on("message", async (message) => {
     if (message.stateEnabled) sandbox.state = state;
     const context = vm.createContext(sandbox, { codeGeneration: { strings: false, wasm: false } });
     contextObjectPrototype = vm.runInContext("Object.prototype", context);
-    const compiled = new vm.Script("(async () => {\n" + message.script + "\n})()", { filename: "workflow-script.js" });
+    let compiled;
+    try {
+      compiled = new vm.Script("(async () => {\n" + message.script + "\n})()", { filename: "workflow-script.js" });
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) throw error;
+      parentPort.postMessage({ type: "error", error: formatWorkflowScriptSyntaxError(error) });
+      return;
+    }
     const value = await compiled.runInContext(context);
     const persistedValue = value === undefined ? null : value;
     assertJsonValue(persistedValue, "return");
