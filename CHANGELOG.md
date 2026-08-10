@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.45.2] - 2026-08-10
+
 ### Fixed
 - Tell parents to revive resumable failed async runs before reporting failure or launching a replacement. Thanks to @Livan-pro for #938.
 - Persist the actual agent and session file for workflow children when they start so their sessions can resume after a parent restart. Thanks to @Livan-pro for #932.
