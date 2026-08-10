@@ -41,6 +41,7 @@ import {
 	SLASH_SUBAGENT_UPDATE_EVENT,
 	DIRS,
 	type Details,
+	type FleetKeybindingsConfig,
 	type JsonSchemaObject,
 	type SingleResult,
 	type SubagentState,
@@ -629,6 +630,7 @@ function slashRunWorkflowScript(key: string, child: Record<string, unknown>): st
 export function registerSlashCommands(
 	pi: ExtensionAPI,
 	state: SubagentState,
+	options: { fleetKeybindings?: FleetKeybindingsConfig } = {},
 ): void {
 	let fleetOpen = false;
 	const showFleet = async (ctx: ExtensionContext) => {
@@ -643,7 +645,7 @@ export function registerSlashCommands(
 		}
 		fleetOpen = true;
 		try {
-			await openSubagentFleet(ctx, state, { asyncDirRoot: DIRS.async, resultsDir: DIRS.results });
+			await openSubagentFleet(ctx, state, { asyncDirRoot: DIRS.async, resultsDir: DIRS.results, fleetKeybindings: options.fleetKeybindings });
 		} finally {
 			fleetOpen = false;
 		}

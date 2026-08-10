@@ -53,6 +53,7 @@ import { formatDuration, shortenPath } from "../shared/formatters.ts";
 import { loadConfig, resolveAsyncByDefault, resolveScheduledStoreRoot } from "./config.ts";
 import { buildSubagentToolDescription } from "./tool-description.ts";
 import { collectGoalContinuationNotices } from "../missions/goal-driver.ts";
+import { restoreForegroundRunHistory } from "../runs/foreground/foreground-history.ts";
 import { syncMissionFromAsyncCompletion } from "../missions/lifecycle.ts";
 import { resolveMissionStoreLocation } from "../missions/store.ts";
 import { listRetainedChildren } from "../runs/background/retained-children.ts";
@@ -378,7 +379,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		? new SubagentFleetStatus(state, async (itemKey) => {
 			const ctx = state.lastUiContext;
 			if (!ctx?.hasUI) return;
-			await openSubagentFleet(ctx, state, { initialKey: itemKey, asyncDirRoot: DIRS.async, resultsDir: DIRS.results });
+			await openSubagentFleet(ctx, state, { initialKey: itemKey, asyncDirRoot: DIRS.async, resultsDir: DIRS.results, fleetKeybindings: config.fleetKeybindings });
 		}, { placement: fleetViewPlacement })
 		: undefined;
 	let executorScheduled: ((id: string, params: SubagentParamsLike, signal: AbortSignal, ctx: ExtensionContext) => Promise<AgentToolResult<Details>>) | undefined;
@@ -603,7 +604,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		}
 	});
 
-	registerSlashCommands(pi, state);
+	registerSlashCommands(pi, state, { fleetKeybindings: config.fleetKeybindings });
 
 	const eventUnsubscribeStoreKey = "__piSubagentEventUnsubscribes";
 	const controlNoticeSeenStoreKey = "__piSubagentVisibleControlNotices";
@@ -722,6 +723,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		state.foregroundControls.clear();
 		state.lastForegroundControlId = null;
 		resetJobs(ctx);
+		restoreForegroundRunHistory(state, { resultsDir: DIRS.results });
 		restoreActiveJobs(ctx);
 		scheduledRunManager.bindSession(ctx);
 		restoreSlashFinalSnapshots(ctx.sessionManager.getEntries());

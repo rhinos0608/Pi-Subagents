@@ -225,6 +225,18 @@ Package skill content.
 		assert.throws(() => updateConfig((config) => config), /config\.artifactDir must be "project", "session", or "temp"/);
 	});
 
+	it("loads and validates Fleet keybinding config", () => {
+		const configPath = path.join(agentDir, "extensions", "subagent", "config.json");
+		writeFile(configPath, JSON.stringify({ fleetKeybindings: { pageUp: ["u"], pageDown: ["d"] } }));
+		assert.deepEqual(loadConfig().fleetKeybindings, { pageUp: ["u"], pageDown: ["d"] });
+
+		writeFile(configPath, JSON.stringify({ fleetKeybindings: { missing: ["m"] } }));
+		assert.throws(() => updateConfig((config) => config), /config\.fleetKeybindings\.missing is not a supported Fleet action/);
+
+		writeFile(configPath, JSON.stringify({ fleetKeybindings: { pageUp: [""] } }));
+		assert.throws(() => updateConfig((config) => config), /config\.fleetKeybindings\.pageUp entries must be non-empty strings/);
+	});
+
 	it("hardens and redacts existing run history while recording", () => {
 		const historyPath = path.join(agentDir, "run-history.jsonl");
 		fs.mkdirSync(agentDir, { recursive: true, mode: 0o755 });

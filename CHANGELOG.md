@@ -13,6 +13,8 @@
 - Read skill descriptions from YAML block scalars instead of exposing their markers. Thanks to @ashlineldridge for #945.
 - Collapse repeated subagent status snapshots in live widgets so status polling does not overflow the chat.
 - Give invalid `subagent` actions safe next steps and typo suggestions without suggesting destructive actions for ambiguous input.
+- Let the Fleet inspector use extension-local keybindings for terminals that intercept navigation keys. Thanks to @epheien for #940.
+- Restore completed foreground children from a compact Fleet history index after session resume. Thanks to @epheien for #946.
 - Compact noisy repeated subagent live-output lines and bound workflow live-card rows so progress stays readable in the TUI (#947).
 
 ## [0.45.2] - 2026-08-10

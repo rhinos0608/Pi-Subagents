@@ -37,7 +37,7 @@ FleetView replaces the legacy above-editor async widget by default. Successful b
 
 `/subagents-fleet` opens the live fleet inspector with current-session foreground work, recent async children, structured Markdown/tool transcripts, and completed output/session paths.
 
-Keys:
+Default keys:
 
 - `↑`/`↓` or `j`/`k` — select a child
 - `Shift+K`/`Shift+J` — scroll one line
@@ -48,6 +48,8 @@ Keys:
 - `s` — compose an acknowledged message to a selected live async child; Tab cycles `steer`, `follow_up`, and `auto`
 - `D` — stop a selected child's top-level async run after confirmation
 - `H` — open the selected active async child in a Herdr inspector pane (Herdr 0.7.5+)
+
+Set `fleetKeybindings` in the extension config to replace inspector-level keys when a terminal intercepts keys such as `PgUp`, `PgDn`, `Home`, or `End`. Prompt modes keep fixed keys such as `Esc`, `Enter`, `Tab`, and stop-confirmation `Y`/`N`.
 
 `Ctrl+Alt+F` opens the same inspector even while a foreground turn is active and slash input is queued.
 

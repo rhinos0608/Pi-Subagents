@@ -1782,12 +1782,34 @@ export interface ScheduledRunsConfig {
 
 export type FleetViewPlacement = "aboveEditor" | "belowEditor";
 
+export const FLEET_KEYBINDING_ACTIONS = [
+	"close",
+	"scrollUp",
+	"scrollDown",
+	"selectUp",
+	"selectDown",
+	"selectFirst",
+	"selectLast",
+	"pageUp",
+	"pageDown",
+	"refresh",
+	"steer",
+	"inspect",
+	"stop",
+	"toggleTools",
+] as const;
+
+export type FleetKeybindingAction = typeof FLEET_KEYBINDING_ACTIONS[number];
+export type FleetKeybindingsConfig = Partial<Record<FleetKeybindingAction, string[]>>;
+
 export interface ExtensionConfig {
 	asyncByDefault?: boolean;
 	/** Show the Claude Code-style navigable fleet. Defaults to true. */
 	fleetView?: boolean;
 	/** Place the persistent FleetView above or below the editor. Defaults to belowEditor. */
 	fleetViewPlacement?: FleetViewPlacement;
+	/** Local keybindings for the full Fleet inspector. */
+	fleetKeybindings?: FleetKeybindingsConfig;
 	/** Show the under-editor async runs widget. Defaults to true, including when FleetView is enabled. */
 	asyncWidget?: boolean;
 	/** Tool description variant registered for the parent-facing subagent tool. Defaults to full. */

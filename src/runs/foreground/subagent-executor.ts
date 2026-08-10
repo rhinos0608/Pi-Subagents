@@ -17,6 +17,7 @@ import {
 	settleForegroundSchedulingOwner,
 	updateForegroundChild,
 } from "./foreground-control.ts";
+import { persistForegroundRunHistory, MAX_REMEMBERED_FOREGROUND_RUNS } from "./foreground-history.ts";
 import { resolveExecutionAgentScope } from "../../agents/agent-scope.ts";
 import { handleManagementAction } from "../../agents/agent-management.ts";
 import { handleRefinementAction } from "../../agents/agent-refinements.ts";
@@ -518,12 +519,20 @@ function foregroundStatusResult(control: SubagentState["foregroundControls"] ext
 
 function trimRememberedForegroundRuns(state: SubagentState): void {
 	if (!state.foregroundRuns) return;
-	while (state.foregroundRuns.size > 50) {
+	while (state.foregroundRuns.size > MAX_REMEMBERED_FOREGROUND_RUNS) {
 		const oldestTerminal = [...state.foregroundRuns.values()]
 			.filter((run) => !run.children.some((child) => child.status === "detached"))
 			.sort((left, right) => left.updatedAt - right.updatedAt)[0];
 		if (!oldestTerminal) break;
 		state.foregroundRuns.delete(oldestTerminal.runId);
+	}
+}
+
+function persistRememberedForegroundRuns(state: SubagentState): void {
+	try {
+		persistForegroundRunHistory(state);
+	} catch (error) {
+		console.error("Failed to persist foreground run history:", error);
 	}
 }
 
@@ -593,6 +602,7 @@ function rememberForegroundRun(state: SubagentState, input: { runId: string; mod
 		}),
 	});
 	trimRememberedForegroundRuns(state);
+	persistRememberedForegroundRuns(state);
 }
 
 function applyControlEventToRememberedForegroundRun(state: SubagentState, event: ControlEvent): void {
@@ -668,6 +678,7 @@ function updateRememberedForegroundChild(state: SubagentState, input: { runId: s
 		...(input.result.capabilityAudit ? { capabilityAudit: input.result.capabilityAudit } : {}),
 	});
 	trimRememberedForegroundRuns(state);
+	persistRememberedForegroundRuns(state);
 	const output = getSingleResultOutput(input.result).trim();
 	const success = terminalStatus === "completed";
 	const summary = !success && input.result.error

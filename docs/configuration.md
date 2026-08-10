@@ -60,6 +60,25 @@ Controls the persistent, navigable FleetView. The default is `true`. Set it to `
 
 Places the persistent FleetView either `"belowEditor"` or `"aboveEditor"`. The default is `"belowEditor"`; invalid values fall back to `"belowEditor"`.
 
+## `fleetKeybindings`
+
+```json
+{
+  "fleetKeybindings": {
+    "pageUp": ["u"],
+    "pageDown": ["d"],
+    "selectFirst": ["g"],
+    "selectLast": ["G"]
+  }
+}
+```
+
+Customizes only the full Fleet inspector opened by `/subagents-fleet` or FleetView inspection. It does not change Pi's global keybindings or the compact persistent FleetView.
+
+Each action accepts a non-empty array of key strings. Configured actions replace their defaults. Unset actions keep the defaults: `selectUp` is `up`/`k`, `selectDown` is `down`/`j`, `scrollUp` is `K`, `scrollDown` is `J`, `pageUp` is `pageUp`, `pageDown` is `pageDown`, `selectFirst` is `home`, `selectLast` is `end`, `toggleTools` is `x`/`X`/`ctrl+o`, `refresh` is `r`/`R`, `steer` is `s`, `stop` is `D`, `inspect` is `H`, and `close` is `escape`/`ctrl+c`/`q`.
+
+Prompt modes keep their fixed keys. For example, `Esc` still cancels steer text or stop confirmation even when the Fleet-level close binding is changed.
+
 ## `asyncWidget`
 
 ```json
