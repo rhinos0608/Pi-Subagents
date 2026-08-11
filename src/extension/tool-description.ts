@@ -153,13 +153,30 @@ function withMandatorySafetyGuidance(description: string): string {
 		: SUBAGENT_SAFETY_GUIDANCE;
 }
 
-export function buildSubagentToolDescription(config: Pick<ExtensionConfig, "toolDescriptionMode"> = {}, options?: ToolDescriptionOptions): string {
+const LEGACY_CHAIN_CONTROL_GUIDANCE_LINES = new Set([
+	'• { action: "append-step", id: "...", step: {agent:"agent-c", task:"Use {previous}"} } appends one step to an already-running durable legacy chain. step is control-only, not an execution mode.',
+	"• approve-checkpoint and reject-checkpoint decide a paused durable legacy chain checkpoint.",
+	"• append-step uses step:{...} only for an already-running durable legacy chain; step is not an execution mode.",
+]);
+
+function withoutLegacyChainControlGuidance(description: string): string {
+	return description
+		.split("\n")
+		.filter((line) => !LEGACY_CHAIN_CONTROL_GUIDANCE_LINES.has(line.trim()))
+		.join("\n");
+}
+
+export function buildSubagentToolDescription(config: Pick<ExtensionConfig, "toolDescriptionMode" | "legacyChainControls"> = {}, options?: ToolDescriptionOptions): string {
 	const mode = resolveToolDescriptionMode(config, options);
-	if (mode === "compact") return COMPACT_SUBAGENT_TOOL_DESCRIPTION;
-	if (mode === "custom") {
+	let description: string;
+	if (mode === "compact") description = COMPACT_SUBAGENT_TOOL_DESCRIPTION;
+	else if (mode === "custom") {
 		const custom = loadCustomToolDescription(options);
-		if (custom) return withMandatorySafetyGuidance(custom);
-		warn(options, `${CUSTOM_TOOL_DESCRIPTION_FILE} was not found or valid for toolDescriptionMode "custom"; using full description.`);
-	}
-	return FULL_SUBAGENT_TOOL_DESCRIPTION;
+		if (custom) description = withMandatorySafetyGuidance(custom);
+		else {
+			warn(options, `${CUSTOM_TOOL_DESCRIPTION_FILE} was not found or valid for toolDescriptionMode "custom"; using full description.`);
+			description = FULL_SUBAGENT_TOOL_DESCRIPTION;
+		}
+	} else description = FULL_SUBAGENT_TOOL_DESCRIPTION;
+	return config.legacyChainControls === true ? description : withoutLegacyChainControlGuidance(description);
 }
