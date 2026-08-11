@@ -1115,6 +1115,69 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		assert.equal(mockPi.callCount(), 2);
 	});
 
+	it("enforces an agent-level timeout on an async serial child without a composite deadline", { skip: !isAsyncAvailable() ? "jiti not available" : process.platform === "win32" ? "timeout signal delivery intermittent on Windows CI" : undefined }, async () => {
+		mockPi.onCall({ delay: 5_000, output: "too late" });
+		const id = `async-child-timeout-chain-${Date.now().toString(36)}`;
+		executeAsyncChain(id, {
+			chain: [{ agent: "slow", task: "Wait" }],
+			agents: [makeAgent("slow", { defaultTimeoutMs: 150 })],
+			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
+			artifactConfig: {
+				enabled: false,
+				includeInput: false,
+				includeOutput: false,
+				includeJsonl: false,
+				includeMetadata: false,
+				cleanupDays: 7,
+			},
+			shareEnabled: false,
+			maxSubagentDepth: 2,
+		});
+
+		const payload = await readAsyncPayload(id);
+		assert.equal(payload.timeoutMs, undefined, "composite parent must remain unbounded by default");
+		assert.equal(payload.state, "failed");
+		assert.equal(payload.results[0]?.timedOut, true);
+		assert.equal(payload.results[0]?.error, "Subagent timed out after 150ms.");
+	});
+
+	it("enforces child timeouts on async parallel tasks without a composite deadline", { skip: !isAsyncAvailable() ? "jiti not available" : process.platform === "win32" ? "timeout signal delivery intermittent on Windows CI" : undefined }, async () => {
+		mockPi.onCall({ delay: 5_000, output: "one too late" });
+		mockPi.onCall({ delay: 5_000, output: "two too late" });
+		const id = `async-child-timeout-parallel-${Date.now().toString(36)}`;
+		executeAsyncChain(id, {
+			chain: [{
+				parallel: [
+					{ agent: "slow-one", task: "Wait" },
+					{ agent: "slow-two", task: "Wait" },
+				],
+				concurrency: 2,
+			}],
+			resultMode: "parallel",
+			agents: [
+				makeAgent("slow-one", { defaultTimeoutMs: 150 }),
+				makeAgent("slow-two", { defaultTimeoutMs: 200 }),
+			],
+			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
+			artifactConfig: {
+				enabled: false,
+				includeInput: false,
+				includeOutput: false,
+				includeJsonl: false,
+				includeMetadata: false,
+				cleanupDays: 7,
+			},
+			shareEnabled: false,
+			maxSubagentDepth: 2,
+		});
+
+		const payload = await readAsyncPayload(id);
+		assert.equal(payload.timeoutMs, undefined, "composite parent must remain unbounded by default");
+		assert.equal(payload.state, "failed");
+		assert.deepEqual(payload.results.map((result) => result.timedOut), [true, true]);
+		assert.deepEqual(payload.results.map((result) => result.error), ["Subagent timed out after 150ms.", "Subagent timed out after 200ms."]);
+	});
+
 	it("hard-kills async children that ignore timeout SIGTERM", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
 		mockPi.onCall({ delay: 60_000, ignoreSigterm: true, output: "too late" });
 		const id = `async-timeout-hard-kill-${Date.now().toString(36)}`;

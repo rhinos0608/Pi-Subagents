@@ -227,11 +227,13 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 		assert.ok(maxRuntimeSchema, "maxRuntimeMs schema should exist");
 		assert.equal(timeoutSchema.minimum, 1);
 		assert.equal(maxRuntimeSchema.minimum, 1);
-		assert.match(String(timeoutSchema.description ?? ""), /foreground and async\/background/i);
-		assert.match(String(timeoutSchema.description ?? ""), /async workflows have no default timeout/i);
+		assert.match(String(timeoutSchema.description ?? ""), /foreground runs and async children/i);
+		assert.match(String(timeoutSchema.description ?? ""), /async children default to 30m/i);
+		assert.match(String(timeoutSchema.description ?? ""), /async composites have no default parent deadline/i);
 		assert.doesNotMatch(String(timeoutSchema.description ?? ""), /foreground-only/i);
 		assert.match(String(maxRuntimeSchema.description ?? ""), /timeoutMs/i);
-		assert.match(String(maxRuntimeSchema.description ?? ""), /async workflows have no default timeout/i);
+		assert.match(String(maxRuntimeSchema.description ?? ""), /async children default to 30m/i);
+		assert.match(String(maxRuntimeSchema.description ?? ""), /async composites have no default parent deadline/i);
 		assert.equal(turnBudgetSchema?.properties?.maxTurns?.minimum, 1);
 		assert.equal(turnBudgetSchema?.properties?.graceTurns?.minimum, 0);
 		assert.equal(toolBudgetSchema?.properties?.soft?.minimum, 1);

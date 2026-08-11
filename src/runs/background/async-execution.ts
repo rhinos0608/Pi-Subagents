@@ -128,6 +128,8 @@ interface AsyncExecutionContext {
 	interactive?: boolean;
 }
 
+export const DEFAULT_ASYNC_TIMEOUT_MS = 30 * 60 * 1000;
+
 interface AsyncChainParams {
 	chain: ChainStep[];
 	task?: string;
@@ -776,6 +778,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 			outputMode: behavior.outputMode,
 			sessionFile,
 			maxSubagentDepth: resolveChildMaxSubagentDepth(maxSubagentDepth, a.maxSubagentDepth),
+			timeoutMs: a.defaultTimeoutMs ?? DEFAULT_ASYNC_TIMEOUT_MS,
 			waitToolEnabled: params.waitToolEnabled,
 			effectiveAcceptance: resolveEffectiveAcceptance({
 				explicit: s.acceptance,

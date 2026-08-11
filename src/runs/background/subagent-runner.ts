@@ -1955,6 +1955,47 @@ function combinedAbortSignal(signals: Array<AbortSignal | undefined>): AbortSign
 	return controller.signal;
 }
 
+async function runSingleStepWithTimeout(
+	step: SubagentStep,
+	ctx: SingleStepContext,
+	parentDeadlineAt?: number,
+): Promise<SingleStepResult> {
+	if (step.timeoutMs === undefined) return runSingleStep(step, ctx);
+
+	const parentRemainingMs = parentDeadlineAt === undefined ? undefined : Math.max(0, parentDeadlineAt - Date.now());
+	const timeoutMs = parentRemainingMs === undefined ? step.timeoutMs : Math.min(step.timeoutMs, parentRemainingMs);
+	const timeoutMessage = parentRemainingMs !== undefined && parentRemainingMs <= step.timeoutMs
+		? ctx.timeoutMessage
+		: `Subagent timed out after ${step.timeoutMs}ms.`;
+	const timeoutController = new AbortController();
+	let timeoutAction: (() => void) | undefined;
+	let timeoutTriggered = false;
+	const triggerTimeout = (): void => {
+		if (timeoutTriggered) return;
+		timeoutTriggered = true;
+		timeoutController.abort();
+		timeoutAction?.();
+	};
+	const registerTimeout = (action: (() => void) | undefined): void => {
+		timeoutAction = action;
+		ctx.registerTimeout?.(action ? triggerTimeout : undefined);
+		if (action && timeoutTriggered) action();
+	};
+	const timer = setTimeout(triggerTimeout, timeoutMs);
+	timer.unref?.();
+	try {
+		return await runSingleStep(step, {
+			...ctx,
+			registerTimeout,
+			timeoutSignal: combinedAbortSignal([ctx.timeoutSignal, timeoutController.signal]),
+			timeoutMessage,
+		});
+	} finally {
+		clearTimeout(timer);
+		ctx.registerTimeout?.(undefined);
+	}
+}
+
 async function runSubagent(
 	config: SubagentRunConfig,
 	onWriterProcess?: (writer: { state: "none" | "spawning" } | { state: "running"; pid: number }) => void,
@@ -3449,7 +3490,7 @@ async function runSubagent(
 				writeStatusPayload();
 				appendJsonl(eventsPath, JSON.stringify({ type: "subagent.step.started", ts: taskStartTime, runId: id, stepIndex: fi, agent: task.agent }));
 				flushPendingStepSteers(fi);
-				const singleResult = await runSingleStep(task, compactOptional<SingleStepContext>({
+				const singleResult = await runSingleStepWithTimeout(task, compactOptional<SingleStepContext>({
 					previousOutput, placeholder, cwd, sessionEnabled,
 					outputs,
 					sessionDir: config.sessionDir ? path.join(config.sessionDir, `dynamic-${stepIndex}-${taskIdx}`) : undefined,
@@ -3479,7 +3520,7 @@ async function runSubagent(
 					onWriterProcess,
 					onExternalProcess: (process) => updateExternalProcess(fi, process),
 					skipAcceptance: () => timedOut || stopped,
-				}));
+				}), config.deadlineAt);
 				const taskEndTime = Date.now();
 				const childInterrupted = singleResult.interrupted === true;
 				const childStopped = singleResult.stopped === true;
@@ -3831,7 +3872,7 @@ async function runSubagent(
 						const { taskForRun, taskCwd } = prepareParallelTaskRun(task, cwd, worktreeSetup, taskIdx);
 						flushPendingStepSteers(fi);
 
-						const singleResult = await runSingleStep(taskForRun, compactOptional<SingleStepContext>({
+						const singleResult = await runSingleStepWithTimeout(taskForRun, compactOptional<SingleStepContext>({
 							previousOutput, placeholder, cwd: taskCwd, sessionEnabled,
 							outputs,
 							sessionDir: taskSessionDir,
@@ -3861,7 +3902,7 @@ async function runSubagent(
 							onWriterProcess,
 							onExternalProcess: (process) => updateExternalProcess(fi, process),
 							skipAcceptance: () => timedOut || stopped,
-						}));
+						}), config.deadlineAt);
 						if (task.sessionFile) {
 							latestSessionFile = task.sessionFile;
 						}
@@ -4120,7 +4161,7 @@ async function runSubagent(
 			}));
 
 			flushPendingStepSteers(flatIndex);
-			const singleResult = await runSingleStep(seqStep, compactOptional<SingleStepContext>({
+			const singleResult = await runSingleStepWithTimeout(seqStep, compactOptional<SingleStepContext>({
 				previousOutput, placeholder, cwd, sessionEnabled,
 				outputs: statusPayload.mode === "single" ? undefined : outputs,
 				sessionDir: config.sessionDir,
@@ -4150,7 +4191,7 @@ async function runSubagent(
 				onWriterProcess,
 				onExternalProcess: (process) => updateExternalProcess(flatIndex, process),
 				skipAcceptance: () => timedOut || stopped,
-			}));
+			}), config.deadlineAt);
 			if (seqStep.sessionFile) {
 				latestSessionFile = seqStep.sessionFile;
 			}

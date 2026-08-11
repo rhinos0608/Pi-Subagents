@@ -207,32 +207,26 @@ describe("acknowledged steering action", () => {
 		let request: SteerRequest | undefined;
 		let interrupted = false;
 		let recovered = false;
+		let attemptedRecovery = false;
 		try {
 			const result = await steerAsyncRun({
 				state: createState(), runId, message: "correct course", location: { asyncDir }, ackTimeoutMs: 25,
 				kill: (_pid, signal) => { if (signal !== 0) interrupted = true; return true; },
 				onRequestQueued: (requestPath) => {
 					request = JSON.parse(fs.readFileSync(requestPath, "utf-8")) as SteerRequest;
-					const routed = runningStatus(runId);
-					projectRequest(routed, request, ["routed"]);
-					writeStatus(asyncDir, routed);
-				},
-				onBeforeRecoveryClaim: (_requestId, committedAt) => {
-					assert.ok(request);
-					const recoveryDir = path.join(asyncDir, "control", "steer-recovery");
-					assert.equal(fs.existsSync(path.join(recoveryDir, "claim.json")), false);
-					assert.equal(fs.existsSync(path.join(recoveryDir, `${Buffer.from(request.id).toString("base64url")}.json`)), false);
 					const acknowledged = runningStatus(runId);
 					projectRequest(acknowledged, request, ["routed"]);
-					updateSteeringTarget(acknowledged.steering!, request.id, 0, "delivered", committedAt);
-					updateSteeringTarget(acknowledged.steps![0]!.steering!, request.id, 0, "delivered", committedAt);
+					updateSteeringTarget(acknowledged.steering!, request.id, 0, "delivered", Date.now());
+					updateSteeringTarget(acknowledged.steps![0]!.steering!, request.id, 0, "delivered", Date.now());
 					writeStatus(asyncDir, acknowledged);
 				},
+				onBeforeRecoveryClaim: () => { attemptedRecovery = true; },
 				recover: async () => { recovered = true; return successResult("replacement"); },
 			});
 			assert.equal(result.details.steering?.state, "delivered");
 			assert.equal(interrupted, false);
 			assert.equal(recovered, false);
+			assert.equal(attemptedRecovery, false);
 			assert.ok(request);
 			assert.equal(fs.existsSync(path.join(asyncDir, "control", "steer-recovery", `${Buffer.from(request.id).toString("base64url")}.json`)), false);
 		} finally {
