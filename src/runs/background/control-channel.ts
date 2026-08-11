@@ -21,6 +21,16 @@ import { POLL_INTERVAL_MS } from "../../shared/types.ts";
 import { resolveWatchPath } from "../../shared/utils.ts";
 
 export type ControlChannelFs = Pick<typeof fs, "mkdirSync" | "existsSync" | "rmSync" | "watch" | "readdirSync" | "readFileSync" | "realpathSync">;
+
+function writeJsonToExistingDir(filePath: string, payload: object): void {
+	const tempPath = path.join(path.dirname(filePath), `.${path.basename(filePath)}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`);
+	try {
+		fs.writeFileSync(tempPath, JSON.stringify(payload, null, 2), { encoding: "utf-8", flag: "wx" });
+		fs.renameSync(tempPath, filePath);
+	} finally {
+		fs.rmSync(tempPath, { force: true });
+	}
+}
 export type ControlChannelTimers = { setInterval: typeof setInterval; clearInterval: typeof clearInterval };
 type KillFn = (pid: number, signal?: NodeJS.Signals | 0) => unknown;
 
@@ -205,6 +215,13 @@ export function writeSteerRequestToDir(dir: string, request: SteerRequest): stri
 	return requestPath;
 }
 
+export function writeSteerRequestToExistingDir(dir: string, request: SteerRequest): string {
+	if (!validSteerRequest(request)) throw new Error("steer request is malformed or exceeds transport limits.");
+	const requestPath = path.join(dir, steerRequestFileName(request));
+	writeJsonToExistingDir(requestPath, request);
+	return requestPath;
+}
+
 export function writeSteerCapabilityAt(filePath: string, capability: Omit<SteerCapability, "type" | "protocolVersion">): string {
 	assertChildIndex(capability.index);
 	if (!Number.isInteger(capability.pid) || capability.pid <= 0) throw new Error("steer capability pid must be a positive integer.");
@@ -383,6 +400,25 @@ export function consumeSteerCapabilities(asyncDir: string, fsImpl: Pick<typeof f
 		}
 	}
 	return capabilities;
+}
+
+export function consumeSteerAckFromDir(
+	dir: string,
+	requestId: string,
+	fsImpl: Pick<typeof fs, "existsSync" | "readdirSync" | "readFileSync" | "rmSync"> = fs,
+): SteerAck | undefined {
+	if (!fsImpl.existsSync(dir)) return undefined;
+	let entries: string[];
+	try { entries = fsImpl.readdirSync(dir).filter((name) => name.endsWith(".json")).sort(); } catch { return undefined; }
+	for (const entry of entries) {
+		const target = path.join(dir, entry);
+		let ack: SteerAck | undefined;
+		try { ack = parseSteerAck(JSON.parse(fsImpl.readFileSync(target, "utf-8"))); } catch { ack = undefined; }
+		if (ack?.requestId !== requestId) continue;
+		try { fsImpl.rmSync(target, { force: true }); } catch { return undefined; }
+		return ack;
+	}
+	return undefined;
 }
 
 export function consumeSteerAcks(asyncDir: string, fsImpl: Pick<typeof fs, "existsSync" | "readdirSync" | "readFileSync" | "rmSync"> = fs): SteerAck[] {
