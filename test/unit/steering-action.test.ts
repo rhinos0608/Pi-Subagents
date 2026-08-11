@@ -348,7 +348,7 @@ describe("acknowledged steering action", () => {
 		let routed: AsyncStatus | undefined;
 		try {
 			const result = await steerAsyncRun({
-				state: createState(), runId, message: "correct course", location: { asyncDir }, ackTimeoutMs: 25, recoveryTimeoutMs: 500, kill: () => true,
+				state: createState(), runId, message: "correct course", location: { asyncDir }, ackTimeoutMs: 250, recoveryTimeoutMs: 1_000, kill: () => true,
 				onRequestQueued: (requestPath) => {
 					const request = JSON.parse(fs.readFileSync(requestPath, "utf-8")) as SteerRequest;
 					routed = runningStatus(runId);
