@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.47.1] - 2026-08-12
+
 ### Fixed
 - Honor configured artifact cleanup retention days and let `0` disable artifact cleanup. Thanks to @elecnix for #1012.
 - Add a display-only dismiss action for reload-recovered running workflows without claiming or attempting to stop their work (#1010).
