@@ -2117,6 +2117,27 @@ export const DEFAULT_FOREGROUND_TIMEOUT_MS = 30 * 60 * 1000;
 // stay unbounded as a whole, while each runner child has its own deadline.
 export { DEFAULT_ASYNC_TIMEOUT_MS };
 
+/**
+ * Maximum delay a Node.js timer accepts. Values above the 32-bit signed integer
+ * ceiling overflow `setTimeout`, which silently clamps the delay to ~1ms and
+ * fires almost immediately — so a run configured with a larger deadline would
+ * terminate right away while reporting the long duration. Any timeout destined
+ * for a timer must stay within this bound.
+ */
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
+
+/**
+ * Resolve the optional global default runtime deadline from extension config
+ * (`config.timeoutMs`). Returns undefined for unset or invalid values so callers
+ * fall back to the built-in defaults. "Invalid" covers non-positive-integer
+ * values and values above `MAX_TIMER_DELAY_MS`; the latter would overflow the
+ * Node.js timer and expire the run almost immediately instead of running long.
+ */
+export function resolveConfigDefaultTimeoutMs(raw: unknown): number | undefined {
+	if (typeof raw !== "number" || !Number.isInteger(raw) || raw <= 0 || raw > MAX_TIMER_DELAY_MS) return undefined;
+	return raw;
+}
+
 export function resolveForegroundTimeout(params: SubagentParamsLike, defaultTimeoutMs?: number): { timeoutMs?: number; error?: string } {
 	const rawTimeout = params.timeoutMs;
 	const rawMaxRuntime = params.maxRuntimeMs;
@@ -2140,14 +2161,18 @@ export function resolveForegroundTimeout(params: SubagentParamsLike, defaultTime
  * Resolve the effective launch timeout for a single-agent run, applying the
  * async/foreground default when neither the caller nor the agent set one.
  *
- * The async default is deliberately applied only to plain single-agent
- * launches. Composite launches keep their top-level execution unbounded when
- * no timeout is set; their runner children resolve separate deadlines.
- * Exported so the executor wiring is directly testable.
+ * A global config default (`config.timeoutMs`, passed as `configDefaultTimeoutMs`)
+ * replaces the built-in 30-minute backstop wherever a concrete default is applied.
+ * The async default is deliberately applied only to plain single-agent launches.
+ * Composite launches keep their top-level execution unbounded when no timeout is
+ * set — even with a config default — while their runner children resolve separate
+ * deadlines. Exported so the executor wiring is directly testable.
  */
-export function resolveSingleAgentLaunchTimeout(params: SubagentParamsLike, async: boolean): { timeoutMs?: number; error?: string } {
+export function resolveSingleAgentLaunchTimeout(params: SubagentParamsLike, async: boolean, configDefaultTimeoutMs?: number): { timeoutMs?: number; error?: string } {
 	const isComposite = (params.chain?.length ?? 0) > 0 || (params.tasks?.length ?? 0) > 0 || params.workflowScript !== undefined;
-	const defaultTimeoutMs = !async ? DEFAULT_FOREGROUND_TIMEOUT_MS : isComposite ? undefined : DEFAULT_ASYNC_TIMEOUT_MS;
+	const foregroundDefault = configDefaultTimeoutMs ?? DEFAULT_FOREGROUND_TIMEOUT_MS;
+	const asyncSingleDefault = configDefaultTimeoutMs ?? DEFAULT_ASYNC_TIMEOUT_MS;
+	const defaultTimeoutMs = !async ? foregroundDefault : isComposite ? undefined : asyncSingleDefault;
 	return resolveForegroundTimeout(params, defaultTimeoutMs);
 }
 
@@ -4382,7 +4407,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		const normalizedAction = typeof requestParams.action === "string" ? requestParams.action.trim() : requestParams.action;
 		if (requestParams.workflowScript !== undefined && normalizedAction === undefined) {
 			const parentCwd = ctx.cwd;
-			const timeout = requestParams.timeoutMs ?? requestParams.maxRuntimeMs ?? (requestParams.async === false ? DEFAULT_FOREGROUND_TIMEOUT_MS : undefined);
+			const timeout = requestParams.timeoutMs ?? requestParams.maxRuntimeMs ?? (requestParams.async === false ? resolveConfigDefaultTimeoutMs(deps.config.timeoutMs) ?? DEFAULT_FOREGROUND_TIMEOUT_MS : undefined);
 			const workflowUsageBudget = validateUsageBudgetConfig(requestParams.usageBudget ?? deps.config.usageBudget, requestParams.usageBudget ? "usageBudget" : "config.usageBudget");
 			if (workflowUsageBudget.error) return buildRequestedModeError(requestParams, workflowUsageBudget.error);
 			const workflowCwd = resolveRequestedCwd(parentCwd, requestParams.cwd);
@@ -5532,6 +5557,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		const foregroundTimeout = resolveSingleAgentLaunchTimeout(
 			effectiveParams,
 			effectiveAsync,
+			resolveConfigDefaultTimeoutMs(deps.config.timeoutMs),
 		);
 		if (foregroundTimeout.error) return buildRequestedModeError(effectiveParams, foregroundTimeout.error);
 		const controlConfig = resolveControlConfig(deps.config.control, effectiveParams.control);
