@@ -27,6 +27,7 @@ describe("async status helpers", () => {
 				lastUpdate: 200,
 				cwd: "/repo-a",
 				currentStep: 1,
+				runFanoutBudget: { used: 2, limit: 64, remaining: 62 },
 				outputFile,
 				steps: [
 					{ agent: "scout", status: "complete", durationMs: 10, description: "Inspect auth only" },
@@ -51,7 +52,9 @@ describe("async status helpers", () => {
 			assert.equal(runs[0]?.steps[1]?.status, "running");
 			assert.equal(runs[0]?.steps[0]?.description, "Inspect auth only");
 			assert.equal(runs[0]?.steps[1]?.description, "Patch billing only");
-			assert.match(formatAsyncRunList(runs), /output: .*output-1\.log/);
+			const text = formatAsyncRunList(runs);
+			assert.match(text, /Run fan-out: 2\/64 used, 62 remaining/);
+			assert.match(text, /output: .*output-1\.log/);
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
 		}

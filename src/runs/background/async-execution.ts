@@ -30,6 +30,7 @@ import { buildWorkflowGraphSnapshot } from "../shared/workflow-graph.ts";
 import { ChainOutputValidationError, validateChainOutputBindings } from "../shared/chain-outputs.ts";
 import { createStructuredOutputRuntime } from "../shared/structured-output.ts";
 import { resolveEffectiveAcceptance, validateAcceptanceInput, validateExecutionAcceptance } from "../shared/acceptance.ts";
+import { writeRunFanoutBudgetDescriptor } from "../shared/run-fanout-budget.ts";
 import {
 	type AcceptanceInput,
 	type AgentContract,
@@ -41,6 +42,7 @@ import {
 	type ResolvedControlConfig,
 	type ResolvedTurnBudget,
 	type ResolvedToolBudget,
+	type RunFanoutBudgetDescriptor,
 	type ToolBudgetConfig,
 	type SubagentRunMode,
 	type SteeringRecoveryDescriptor,
@@ -171,6 +173,7 @@ interface AsyncChainParams {
 	/** Global cap on simultaneously-running subagent tasks within the async run. */
 	globalConcurrencyLimit?: number;
 	capabilityCeiling?: ResolvedSubagentCapabilityCeiling;
+	runFanoutBudget: RunFanoutBudgetDescriptor;
 	parentWorkflowRunId?: string;
 	workflowKey?: string;
 }
@@ -220,6 +223,7 @@ interface AsyncSingleParams {
 	configToolBudget?: ResolvedToolBudget;
 	allowZeroToolBudget?: boolean;
 	capabilityCeiling?: ResolvedSubagentCapabilityCeiling;
+	runFanoutBudget: RunFanoutBudgetDescriptor;
 	parentWorkflowRunId?: string;
 	workflowKey?: string;
 }
@@ -648,7 +652,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 			...(s.model !== undefined ? { model: s.model } : {}),
 		};
 	};
-	const buildSeqStep = (s: SequentialStep, sessionFile?: string, behaviorCwd?: string, progressPrecreated = false, resolvedBehavior?: ResolvedStepBehavior, flatIndex?: number, parallelOutputNamespace?: { stepIndex: number; taskIndex?: number }) => {
+	const buildSeqStep = (s: SequentialStep, sessionFile?: string, behaviorCwd?: string, progressPrecreated = false, resolvedBehavior?: ResolvedStepBehavior, flatIndex?: number, parallelOutputNamespace?: { stepIndex: number; taskIndex?: number }, runFanoutPath?: string) => {
 		const a = agents.find((x) => x.name === s.agent)!;
 		const externalRunner = a.runner?.type === "external-cli";
 		if (externalRunner) {
@@ -748,6 +752,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 			parentSessionId: ctx.parentSessionId ?? ctx.currentSessionId,
 			permissionRules,
 			...(params.capabilityCeiling ? { capabilityCeiling: params.capabilityCeiling } : {}),
+			...(runFanoutPath ? { runFanoutPath } : {}),
 			agent: s.agent,
 			task,
 			...(a.runner ? { runner: a.runner } : {}),
@@ -839,7 +844,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 							}
 						}
 						const staticStep = nextFlatStep();
-						return buildSeqStep({ ...t, agentContract: t.agentContract ?? s.agentContract, gateOn: t.gateOn ?? s.gateOn }, staticStep.sessionFile, behaviorCwd, progressPrecreated, parallelBehaviors[taskIndex], staticStep.index, { stepIndex, taskIndex });
+						return buildSeqStep({ ...t, agentContract: t.agentContract ?? s.agentContract, gateOn: t.gateOn ?? s.gateOn }, staticStep.sessionFile, behaviorCwd, progressPrecreated, parallelBehaviors[taskIndex], staticStep.index, { stepIndex, taskIndex }, resultMode === "parallel" ? `tasks[${taskIndex}]` : `chain[${stepIndex}].parallel[${taskIndex}]`);
 					}),
 					concurrency: s.concurrency,
 					failFast: s.failFast,
@@ -884,7 +889,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 				};
 			}
 			const staticStep = nextFlatStep();
-			return buildSeqStep(s as SequentialStep, staticStep.sessionFile, undefined, false, undefined, staticStep.index);
+			return buildSeqStep(s as SequentialStep, staticStep.sessionFile, undefined, false, undefined, staticStep.index, undefined, `chain[${stepIndex}]`);
 		});
 		const steps = params.attachRoot
 			? [{
@@ -968,6 +973,7 @@ export function executeAsyncChain(
 		: path.join(DIRS.async, id);
 	try {
 		fs.mkdirSync(asyncDir, { recursive: true });
+		writeRunFanoutBudgetDescriptor(asyncDir, params.runFanoutBudget);
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		return {
@@ -1063,6 +1069,7 @@ export function executeAsyncChain(
 				timeoutMs: params.timeoutMs,
 				deadlineAt,
 				globalConcurrencyLimit: params.globalConcurrencyLimit,
+				runFanoutBudget: params.runFanoutBudget,
 				workflowGraph,
 				...(params.parentWorkflowRunId ? { parentWorkflowRunId: params.parentWorkflowRunId } : {}),
 				...(params.workflowKey ? { workflowKey: params.workflowKey } : {}),
@@ -1281,6 +1288,7 @@ export function executeAsyncSingle(
 		: path.join(DIRS.async, id);
 	try {
 		fs.mkdirSync(asyncDir, { recursive: true });
+		writeRunFanoutBudgetDescriptor(asyncDir, params.runFanoutBudget);
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		return {
@@ -1376,6 +1384,7 @@ export function executeAsyncSingle(
 	const recoveryDescriptor: SteeringRecoveryDescriptor = {
 		version: 1,
 		launchContractDigest,
+		runFanoutBudget: params.runFanoutBudget,
 		sourceRunId: id,
 		...(params.agentContract ? { agentContract: params.agentContract } : {}),
 		agent,
@@ -1494,6 +1503,7 @@ export function executeAsyncSingle(
 				resultMode: "single",
 				launchContractDigest,
 				launchResolvedExtensions,
+				runFanoutBudget: params.runFanoutBudget,
 				...(params.parentWorkflowRunId ? { parentWorkflowRunId: params.parentWorkflowRunId } : {}),
 				...(params.workflowKey ? { workflowKey: params.workflowKey } : {}),
 				...(params.revivalLease ? { revivalLease: params.revivalLease } : {}),

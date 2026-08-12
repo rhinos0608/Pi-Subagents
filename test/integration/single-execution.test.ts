@@ -1124,6 +1124,30 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		assert.deepEqual(result.details.workflow?.trace.filter((entry) => entry.state !== "started").map(({ state }) => state).sort(), ["completed", "failed"]);
 	});
 
+	it("rejects an over-limit runs.all batch before launching any workflow child", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		const executor = makeExecutor([makeAgent("echo")], { maxSubagentSpawnsPerRun: 1 });
+
+		const result = await executor.execute(
+			"scripted-workflow-fanout-limit",
+			{
+				async: false,
+				workflowScript: `return await runs.all([
+					{ key: "first", agent: "echo", task: "First task" },
+					{ key: "second", agent: "echo", task: "Second task" }
+				]);`,
+			},
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+
+		assert.equal(result.isError, undefined, result.content[0]?.text ?? "workflow failed");
+		assert.equal(mockPi.callCount(), 0);
+		const children = result.details.workflow?.value as Array<{ ok: boolean; error?: string }>;
+		assert.deepEqual(children.map(({ ok }) => ok), [false, false]);
+		for (const child of children) assert.match(child.error ?? "", /workflow\[second\].*0\/1 used; 2 requested, 1 remaining/);
+	});
+
 	it("runs a direct child gate as host-verified acceptance", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
 		const markerFile = "direct-gate.txt";
 		const markerPath = path.join(tempDir, markerFile);
@@ -1886,6 +1910,25 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		assert.equal(second.isError, true);
 		assert.match(second.content[0]?.text ?? "", /Subagent spawn limit reached for this session \(1\/1 used, 1 requested\)/);
 		assert.equal(mockPi.callCount(), 1);
+	});
+
+	it("rejects an over-limit static run fan-out before creating session artifacts", async () => {
+		const sessionDir = path.join(tempDir, "run-fanout-preflight");
+		const executor = makeExecutor([makeAgent("echo"), makeAgent("second")], { maxSubagentSpawnsPerRun: 1 });
+		const result = await executor.execute(
+			"run-fanout-preflight",
+			{ tasks: [{ agent: "echo", task: "First" }, { agent: "second", task: "Second" }], sessionDir },
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+
+		assert.equal(result.isError, true);
+		assert.match(result.content[0]?.text ?? "", /Run fan-out limit reached at tasks\[1\] \(0\/1 used; 2 requested, 1 remaining\)/);
+		assert.deepEqual(result.details.runFanoutBudget, { used: 0, limit: 1, remaining: 1 });
+		assert.equal(result.details.runFanoutRejection?.path, "tasks[1]");
+		assert.equal(fs.existsSync(sessionDir), false);
+		assert.equal(mockPi.callCount(), 0);
 	});
 
 	it("reports structured spawn-budget usage through status", async () => {

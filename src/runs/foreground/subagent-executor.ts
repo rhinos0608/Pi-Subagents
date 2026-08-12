@@ -65,6 +65,7 @@ import { applyIntercomBridgeToAgent, INTERCOM_BRIDGE_MARKER, resolveIntercomBrid
 import { formatControlIntercomMessage, formatControlNoticeMessage, resolveControlConfig, shouldNotifyControlEvent } from "../shared/subagent-control.ts";
 import { resolveTurnBudgetConfig } from "../shared/turn-budget.ts";
 import { formatSpawnBudget, getSpawnBudgetSnapshot, grantSpawnBudget, preflightSpawnBudget, preflightSpawnBudgetGrant, reserveSpawnBudget } from "../shared/spawn-budget.ts";
+import { claimRunFanoutBatch, createRunFanoutBudget, decodeRunFanoutBudgetDescriptor, formatRunFanoutBudget, getRunFanoutBudgetSnapshot, readRunFanoutBudgetDescriptor, RunFanoutLimitError, RUN_FANOUT_BUDGET_ENV } from "../shared/run-fanout-budget.ts";
 import { validateToolBudgetConfig } from "../shared/tool-budget.ts";
 import { usageBudgetExceededMessage, usageBudgetState, validateUsageBudgetConfig } from "../shared/usage-budget.ts";
 import { intersectSubagentCapabilityCeilings, resolveCurrentSubagentCapabilityCeiling, type ResolvedSubagentCapabilityCeiling } from "../shared/capability-ceiling.ts";
@@ -145,6 +146,7 @@ import {
 	type ResolvedControlConfig,
 	type ResolvedTurnBudget,
 	type ResolvedToolBudget,
+	type RunFanoutBudgetDescriptor,
 	type SingleResult,
 	type ToolBudgetConfig,
 	type TurnBudgetConfig,
@@ -163,6 +165,7 @@ import {
 	resolveTopLevelParallelMaxTasks,
 	resolveChildMaxSubagentDepth,
 	resolveCurrentMaxSubagentDepth,
+	resolveMaxSubagentSpawnsPerRun,
 	wrapForkTask,
 } from "../../shared/types.ts";
 
@@ -286,6 +289,10 @@ export interface SubagentParamsLike {
 	workflowKey?: string;
 	workflowChildAsyncId?: string;
 	suppressRoutineResultIntercom?: boolean;
+	/** Internal inherited cumulative run-tree budget. */
+	runFanoutBudget?: RunFanoutBudgetDescriptor;
+	/** Internal workflow host admission proof. */
+	runFanoutAdmitted?: boolean;
 	/** Internal durable-run compatibility fields. Public callers must use workflowScript. */
 	chain?: ChainStep[];
 	tasks?: TaskParam[];
@@ -406,6 +413,7 @@ interface ExecutionContextData {
 	parentSessionId: string | null;
 	parentPiSessionId?: string;
 	capabilityCeiling?: ResolvedSubagentCapabilityCeiling;
+	runFanoutBudget: RunFanoutBudgetDescriptor;
 }
 
 function resolveRequestedCwd(runtimeCwd: string, requestedCwd: string | undefined): string {
@@ -520,6 +528,29 @@ function countRequestedSubagentSpawns(params: SubagentParamsLike, config: Extens
 		}, 0);
 	}
 	return params.agent ? 1 : 0;
+}
+
+function staticRunFanoutPaths(params: SubagentParamsLike): string[] {
+	if (params.tasks) return params.tasks.map((_, index) => `tasks[${index}]`);
+	if (params.chain) return params.chain.flatMap((step, stepIndex) => {
+		if (isDynamicParallelStep(step) || "checkpoint" in step) return [];
+		if (isParallelStep(step)) return step.parallel.map((_, itemIndex) => `chain[${stepIndex}].parallel[${itemIndex}]`);
+		return [`chain[${stepIndex}]`];
+	});
+	return params.agent ? ["single"] : [];
+}
+
+function runFanoutErrorResult(error: RunFanoutLimitError, mode: "single" | "parallel" | "chain"): AgentToolResult<Details> {
+	return { content: [{ type: "text", text: error.message }], isError: true, details: { mode, results: [], runFanoutBudget: error.snapshot, runFanoutRejection: error.rejection } };
+}
+
+function withRunFanoutBudget(result: AgentToolResult<Details>, descriptor: RunFanoutBudgetDescriptor): AgentToolResult<Details> {
+	const runFanoutBudget = getRunFanoutBudgetSnapshot(descriptor);
+	return {
+		...result,
+		content: result.content.map((item, index) => index === 0 && item.type === "text" ? { ...item, text: `${formatRunFanoutBudget(runFanoutBudget)}\n${item.text}` } : item),
+		details: { ...result.details, runFanoutBudget },
+	};
 }
 
 function foregroundStatusResult(control: SubagentState["foregroundControls"] extends Map<string, infer T> ? T : never): AgentToolResult<Details> {
@@ -1154,6 +1185,16 @@ function appendStepToAsyncChain(input: {
 	}
 
 	try {
+		const runFanoutBudget = readRunFanoutBudgetDescriptor(resolved.location.asyncDir);
+		if (!runFanoutBudget) throw new Error(`Run '${resolved.id}' is missing its run fan-out budget identity.`);
+		const startIndex = (status.chainStepCount ?? status.steps?.length ?? 0) + pendingAppendRequests.reduce((total, request) => total + request.steps.length, 0);
+		const appendPaths = chain.flatMap((step, localIndex) => {
+			const absoluteIndex = startIndex + localIndex;
+			if (isDynamicParallelStep(step) || "checkpoint" in step) return [];
+			if (isParallelStep(step)) return step.parallel.map((_, itemIndex) => `chain[${absoluteIndex}].parallel[${itemIndex}]`);
+			return [`chain[${absoluteIndex}]`];
+		});
+		claimRunFanoutBatch(runFanoutBudget, appendPaths);
 		const result = enqueueChainAppendRequest({
 			asyncDir: resolved.location.asyncDir,
 			runId: resolved.id,
@@ -1551,6 +1592,7 @@ async function resumeAsyncRun(input: {
 			controlIntercomTarget: intercomBridge.active ? intercomBridge.orchestratorTarget : undefined,
 			childIntercomTarget: intercomBridge.active ? (agent, index) => resolveSubagentIntercomTarget(runId, agent, index) : undefined,
 			globalConcurrencyLimit: input.deps.config.globalConcurrencyLimit,
+			runFanoutBudget: createRunFanoutBudget(runId, resolveMaxSubagentSpawnsPerRun(input.deps.config.maxSubagentSpawnsPerRun)),
 			capabilityCeiling: intersectSubagentCapabilityCeilings("capabilityCeiling" in target ? target.capabilityCeiling : undefined, resolveCurrentSubagentCapabilityCeiling(input.deps.state.currentSessionId)),
 		}));
 		if (result.isError) return result;
@@ -1631,6 +1673,7 @@ async function resumeAsyncRun(input: {
 		...(input.params.turnBudget !== undefined ? { turnBudget: input.params.turnBudget } : {}),
 		...(input.params.toolBudget !== undefined ? { toolBudget: input.params.toolBudget } : {}),
 		capabilityCeiling: intersectSubagentCapabilityCeilings("capabilityCeiling" in target ? target.capabilityCeiling : undefined, recoveryDescriptor?.capabilityCeiling, resolveCurrentSubagentCapabilityCeiling(input.deps.state.currentSessionId)),
+		runFanoutBudget: recoveryDescriptor?.runFanoutBudget ?? createRunFanoutBudget(runId, resolveMaxSubagentSpawnsPerRun(input.deps.config.maxSubagentSpawnsPerRun)),
 		parentWorkflowRunId: input.params.workflowParentRunId,
 		workflowKey: input.params.workflowKey,
 	}));
@@ -2672,6 +2715,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 			usageBudget: data.usageBudget,
 			configToolBudget: data.configToolBudget,
 			capabilityCeiling: data.capabilityCeiling,
+			runFanoutBudget: data.runFanoutBudget,
 			globalConcurrencyLimit: deps.config.globalConcurrencyLimit,
 			parentWorkflowRunId: params.workflowParentRunId,
 			workflowKey: params.workflowKey,
@@ -2717,6 +2761,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 			usageBudget: data.usageBudget,
 			configToolBudget: data.configToolBudget,
 			capabilityCeiling: data.capabilityCeiling,
+			runFanoutBudget: data.runFanoutBudget,
 			globalConcurrencyLimit: deps.config.globalConcurrencyLimit,
 			parentWorkflowRunId: params.workflowParentRunId,
 			workflowKey: params.workflowKey,
@@ -2784,6 +2829,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 			usageBudget: data.usageBudget,
 			configToolBudget: data.configToolBudget,
 			capabilityCeiling: data.capabilityCeiling,
+			runFanoutBudget: data.runFanoutBudget,
 			parentWorkflowRunId: params.workflowParentRunId,
 			workflowKey: params.workflowKey,
 		}));
@@ -2874,6 +2920,7 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 		permissions: deps.config.permissions,
 		globalConcurrencyLimit: deps.config.globalConcurrencyLimit,
 		capabilityCeiling: data.capabilityCeiling,
+		runFanoutBudget: data.runFanoutBudget,
 	}));
 
 	if (chainResult.requestedAsync) {
@@ -2934,6 +2981,7 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 			usageBudget: data.usageBudget,
 			configToolBudget: data.configToolBudget,
 			capabilityCeiling: data.capabilityCeiling,
+			runFanoutBudget: data.runFanoutBudget,
 			globalConcurrencyLimit: deps.config.globalConcurrencyLimit,
 		}));
 	}
@@ -2980,6 +3028,7 @@ interface ForegroundParallelRunInput {
 	intercomEvents: IntercomEventBus;
 	parentSessionId: string | null;
 	capabilityCeiling?: ResolvedSubagentCapabilityCeiling;
+	runFanoutBudget: RunFanoutBudgetDescriptor;
 	signal: AbortSignal;
 	runId: string;
 	sessionDirForIndex: (idx?: number) => string | undefined;
@@ -3263,6 +3312,7 @@ async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Pr
 			llmIntentArbiter: createTaskMutationArbiter(input.ctx),
 			...workflowForegroundSteeringLaunchOptions(input.foregroundControl, index),
 			context: input.contextPolicy.contextForAgent(task.agent),
+			runFanoutBudget: { ...input.runFanoutBudget, parentPath: `${input.runFanoutBudget.parentPath ? `${input.runFanoutBudget.parentPath}/` : ""}tasks[${index}]` },
 			cwd: taskCwd,
 			signal: input.signal,
 			interruptSignal: interruptController.signal,
@@ -3555,6 +3605,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 				toolBudget: data.toolBudget,
 				configToolBudget: data.configToolBudget,
 				globalConcurrencyLimit: deps.config.globalConcurrencyLimit,
+				runFanoutBudget: data.runFanoutBudget,
 			}));
 		}
 	}
@@ -3634,6 +3685,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 			intercomEvents: deps.pi.events,
 			parentSessionId: data.parentSessionId,
 			capabilityCeiling: data.capabilityCeiling,
+			runFanoutBudget: data.runFanoutBudget,
 			signal,
 			runId,
 			sessionDirForIndex,
@@ -3919,6 +3971,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 				toolBudget: effectiveToolBudget.toolBudget,
 				usageBudget: data.usageBudget,
 				allowZeroToolBudget: data.allowZeroToolBudget && effectiveToolBudget.toolBudget === data.toolBudget,
+				runFanoutBudget: data.runFanoutBudget,
 			}));
 		}
 	}
@@ -3993,6 +4046,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 			llmIntentArbiter: createTaskMutationArbiter(ctx),
 			...workflowForegroundSteeringLaunchOptions(foregroundControl, 0),
 			context: data.contextPolicy.contextForAgent(params.agent!),
+			runFanoutBudget: params.runFanoutAdmitted ? data.runFanoutBudget : { ...data.runFanoutBudget, parentPath: `${data.runFanoutBudget.parentPath ? `${data.runFanoutBudget.parentPath}/` : ""}single` },
 			cwd: effectiveCwd,
 			signal,
 			interruptSignal: interruptController.signal,
@@ -4266,7 +4320,7 @@ export function prepareWorkflowLaunchParams(
 	childParams: Record<string, unknown>,
 	parentWorkflowRunId: string,
 	workflowKey: string,
-	options: { missionDetached?: boolean; suppressRoutineResultIntercom?: boolean } = {},
+	options: { missionDetached?: boolean; suppressRoutineResultIntercom?: boolean; runFanoutBudget?: RunFanoutBudgetDescriptor } = {},
 ): SubagentParamsLike {
 	if (typeof childParams.resume === "string") {
 		if (childParams.gate !== undefined || workflowDefaults.gate !== undefined) {
@@ -4294,6 +4348,7 @@ export function prepareWorkflowLaunchParams(
 		...(options.missionDetached ? { mission: false } : {}),
 		workflowParentRunId: parentWorkflowRunId,
 		workflowKey,
+		...(options.runFanoutBudget ? { runFanoutBudget: { ...options.runFanoutBudget, parentPath: `${options.runFanoutBudget.parentPath ? `${options.runFanoutBudget.parentPath}/` : ""}workflow[${workflowKey}]` } } : {}),
 		...(options.suppressRoutineResultIntercom ? { suppressRoutineResultIntercom: true } : {}),
 	} as SubagentParamsLike;
 	const normalizedGate = normalizeGateParams(launchParams);
@@ -4472,6 +4527,14 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			const chatProgressResult = resolveWorkflowChatProgress({ requested: requestParams.chatProgress, parentCwd, workflowCwd, background: requestParams.async !== false });
 			if (chatProgressResult.error) return { content: [{ type: "text", text: chatProgressResult.error }], isError: true, details: { mode: "workflow", results: [] } };
 			const chatProgress = chatProgressResult.projection!;
+			let workflowFanoutBudget: RunFanoutBudgetDescriptor;
+			try {
+				workflowFanoutBudget = requestParams.runFanoutBudget
+					?? decodeRunFanoutBudgetDescriptor(process.env[RUN_FANOUT_BUDGET_ENV])
+					?? createRunFanoutBudget(_id, resolveMaxSubagentSpawnsPerRun(deps.config.maxSubagentSpawnsPerRun));
+			} catch (error) {
+				return { content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }], isError: true, details: { mode: "workflow", results: [] } };
+			}
 			const explicitMission = requestParams.missionId !== undefined || requestParams.mission !== undefined;
 			const autoMission = !explicitMission;
 			const workflowPreview = autoMission ? previewSimpleWorkflowRun(requestParams.workflowScript) : undefined;
@@ -4532,6 +4595,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 					pid: process.pid,
 					steps: [],
 					workflow: { trace: [], emits: [], console: [] },
+					runFanoutBudget: getRunFanoutBudgetSnapshot(workflowFanoutBudget),
 				};
 				const appendWorkflowEvent = (event: Record<string, unknown>) => fs.appendFileSync(eventsPath, `${JSON.stringify({ ts: Date.now(), runId: workflowRunId, ...event })}\n`, "utf-8");
 				let indexedState: AsyncStatus["state"] | undefined;
@@ -4642,13 +4706,17 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 							prompts: workflowPrompts,
 							...(workflowState ? { state: workflowState } : {}),
 							onTrace: updateTrace,
+							admit: (calls) => {
+								status.runFanoutBudget = claimRunFanoutBatch(workflowFanoutBudget, calls.map(({ key }) => `workflow[${key}]`));
+								persist();
+							},
 							onEmit: (emits) => {
 								// Each emit is validated at the host boundary in runWorkflowScript before onEmit fires.
 								status.workflow = { ...(status.workflow ?? { trace: [], console: [] }), emits };
 								persist();
 								appendWorkflowEvent({ type: "subagent.workflow.emit", value: emits.at(-1) });
 							},
-							launch: async (key, childParams, workflowSignal) => {
+							launch: async (key, childParams, workflowSignal, admission) => {
 								if (workflowUsageBudget.budget && childParams.async === true) return workflowChildResult(key, buildRequestedModeError(childParams as SubagentParamsLike, "workflow usageBudget does not support async runs.run launches."));
 								const budgetState = usageBudgetState(workflowUsageBudget.budget, sumResultsCost(workflowResults));
 								if (budgetState?.exhausted) return workflowChildResult(key, buildRequestedModeError(childParams as SubagentParamsLike, usageBudgetExceededMessage(budgetState)));
@@ -4663,7 +4731,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 								});
 								const result = await runMissionWorkflowChild(missionBinding, workflowRunId, key, childPhase, () => {
 									const childRequest = bindMissionWorkflowChildAsyncLaunch(
-										prepareWorkflowLaunchParams(workflowChildDefaults, childParams, workflowRunId, key, { missionDetached: detachWorkflowChildMissions }),
+										{ ...prepareWorkflowLaunchParams(workflowChildDefaults, childParams, workflowRunId, key, { missionDetached: detachWorkflowChildMissions, runFanoutBudget: workflowFanoutBudget }), runFanoutAdmitted: admission.admitted },
 										missionBinding,
 										deps.asyncByDefault,
 									);
@@ -4742,10 +4810,10 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 						deps.state.workflowControllers?.delete(workflowRunId);
 					}
 				});
-				return attachWorkflowMission({
+				return attachWorkflowMission(withRunFanoutBudget({
 					content: [{ type: "text", text: formatAsyncStartedMessage(`Async workflow [${workflowRunId}]`, ctx.hasUI === true) }],
 					details: { mode: "workflow", runId: workflowRunId, toolCallId, asyncId: workflowRunId, asyncDir, results: [], chatProgress },
-				});
+				}, workflowFanoutBudget));
 			}
 			const { workflowScript: _workflowScript, action: _action, agent: _agent, task: _task, resume: _resume, tasks: _tasks, chain: _chain, concurrency: _concurrency, async: _async, foregroundOnly: _foregroundOnly, clarify: _clarify, timeoutMs: _timeoutMs, maxRuntimeMs: _maxRuntimeMs, usageBudget: _usageBudget, chatProgress: _chatProgress, missionId: _missionId, mission: _mission, ...workflowChildDefaults } = requestParams;
 			const workflowResults: SingleResult[] = [];
@@ -4765,11 +4833,14 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 						liveWorkflow = { ...liveWorkflow, trace };
 						sendWorkflowProgress();
 					},
+					admit: (calls) => {
+						claimRunFanoutBatch(workflowFanoutBudget, calls.map(({ key }) => `workflow[${key}]`));
+					},
 					onEmit: (emits) => {
 						liveWorkflow = { ...liveWorkflow, emits };
 						sendWorkflowProgress();
 					},
-					launch: async (key, childParams, workflowSignal) => {
+					launch: async (key, childParams, workflowSignal, admission) => {
 						if (workflowUsageBudget.budget && childParams.async === true) return workflowChildResult(key, buildRequestedModeError(childParams as SubagentParamsLike, "workflow usageBudget does not support async runs.run launches."));
 						const budgetState = usageBudgetState(workflowUsageBudget.budget, sumResultsCost(workflowResults));
 						if (budgetState?.exhausted) return workflowChildResult(key, buildRequestedModeError(childParams as SubagentParamsLike, usageBudgetExceededMessage(budgetState)));
@@ -4784,7 +4855,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 						});
 						const result = await runMissionWorkflowChild(missionBinding, _id, key, childPhase, () => {
 							const childRequest = bindMissionWorkflowChildAsyncLaunch(
-								prepareWorkflowLaunchParams(workflowChildDefaults, childParams, _id, key, { missionDetached: detachWorkflowChildMissions, suppressRoutineResultIntercom: chatProgress.mode === "live-card" }),
+								{ ...prepareWorkflowLaunchParams(workflowChildDefaults, childParams, _id, key, { missionDetached: detachWorkflowChildMissions, suppressRoutineResultIntercom: chatProgress.mode === "live-card", runFanoutBudget: workflowFanoutBudget }), runFanoutAdmitted: admission.admitted },
 								missionBinding,
 								deps.asyncByDefault,
 							);
@@ -4825,10 +4896,10 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 				if (workflow.emits.length > 0) sections.push(`Emitted:\n${workflow.emits.map(formatWorkflowValue).join("\n")}`);
 				if (workflow.console.length > 0) sections.push(`Console:\n${workflow.console.map((entry) => `[${entry.level}] ${entry.text}`).join("\n")}`);
 				if (traceLines.length > 0) sections.push(`Call trace:\n${traceLines.join("\n")}`);
-				return attachWorkflowMission({
+				return attachWorkflowMission(withRunFanoutBudget({
 					content: [{ type: "text", text: sections.join("\n\n") }],
 					details: compactOptional<Details>({ mode: "workflow", runId: _id, results: workflow.children.flatMap((child) => (child.results ?? []) as SingleResult[]), totalChildUsage: sumResultsUsage(workflowResults), totalCost: sumResultsCost(workflowResults), usageBudget: usageBudgetState(workflowUsageBudget.budget, sumResultsCost(workflowResults)), workflow: { value: workflow.value, trace: workflow.trace, emits: workflow.emits, console: workflow.console }, chatProgress }),
-				});
+				}, workflowFanoutBudget));
 			} catch (error) {
 				const partial = error instanceof WorkflowScriptError ? error.partial : { trace: [], emits: [], console: [], children: [] };
 				const text = error instanceof Error ? error.message : String(error);
@@ -4837,11 +4908,11 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 				if (partial.emits.length > 0) sections.push(`Emitted:\n${partial.emits.map(formatWorkflowValue).join("\n")}`);
 				if (partial.console.length > 0) sections.push(`Console:\n${partial.console.map((entry) => `[${entry.level}] ${entry.text}`).join("\n")}`);
 				if (traceLines.length > 0) sections.push(`Call trace:\n${traceLines.join("\n")}`);
-				return attachWorkflowMission({
+				return attachWorkflowMission(withRunFanoutBudget({
 					content: [{ type: "text", text: sections.join("\n\n") }],
 					isError: true,
 					details: compactOptional<Details>({ mode: "workflow", runId: _id, results: partial.children.flatMap((child) => (child.results ?? []) as SingleResult[]), totalChildUsage: sumResultsUsage(workflowResults), totalCost: sumResultsCost(workflowResults), usageBudget: usageBudgetState(workflowUsageBudget.budget, sumResultsCost(workflowResults)), workflow: { trace: partial.trace, emits: partial.emits, console: partial.console }, chatProgress }),
-				});
+				}, workflowFanoutBudget));
 			}
 		}
 		const directParams = prepareWorkflowChildParams(requestParams);
@@ -5600,6 +5671,16 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		);
 		if (foregroundTimeout.error) return buildRequestedModeError(effectiveParams, foregroundTimeout.error);
 		const controlConfig = resolveControlConfig(deps.config.control, effectiveParams.control);
+		let runFanoutBudget: RunFanoutBudgetDescriptor;
+		try {
+			runFanoutBudget = effectiveParams.runFanoutBudget
+				?? decodeRunFanoutBudgetDescriptor(process.env[RUN_FANOUT_BUDGET_ENV])
+				?? createRunFanoutBudget(runId, resolveMaxSubagentSpawnsPerRun(deps.config.maxSubagentSpawnsPerRun));
+			if (!effectiveParams.runFanoutAdmitted) claimRunFanoutBatch(runFanoutBudget, staticRunFanoutPaths(effectiveParams));
+		} catch (error) {
+			if (error instanceof RunFanoutLimitError) return runFanoutErrorResult(error, foregroundMode);
+			return buildRequestedModeError(effectiveParams, error instanceof Error ? error.message : String(error));
+		}
 
 		const artifactConfig: ArtifactConfig = omitUndefinedProperties({
 			...DEFAULT_ARTIFACT_CONFIG,
@@ -5741,6 +5822,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			parentSessionId: requestSessionId,
 			parentPiSessionId: requestPiSessionId,
 			capabilityCeiling: resolveCurrentSubagentCapabilityCeiling(requestSessionId),
+			runFanoutBudget,
 		});
 
 		const foregroundDescription = selectedAgentNames.length === 1
@@ -5915,7 +5997,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 				}
 			}
 			const asyncResult = runAsyncPath(execData, deps);
-			if (asyncResult) return attachMission(withResolvedContext(withForkThinkingNotes(asyncResult, forkThinkingDowngrades), contextPolicy.contextSummary));
+			if (asyncResult) return attachMission(withRunFanoutBudget(withResolvedContext(withForkThinkingNotes(asyncResult, forkThinkingDowngrades), contextPolicy.contextSummary), runFanoutBudget));
 			if (foregroundControl) {
 				writeNestedForegroundEvent("subagent.nested.started");
 				nestedForegroundStarted = true;
@@ -5923,17 +6005,17 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			if (hasChain && effectiveParams.chain) {
 				const result = await runChainPath(execData, deps);
 				writeNestedForegroundEvent("subagent.nested.completed", result);
-				return attachMission(withResolvedContext(withForkThinkingNotes(result, forkThinkingDowngrades), contextPolicy.contextSummary));
+				return attachMission(withRunFanoutBudget(withResolvedContext(withForkThinkingNotes(result, forkThinkingDowngrades), contextPolicy.contextSummary), runFanoutBudget));
 			}
 			if (hasTasks && effectiveParams.tasks) {
 				const result = await runParallelPath(execData, deps);
 				writeNestedForegroundEvent("subagent.nested.completed", result);
-				return attachMission(withResolvedContext(withForkThinkingNotes(result, forkThinkingDowngrades), contextPolicy.contextSummary));
+				return attachMission(withRunFanoutBudget(withResolvedContext(withForkThinkingNotes(result, forkThinkingDowngrades), contextPolicy.contextSummary), runFanoutBudget));
 			}
 			if (hasSingle) {
 				const result = await runSinglePath(execData, deps);
 				writeNestedForegroundEvent("subagent.nested.completed", result);
-				return attachMission(withResolvedContext(withForkThinkingNotes(result, forkThinkingDowngrades), contextPolicy.contextSummary));
+				return attachMission(withRunFanoutBudget(withResolvedContext(withForkThinkingNotes(result, forkThinkingDowngrades), contextPolicy.contextSummary), runFanoutBudget));
 			}
 		} catch (error) {
 			const errorResult = withForkThinkingNotes(toExecutionErrorResult(effectiveParams, error, contextPolicy.contextSummary), forkThinkingDowngrades);
