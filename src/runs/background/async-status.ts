@@ -11,7 +11,7 @@ import { flatToLogicalStepIndex, normalizeParallelGroups } from "./parallel-grou
 import { contextModeLabel, summarizeContextModes, type ContextMode, type ContextSummary } from "../shared/context-mode.ts";
 import { reconcileAsyncRun, reconcileNestedAsyncDescendants } from "./stale-run-reconciler.ts";
 import { readProcessTerminal, sanitizeProcessTerminal } from "./process-terminal.ts";
-import { ACTIVE_RUN_INDEX_DIR, isActiveAsyncState, readActiveRunIndex, updateActiveRunIndex } from "./active-run-index.ts";
+import { ACTIVE_RUN_INDEX_DIR, isActiveAsyncState, readActiveRunIndex, releaseActiveRunIndex, updateActiveRunIndex } from "./active-run-index.ts";
 
 interface AsyncRunStepSummary {
 	index: number;
@@ -452,11 +452,11 @@ export function listAsyncRuns(asyncDirRoot: string, options: AsyncRunListOptions
 			if (usedActiveIndex) updateActiveRunIndex(asyncDir, "failed");
 			continue;
 		}
-		if (status.displayDismissedAt !== undefined) {
-			if (usedActiveIndex) updateActiveRunIndex(asyncDir, "complete");
-			continue;
+		if (usedActiveIndex && !isActiveAsyncState(status.state)) {
+			const processTerminal = readProcessTerminal(asyncDir, { runId: status.runId, runnerProcessInstanceId: status.processTerminal?.runnerProcessInstanceId });
+			if (processTerminal?.state === "observed") releaseActiveRunIndex(asyncDir);
 		}
-		if (usedActiveIndex && !isActiveAsyncState(status.state)) updateActiveRunIndex(asyncDir, status.state);
+		if (status.displayDismissedAt !== undefined) continue;
 		// Filter before the nested-route lookup: the lookup builds an index over
 		// the nested-events directory, so deferring it for filtered-out runs keeps
 		// restoration at load from scanning that directory when no active runs

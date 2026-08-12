@@ -25,6 +25,8 @@ import {
 	type LaunchResolvedChildExtensionsV1,
 	type RuntimeAcknowledgedChildExtensionsV1,
 	type ModelAttempt,
+	type PiWriterProcessInstanceExitV1,
+	type ProcessTreeTerminalV1,
 	type NestedRouteInfo,
 	type NestedRunSummary,
 	type ResolvedControlConfig,
@@ -85,6 +87,7 @@ import {
 	waitForSubagentStartupRetry,
 } from "../shared/subagent-startup-retry.ts";
 import { markProcessTerminalCandidateLeaseRelease, writeProcessTerminalCandidate, type ProcessTerminalCandidate } from "./process-terminal.ts";
+import { createOwnedProcessTreeController, type OwnedProcessTreeController } from "./owned-process-tree.ts";
 import { createSteeringStatus, recordSteeringRequest, steeringStatus, terminalSteeringNoticeState, updateSteeringTarget } from "./steering.ts";
 import { attachPostExitStdioGuard, trySignalChild } from "../../shared/post-exit-stdio-guard.ts";
 import { PROMPT_REDACTED, detectSubagentError, extractTextFromContent, extractToolArgsPreview, getFinalOutput, hasEmptyTerminalAssistantResponse, readStatus } from "../../shared/utils.ts";
@@ -232,7 +235,7 @@ interface StepResult {
 	structuredOutputSchemaPath?: string;
 	acceptance?: import("../../shared/types.ts").AcceptanceLedger;
 	watchdog?: import("../../shared/types.ts").ChildWatchdogProgress;
-	writerProcesses?: Array<{ processInstanceId: string; kind: "pi-writer"; attempt: number; closeObservedAt: number; exitCode: number | null; signal: string | null }>;
+	writerProcesses?: PiWriterProcessInstanceExitV1[];
 	writerAttemptCount?: number;
 	runner?: ExternalCliRunnerStatus;
 	externalProcess?: ExternalProcessStatus;
@@ -512,6 +515,7 @@ interface RunPiStreamingResult {
 	processInstanceId: string;
 	processCloseObservedAt?: number;
 	processSignal?: string | null;
+	processTree: ProcessTreeTerminalV1;
 }
 
 function runPiStreaming(
@@ -548,7 +552,9 @@ function runPiStreaming(
 			stdio: ["ignore", "pipe", "pipe"],
 			env: spawnEnv,
 			windowsHide: true,
+			detached: process.platform !== "win32",
 		});
+		let processTreeController: OwnedProcessTreeController | undefined;
 		const stderrTail = createBoundedByteTail();
 		const rawStdoutTail = createBoundedByteTail();
 		const messages: Message[] = [];
@@ -556,6 +562,7 @@ function runPiStreaming(
 		let model: string | undefined;
 		let writerRegistrationError: string | undefined;
 		if (typeof child.pid === "number") {
+			processTreeController = createOwnedProcessTreeController(child.pid);
 			try {
 				onWriterProcess?.({ state: "running", pid: child.pid });
 			} catch (writerError) {
@@ -703,7 +710,6 @@ function runPiStreaming(
 		// a lingering stdio holder after `exit`, or a child that never exits.
 		const FINAL_STOP_GRACE_MS = 1000;
 		const HARD_KILL_MS = 3000;
-		const TIMEOUT_HARD_KILL_MS = 3000;
 		let childExited = false;
 		let forcedTerminationSignal = false;
 		let cleanTerminalAssistantStopReceived = false;
@@ -711,7 +717,6 @@ function runPiStreaming(
 		let finalDrainTimer: NodeJS.Timeout | undefined;
 		let finalHardKillTimer: NodeJS.Timeout | undefined;
 		let watchdogTailTimer: NodeJS.Timeout | undefined;
-		let timeoutHardKillTimer: NodeJS.Timeout | undefined;
 		let turnBudgetTerminationTimer: NodeJS.Timeout | undefined;
 		let turnBudgetHardKillTimer: NodeJS.Timeout | undefined;
 		let protocolHardKillTimer: NodeJS.Timeout | undefined;
@@ -776,22 +781,16 @@ function runPiStreaming(
 			timedOut = true;
 			interrupted = false;
 			error = timeoutMessage ?? "Subagent timed out.";
-			trySignalChild(child, "SIGTERM");
-			timeoutHardKillTimer = setTimeout(() => {
-				if (!settled) trySignalChild(child, "SIGKILL");
-			}, TIMEOUT_HARD_KILL_MS);
-			timeoutHardKillTimer.unref?.();
+			if (processTreeController) void processTreeController.terminate();
+			else trySignalChild(child, "SIGTERM");
 		});
 		registerStop?.(() => {
 			if (settled || timedOut || stopped) return;
 			stopped = true;
 			interrupted = false;
 			error = stopMessage ?? "Subagent stopped by user.";
-			trySignalChild(child, "SIGTERM");
-			timeoutHardKillTimer = setTimeout(() => {
-				if (!settled) trySignalChild(child, "SIGKILL");
-			}, TIMEOUT_HARD_KILL_MS);
-			timeoutHardKillTimer.unref?.();
+			if (processTreeController) void processTreeController.terminate();
+			else trySignalChild(child, "SIGTERM");
 		});
 		registerTurnBudgetAbort?.((message, state) => {
 			if (settled || timedOut || stopped || turnBudgetExceeded) return;
@@ -820,10 +819,6 @@ function runPiStreaming(
 				finalHardKillTimer = undefined;
 			}
 			clearWatchdogTailTimer();
-			if (timeoutHardKillTimer) {
-				clearTimeout(timeoutHardKillTimer);
-				timeoutHardKillTimer = undefined;
-			}
 			if (turnBudgetTerminationTimer) {
 				clearTimeout(turnBudgetTerminationTimer);
 				turnBudgetTerminationTimer = undefined;
@@ -885,9 +880,12 @@ function runPiStreaming(
 			childExited = true;
 			clearDrainTimers();
 		});
-		child.on("close", (exitCode, signal) => {
+		child.on("close", async (exitCode, signal) => {
 			settled = true;
 			const processCloseObservedAt = Date.now();
+			const processTree = processTreeController
+				? await processTreeController.finishAfterWriterClose()
+				: { state: "unknown" as const, reason: "verification-failed" as const, diagnostic: "Writer PID was unavailable." };
 			try {
 				onWriterProcess?.({ state: "none" });
 			} catch {
@@ -939,6 +937,7 @@ function runPiStreaming(
 				processInstanceId,
 				processCloseObservedAt,
 				processSignal: signal,
+				processTree,
 			}));
 		});
 
@@ -961,7 +960,7 @@ function runPiStreaming(
 			const stderr = stderrTail.text();
 			const finalOutput = getFinalOutput(messages) || rawStdoutTail.text().trim();
 			const spawnErrorMessage = spawnError instanceof Error ? spawnError.message : String(spawnError);
-			resolve(omitUndefinedProperties({ stderr, exitCode: 1, messages, usage, toolCount, durationMs: Date.now() - startedAt, model, error: stopped ? (stopMessage ?? "Subagent stopped by user.") : timedOut ? (timeoutMessage ?? "Subagent timed out.") : turnBudgetExceeded ? turnBudgetMessage : error ?? assistantError ?? spawnErrorMessage, protocolError, finalOutput: (timedOut || stopped) && !finalOutput.trim() ? (stopped ? stopMessage ?? "Subagent stopped by user." : timeoutMessage ?? "Subagent timed out.") : finalOutput, outputState: finalOutput.trim() ? "present" : "absent", timedOut, stopped, turnBudget, turnBudgetExceeded, wrapUpRequested: turnBudget?.outcome === "wrap-up-requested" || turnBudget?.outcome === "termination-deferred" || turnBudgetExceeded || undefined, observedMutationAttempt, structuredOutputToolInvoked, structuredOutputMessageStartIndex, watchdog: childWatchdogState, processInstanceId }));
+			resolve(omitUndefinedProperties({ stderr, exitCode: 1, messages, usage, toolCount, durationMs: Date.now() - startedAt, model, error: stopped ? (stopMessage ?? "Subagent stopped by user.") : timedOut ? (timeoutMessage ?? "Subagent timed out.") : turnBudgetExceeded ? turnBudgetMessage : error ?? assistantError ?? spawnErrorMessage, protocolError, finalOutput: (timedOut || stopped) && !finalOutput.trim() ? (stopped ? stopMessage ?? "Subagent stopped by user." : timeoutMessage ?? "Subagent timed out.") : finalOutput, outputState: finalOutput.trim() ? "present" : "absent", timedOut, stopped, turnBudget, turnBudgetExceeded, wrapUpRequested: turnBudget?.outcome === "wrap-up-requested" || turnBudget?.outcome === "termination-deferred" || turnBudgetExceeded || undefined, observedMutationAttempt, structuredOutputToolInvoked, structuredOutputMessageStartIndex, watchdog: childWatchdogState, processInstanceId, processTree: { state: "unknown", reason: "verification-failed", diagnostic: spawnErrorMessage } }));
 		});
 	});
 }
@@ -1292,7 +1291,7 @@ async function runSingleStep(
 	let capabilityAudit: import("../shared/capability-ceiling.ts").SubagentCapabilityAudit | undefined;
 	let launchResolvedExtensions = step.launchResolvedExtensions;
 	const modelAttempts: ModelAttempt[] = [];
-	const writerProcesses: Array<{ processInstanceId: string; kind: "pi-writer"; attempt: number; closeObservedAt: number; exitCode: number | null; signal: string | null }> = [];
+	const writerProcesses: PiWriterProcessInstanceExitV1[] = [];
 	let writerAttemptCount = 0;
 	const attemptNotes: string[] = [];
 	const eventsPath = path.join(path.dirname(ctx.outputFile), "events.jsonl");
@@ -1433,6 +1432,7 @@ async function runSingleStep(
 				closeObservedAt: run.processCloseObservedAt,
 				exitCode: run.exitCode,
 				signal: run.processSignal ?? null,
+				processTree: run.processTree,
 			});
 		}
 		if (run.turnBudget) turnBudget = run.turnBudget;
@@ -2268,10 +2268,10 @@ async function runSubagent(
 		refreshWorkflowGraph();
 		writeAtomicJson(statusPath, statusPayload);
 		const activeState = isActiveAsyncState(statusPayload.state);
-		if (activeState !== lastIndexedActiveState) {
+		if (activeState && activeState !== lastIndexedActiveState) {
 			updateActiveRunIndex(asyncDir, statusPayload.state);
-			lastIndexedActiveState = activeState;
 		}
+		lastIndexedActiveState = activeState;
 		emitNestedSelfEvent(statusPayload.state === "running" || statusPayload.state === "queued" ? "subagent.nested.updated" : "subagent.nested.completed");
 	};
 	const statusWriteCoalescer = createFileCoalescer(writeStatusPayloadNow, 100);
@@ -3043,7 +3043,6 @@ async function runSubagent(
 		if (stopped || timedOut || interrupted || statusPayload.state !== "running") return;
 		stopped = true;
 		const now = Date.now();
-		statusPayload.state = "stopped";
 		statusPayload.stopped = true;
 		statusPayload.error = stopMessage;
 		currentActivityState = undefined;
@@ -3076,7 +3075,6 @@ async function runSubagent(
 		timedOut = true;
 		const now = Date.now();
 		const message = timeoutMessage ?? "Subagent timed out.";
-		statusPayload.state = "failed";
 		statusPayload.timedOut = true;
 		statusPayload.error = message;
 		currentActivityState = undefined;
@@ -4446,6 +4444,9 @@ async function runSubagent(
 		clearTimeout(timeoutTimer);
 		timeoutTimer = undefined;
 	}
+	if (!timedOut && !stopped && !interrupted && config.timeoutMs !== undefined && results.some((result) => result.timedOut === true && result.error === timeoutMessage)) {
+		timedOut = true;
+	}
 	const signalTerminated = !stopped && !timedOut && !turnBudgetExceeded && !interrupted && results.some((result) => result.exitCode !== 0 && isUnexplainedProcessSignal(omitUndefinedProperties({
 		processSignal: result.processSignal,
 		interrupted: result.interrupted,
@@ -4638,7 +4639,7 @@ async function runSubagent(
 		shareError,
 	}));
 	if (config.runnerProcessInstanceId) {
-		const writers: Record<string, Array<{ processInstanceId: string; kind: "pi-writer"; attempt: number; closeObservedAt: number; exitCode: number | null; signal: string | null }>> = {};
+		const writers: Record<string, PiWriterProcessInstanceExitV1[]> = {};
 		const expectedWriters: Record<string, number> = {};
 		for (const [index, result] of results.entries()) {
 			writers[String(index)] = result.writerProcesses ?? [];

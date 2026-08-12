@@ -344,6 +344,7 @@ export type ProcessTerminalReason =
 	| "runner-candidate-missing"
 	| "runner-instance-mismatch"
 	| "writer-close-unverified"
+	| "process-tree-unverified"
 	| "canonical-session-unavailable"
 	| "canonical-session-lease-active"
 	| "canonical-session-release-unverified"
@@ -358,6 +359,19 @@ export interface RunnerProcessInstanceExitV1 {
 	signal: string | null;
 }
 
+export type ProcessTreeTerminalV1 =
+	| {
+		state: "observed";
+		mechanism: "posix-process-group";
+		processGroupId: number;
+		verifiedAt: number;
+	}
+	| {
+		state: "unknown";
+		reason: "unsupported-platform" | "signal-failed" | "verification-failed";
+		diagnostic?: string;
+	};
+
 export interface PiWriterProcessInstanceExitV1 {
 	processInstanceId: string;
 	kind: "pi-writer";
@@ -365,6 +379,7 @@ export interface PiWriterProcessInstanceExitV1 {
 	closeObservedAt: number;
 	exitCode: number | null;
 	signal: string | null;
+	processTree: ProcessTreeTerminalV1;
 }
 
 export type ProcessInstanceExitV1 = RunnerProcessInstanceExitV1 | PiWriterProcessInstanceExitV1;

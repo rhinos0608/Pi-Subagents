@@ -597,7 +597,7 @@ describe("async status helpers", () => {
 		}
 	});
 
-	it("prunes terminal active markers while preserving history listing", () => {
+	it("keeps terminal active markers until observed process-terminal proof releases them", () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-async-status-index-prune-"));
 		try {
 			const asyncDir = createAsyncDir(root, "finished", {
@@ -606,13 +606,26 @@ describe("async status helpers", () => {
 				state: "complete",
 				startedAt: 100,
 				lastUpdate: 200,
+				displayDismissedAt: 250,
+				processTerminal: { version: 1, state: "unknown", runId: "finished", runnerProcessInstanceId: "runner", reason: "process-tree-unverified" },
 				steps: [{ agent: "worker", status: "complete" }],
 			});
 			updateActiveRunIndex(asyncDir, "running");
+			const markerPath = path.join(root, ACTIVE_RUN_INDEX_DIR, "finished");
 
 			assert.deepEqual(listAsyncRuns(root, { states: ["running"], reconcile: false }), []);
-			assert.equal(fs.existsSync(path.join(root, ACTIVE_RUN_INDEX_DIR, "finished")), false);
-			assert.deepEqual(listAsyncRuns(root, { states: ["complete"], reconcile: false }).map((run) => run.id), ["finished"]);
+			assert.equal(fs.existsSync(markerPath), true);
+
+			fs.writeFileSync(path.join(asyncDir, "process-terminal.json"), JSON.stringify({
+				version: 1,
+				state: "observed",
+				runId: "finished",
+				runnerProcessInstanceId: "runner",
+				observedAt: 300,
+				instances: [{ kind: "runner", processInstanceId: "runner", closeObservedAt: 300, exitCode: 0, signal: null }],
+			}), "utf-8");
+			assert.deepEqual(listAsyncRuns(root, { states: ["running"], reconcile: false }), []);
+			assert.equal(fs.existsSync(markerPath), false);
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
 		}
