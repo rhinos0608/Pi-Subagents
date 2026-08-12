@@ -146,7 +146,7 @@ describe("subagent extension RPC bridge", () => {
 		assert.deepEqual(executedParams, { action: "status", id: "abc123" });
 		assert.equal((reply as { data: { text?: string } }).data.text, "Run: abc123");
 		assert.deepEqual((reply as { data: { fleet?: unknown } }).data.fleet, {
-			version: 1, entries: [], totalActive: 0, omitted: 0,
+			version: 1, entries: [], totalActive: 0, topLevelAsyncCapacity: { used: 0, limit: 0 }, omitted: 0,
 		});
 
 		bridge.dispose();
@@ -230,6 +230,7 @@ describe("subagent extension RPC bridge", () => {
 				}]]),
 			}]]),
 			asyncJobs: new Map(),
+			activeAsyncCapacity: { used: 2, limit: 4 },
 		} as any;
 		state.foregroundControls.set("private-old", {
 			runId: "private-old",
@@ -249,6 +250,7 @@ describe("subagent extension RPC bridge", () => {
 		assert.deepEqual((reply as any).data.fleet, {
 			version: 1,
 			totalActive: 1,
+			topLevelAsyncCapacity: { used: 2, limit: 4 },
 			omitted: 0,
 			entries: [{
 				key: "fleet-1",

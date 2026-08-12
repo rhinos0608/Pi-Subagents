@@ -1063,6 +1063,7 @@ export interface Details {
 	spawnBudget?: SpawnBudgetSnapshot;
 	runFanoutBudget?: RunFanoutBudgetSnapshot;
 	runFanoutRejection?: RunFanoutRejection;
+	activeAsyncCapacity?: ActiveAsyncCapacitySnapshot;
 	capabilityCeiling?: ResolvedSubagentCapabilityCeiling;
 	capabilityAudit?: SubagentCapabilityAudit;
 	parallelHandoff?: ParallelHandoffReference;
@@ -1383,6 +1384,10 @@ export interface AsyncStatus {
 		phase?: string;
 		label?: string;
 		workflowKey?: string;
+		/** Child run identity for workflow capacity reconciliation. */
+		runId?: string;
+		/** True only when this workflow child owns a detached async runner. */
+		async?: boolean;
 		parentWorkflowRunId?: string;
 		outputName?: string;
 		structured?: boolean;
@@ -1640,6 +1645,12 @@ export interface WaitSubscriptionRecord {
 	expiresAt: number;
 }
 
+export interface ActiveAsyncCapacitySnapshot {
+	used: number;
+	/** Zero means the opt-in cap is disabled. */
+	limit: number;
+}
+
 export interface SubagentState {
 	baseCwd: string;
 	currentSessionId: string | null;
@@ -1660,6 +1671,8 @@ export interface SubagentState {
 		granted?: number;
 		grantHistory?: SpawnBudgetGrant[];
 	};
+	/** Current-session top-level async capacity projection. */
+	activeAsyncCapacity?: ActiveAsyncCapacitySnapshot;
 	asyncJobs: Map<string, AsyncJobState>;
 	/** Current-session active and recent async runs for the native fleet inspector. */
 	fleetJobs?: Map<string, AsyncJobState>;
@@ -1894,6 +1907,8 @@ export interface ExtensionConfig {
 	maxSubagentSpawnsPerSession?: number;
 	/** Cumulative logical-child cap for one top-level run tree. Defaults to 64. */
 	maxSubagentSpawnsPerRun?: number;
+	/** Optional active top-level async run cap per parent session. Unset or 0 means unlimited. */
+	maxActiveAsyncRunsPerSession?: number;
 	/** Global cap on simultaneously-running subagent tasks within a single run. Defaults to 20. */
 	globalConcurrencyLimit?: number;
 	/**

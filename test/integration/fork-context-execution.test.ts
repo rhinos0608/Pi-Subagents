@@ -5,6 +5,7 @@ import * as path from "node:path";
 import type { MockPi } from "../support/helpers.ts";
 import { createEventBus, createMockPi, createTempDir, events, removeTempDir, tryImport } from "../support/helpers.ts";
 import { discoverAgents } from "../../src/agents/agents.ts";
+import { ACTIVE_ASYNC_CAPACITY_DIR, acquireActiveAsyncCapacity, activeAsyncCapacitySessionKey } from "../../src/runs/background/active-async-capacity.ts";
 import { DEFAULT_FORK_PREAMBLE, INTERCOM_DETACH_REQUEST_EVENT, SUBAGENT_ASYNC_STARTED_EVENT } from "../../src/shared/types.ts";
 
 interface ExecutorModule {
@@ -1582,6 +1583,83 @@ describe("fork context execution wiring", { skip: !available ? "subagent executo
 				assert.doesNotMatch(event.goal ?? "", /delegated subagent running from a fork/, testCase.name);
 				assert.notEqual(event.goal, testCase.goal, testCase.name);
 			}
+		}
+	});
+
+	it("rejects Clarify background switches over the active async capacity cap", { skip: !asyncAvailable ? "jiti not available" : undefined }, async () => {
+		const previousDepth = process.env.PI_SUBAGENT_DEPTH;
+		process.env.PI_SUBAGENT_DEPTH = "0";
+		try {
+			for (const testCase of [
+				{
+					name: "single",
+					mode: "single",
+					params: { agent: "echo", task: "Original single", async: true, clarify: true },
+					templates: ["Edited single"],
+				},
+				{
+					name: "parallel",
+					mode: "parallel",
+					params: { tasks: [{ agent: "echo", task: "Original parallel" }, { agent: "second", task: "Second child" }], async: true, clarify: true },
+					templates: ["Edited parallel", "Second child"],
+				},
+				{
+					name: "chain",
+					mode: "chain",
+					params: { chain: [{ agent: "echo", task: "Original chain" }], async: true, clarify: true },
+					templates: ["Edited chain"],
+				},
+			] as const) {
+				const sessionId = `session-clarify-cap-${testCase.name}-${Date.now()}`;
+				const sessionCapacityDir = path.join(ACTIVE_ASYNC_CAPACITY_DIR, activeAsyncCapacitySessionKey(sessionId));
+				fs.rmSync(sessionCapacityDir, { recursive: true, force: true });
+				const held = acquireActiveAsyncCapacity({
+					sessionId,
+					limit: 1,
+					runId: `held-${testCase.name}`,
+					kind: "runner",
+					asyncDir: path.join(tempDir, `held-${testCase.name}`),
+				});
+				held?.markStarted(`held-runner-${testCase.name}`);
+				try {
+					const executor = makeExecutorWithConfig({ maxActiveAsyncRunsPerSession: 1 });
+					const manager = {
+						...makeSessionManagerRecorder().manager,
+						getSessionId: () => sessionId,
+					};
+					const ctx = {
+						...makeCtx(manager),
+						hasUI: true,
+						ui: {
+							custom: async () => ({
+								confirmed: true,
+								templates: testCase.templates,
+								behaviorOverrides: testCase.templates.map(() => undefined),
+								runInBackground: true,
+							}),
+						},
+					};
+
+					const result = await executor.execute(
+						`clarify-cap-${testCase.name}`,
+						testCase.params,
+						new AbortController().signal,
+						undefined,
+						ctx,
+					);
+
+					assert.equal(result.isError, true, testCase.name);
+					assert.equal(result.details?.mode, testCase.mode, testCase.name);
+					assert.equal(result.details?.asyncId, undefined, testCase.name);
+					assert.match(result.content[0]?.text ?? "", /Active async run capacity exhausted: 1\/1 used/, testCase.name);
+					assert.equal(mockPi.callCount(), 0, testCase.name);
+				} finally {
+					fs.rmSync(sessionCapacityDir, { recursive: true, force: true });
+				}
+			}
+		} finally {
+			if (previousDepth === undefined) delete process.env.PI_SUBAGENT_DEPTH;
+			else process.env.PI_SUBAGENT_DEPTH = previousDepth;
 		}
 	});
 

@@ -69,7 +69,7 @@ describe("buildDoctorReport", () => {
 
 			const report = buildDoctorReport({
 				cwd: root,
-				config: { defaultSessionDir: "~/subagent-sessions", intercomBridge: { mode: "always" }, maxSubagentSpawnsPerSession: 4 },
+				config: { defaultSessionDir: "~/subagent-sessions", intercomBridge: { mode: "always" }, maxSubagentSpawnsPerSession: 4, maxActiveAsyncRunsPerSession: 2 },
 				state,
 				currentSessionFile: path.join(root, "sessions", "parent.jsonl"),
 				currentSessionId: "session-abc123",
@@ -118,6 +118,8 @@ describe("buildDoctorReport", () => {
 			assert.match(report, /new parent session resets usage and grants; compaction does not/);
 			assert.match(report, /Run fan-out budget\n- configured limit: 64 \(default\)/);
 			assert.match(report, /cumulative claims are never released; a new top-level run creates a new budget/);
+			assert.match(report, /Active async capacity\n- usage: 0\/2 used/);
+			assert.match(report, /missing or unknown cleanup proof retains capacity/);
 			assert.match(report, /- skills: total 2 \(project 1, user-package 1\)/);
 			assert.match(report, /- bridge: active/);
 			assert.match(report, /- supervisor channel: available \(native:pi-subagents-supervisor-channel\)/);
