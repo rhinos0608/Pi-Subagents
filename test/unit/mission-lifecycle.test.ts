@@ -123,6 +123,30 @@ describe("mission launch lifecycle", () => {
 		}
 	});
 
+	it("explains when an explicit mission belongs to another worktree", () => {
+		const test = projectFixture();
+		const worktreeRoot = path.join(test.root, "worktree");
+		fs.mkdirSync(worktreeRoot, { recursive: true });
+		try {
+			const binding = prepareMissionLaunch({
+				params: { mission: { title: "Root mission" }, task: "Prepare root work" },
+				projectRoot: test.projectRoot,
+				config: test.missionConfig,
+			});
+			assert.ok(binding);
+			const missionDir = path.join(worktreeRoot, ".pi", "subagents", "missions");
+			assert.throws(() => prepareMissionLaunch({
+				params: { missionId: binding.missionId, task: "Prepare worktree work" },
+				projectRoot: worktreeRoot,
+				config: test.missionConfig,
+			}), {
+				message: `Mission '${binding.missionId}' was not found in mission directory '${missionDir}' for project root '${worktreeRoot}'. If it was created in another worktree, run the request from that worktree.`,
+			});
+		} finally {
+			fs.rmSync(test.root, { recursive: true, force: true });
+		}
+	});
+
 	it("creates a mission shortcut and records a completed foreground run", () => {
 		const test = projectFixture();
 		try {
