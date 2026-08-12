@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { describe, it } from "node:test";
 import { formatAsyncRunList, listAsyncRuns } from "../../src/runs/background/async-status.ts";
 import { ACTIVE_RUN_INDEX_DIR, updateActiveRunIndex } from "../../src/runs/background/active-run-index.ts";
+import { claimRunFanoutBatch, createRunFanoutBudget, writeRunFanoutBudgetDescriptor } from "../../src/runs/shared/run-fanout-budget.ts";
 
 function createAsyncDir(root: string, id: string, status: Record<string, unknown>): string {
 	const dir = path.join(root, id);
@@ -17,9 +18,10 @@ function createAsyncDir(root: string, id: string, status: Record<string, unknown
 describe("async status helpers", () => {
 	it("lists only requested states and includes flattened step summaries", () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-async-status-"));
+		let budgetDirectory: string | undefined;
 		try {
 			const outputFile = path.join(root, "run-a", "output-1.log");
-			createAsyncDir(root, "run-a", {
+			const runDir = createAsyncDir(root, "run-a", {
 				runId: "run-a",
 				mode: "chain",
 				state: "running",
@@ -34,6 +36,10 @@ describe("async status helpers", () => {
 					{ agent: "worker", status: "running", durationMs: 20, description: "Patch billing only" },
 				],
 			});
+			const descriptor = createRunFanoutBudget("run-a", 64);
+			budgetDirectory = descriptor.directory;
+			writeRunFanoutBudgetDescriptor(runDir, descriptor);
+			claimRunFanoutBatch(descriptor, ["chain[0]", "chain[1]", "chain[1]/single"]);
 			createAsyncDir(root, "run-b", {
 				runId: "run-b",
 				mode: "single",
@@ -53,10 +59,11 @@ describe("async status helpers", () => {
 			assert.equal(runs[0]?.steps[0]?.description, "Inspect auth only");
 			assert.equal(runs[0]?.steps[1]?.description, "Patch billing only");
 			const text = formatAsyncRunList(runs);
-			assert.match(text, /Run fan-out: 2\/64 used, 62 remaining/);
+			assert.match(text, /Run fan-out: 3\/64 used, 61 remaining/);
 			assert.match(text, /output: .*output-1\.log/);
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
+			if (budgetDirectory) fs.rmSync(budgetDirectory, { recursive: true, force: true });
 		}
 	});
 

@@ -30,7 +30,7 @@ import { buildWorkflowGraphSnapshot } from "../shared/workflow-graph.ts";
 import { ChainOutputValidationError, validateChainOutputBindings } from "../shared/chain-outputs.ts";
 import { createStructuredOutputRuntime } from "../shared/structured-output.ts";
 import { resolveEffectiveAcceptance, validateAcceptanceInput, validateExecutionAcceptance } from "../shared/acceptance.ts";
-import { writeRunFanoutBudgetDescriptor } from "../shared/run-fanout-budget.ts";
+import { createRunFanoutBudget, writeRunFanoutBudgetDescriptor } from "../shared/run-fanout-budget.ts";
 import {
 	type AcceptanceInput,
 	type AgentContract,
@@ -173,7 +173,7 @@ interface AsyncChainParams {
 	/** Global cap on simultaneously-running subagent tasks within the async run. */
 	globalConcurrencyLimit?: number;
 	capabilityCeiling?: ResolvedSubagentCapabilityCeiling;
-	runFanoutBudget: RunFanoutBudgetDescriptor;
+	runFanoutBudget?: RunFanoutBudgetDescriptor;
 	parentWorkflowRunId?: string;
 	workflowKey?: string;
 }
@@ -223,7 +223,7 @@ interface AsyncSingleParams {
 	configToolBudget?: ResolvedToolBudget;
 	allowZeroToolBudget?: boolean;
 	capabilityCeiling?: ResolvedSubagentCapabilityCeiling;
-	runFanoutBudget: RunFanoutBudgetDescriptor;
+	runFanoutBudget?: RunFanoutBudgetDescriptor;
 	parentWorkflowRunId?: string;
 	workflowKey?: string;
 }
@@ -971,9 +971,11 @@ export function executeAsyncChain(
 	const asyncDir = inheritedNestedRoute
 		? path.join(TEMP_ROOT_DIR, "nested-subagent-runs", inheritedNestedRoute.rootRunId, id)
 		: path.join(DIRS.async, id);
+	let runFanoutBudget: RunFanoutBudgetDescriptor;
 	try {
+		runFanoutBudget = params.runFanoutBudget ?? createRunFanoutBudget(id, 64);
 		fs.mkdirSync(asyncDir, { recursive: true });
-		writeRunFanoutBudgetDescriptor(asyncDir, params.runFanoutBudget);
+		writeRunFanoutBudgetDescriptor(asyncDir, runFanoutBudget);
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		return {
@@ -1069,7 +1071,7 @@ export function executeAsyncChain(
 				timeoutMs: params.timeoutMs,
 				deadlineAt,
 				globalConcurrencyLimit: params.globalConcurrencyLimit,
-				runFanoutBudget: params.runFanoutBudget,
+				runFanoutBudget,
 				workflowGraph,
 				...(params.parentWorkflowRunId ? { parentWorkflowRunId: params.parentWorkflowRunId } : {}),
 				...(params.workflowKey ? { workflowKey: params.workflowKey } : {}),
@@ -1286,9 +1288,11 @@ export function executeAsyncSingle(
 	const asyncDir = inheritedNestedRoute
 		? path.join(TEMP_ROOT_DIR, "nested-subagent-runs", inheritedNestedRoute.rootRunId, id)
 		: path.join(DIRS.async, id);
+	let runFanoutBudget: RunFanoutBudgetDescriptor;
 	try {
+		runFanoutBudget = params.runFanoutBudget ?? createRunFanoutBudget(id, 64);
 		fs.mkdirSync(asyncDir, { recursive: true });
-		writeRunFanoutBudgetDescriptor(asyncDir, params.runFanoutBudget);
+		writeRunFanoutBudgetDescriptor(asyncDir, runFanoutBudget);
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		return {
@@ -1384,7 +1388,7 @@ export function executeAsyncSingle(
 	const recoveryDescriptor: SteeringRecoveryDescriptor = {
 		version: 1,
 		launchContractDigest,
-		runFanoutBudget: params.runFanoutBudget,
+		runFanoutBudget,
 		sourceRunId: id,
 		...(params.agentContract ? { agentContract: params.agentContract } : {}),
 		agent,
@@ -1503,7 +1507,7 @@ export function executeAsyncSingle(
 				resultMode: "single",
 				launchContractDigest,
 				launchResolvedExtensions,
-				runFanoutBudget: params.runFanoutBudget,
+				runFanoutBudget,
 				...(params.parentWorkflowRunId ? { parentWorkflowRunId: params.parentWorkflowRunId } : {}),
 				...(params.workflowKey ? { workflowKey: params.workflowKey } : {}),
 				...(params.revivalLease ? { revivalLease: params.revivalLease } : {}),

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { DEFAULT_FILE_SYSTEM_RETRY_DELAYS_MS, waitForFileSystemRetry } from "../../shared/file-system-retry.ts";
 import {
 	TEMP_ROOT_DIR,
 	type RunFanoutBudgetDescriptor,
@@ -8,7 +9,6 @@ import {
 	type RunFanoutRejection,
 } from "../../shared/types.ts";
 
-export const DEFAULT_MAX_SUBAGENT_SPAWNS_PER_RUN = 64;
 export const RUN_FANOUT_BUDGET_ENV = "PI_SUBAGENT_RUN_FANOUT_BUDGET";
 const RUN_FANOUT_ROOT = path.join(TEMP_ROOT_DIR, "run-fanout-budgets");
 
@@ -64,12 +64,18 @@ function readManifest(directory: string): ManifestV1 {
 }
 
 function validateDirectory(directory: string): string {
-	const resolved = path.resolve(directory);
-	const root = path.resolve(RUN_FANOUT_ROOT);
-	if (resolved !== root && !resolved.startsWith(`${root}${path.sep}`)) {
-		throw new Error("Run fan-out budget directory is outside the managed budget root.");
+	let realDirectory: string;
+	let realRoot: string;
+	try {
+		realDirectory = fs.realpathSync(path.resolve(directory));
+		realRoot = fs.realpathSync(path.resolve(RUN_FANOUT_ROOT));
+	} catch (error) {
+		throw new Error(`Run fan-out budget directory is unavailable: ${error instanceof Error ? error.message : String(error)}`);
 	}
-	return resolved;
+	if (realDirectory !== realRoot && !realDirectory.startsWith(`${realRoot}${path.sep}`)) {
+		throw new Error("Run fan-out budget directory resolves outside the managed budget root.");
+	}
+	return realDirectory;
 }
 
 export function createRunFanoutBudget(rootRunId: string, limit: number): RunFanoutBudgetDescriptor {
@@ -131,57 +137,70 @@ export function decodeRunFanoutBudgetDescriptor(encoded: string | undefined): Ru
 	}
 }
 
-const CLAIM_LOCK_WAIT_MS = 5_000;
-const CLAIM_LOCK_RETRY_MS = 10;
-const claimLockWaitArray = new Int32Array(new SharedArrayBuffer(4));
+interface AdmissionLockOwner {
+	pid: number;
+	token: string;
+}
 
-function processIsAlive(pid: number): boolean {
+const ADMISSION_LOCK_STALE_MS = 60_000;
+
+function readAdmissionLockOwner(lockPath: string): AdmissionLockOwner | undefined {
 	try {
-		process.kill(pid, 0);
-		return true;
-	} catch (error) {
-		return (error as NodeJS.ErrnoException).code === "EPERM";
+		const owner = JSON.parse(fs.readFileSync(path.join(lockPath, "owner.json"), "utf-8")) as Partial<AdmissionLockOwner>;
+		if (Number.isSafeInteger(owner.pid) && (owner.pid ?? 0) > 0 && typeof owner.token === "string" && owner.token) return owner as AdmissionLockOwner;
+	} catch {}
+	return undefined;
+}
+
+function admissionLockIsStale(lockPath: string): boolean {
+	const owner = readAdmissionLockOwner(lockPath);
+	if (owner) {
+		try {
+			process.kill(owner.pid, 0);
+			return false;
+		} catch (error) {
+			return (error as NodeJS.ErrnoException).code !== "EPERM";
+		}
+	}
+	try { return Date.now() - fs.statSync(lockPath).mtimeMs > ADMISSION_LOCK_STALE_MS; }
+	catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+		throw error;
 	}
 }
 
-function withClaimLock<T>(directory: string, callback: () => T): T {
-	const lockPath = path.join(directory, "claim.lock");
-	const token = randomUUID();
-	const deadline = Date.now() + CLAIM_LOCK_WAIT_MS;
-	while (true) {
+function withAdmissionLock<T>(directory: string, operation: () => T): T {
+	const lockPath = path.join(directory, "admission.lock");
+	const owner: AdmissionLockOwner = { pid: process.pid, token: randomUUID() };
+	for (let attempt = 0; ; attempt++) {
 		try {
 			fs.mkdirSync(lockPath, { mode: 0o700 });
-			fs.writeFileSync(path.join(lockPath, "owner.json"), `${JSON.stringify({ pid: process.pid, token })}\n`, { mode: 0o600 });
+			try { fs.writeFileSync(path.join(lockPath, "owner.json"), JSON.stringify(owner), { mode: 0o600 }); }
+			catch (error) {
+				fs.rmSync(lockPath, { recursive: true, force: true });
+				throw error;
+			}
 			break;
 		} catch (error) {
 			if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-			let stale = false;
-			try {
-				const parsed = JSON.parse(fs.readFileSync(path.join(lockPath, "owner.json"), "utf-8")) as Partial<{ pid: number }>;
-				stale = Number.isInteger(parsed.pid) && (parsed.pid ?? 0) > 0 && !processIsAlive(parsed.pid!);
-			} catch {
-				try { stale = Date.now() - fs.statSync(lockPath).mtimeMs >= CLAIM_LOCK_WAIT_MS; } catch {}
-			}
-			if (stale) {
-				const stalePath = path.join(directory, `claim.stale-${randomUUID()}`);
+			if (admissionLockIsStale(lockPath)) {
+				const stalePath = path.join(directory, `admission.stale-${randomUUID()}`);
 				try {
 					fs.renameSync(lockPath, stalePath);
 					fs.rmSync(stalePath, { recursive: true, force: true });
 					continue;
-				} catch (takeoverError) {
-					if (!(["ENOENT", "EEXIST"] as Array<string | undefined>).includes((takeoverError as NodeJS.ErrnoException).code)) throw takeoverError;
+				} catch (reclaimError) {
+					if ((reclaimError as NodeJS.ErrnoException).code !== "ENOENT") throw reclaimError;
 				}
 			}
-			if (Date.now() >= deadline) throw new Error(`Timed out waiting for run fan-out admission lock at '${directory}'.`);
-			Atomics.wait(claimLockWaitArray, 0, 0, CLAIM_LOCK_RETRY_MS);
+			const delay = DEFAULT_FILE_SYSTEM_RETRY_DELAYS_MS[attempt];
+			if (delay === undefined) throw new Error(`Timed out acquiring run fan-out admission lock at '${directory}'.`);
+			waitForFileSystemRetry(delay);
 		}
 	}
-	try { return callback(); }
+	try { return operation(); }
 	finally {
-		try {
-			const current = JSON.parse(fs.readFileSync(path.join(lockPath, "owner.json"), "utf-8")) as Partial<{ token: string }>;
-			if (current.token === token) fs.rmSync(lockPath, { recursive: true, force: true });
-		} catch {}
+		if (readAdmissionLockOwner(lockPath)?.token === owner.token) fs.rmSync(lockPath, { recursive: true, force: true });
 	}
 }
 
@@ -189,14 +208,15 @@ function claimCount(directory: string): number {
 	const claimsDir = path.join(directory, "claims");
 	let entries: fs.Dirent[];
 	try { entries = fs.readdirSync(claimsDir, { withFileTypes: true }); }
-	catch { return Number.POSITIVE_INFINITY; }
+	catch (error) {
+		throw new Error(`Run fan-out claims directory is unreadable at '${claimsDir}': ${error instanceof Error ? error.message : String(error)}`);
+	}
 	return entries.filter((entry) => /^\d{6}\.json$/.test(entry.name)).length;
 }
 
 export function getRunFanoutBudgetSnapshot(descriptor: RunFanoutBudgetDescriptor): RunFanoutBudgetSnapshot {
 	const valid = validateRunFanoutBudgetDescriptor(descriptor);
 	const used = claimCount(valid.directory);
-	if (!Number.isFinite(used)) return { used: valid.limit, limit: valid.limit, remaining: 0 };
 	return { used, limit: valid.limit, remaining: Math.max(0, valid.limit - used) };
 }
 
@@ -210,11 +230,11 @@ export function qualifyRunFanoutPaths(descriptor: RunFanoutBudgetDescriptor, pat
 	return paths.map((item) => prefix ? `${prefix}/${item}` : item);
 }
 
-export function claimRunFanoutBatch(descriptor: RunFanoutBudgetDescriptor, paths: string[]): RunFanoutBudgetSnapshot {
+function commitRunFanoutBatch<T>(descriptor: RunFanoutBudgetDescriptor, paths: string[], commit: (snapshot: RunFanoutBudgetSnapshot) => T): T {
 	const valid = validateRunFanoutBudgetDescriptor(descriptor);
-	if (paths.length === 0) return getRunFanoutBudgetSnapshot(valid);
+	if (paths.length === 0) return commit(getRunFanoutBudgetSnapshot(valid));
 	const qualified = qualifyRunFanoutPaths(valid, paths);
-	return withClaimLock(valid.directory, () => {
+	return withAdmissionLock(valid.directory, () => {
 		const before = getRunFanoutBudgetSnapshot(valid);
 		if (qualified.length > before.remaining) {
 			throw new RunFanoutLimitError({ code: "RUN_FANOUT_LIMIT", path: qualified[before.remaining] ?? qualified[0]!, requested: qualified.length, ...before });
@@ -226,11 +246,11 @@ export function claimRunFanoutBatch(descriptor: RunFanoutBudgetDescriptor, paths
 					const slotPath = path.join(valid.directory, "claims", `${String(slot).padStart(6, "0")}.json`);
 					try {
 						const fd = fs.openSync(slotPath, "wx", 0o600);
+						created.push(slotPath);
 						try {
 							const claim: ClaimV1 = { version: 1, claimId: randomUUID(), path: claimPath, claimedAt: Date.now() };
 							fs.writeFileSync(fd, `${JSON.stringify(claim)}\n`, "utf-8");
 						} finally { fs.closeSync(fd); }
-						created.push(slotPath);
 						break;
 					} catch (error) {
 						if ((error as NodeJS.ErrnoException).code === "EEXIST") continue;
@@ -238,7 +258,7 @@ export function claimRunFanoutBatch(descriptor: RunFanoutBudgetDescriptor, paths
 					}
 				}
 			}
-			return getRunFanoutBudgetSnapshot(valid);
+			return commit(getRunFanoutBudgetSnapshot(valid));
 		} catch (error) {
 			for (const slotPath of created) {
 				try { fs.unlinkSync(slotPath); } catch {}
@@ -246,6 +266,14 @@ export function claimRunFanoutBatch(descriptor: RunFanoutBudgetDescriptor, paths
 			throw error;
 		}
 	});
+}
+
+export function claimRunFanoutBatch(descriptor: RunFanoutBudgetDescriptor, paths: string[]): RunFanoutBudgetSnapshot {
+	return commitRunFanoutBatch(descriptor, paths, (snapshot) => snapshot);
+}
+
+export function claimRunFanoutBatchWithCommit<T>(descriptor: RunFanoutBudgetDescriptor, paths: string[], commit: () => T): T {
+	return commitRunFanoutBatch(descriptor, paths, commit);
 }
 
 export function formatRunFanoutBudget(snapshot: RunFanoutBudgetSnapshot): string {

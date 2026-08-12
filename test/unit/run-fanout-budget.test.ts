@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
 import { afterEach, describe, it } from "node:test";
 import {
 	claimRunFanoutBatch,
+	claimRunFanoutBatchWithCommit,
 	createRunFanoutBudget,
 	decodeRunFanoutBudgetDescriptor,
 	encodeRunFanoutBudgetDescriptor,
@@ -15,10 +17,12 @@ import {
 import { resolveMaxSubagentSpawnsPerRun } from "../../src/shared/types.ts";
 
 const directories: string[] = [];
+const externalDirectories: string[] = [];
 const previousEnv = process.env.PI_SUBAGENT_MAX_SPAWNS_PER_RUN;
 
 afterEach(() => {
 	for (const directory of directories.splice(0)) fs.rmSync(directory, { recursive: true, force: true });
+	for (const directory of externalDirectories.splice(0)) fs.rmSync(directory, { recursive: true, force: true });
 	if (previousEnv === undefined) delete process.env.PI_SUBAGENT_MAX_SPAWNS_PER_RUN;
 	else process.env.PI_SUBAGENT_MAX_SPAWNS_PER_RUN = previousEnv;
 });
@@ -64,26 +68,54 @@ describe("run fan-out budget", () => {
 		assert.deepEqual(getRunFanoutBudgetSnapshot(descriptor), { used: 1, limit: 2, remaining: 1 });
 	});
 
-	it("admits exactly one simultaneous process for the last slot", async () => {
-		const descriptor = budget(1);
-		const modulePath = fileURLToPath(new URL("../../src/runs/shared/run-fanout-budget.ts", import.meta.url));
-		const script = `import { claimRunFanoutBatch } from ${JSON.stringify(modulePath)}; const descriptor = JSON.parse(process.argv[1]); try { claimRunFanoutBatch(descriptor, [process.argv[2]]); process.stdout.write("admitted"); } catch { process.stdout.write("rejected"); }`;
-		const launch = (claimPath: string) => new Promise<string>((resolve, reject) => {
-			const child = spawn(process.execPath, ["--experimental-strip-types", "--input-type=module", "--eval", script, JSON.stringify(descriptor), claimPath], { stdio: ["ignore", "pipe", "pipe"] });
-			let stdout = "";
-			let stderr = "";
-			child.stdout.on("data", (chunk) => { stdout += chunk; });
-			child.stderr.on("data", (chunk) => { stderr += chunk; });
-			child.on("error", reject);
-			child.on("close", (code) => code === 0 ? resolve(stdout) : reject(new Error(stderr)));
-		});
-
-		assert.deepEqual((await Promise.all([launch("nested[a]"), launch("nested[b]")])).sort(), ["admitted", "rejected"]);
-		assert.deepEqual(getRunFanoutBudgetSnapshot(descriptor), { used: 1, limit: 1, remaining: 0 });
+	it("rolls back a batch when its commit fails", () => {
+		const descriptor = budget(2);
+		claimRunFanoutBatch(descriptor, ["existing"]);
+		assert.throws(
+			() => claimRunFanoutBatchWithCommit(descriptor, ["append"], () => { throw new Error("enqueue failed"); }),
+			/enqueue failed/,
+		);
+		assert.deepEqual(getRunFanoutBudgetSnapshot(descriptor), { used: 1, limit: 2, remaining: 1 });
 	});
 
-	it("fails closed when descriptor identity does not match the manifest", () => {
+	it("reports claims-directory I/O errors instead of ordinary exhaustion", () => {
+		const descriptor = budget(2);
+		fs.rmSync(path.join(descriptor.directory, "claims"), { recursive: true });
+		fs.writeFileSync(path.join(descriptor.directory, "claims"), "not a directory", "utf-8");
+		assert.throws(() => getRunFanoutBudgetSnapshot(descriptor), /claims directory is unreadable.*ENOTDIR/);
+	});
+
+	it("admits exactly one simultaneous two-slot batch at limit two", async () => {
+		const moduleUrl = new URL("../../src/runs/shared/run-fanout-budget.ts", import.meta.url).href;
+		const script = `import { claimRunFanoutBatch } from ${JSON.stringify(moduleUrl)}; const descriptor = JSON.parse(process.argv[1]); try { claimRunFanoutBatch(descriptor, [process.argv[2] + "[0]", process.argv[2] + "[1]"]); process.stdout.write("admitted"); } catch { process.stdout.write("rejected"); }`;
+		for (let iteration = 0; iteration < 12; iteration++) {
+			const descriptor = budget(2);
+			const launch = (claimPath: string) => new Promise<string>((resolve, reject) => {
+				const child = spawn(process.execPath, ["--experimental-strip-types", "--input-type=module", "--eval", script, JSON.stringify(descriptor), claimPath], { stdio: ["ignore", "pipe", "pipe"] });
+				let stdout = "";
+				let stderr = "";
+				child.stdout.on("data", (chunk) => { stdout += chunk; });
+				child.stderr.on("data", (chunk) => { stderr += chunk; });
+				child.on("error", reject);
+				child.on("close", (code) => code === 0 ? resolve(stdout) : reject(new Error(stderr)));
+			});
+
+			assert.deepEqual((await Promise.all([launch("group-a"), launch("group-b")])).sort(), ["admitted", "rejected"], `iteration ${iteration}`);
+			assert.deepEqual(getRunFanoutBudgetSnapshot(descriptor), { used: 2, limit: 2, remaining: 0 });
+		}
+	});
+
+	it("fails closed when descriptor identity or managed-root containment is invalid", () => {
 		const descriptor = budget(2);
 		assert.throws(() => validateRunFanoutBudgetDescriptor({ ...descriptor, limit: 3 }), /does not match/);
+
+		const outside = fs.mkdtempSync(path.join(os.tmpdir(), "pi-run-fanout-outside-"));
+		externalDirectories.push(outside);
+		fs.mkdirSync(path.join(outside, "claims"));
+		fs.writeFileSync(path.join(outside, "manifest.json"), JSON.stringify({ version: 1, rootRunId: descriptor.rootRunId, limit: 2, createdAt: Date.now() }));
+		const linked = path.join(path.dirname(descriptor.directory), `linked-${Date.now()}`);
+		fs.symlinkSync(outside, linked, process.platform === "win32" ? "junction" : "dir");
+		directories.push(linked);
+		assert.throws(() => validateRunFanoutBudgetDescriptor({ ...descriptor, directory: linked }), /resolves outside/);
 	});
 });

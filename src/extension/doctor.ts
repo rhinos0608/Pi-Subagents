@@ -12,6 +12,7 @@ import {
 	TEMP_ROOT_DIR,
 	type ExtensionConfig,
 	type SubagentState,
+	normalizeMaxSubagentSpawnsPerRun,
 	resolveMaxSubagentSpawnsPerRun,
 } from "../shared/types.ts";
 
@@ -187,7 +188,9 @@ function formatRunFanoutSection(input: DoctorReportInput): string[] {
 		return [`- inherited budget: invalid — ${errorText(error)}`];
 	}
 	const configured = resolveMaxSubagentSpawnsPerRun(input.config.maxSubagentSpawnsPerRun);
-	const source = process.env.PI_SUBAGENT_MAX_SPAWNS_PER_RUN ? "environment" : input.config.maxSubagentSpawnsPerRun ? "config" : "default";
+	const source = normalizeMaxSubagentSpawnsPerRun(process.env.PI_SUBAGENT_MAX_SPAWNS_PER_RUN) !== undefined
+		? "environment"
+		: normalizeMaxSubagentSpawnsPerRun(input.config.maxSubagentSpawnsPerRun) !== undefined ? "config" : "default";
 	return [`- configured limit: ${configured} (${source})`, "- usage: available after a run starts", "- reset boundary: cumulative claims are never released; a new top-level run creates a new budget"];
 }
 

@@ -65,7 +65,7 @@ import { applyIntercomBridgeToAgent, INTERCOM_BRIDGE_MARKER, resolveIntercomBrid
 import { formatControlIntercomMessage, formatControlNoticeMessage, resolveControlConfig, shouldNotifyControlEvent } from "../shared/subagent-control.ts";
 import { resolveTurnBudgetConfig } from "../shared/turn-budget.ts";
 import { formatSpawnBudget, getSpawnBudgetSnapshot, grantSpawnBudget, preflightSpawnBudget, preflightSpawnBudgetGrant, reserveSpawnBudget } from "../shared/spawn-budget.ts";
-import { claimRunFanoutBatch, createRunFanoutBudget, decodeRunFanoutBudgetDescriptor, formatRunFanoutBudget, getRunFanoutBudgetSnapshot, readRunFanoutBudgetDescriptor, RunFanoutLimitError, RUN_FANOUT_BUDGET_ENV } from "../shared/run-fanout-budget.ts";
+import { claimRunFanoutBatch, claimRunFanoutBatchWithCommit, createRunFanoutBudget, decodeRunFanoutBudgetDescriptor, formatRunFanoutBudget, getRunFanoutBudgetSnapshot, readRunFanoutBudgetDescriptor, RunFanoutLimitError, RUN_FANOUT_BUDGET_ENV, writeRunFanoutBudgetDescriptor } from "../shared/run-fanout-budget.ts";
 import { validateToolBudgetConfig } from "../shared/tool-budget.ts";
 import { usageBudgetExceededMessage, usageBudgetState, validateUsageBudgetConfig } from "../shared/usage-budget.ts";
 import { intersectSubagentCapabilityCeilings, resolveCurrentSubagentCapabilityCeiling, type ResolvedSubagentCapabilityCeiling } from "../shared/capability-ceiling.ts";
@@ -544,11 +544,13 @@ function runFanoutErrorResult(error: RunFanoutLimitError, mode: "single" | "para
 	return { content: [{ type: "text", text: error.message }], isError: true, details: { mode, results: [], runFanoutBudget: error.snapshot, runFanoutRejection: error.rejection } };
 }
 
-function withRunFanoutBudget(result: AgentToolResult<Details>, descriptor: RunFanoutBudgetDescriptor): AgentToolResult<Details> {
+function withRunFanoutBudget(result: AgentToolResult<Details>, descriptor: RunFanoutBudgetDescriptor, options: { annotateContent?: boolean } = {}): AgentToolResult<Details> {
 	const runFanoutBudget = getRunFanoutBudgetSnapshot(descriptor);
 	return {
 		...result,
-		content: result.content.map((item, index) => index === 0 && item.type === "text" ? { ...item, text: `${formatRunFanoutBudget(runFanoutBudget)}\n${item.text}` } : item),
+		content: options.annotateContent === false
+			? result.content
+			: result.content.map((item, index) => index === 0 && item.type === "text" ? { ...item, text: `${formatRunFanoutBudget(runFanoutBudget)}\n${item.text}` } : item),
 		details: { ...result.details, runFanoutBudget },
 	};
 }
@@ -1185,7 +1187,9 @@ function appendStepToAsyncChain(input: {
 	}
 
 	try {
-		const runFanoutBudget = readRunFanoutBudgetDescriptor(resolved.location.asyncDir);
+		const asyncDir = resolved.location.asyncDir;
+		if (!asyncDir) throw new Error(`Run '${resolved.id}' is missing its async directory.`);
+		const runFanoutBudget = readRunFanoutBudgetDescriptor(asyncDir);
 		if (!runFanoutBudget) throw new Error(`Run '${resolved.id}' is missing its run fan-out budget identity.`);
 		const startIndex = (status.chainStepCount ?? status.steps?.length ?? 0) + pendingAppendRequests.reduce((total, request) => total + request.steps.length, 0);
 		const appendPaths = chain.flatMap((step, localIndex) => {
@@ -1194,19 +1198,19 @@ function appendStepToAsyncChain(input: {
 			if (isParallelStep(step)) return step.parallel.map((_, itemIndex) => `chain[${absoluteIndex}].parallel[${itemIndex}]`);
 			return [`chain[${absoluteIndex}]`];
 		});
-		claimRunFanoutBatch(runFanoutBudget, appendPaths);
 		const result = enqueueChainAppendRequest({
-			asyncDir: resolved.location.asyncDir,
+			asyncDir,
 			runId: resolved.id,
 			steps: built.steps,
+			admit: (persist) => claimRunFanoutBatchWithCommit(runFanoutBudget, appendPaths, persist),
 		});
 		const stepText = built.steps.length === 1 ? "step" : "steps";
 		return {
 			content: [{
 				type: "text",
-				text: `Append queued for chain run ${resolved.id}: ${built.steps.length} ${stepText}. It becomes eligible after the chain's already-queued steps finish. Pending appends: ${result.pendingCount}.`,
+				text: `Append queued for chain run ${resolved.id}: ${built.steps.length} ${stepText}. It becomes eligible after the chain's already-queued steps finish. Pending appends: ${result.pendingCount}.${result.bookkeepingError ? ` Bookkeeping warning: ${result.bookkeepingError}` : ""}`,
 			}],
-			details: { mode: "management", results: [], asyncId: resolved.id, asyncDir: resolved.location.asyncDir },
+			details: { mode: "management", results: [], asyncId: resolved.id, asyncDir },
 		};
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
@@ -1613,6 +1617,9 @@ async function resumeAsyncRun(input: {
 	const revivalSessionFile = target.sessionFile;
 	if (!revivalSessionFile) {
 		return { content: [{ type: "text", text: `Async child '${target.runId}' has no persisted session file to resume.` }], isError: true, details: { mode: "management", results: [] } };
+	}
+	if (target.source === "async" && !recoveryDescriptor) {
+		return { content: [{ type: "text", text: `Async child '${target.runId}' is missing its required run fan-out recovery identity. Start a new run instead.` }], isError: true, details: { mode: "management", results: [] } };
 	}
 	const runId = randomUUID().slice(0, 8);
 	const recoveryAgentConfig = recoveryDescriptor ? applySteeringRecoveryAgentConfig(agentConfig, recoveryDescriptor) : agentConfig;
@@ -4496,6 +4503,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 } {
 	const delegatedThinkingOverrides = new WeakMap<object, AgentConfig["thinking"]>();
 	const delegatedZeroToolBudgets = new WeakSet<object>();
+	const delegatedExecutions = new WeakSet<object>();
 	const warnedArtifactPackageDirs = new Set<string>();
 	const scheduledOwnerExecutors = new Map<string, ReturnType<typeof createSubagentExecutor>>();
 	const execute = async (
@@ -4509,6 +4517,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		const workflowLaunchObserver = workflowLaunchObservers.get(params);
 		const delegatedThinkingOverride = delegatedThinkingOverrides.get(params);
 		const allowZeroToolBudget = delegatedZeroToolBudgets.has(params);
+		const delegatedExecution = delegatedExecutions.has(params);
 		if (!preserveActiveSession) deps.state.baseCwd = ctx.cwd;
 		deps.state.foregroundRuns ??= new Map();
 		deps.state.foregroundControls ??= new Map();
@@ -4578,6 +4587,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 				const startedAt = Date.now();
 				const currentSessionId = resolveCurrentSessionId(ctx.sessionManager);
 				fs.mkdirSync(asyncDir, { recursive: true });
+				writeRunFanoutBudgetDescriptor(asyncDir, workflowFanoutBudget);
 				fs.mkdirSync(DIRS.results, { recursive: true });
 				const controller = new AbortController();
 				deps.state.workflowControllers ??= new Map();
@@ -5673,8 +5683,9 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		const controlConfig = resolveControlConfig(deps.config.control, effectiveParams.control);
 		let runFanoutBudget: RunFanoutBudgetDescriptor;
 		try {
+			const inheritedRunFanoutBudget = effectiveParams.runFanoutBudget ? undefined : decodeRunFanoutBudgetDescriptor(process.env[RUN_FANOUT_BUDGET_ENV]);
 			runFanoutBudget = effectiveParams.runFanoutBudget
-				?? decodeRunFanoutBudgetDescriptor(process.env[RUN_FANOUT_BUDGET_ENV])
+				?? (inheritedRunFanoutBudget ? { ...inheritedRunFanoutBudget, parentPath: `${inheritedRunFanoutBudget.parentPath ? `${inheritedRunFanoutBudget.parentPath}/` : ""}${runId}` } : undefined)
 				?? createRunFanoutBudget(runId, resolveMaxSubagentSpawnsPerRun(deps.config.maxSubagentSpawnsPerRun));
 			if (!effectiveParams.runFanoutAdmitted) claimRunFanoutBatch(runFanoutBudget, staticRunFanoutPaths(effectiveParams));
 		} catch (error) {
@@ -5766,7 +5777,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		const attachMission = (result: AgentToolResult<Details>): AgentToolResult<Details> => {
 			if (!missionBinding) return missionWarning ? { ...result, details: { ...result.details, missionWarning } } : result;
 			try {
-				return attachMissionToLaunchResult({ binding: missionBinding, result });
+				return attachMissionToLaunchResult({ binding: delegatedExecution ? { ...missionBinding, announceInContent: false } : missionBinding, result });
 			} catch (error) {
 				const warning = `Mission tracking unavailable after launch: ${error instanceof Error ? error.message : String(error)}`;
 				if (explicitMission) {
@@ -6002,20 +6013,21 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 				writeNestedForegroundEvent("subagent.nested.started");
 				nestedForegroundStarted = true;
 			}
+			const runFanoutAnnotateContent = !delegatedExecution;
 			if (hasChain && effectiveParams.chain) {
 				const result = await runChainPath(execData, deps);
 				writeNestedForegroundEvent("subagent.nested.completed", result);
-				return attachMission(withRunFanoutBudget(withResolvedContext(withForkThinkingNotes(result, forkThinkingDowngrades), contextPolicy.contextSummary), runFanoutBudget));
+				return attachMission(withRunFanoutBudget(withResolvedContext(withForkThinkingNotes(result, forkThinkingDowngrades), contextPolicy.contextSummary), runFanoutBudget, { annotateContent: runFanoutAnnotateContent }));
 			}
 			if (hasTasks && effectiveParams.tasks) {
 				const result = await runParallelPath(execData, deps);
 				writeNestedForegroundEvent("subagent.nested.completed", result);
-				return attachMission(withRunFanoutBudget(withResolvedContext(withForkThinkingNotes(result, forkThinkingDowngrades), contextPolicy.contextSummary), runFanoutBudget));
+				return attachMission(withRunFanoutBudget(withResolvedContext(withForkThinkingNotes(result, forkThinkingDowngrades), contextPolicy.contextSummary), runFanoutBudget, { annotateContent: runFanoutAnnotateContent }));
 			}
 			if (hasSingle) {
 				const result = await runSinglePath(execData, deps);
 				writeNestedForegroundEvent("subagent.nested.completed", result);
-				return attachMission(withRunFanoutBudget(withResolvedContext(withForkThinkingNotes(result, forkThinkingDowngrades), contextPolicy.contextSummary), runFanoutBudget));
+				return attachMission(withRunFanoutBudget(withResolvedContext(withForkThinkingNotes(result, forkThinkingDowngrades), contextPolicy.contextSummary), runFanoutBudget, { annotateContent: runFanoutAnnotateContent }));
 			}
 		} catch (error) {
 			const errorResult = withForkThinkingNotes(toExecutionErrorResult(effectiveParams, error, contextPolicy.contextSummary), forkThinkingDowngrades);
@@ -6090,6 +6102,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		delete privateParams.delegatedAllowZeroToolBudget;
 		if (thinkingOverride !== undefined) delegatedThinkingOverrides.set(delegatedParams, thinkingOverride);
 		if (allowZeroToolBudget) delegatedZeroToolBudgets.add(delegatedParams);
+		delegatedExecutions.add(delegatedParams);
 		return execute(id, delegatedParams, signal, onUpdate, ctx);
 	};
 

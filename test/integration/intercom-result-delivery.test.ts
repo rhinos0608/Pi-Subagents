@@ -6,6 +6,7 @@ import * as path from "node:path";
 import { after, afterEach, before, beforeEach, describe, it } from "node:test";
 import { ASYNC_DIR, INTERCOM_DETACH_REQUEST_EVENT, RESULTS_DIR, SUBAGENT_ASYNC_STARTED_EVENT, SUBAGENT_FOREGROUND_COMPLETE_EVENT } from "../../src/shared/types.ts";
 import { waitForSubagents } from "../../src/runs/background/subagent-wait.ts";
+import { createRunFanoutBudget } from "../../src/runs/shared/run-fanout-budget.ts";
 import { sessionLeaseDir } from "../../src/runs/shared/session-lease.ts";
 import type { MockPi } from "../support/helpers.ts";
 import {
@@ -82,6 +83,7 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 	let mockPi: MockPi;
 	let originalHome: string | undefined;
 	let originalUserProfile: string | undefined;
+	let budgetDirectories: string[] = [];
 
 	before(() => {
 		originalHome = process.env.HOME;
@@ -112,6 +114,7 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 
 	afterEach(() => {
 		removeTempDir(tempDir);
+		for (const directory of budgetDirectories.splice(0)) fs.rmSync(directory, { recursive: true, force: true });
 	});
 
 	async function readMockCallArgs(index: number): Promise<string[]> {
@@ -160,6 +163,25 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 			if (Date.now() > deadline) assert.fail(`Timed out waiting for path cleanup: ${filePath}`);
 			await new Promise((resolve) => setTimeout(resolve, 50));
 		}
+	}
+
+	function writeRecoveryDescriptor(asyncDir: string, runId: string, agent = "worker", overrides: Record<string, unknown> = {}): void {
+		const runFanoutBudget = createRunFanoutBudget(runId, 64);
+		budgetDirectories.push(runFanoutBudget.directory);
+		fs.writeFileSync(path.join(asyncDir, "recovery-descriptor.json"), JSON.stringify({
+			version: 1,
+			runFanoutBudget,
+			sourceRunId: runId,
+			agent,
+			cwd: tempDir,
+			systemPromptMode: "replace",
+			inheritProjectContext: false,
+			inheritSkills: false,
+			outputMode: "inline",
+			maxSubagentDepth: 2,
+			share: false,
+			...overrides,
+		}, null, 2), "utf-8");
 	}
 
 	function makeExecutor(options: { bridgeMode?: "always" | "off"; resultDelivery?: boolean; agents?: ReturnType<typeof makeAgent>[]; acknowledgeResults?: boolean; kill?: (pid: number, signal?: NodeJS.Signals | 0) => boolean } = {}) {
@@ -270,6 +292,7 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 				sessionFile,
 				steps: [{ agent: "worker", status: "complete", sessionFile }],
 			}, null, 2), "utf-8");
+			writeRecoveryDescriptor(sourceAsyncDir, sourceRunId);
 			const { executor } = makeExecutor();
 
 			const result = await executor.execute(
@@ -846,6 +869,7 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 					{ agent: "b", status: "complete", sessionFile: secondSession, model: "anthropic/claude-sonnet-4", thinking: "high" },
 				],
 			}, null, 2), "utf-8");
+			writeRecoveryDescriptor(asyncDir, runId, "b", { model: "anthropic/claude-sonnet-4:high" });
 			const { executor } = makeExecutor({ agents: [makeAgent("a"), makeAgent("b")] });
 
 			const result = await executor.execute(
@@ -887,6 +911,7 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 				sessionFile,
 				steps: [{ agent: "worker", status: "complete", launchContractDigest: "source-launch-contract-digest" }],
 			}, null, 2), "utf-8");
+			writeRecoveryDescriptor(asyncDir, runId, "worker", { launchContractDigest: "source-launch-contract-digest" });
 			const { executor, events } = makeExecutor();
 
 			const result = await executor.execute(
@@ -932,21 +957,12 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 				runId, sessionId: "session-123", mode: "single", state: "paused", startedAt: 100, lastUpdate: 200, cwd: tempDir,
 				steps: [{ agent: "removed-worker", status: "paused", sessionFile }],
 			}, null, 2), "utf-8");
-			fs.writeFileSync(path.join(asyncDir, "recovery-descriptor.json"), JSON.stringify({
-				version: 1,
-				sourceRunId: runId,
-				agent: "removed-worker",
-				cwd: tempDir,
+			writeRecoveryDescriptor(asyncDir, runId, "removed-worker", {
 				model: "anthropic/claude-sonnet-4:high",
 				tools: ["read"],
 				systemPrompt: "Original persisted prompt",
-				systemPromptMode: "replace",
-				inheritProjectContext: false,
-				inheritSkills: false,
-				outputMode: "inline",
 				maxSubagentDepth: 1,
-				share: false,
-			}, null, 2), "utf-8");
+			});
 			const { executor } = makeExecutor({ agents: [] });
 
 			const result = await executor.execute(
@@ -992,6 +1008,7 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 			sessionFile,
 			steps: [{ agent: "worker", status: "complete" }],
 		}, null, 2), "utf-8");
+		writeRecoveryDescriptor(sourceAsyncDir, sourceRunId);
 		try {
 			const { executor } = makeExecutor();
 			const first = await executor.execute(

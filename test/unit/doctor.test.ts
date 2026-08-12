@@ -127,6 +127,30 @@ describe("buildDoctorReport", () => {
 		}
 	});
 
+	it("reports the effective source when the run fan-out environment value is invalid", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-doctor-fanout-source-"));
+		const previous = process.env.PI_SUBAGENT_MAX_SPAWNS_PER_RUN;
+		try {
+			process.env.PI_SUBAGENT_MAX_SPAWNS_PER_RUN = "invalid";
+			const report = buildDoctorReport({
+				cwd: root,
+				config: { maxSubagentSpawnsPerRun: 12 },
+				state: makeState(root),
+				deps: {
+					isAsyncAvailable: () => true,
+					discoverAgentsAll: () => ({ builtin: [], user: [], project: [], chains: [], userDir: root, projectDir: root, userChainDir: root, projectChainDir: root, userSettingsPath: path.join(root, "user.json"), projectSettingsPath: path.join(root, "project.json") }),
+					discoverAvailableSkills: () => [],
+					diagnoseIntercomBridge: () => ({ active: false, mode: "off", wantsIntercom: false, supervisorChannelAvailable: false, extensionDir: "none" }),
+				},
+			});
+			assert.match(report, /Run fan-out budget\n- configured limit: 12 \(config\)/);
+		} finally {
+			if (previous === undefined) delete process.env.PI_SUBAGENT_MAX_SPAWNS_PER_RUN;
+			else process.env.PI_SUBAGENT_MAX_SPAWNS_PER_RUN = previous;
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("keeps reporting when a directory or discovery check fails", () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-doctor-failure-"));
 		try {

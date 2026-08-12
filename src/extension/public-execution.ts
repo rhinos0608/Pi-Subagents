@@ -11,6 +11,8 @@ export interface PublicSubagentExecutionParams {
 	workflowScript?: unknown;
 	resume?: unknown;
 	clarify?: unknown;
+	runFanoutBudget?: unknown;
+	runFanoutAdmitted?: unknown;
 }
 
 export type PublicSubagentExecutionMode = "workflow" | "management";
@@ -24,6 +26,9 @@ export type PublicSubagentExecutionNormalization<T> =
  * Internal runs.run children and structured owned delegation bypass this boundary.
  */
 export function normalizePublicSubagentExecution<T extends PublicSubagentExecutionParams>(params: T): PublicSubagentExecutionNormalization<T> {
+	if (params.runFanoutBudget !== undefined || params.runFanoutAdmitted !== undefined) {
+		return { ok: false, error: "Public execution does not accept internal run fan-out fields.", mode: params.workflowScript !== undefined ? "workflow" : "management" };
+	}
 	const action = params.action;
 	if (action !== undefined && (typeof action !== "string" || !action.trim())) {
 		return { ok: false, error: "action must be a non-empty management/control action, or omit action and use workflowScript.", mode: "management" };
