@@ -328,6 +328,7 @@ export interface FileMutationEffect {
 	expected: boolean;
 	attempted: boolean;
 	message?: string;
+	resolvedBy?: "llm-intent-arbiter";
 }
 
 export interface EffectsProjection {
@@ -1733,6 +1734,8 @@ export interface RunSyncOptions {
 	nestedRoute?: NestedRouteInfo;
 	/** Override the agent's default model (format: "provider/id" or just "id") */
 	modelOverride?: string;
+	/** LLM intent arbiter for the completion mutation guard (rescues read-only review runs). */
+	llmIntentArbiter?: import("../runs/shared/llm-intent-arbiter.ts").TaskMutationArbiter;
 	/** Override the agent's default thinking level for this run */
 	thinkingOverride?: AgentConfig["thinking"];
 	/** Registry models available for heuristic bare-model resolution */
