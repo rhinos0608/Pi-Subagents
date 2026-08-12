@@ -4029,12 +4029,14 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 	if (r.artifactPaths) allArtifactPaths.push(r.artifactPaths);
 
 	const fullOutput = getSingleResultOutput(r);
+	const preserveRejectedSavedOutput = r.acceptance?.explicit && r.acceptance.status === "rejected" && r.savedOutputPath !== undefined;
 	const finalizedOutput = finalizeSingleOutput(omitUndefinedProperties({
 		fullOutput,
 		truncatedOutput: r.truncation?.text,
 		outputPath,
 		outputMode: r.outputMode,
 		exitCode: r.exitCode,
+		preserveSavedOutput: preserveRejectedSavedOutput,
 		savedPath: r.savedOutputPath,
 		outputReference: r.outputReference,
 		saveError: r.outputSaveError,

@@ -66,7 +66,7 @@ import { resolveEffectiveThinking } from "../../shared/model-info.ts";
 import { MISSING_STRUCTURED_OUTPUT_CALL_ERROR, readStructuredOutput } from "../shared/structured-output.ts";
 import { formatProcessSignalError, isUnexplainedProcessSignal } from "../shared/process-signal.ts";
 import { readChildToolDiagnosticError } from "../shared/tool-availability.ts";
-import { captureSingleOutputSnapshot, extractChildWrittenOutput, formatSavedOutputReference, injectOutputPathSystemPrompt, resolveSingleOutput, validateFileOnlyOutputMode, type SingleOutputSnapshot } from "../shared/single-output.ts";
+import { captureSingleOutputSnapshot, extractChildWrittenOutput, finalizeSingleOutput, formatSavedOutputReference, injectOutputPathSystemPrompt, resolveSingleOutput, validateFileOnlyOutputMode, type SingleOutputSnapshot } from "../shared/single-output.ts";
 import {
 	buildModelCandidates,
 	formatModelAttemptNote,
@@ -1750,7 +1750,32 @@ async function runSyncCompletion(
 	stripAcceptanceReportsFromMessages(result.messages);
 	if (acceptanceFailure && result.acceptance.explicit && result.exitCode === 0 && !result.interrupted && !result.timedOut && !isAgentContractV1(options.agentContract)) {
 		result.exitCode = 1;
+		if (result.savedOutputPath) {
+			result.finalOutput = finalizeSingleOutput({
+				fullOutput: result.finalOutput ?? "",
+				outputPath: options.outputPath,
+				outputMode: result.outputMode,
+				exitCode: result.exitCode,
+				preserveSavedOutput: true,
+				savedPath: result.savedOutputPath,
+				outputReference: result.outputReference,
+			}).displayOutput;
+			artifactOutputByResult.set(result, result.finalOutput);
+		}
 		result.error = result.error ? `${result.error}\n${acceptanceFailure}` : acceptanceFailure;
+		if (artifactPathsResult && options.artifactConfig?.enabled !== false && options.artifactConfig?.includeOutput !== false) {
+			try {
+				writeArtifact(artifactPathsResult.outputPath, formatOutputArtifactContent({
+					output: artifactOutputByResult.get(result) ?? result.finalOutput ?? "",
+					error: result.error,
+					transcriptPath: result.transcriptPath,
+					metadataPath: options.artifactConfig?.includeMetadata === false ? undefined : artifactPathsResult.metadataPath,
+				}));
+			} catch (error) {
+				const message = `Artifact output post-processing failed: ${error instanceof Error ? error.message : String(error)}`;
+				result.outputSaveError = result.outputSaveError ? `${result.outputSaveError}\n${message}` : message;
+			}
+		}
 		if (result.progress) {
 			result.progress.status = "failed";
 			result.progress.error = result.error;

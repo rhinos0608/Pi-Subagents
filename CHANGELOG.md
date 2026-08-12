@@ -7,6 +7,7 @@
 
 ### Fixed
 - Explain when a requested mission is scoped to another worktree by naming the current project root and mission directory (#1024).
+- Preserve the configured output reference when explicit acceptance rejects an otherwise completed foreground child, so useful reports remain available (#1023).
 - Reject configured worktree base directories inside the agent extensions directory, including symlink aliases (#1014).
 - Align unnamed intercom fallback orchestrator targets with pi-intercom's 18-character registered presence names so subagents without an explicit session name can reach their orchestrator. Thanks to @mystery4f for #1017.
 - Stop reading hyphenated adjectives like "must-fix items" or "should-fix tests" as implementation intent, which made the completion mutation guard hard-fail read-only review runs with a false "completed without making edits" error. Severity compounds (must|should|needs + dash + verb) are stripped before verb matching across every mutation pattern (incl. update/add/apply/make/do siblings), the acceptance-level write-capability check, and the patch-scope pattern, while CLI flags ("eslint --fix", "prettier --write") and clause-level dashes ("branch—fix it") keep their write intent. Thanks to @MarcusNeufeldt for #1020.
