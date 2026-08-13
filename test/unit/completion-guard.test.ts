@@ -57,6 +57,8 @@ test("implementation challenges may complete with an explicit no-better-change r
 test("implementation challenge reports with negated or uncertain no-better-change claims remain guarded", () => {
 	for (const report of [
 		"I cannot say no better current-scope change is needed.",
+		"I don't think no better current-scope change is needed.",
+		"I do not think no better current-scope change is needed.",
 		"Maybe no better current-scope change is needed.",
 	]) {
 		assert.equal(evaluateCompletionMutationGuard({
