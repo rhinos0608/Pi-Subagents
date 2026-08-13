@@ -88,13 +88,13 @@ export function hasMutationToolCall(messages: Message[]): boolean {
 }
 
 function reportsNoBetterChallengeChange(messages: Message[]): boolean {
-	return messages.some((message) => {
-		if (message.role !== "assistant") return false;
-		const report = message.content.flatMap((part) => part.type === "text" ? [part.text] : []).join("\n");
-		const match = NO_BETTER_CHANGE_NEEDED_PATTERN.exec(report);
-		if (!match || match.index === undefined) return false;
-		return !NO_BETTER_CHANGE_QUALIFIER_PATTERN.test(report);
-	});
+	const report = messages
+		.filter((message) => message.role === "assistant")
+		.flatMap((message) => message.content)
+		.flatMap((part) => part.type === "text" ? [part.text] : [])
+		.join("\n");
+	return NO_BETTER_CHANGE_NEEDED_PATTERN.test(report)
+		&& !NO_BETTER_CHANGE_QUALIFIER_PATTERN.test(report);
 }
 
 export function evaluateCompletionMutationGuard(input: CompletionMutationGuardInput): CompletionMutationGuardResult {

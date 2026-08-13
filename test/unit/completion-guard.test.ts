@@ -74,6 +74,15 @@ test("implementation challenge reports with negated or uncertain no-better-chang
 			messages: [assistantText(report)],
 		}).triggered, true, report);
 	}
+
+	assert.equal(evaluateCompletionMutationGuard({
+		agent: "worker",
+		task: implementationChallengeTask,
+		messages: [
+			assistantText("No better current-scope change is needed."),
+			assistantText("I cannot confirm the rest."),
+		],
+	}).triggered, true);
 });
 
 test("declared read-only builtin tools suppress implementation-word false positives", () => {
