@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.49.0] - 2026-08-13
+
 ### Added
 - Run a single child with `{ agent, task? }` when a full workflow script is not needed (#1059).
 - Adjust FleetView spacing and collapsed result height from the main window. Thanks to @pierre-mgmt for #1048.
