@@ -30,6 +30,7 @@ import { SubagentFleetStatus, resolveFleetViewPlacement } from "../tui/fleet-sta
 import { createSubagentParamsSchema } from "./schemas.ts";
 import { createSubagentExecutor, type SubagentParamsLike } from "../runs/foreground/subagent-executor.ts";
 import { createAsyncJobTracker } from "../runs/background/async-job-tracker.ts";
+import { getActiveAsyncCapacitySnapshot, resolveMaxActiveAsyncRunsPerSession } from "../runs/background/active-async-capacity.ts";
 import { createResultWatcher } from "../runs/background/result-watcher.ts";
 import { createScheduledRunManager } from "../runs/background/scheduled-runs.ts";
 import { registerSlashCommands } from "../slash/slash-commands.ts";
@@ -65,6 +66,7 @@ import {
 	SLASH_TEXT_RESULT_TYPE,
 	SUBAGENT_ASYNC_COMPLETE_EVENT,
 	SUBAGENT_ASYNC_STARTED_EVENT,
+	SUBAGENT_PROCESS_TERMINAL_EVENT,
 	SUBAGENT_CONTROL_EVENT,
 	SUBAGENT_STEERING_NOTICE_EVENT,
 	WIDGET_KEY,
@@ -384,6 +386,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 			granted: 0,
 			grantHistory: [],
 		},
+		activeAsyncCapacity: { used: 0, limit: resolveMaxActiveAsyncRunsPerSession(config.maxActiveAsyncRunsPerSession) ?? 0 },
 		asyncJobs: new Map(),
 		fleetJobs: new Map(),
 		foregroundRuns: new Map(),
@@ -677,12 +680,17 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	};
 	const asyncCompleteHandler = (payload: unknown) => {
 		handleComplete(payload);
+		refreshActiveAsyncCapacity();
 		scheduledRunManager.handleAsyncCompletion(payload);
 		fleetStatus?.refresh();
 	};
 	const eventUnsubscribes = [
 		pi.events.on(SUBAGENT_ASYNC_STARTED_EVENT, asyncStartedHandler),
 		pi.events.on(SUBAGENT_ASYNC_COMPLETE_EVENT, asyncCompleteHandler),
+		pi.events.on(SUBAGENT_PROCESS_TERMINAL_EVENT, () => {
+			refreshActiveAsyncCapacity();
+			fleetStatus?.refresh();
+		}),
 		pi.events.on(SUBAGENT_CONTROL_EVENT, controlEventHandler),
 		pi.events.on(SUBAGENT_STEERING_NOTICE_EVENT, steeringNoticeHandler),
 		herdrStatusBridge.dispose,
@@ -728,6 +736,18 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		fleetStatus?.refresh();
 	};
 
+	const refreshActiveAsyncCapacity = () => {
+		if (!state.currentSessionId) {
+			state.activeAsyncCapacity = { used: 0, limit: resolveMaxActiveAsyncRunsPerSession(config.maxActiveAsyncRunsPerSession) ?? 0 };
+			return;
+		}
+		state.activeAsyncCapacity = getActiveAsyncCapacitySnapshot(
+			state.currentSessionId,
+			resolveMaxActiveAsyncRunsPerSession(config.maxActiveAsyncRunsPerSession),
+			{ liveWorkflowRunIds: new Set(state.workflowControllers?.keys() ?? []) },
+		);
+	};
+
 	const resetSessionState = (ctx: ExtensionContext, recovering: boolean) => {
 		state.widgetsSuspended = false;
 		state.baseCwd = ctx.cwd;
@@ -753,6 +773,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 			}
 		}
 		state.lastUiContext = ctx;
+		refreshActiveAsyncCapacity();
 		cleanupSessionArtifacts(ctx);
 		state.foregroundControls.clear();
 		state.lastForegroundControlId = null;

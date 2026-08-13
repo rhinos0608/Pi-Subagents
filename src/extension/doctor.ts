@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { discoverAgentsAll, type AgentSource } from "../agents/agents.ts";
 import { isAsyncAvailable } from "../runs/background/async-execution.ts";
 import { formatSpawnBudgetSummary, getSpawnBudgetSnapshot } from "../runs/shared/spawn-budget.ts";
+import { getActiveAsyncCapacitySnapshot, resolveMaxActiveAsyncRunsPerSession } from "../runs/background/active-async-capacity.ts";
 import { decodeRunFanoutBudgetDescriptor, formatRunFanoutBudget, getRunFanoutBudgetSnapshot, RUN_FANOUT_BUDGET_ENV } from "../runs/shared/run-fanout-budget.ts";
 import { diagnoseIntercomBridge, type IntercomBridgeDiagnostic } from "../intercom/intercom-bridge.ts";
 import { discoverAvailableSkills, type SkillSource } from "../agents/skills.ts";
@@ -194,6 +195,20 @@ function formatRunFanoutSection(input: DoctorReportInput): string[] {
 	return [`- configured limit: ${configured} (${source})`, "- usage: available after a run starts", "- reset boundary: cumulative claims are never released; a new top-level run creates a new budget"];
 }
 
+function formatActiveAsyncCapacitySection(input: DoctorReportInput): string[] {
+	const limit = resolveMaxActiveAsyncRunsPerSession(input.config.maxActiveAsyncRunsPerSession);
+	const sessionId = input.currentSessionId ?? input.state.currentSessionId;
+	const snapshot = sessionId
+		? getActiveAsyncCapacitySnapshot(sessionId, limit, { liveWorkflowRunIds: new Set(input.state.workflowControllers?.keys() ?? []) })
+		: { used: 0, limit: limit ?? 0 };
+	input.state.activeAsyncCapacity = snapshot;
+	return [
+		`- usage: ${snapshot.used}/${snapshot.limit || "unlimited"} used`,
+		"- scope: top-level async runs in the current parent session; foreground and nested workflow children are not charged again",
+		"- release: terminal logical state plus verified process exit; missing or unknown cleanup proof retains capacity",
+	];
+}
+
 function formatPermissionSystemSection(): string[] {
 	const lines: string[] = [];
 	const parentSession = process.env["PI_SUBAGENT_PARENT_SESSION"] ?? "";
@@ -236,6 +251,9 @@ export function buildDoctorReport(input: DoctorReportInput): string {
 		"",
 		"Run fan-out budget",
 		...formatRunFanoutSection(input),
+		"",
+		"Active async capacity",
+		...formatActiveAsyncCapacitySection(input),
 		"",
 		"Permission system",
 		...formatPermissionSystemSection(),

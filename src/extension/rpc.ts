@@ -90,6 +90,7 @@ export interface SubagentRpcFleetStatus {
 	entries: SubagentRpcFleetEntry[];
 	/** Total active children before the bounded entries window. */
 	totalActive: number;
+	topLevelAsyncCapacity: { used: number; limit: number };
 	omitted: number;
 }
 
@@ -153,7 +154,7 @@ function buildFleetStatus(
 	}
 	if (!state || !authoritativeSessionId || state.currentSessionId !== authoritativeSessionId) {
 		keyState.keys.clear();
-		return { version: 1, entries: [], totalActive: 0, omitted: 0 };
+		return { version: 1, entries: [], totalActive: 0, topLevelAsyncCapacity: { used: 0, limit: 0 }, omitted: 0 };
 	}
 
 	let totalActive = 0;
@@ -264,7 +265,7 @@ function buildFleetStatus(
 		if (!activeKeys.has(internalKey)) keyState.keys.delete(internalKey);
 	}
 	const omitted = Math.max(0, totalActive - entries.length);
-	return { version: 1, entries, totalActive, omitted };
+	return { version: 1, entries, totalActive, topLevelAsyncCapacity: state.activeAsyncCapacity ?? { used: 0, limit: 0 }, omitted };
 }
 
 interface RegisterSubagentRpcBridgeOptions {

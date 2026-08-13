@@ -55,6 +55,7 @@ describe("below-editor subagent FleetView", () => {
 
 	it("renders main plus active children below the editor and bounds every line", () => {
 		const state = stateForTest();
+		state.activeAsyncCapacity = { used: 2, limit: 4 };
 		const now = Date.now();
 		for (let index = 0; index < 7; index++) {
 			state.foregroundControls.set(`run-${index}`, {
@@ -98,7 +99,7 @@ describe("below-editor subagent FleetView", () => {
 			const component = widgetFactory!(tui, theme);
 			const compactLines = component.render(80);
 			assert.equal(compactLines.length, 1);
-			assert.ok(compactLines[0]!.includes("7 active agents"));
+			assert.ok(compactLines[0]!.includes("7 active agents · Async runs 2/4"));
 			assert.ok(compactLines[0]!.includes("↓ 13.7k tokens"));
 			assert.ok(compactLines[0]!.includes("↓/← to inspect"));
 			assert.ok(visibleWidth(compactLines[0]!) <= 80);
@@ -117,6 +118,31 @@ describe("below-editor subagent FleetView", () => {
 			assert.equal(component.render(80).length, 1);
 			assert.deepEqual(fleet.handleKey("\x1b[D"), { consume: true });
 			assert.ok(component.render(80).length > 1, "Left should also expand the roster");
+		} finally {
+			fleet.dispose();
+		}
+	});
+
+	it("keeps occupied capacity visible without active child rows", () => {
+		const state = stateForTest();
+		state.activeAsyncCapacity = { used: 1, limit: 2 };
+		let widgetFactory: ((tui: unknown, theme: typeof theme) => { render(width: number): string[] }) | undefined;
+		const ctx = {
+			hasUI: true,
+			ui: {
+				setWidget(_key: string, content: typeof widgetFactory | undefined) { if (content) widgetFactory = content; },
+				onTerminalInput() { return () => {}; },
+				getEditorText() { return ""; },
+				requestRender() {},
+				notify() {},
+				theme,
+			},
+		} as unknown as ExtensionContext;
+		const fleet = new SubagentFleetStatus(state, () => {}, { refreshMs: 60_000 });
+		try {
+			fleet.setContext(ctx);
+			assert.ok(widgetFactory);
+			assert.deepEqual(widgetFactory!({ requestRender() {} }, theme).render(80), ["  Async runs 1/2 · ↓ 0 tokens · ↓/← to inspect"]);
 		} finally {
 			fleet.dispose();
 		}

@@ -851,9 +851,9 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		assert.equal(childResult.parentWorkflowRunId, workflowRunId);
 		assert.equal(childResult.workflowKey, "background");
 		assert.equal(fs.existsSync(workflowStepSessionFile), true);
-		fs.rmSync(started.details.asyncDir!, { recursive: true, force: true });
+		fs.rmSync(started.details.asyncDir!, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
 		fs.rmSync(workflowResultPath, { force: true });
-		fs.rmSync(childDir, { recursive: true, force: true });
+		fs.rmSync(childDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
 		fs.rmSync(path.join(DIRS.results, `${childRunId}.json`), { force: true });
 	});
 
