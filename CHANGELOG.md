@@ -4,6 +4,7 @@
 
 ### Added
 - Add `debug.run` for async run lifecycle diagnostics without exposing prompts, secrets, or transcripts (#1037).
+- Add `tools: "inherit"` for builtin role overrides, so one role can inherit Pi's normal tools and extensions without shadowing the agent file. Thanks to @estanexanavsem for #1047 and @davidarny for #1049.
 
 ### Fixed
 - Derive default `workflowScript` child report paths from the workflow output path while keeping the workflow aggregate report separate, and reject child output path collisions before launch (#1038).
