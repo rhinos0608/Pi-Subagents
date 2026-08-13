@@ -386,6 +386,27 @@ describe("subagent extension RPC bridge", () => {
 		bridge.dispose();
 	});
 
+	it("lowers structured single-child spawn requests onto the async workflow path", async () => {
+		const events = new FakeEvents();
+		let executedParams: any;
+		const bridge = registerSubagentRpcBridge({
+			events,
+			getContext: () => ctx(),
+			execute: async (_id, params) => {
+				executedParams = params;
+				return { content: [{ type: "text", text: "Async: worker [run-1]" }], details: { mode: "workflow", results: [], asyncId: "run-1" } } as any;
+			},
+		});
+
+		const reply = await request(events, "spawn-structured", "spawn", { agent: "worker", task: "Do work" });
+		assert.equal(reply.success, true);
+		assert.equal(executedParams.agent, undefined);
+		assert.equal(executedParams.task, undefined);
+		assert.equal(executedParams.async, true);
+		assert.match(executedParams.workflowScript, /runs\.run\("main", \{"agent":"worker","task":"Do work"\}\)/);
+		bridge.dispose();
+	});
+
 	it("rejects foreground or management spawn requests before executor dispatch", async () => {
 		const events = new FakeEvents();
 		let executeCalls = 0;
@@ -398,12 +419,8 @@ describe("subagent extension RPC bridge", () => {
 			},
 		});
 
-		const direct = await request(events, "spawn-direct", "spawn", { agent: "worker", task: "Do work" });
-		const foreground = await request(events, "spawn-foreground", "spawn", { workflowScript: "return runs.run('main', { agent: 'worker' })", async: false });
+		const foreground = await request(events, "spawn-foreground", "spawn", { agent: "worker", task: "Do work", async: false });
 		const management = await request(events, "spawn-management", "spawn", { action: "list" });
-
-		assert.equal(direct.success, false);
-		assert.match((direct as { error: { message: string } }).error.message, /Direct execution was removed/);
 
 		assert.equal(foreground.success, false);
 		assert.equal((foreground as { error: { code: string; message: string } }).error.code, "invalid_params");
