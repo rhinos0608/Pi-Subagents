@@ -12,6 +12,7 @@
 - Tell parents to continue after an async launch only until the next dependency barrier, so they consume a child result before dependent work makes it obsolete. Thanks to @exuanbo for #1045.
 - Tell wait callers to reply and wait instead of reviving a wrapper that detached for intercom coordination. Thanks to @yayamaz for #1053.
 - Derive default `workflowScript` child report paths from the workflow output path while keeping the workflow aggregate report separate, and reject child output path collisions before launch (#1038).
+- Allow resumed implementation challenge passes to complete without edits when they explicitly report that no better current-scope change is needed (#1054).
 - Harden the LLM intent arbiter: the model decision now carries a confidence level and only a high-confidence read_only rescues a failed run (read_only without high confidence is treated as implementation, keeping the guard fail-closed); tasks over 8000 characters are never arbitrated from partial evidence; and registry credentials are resolved as a method call on the model registry rather than a detached reference, so OAuth/header/environment authentication reaches the stream. Thanks to @MarcusNeufeldt for #1044.
 - Launch Herdr inspector panes with Node when Pi runs as a standalone executable. Thanks to @kevinpita for #1051.
 - Sanitize async run, nested run, and result transcript output before terminal display, extending the Fleet transcript sanitization from #823 to the run-status transcript views. Thanks to @riesbri for #1046.
