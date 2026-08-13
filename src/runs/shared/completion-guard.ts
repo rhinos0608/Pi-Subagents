@@ -22,7 +22,7 @@ const READ_ONLY_BUILTIN_TOOLS = new Set([
 const CURSOR_FILE_MUTATION_THINKING =
 	/(?:^|\n)\s*Cursor (?:edit|write)\s*:/i;
 
-const IMPLEMENTATION_CHALLENGE_TASK_PATTERN = /^You are reviving a previous subagent conversation\.\n\nFollow-up:\nRun implementation challenge pass (?:one|two|\d+) and implement any better current-scope change\.$/;
+const IMPLEMENTATION_CHALLENGE_TASK_PATTERN = /^You are reviving a previous subagent conversation\.\n\nOriginal run: .+\nOriginal agent: .+(?:\nOriginal session file: .+)?\n\nUse the stored session context as background\. Answer the orchestrator's follow-up below\. Do not assume the original child process is still alive\.\n\nFollow-up:\nRun implementation challenge pass (?:one|two|\d+) and implement any better current-scope change\.$/;
 const NO_BETTER_CHANGE_NEEDED_PATTERN = /^\s*no (?:better|further|additional) (?:current[- ]scope )?(?:code |source |file )?(?:change|changes|edit|edits|patch|patches) (?:is|are) needed[.!]?\s*$/i;
 const NO_BETTER_CHANGE_QUALIFIER_PATTERN = /\b(?:do\s+not|don't|dont|not|never|cannot|can't|cant|unable|uncertain|unsure|unclear|maybe|might|may|\w+n['’]t)\b/i;
 

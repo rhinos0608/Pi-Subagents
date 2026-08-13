@@ -38,7 +38,22 @@ test("implementation task with no mutation triggers the completion guard", () =>
 	});
 });
 
-const implementationChallengeTask = "You are reviving a previous subagent conversation.\n\nFollow-up:\nRun implementation challenge pass two and implement any better current-scope change.";
+function revivedTask(followUp: string): string {
+	return [
+		"You are reviving a previous subagent conversation.",
+		"",
+		"Original run: abc123",
+		"Original agent: worker",
+		"Original session file: /tmp/session.jsonl",
+		"",
+		"Use the stored session context as background. Answer the orchestrator's follow-up below. Do not assume the original child process is still alive.",
+		"",
+		"Follow-up:",
+		followUp,
+	].join("\n");
+}
+
+const implementationChallengeTask = revivedTask("Run implementation challenge pass two and implement any better current-scope change.");
 
 test("implementation challenges may complete with an explicit no-better-change report", () => {
 	const result = evaluateCompletionMutationGuard({
@@ -57,7 +72,7 @@ test("implementation challenges may complete with an explicit no-better-change r
 test("revived implementation tasks that mention implementation challenge remain guarded", () => {
 	const result = evaluateCompletionMutationGuard({
 		agent: "worker",
-		task: "You are reviving a previous subagent conversation.\n\nFollow-up:\nFix the implementation challenge completion guard bug.",
+		task: revivedTask("Fix the implementation challenge completion guard bug."),
 		messages: [assistantText("No better current-scope change is needed.")],
 	});
 
