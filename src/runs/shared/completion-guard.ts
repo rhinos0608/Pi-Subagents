@@ -25,7 +25,7 @@ const CURSOR_FILE_MUTATION_THINKING =
 const REVIVED_TASK_PATTERN = /^You are reviving a previous subagent conversation\./;
 const IMPLEMENTATION_CHALLENGE_PATTERN = /\bimplementation challenge\b/i;
 const NO_BETTER_CHANGE_NEEDED_PATTERN = /\bno (?:better|further|additional) (?:current[- ]scope )?(?:code |source |file )?(?:change|changes|edit|edits|patch|patches) (?:is|are) needed\b/i;
-const NO_BETTER_CHANGE_QUALIFIER_PATTERN = /\b(?:do\s+not|don't|dont|not|never|cannot|can't|cant|unable|uncertain|unsure|unclear|maybe|might|may)\b/i;
+const NO_BETTER_CHANGE_QUALIFIER_PATTERN = /\b(?:do\s+not|don't|dont|not|never|cannot|can't|cant|unable|uncertain|unsure|unclear|maybe|might|may|\w+n['’]t)\b/i;
 
 interface CompletionMutationGuardInput {
 	agent: string;
