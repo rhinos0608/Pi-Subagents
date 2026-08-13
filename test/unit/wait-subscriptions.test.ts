@@ -253,8 +253,8 @@ describe("non-blocking wait subscriptions", () => {
 
 			writeStatus(asyncRoot, "run-detached", "failed", {
 				sessionId: "session-a",
-				error: "Wrapper failed after child detached for INTERCOM coordination before task completion.",
-				steps: [{ agent: "worker", status: "failed", sessionFile }],
+				error: "Step failed: worker",
+				steps: [{ agent: "worker", status: "failed", sessionFile, error: "Detached for intercom coordination before task completion." }],
 			});
 			manager.reconcile();
 

@@ -229,8 +229,8 @@ describe("subagent_wait tool", () => {
 			const result = await waitForSubagents({ all: true }, undefined, baseDeps(root, state, {
 				sleep: async () => writeStatus(asyncRoot, "run-detached", "failed", {
 					sessionId: "sess-1",
-					error: "Wrapper failed after child detached for INTERCOM coordination before task completion.",
-					steps: [{ agent: "worker", status: "failed", sessionFile }],
+					error: "Step failed: worker",
+					steps: [{ agent: "worker", status: "failed", sessionFile, error: "Detached for intercom coordination before task completion." }],
 				}),
 			}));
 

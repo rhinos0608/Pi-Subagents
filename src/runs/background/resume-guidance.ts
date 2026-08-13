@@ -3,9 +3,10 @@ import type { AsyncRunSummary } from "./async-status.ts";
 
 const INTERCOM_DETACH_ERROR = "detached for intercom coordination";
 
-// Persisted async status has no structured intercom-detach marker yet.
 function isIntercomDetached(run: AsyncRunSummary): boolean {
-	return run.error?.toLowerCase().includes(INTERCOM_DETACH_ERROR) === true;
+	return run.steps.some((step) => step.execution?.status === "detached"
+		|| step.error?.toLowerCase().includes(INTERCOM_DETACH_ERROR) === true)
+		|| run.error?.toLowerCase().includes(INTERCOM_DETACH_ERROR) === true;
 }
 
 function formatIntercomDetachGuidance(run: AsyncRunSummary): string | undefined {
