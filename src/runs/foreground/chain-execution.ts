@@ -73,6 +73,7 @@ import {
 	type ResolvedControlConfig,
 	type ResolvedTurnBudget,
 	type ResolvedToolBudget,
+	type RunFanoutBudgetDescriptor,
 	type SingleResult,
 	type ToolBudgetConfig,
 	type ChainCheckpointState,
@@ -88,6 +89,7 @@ import { ChainOutputValidationError, outputEntryFromResult, resolveOutputReferen
 import { createStructuredOutputRuntime } from "../shared/structured-output.ts";
 import { collectDynamicResults, DynamicFanoutError, materializeDynamicParallelStep, validateDynamicCollection, type DynamicCollectedResult } from "../shared/dynamic-fanout.ts";
 import { acceptanceFailureMessage, aggregateAcceptanceReport, evaluateAcceptance, resolveEffectiveAcceptance } from "../shared/acceptance.ts";
+import { claimRunFanoutBatch, RunFanoutLimitError } from "../shared/run-fanout-budget.ts";
 import { isAgentContractV1 } from "../shared/agent-contract.ts";
 import type { ChainOutputMap } from "../../shared/types.ts";
 import { validateToolBudgetConfig } from "../shared/tool-budget.ts";
@@ -169,6 +171,7 @@ interface ParallelChainRunInput {
 	configToolBudget?: ToolBudgetConfig;
 	globalSemaphore?: Semaphore;
 	capabilityCeiling?: ResolvedSubagentCapabilityCeiling;
+	runFanoutBudget?: RunFanoutBudgetDescriptor;
 	permissions?: PermissionConfig;
 	dynamic?: boolean;
 }
@@ -397,6 +400,7 @@ async function runParallelChainTasks(input: ParallelChainRunInput): Promise<Sing
 				llmIntentArbiter: createTaskMutationArbiter(input.ctx),
 				...workflowForegroundSteeringLaunchOptions(input.foregroundControl, childIndex),
 				capabilityCeiling: input.capabilityCeiling,
+				runFanoutBudget: input.runFanoutBudget ? { ...input.runFanoutBudget, parentPath: `${input.runFanoutBudget.parentPath ? `${input.runFanoutBudget.parentPath}/` : ""}chain[${input.stepIndex}]${input.dynamic ? `.expand[${taskIndex}]` : `.parallel[${taskIndex}]`}` } : undefined,
 				context: input.contextForAgent?.(task.agent),
 				cwd: taskCwd,
 				signal: input.signal,
@@ -548,6 +552,7 @@ interface ChainExecutionParams {
 	/** Global cap on simultaneously-running tasks within this chain. Defaults to DEFAULT_GLOBAL_CONCURRENCY_LIMIT. */
 	globalConcurrencyLimit?: number;
 	capabilityCeiling?: ResolvedSubagentCapabilityCeiling;
+	runFanoutBudget?: RunFanoutBudgetDescriptor;
 }
 
 interface ChainExecutionResult {
@@ -884,6 +889,7 @@ ${step.message}` : ""}` }],
 					configToolBudget: params.configToolBudget,
 					globalSemaphore,
 					permissions: params.permissions,
+					runFanoutBudget: params.runFanoutBudget,
 				});
 				globalTaskIndex += step.parallel.length;
 
@@ -1008,6 +1014,19 @@ ${step.message}` : ""}` }],
 				const message = error instanceof DynamicFanoutError ? error.message : error instanceof Error ? error.message : String(error);
 				dynamicGroupStatuses[stepIndex] = { status: "failed", error: message };
 				return buildChainExecutionErrorResult(message, makeDetailsInput({ currentStepIndex: stepIndex, currentFlatIndex: globalTaskIndex }));
+			}
+
+			try {
+				if (params.runFanoutBudget) claimRunFanoutBatch(params.runFanoutBudget, materialized.parallel.map((_, itemIndex) => `chain[${stepIndex}].expand[${itemIndex}]`));
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				dynamicGroupStatuses[stepIndex] = { status: "failed", error: message };
+				const result = buildChainExecutionErrorResult(message, makeDetailsInput({ currentStepIndex: stepIndex, currentFlatIndex: globalTaskIndex }));
+				if (error instanceof RunFanoutLimitError) {
+					result.details.runFanoutBudget = error.snapshot;
+					result.details.runFanoutRejection = error.rejection;
+				}
+				return result;
 			}
 
 			dynamicChildren[stepIndex] = materialized.items.map((item, itemIndex) => ({
@@ -1145,6 +1164,7 @@ ${step.message}` : ""}` }],
 				configToolBudget: params.configToolBudget,
 				globalSemaphore,
 				permissions: params.permissions,
+				runFanoutBudget: params.runFanoutBudget,
 				dynamic: true,
 			});
 			globalTaskIndex = dynamicStartIndex + reservedDynamicItems;
@@ -1384,6 +1404,7 @@ ${step.message}` : ""}` }],
 				llmIntentArbiter: createTaskMutationArbiter(ctx),
 				...workflowForegroundSteeringLaunchOptions(params.foregroundControl, childIndex),
 				capabilityCeiling: params.capabilityCeiling,
+				runFanoutBudget: params.runFanoutBudget ? { ...params.runFanoutBudget, parentPath: `${params.runFanoutBudget.parentPath ? `${params.runFanoutBudget.parentPath}/` : ""}chain[${stepIndex}]` } : undefined,
 				context: params.contextForAgent?.(seqStep.agent),
 				cwd: resolveChildCwd(cwd ?? ctx.cwd, seqStep.cwd),
 				signal,

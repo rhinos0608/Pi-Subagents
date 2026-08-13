@@ -41,6 +41,7 @@ import { ACTIVE_RUN_INDEX_DIR } from "../../src/runs/background/active-run-index
 import { CHILD_WATCHDOG_STATUS_EVENT } from "../../src/watchdog/child-status.ts";
 import { WAIT_TOOL_ENABLED_ENV } from "../../src/runs/background/wait-config.ts";
 import { TOOL_BUDGET_ENV, TOOL_BUDGET_ZERO_AUTH_ENV } from "../../src/runs/shared/tool-budget.ts";
+import { createRunFanoutBudget, encodeRunFanoutBudgetDescriptor, RUN_FANOUT_BUDGET_ENV } from "../../src/runs/shared/run-fanout-budget.ts";
 import { MainWatchdogRuntime } from "../../src/watchdog/runtime.ts";
 import { MAX_CHILD_PENDING_LINE_BYTES, MAX_CHILD_STDERR_BYTES } from "../../src/runs/shared/child-protocol.ts";
 import {
@@ -394,6 +395,19 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 
 		assert.equal(result.isError, true);
 		assert.match(result.content[0]?.text ?? "", /Direct execution was removed/);
+		assert.equal(mockPi.callCount(), 0);
+	});
+
+	it("rejects internal fan-out fields from public workflows", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		const executor = makeExecutor([makeAgent("echo")]);
+		for (const params of [
+			{ workflowScript: `return runs.run("main", { agent: "echo", task: "work" })`, runFanoutBudget: { version: 1 } },
+			{ workflowScript: `return runs.run("main", { agent: "echo", task: "work" })`, runFanoutAdmitted: true },
+		] as const) {
+			const result = await executor.executePublic("private-fanout", params, new AbortController().signal, undefined, makeMinimalCtx(tempDir));
+			assert.equal(result.isError, true);
+			assert.match(result.content[0]?.text ?? "", /does not accept internal run fan-out fields/);
+		}
 		assert.equal(mockPi.callCount(), 0);
 	});
 
@@ -1122,6 +1136,30 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		assert.match(failed?.error ?? "", /first child failed/);
 		assert.equal(succeeded?.error, undefined);
 		assert.deepEqual(result.details.workflow?.trace.filter((entry) => entry.state !== "started").map(({ state }) => state).sort(), ["completed", "failed"]);
+	});
+
+	it("rejects an over-limit runs.all batch before launching any workflow child", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		const executor = makeExecutor([makeAgent("echo")], { maxSubagentSpawnsPerRun: 1 });
+
+		const result = await executor.execute(
+			"scripted-workflow-fanout-limit",
+			{
+				async: false,
+				workflowScript: `return await runs.all([
+					{ key: "first", agent: "echo", task: "First task" },
+					{ key: "second", agent: "echo", task: "Second task" }
+				]);`,
+			},
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+
+		assert.equal(result.isError, undefined, result.content[0]?.text ?? "workflow failed");
+		assert.equal(mockPi.callCount(), 0);
+		const children = result.details.workflow?.value as Array<{ ok: boolean; error?: string }>;
+		assert.deepEqual(children.map(({ ok }) => ok), [false, false]);
+		for (const child of children) assert.match(child.error ?? "", /workflow\[second\].*0\/1 used; 2 requested, 1 remaining/);
 	});
 
 	it("runs a direct child gate as host-verified acceptance", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
@@ -1886,6 +1924,46 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		assert.equal(second.isError, true);
 		assert.match(second.content[0]?.text ?? "", /Subagent spawn limit reached for this session \(1\/1 used, 1 requested\)/);
 		assert.equal(mockPi.callCount(), 1);
+	});
+
+	it("qualifies inherited nested claims with the generated nested run id", async () => {
+		mockPi.onCall({ output: "nested completed" });
+		const descriptor = createRunFanoutBudget("root-run", 2);
+		const previous = process.env[RUN_FANOUT_BUDGET_ENV];
+		try {
+			process.env[RUN_FANOUT_BUDGET_ENV] = encodeRunFanoutBudgetDescriptor({ ...descriptor, parentPath: "tasks[0]" });
+			const executor = makeExecutor([makeAgent("echo")]);
+			const result = await executor.execute("nested", { agent: "echo", task: "Nested work" }, new AbortController().signal, undefined, makeMinimalCtx(tempDir));
+
+			assert.equal(result.isError, undefined, result.content[0]?.text ?? "nested run failed");
+			const claims = fs.readdirSync(path.join(descriptor.directory, "claims"));
+			assert.equal(claims.length, 1);
+			const claim = JSON.parse(fs.readFileSync(path.join(descriptor.directory, "claims", claims[0]!), "utf-8")) as { path: string };
+			assert.match(claim.path, /^tasks\[0\]\/[a-f0-9]{8}\/single$/);
+		} finally {
+			if (previous === undefined) delete process.env[RUN_FANOUT_BUDGET_ENV];
+			else process.env[RUN_FANOUT_BUDGET_ENV] = previous;
+			fs.rmSync(descriptor.directory, { recursive: true, force: true });
+		}
+	});
+
+	it("rejects an over-limit static run fan-out before creating session artifacts", async () => {
+		const sessionDir = path.join(tempDir, "run-fanout-preflight");
+		const executor = makeExecutor([makeAgent("echo"), makeAgent("second")], { maxSubagentSpawnsPerRun: 1 });
+		const result = await executor.execute(
+			"run-fanout-preflight",
+			{ tasks: [{ agent: "echo", task: "First" }, { agent: "second", task: "Second" }], sessionDir },
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+
+		assert.equal(result.isError, true);
+		assert.match(result.content[0]?.text ?? "", /Run fan-out limit reached at tasks\[1\] \(0\/1 used; 2 requested, 1 remaining\)/);
+		assert.deepEqual(result.details.runFanoutBudget, { used: 0, limit: 1, remaining: 1 });
+		assert.equal(result.details.runFanoutRejection?.path, "tasks[1]");
+		assert.equal(fs.existsSync(sessionDir), false);
+		assert.equal(mockPi.callCount(), 0);
 	});
 
 	it("reports structured spawn-budget usage through status", async () => {

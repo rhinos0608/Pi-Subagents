@@ -478,9 +478,30 @@ export interface SteeringNotice {
 	currentSessionId?: string;
 }
 
+export interface RunFanoutBudgetDescriptor {
+	version: 1;
+	rootRunId: string;
+	directory: string;
+	limit: number;
+	parentPath?: string;
+}
+
+export interface RunFanoutBudgetSnapshot {
+	used: number;
+	limit: number;
+	remaining: number;
+}
+
+export interface RunFanoutRejection extends RunFanoutBudgetSnapshot {
+	code: "RUN_FANOUT_LIMIT";
+	path: string;
+	requested: number;
+}
+
 export interface SteeringRecoveryDescriptor {
 	version: 1;
 	launchContractDigest?: string;
+	runFanoutBudget: RunFanoutBudgetDescriptor;
 	sourceRunId: string;
 	agentContract?: AgentContract;
 	agent: string;
@@ -1040,6 +1061,8 @@ export interface Details {
 	// Aggregated cost across all agents in the run
 	totalCost?: CostSummary;
 	spawnBudget?: SpawnBudgetSnapshot;
+	runFanoutBudget?: RunFanoutBudgetSnapshot;
+	runFanoutRejection?: RunFanoutRejection;
 	capabilityCeiling?: ResolvedSubagentCapabilityCeiling;
 	capabilityAudit?: SubagentCapabilityAudit;
 	parallelHandoff?: ParallelHandoffReference;
@@ -1339,6 +1362,8 @@ export interface AsyncStatus {
 	workflowGraph?: WorkflowGraphSnapshot;
 	checkpoint?: ChainCheckpointState;
 	processTerminal?: ProcessTerminalV1;
+	runFanoutBudget?: RunFanoutBudgetSnapshot;
+	runFanoutBudgetDescriptor?: RunFanoutBudgetDescriptor;
 	launchContractDigest?: string;
 	launchResolvedExtensions?: LaunchResolvedChildExtensionsV1;
 	runtimeAcknowledgedExtensions?: RuntimeAcknowledgedChildExtensionsV1;
@@ -1752,6 +1777,7 @@ export interface RunSyncOptions {
 	/** Effective parent wait-tool setting propagated to the child runtime. */
 	waitToolEnabled?: boolean;
 	capabilityCeiling?: ResolvedSubagentCapabilityCeiling;
+	runFanoutBudget?: RunFanoutBudgetDescriptor;
 	nestedRoute?: NestedRouteInfo;
 	/** Override the agent's default model (format: "provider/id" or just "id") */
 	modelOverride?: string;
@@ -1866,6 +1892,8 @@ export interface ExtensionConfig {
 	maxSubagentDepth?: number;
 	/** Optional cumulative session cap. Unset or 0 means unlimited. */
 	maxSubagentSpawnsPerSession?: number;
+	/** Cumulative logical-child cap for one top-level run tree. Defaults to 64. */
+	maxSubagentSpawnsPerRun?: number;
 	/** Global cap on simultaneously-running subagent tasks within a single run. Defaults to 20. */
 	globalConcurrencyLimit?: number;
 	/**
@@ -2091,6 +2119,19 @@ export function resolveMaxSubagentSpawnsPerSession(configMaxSpawns?: number): nu
 	if (envMaxSpawns !== undefined) return envMaxSpawns === 0 ? undefined : envMaxSpawns;
 	const configuredMaxSpawns = normalizeMaxSubagentSpawnsPerSession(configMaxSpawns);
 	return configuredMaxSpawns === 0 ? undefined : configuredMaxSpawns;
+}
+
+export const DEFAULT_MAX_SUBAGENT_SPAWNS_PER_RUN = 64;
+
+export function normalizeMaxSubagentSpawnsPerRun(value: unknown): number | undefined {
+	const normalized = normalizeNonNegativeInteger(value);
+	return normalized !== undefined && normalized > 0 ? normalized : undefined;
+}
+
+export function resolveMaxSubagentSpawnsPerRun(configMaxSpawns?: number): number {
+	return normalizeMaxSubagentSpawnsPerRun(process.env.PI_SUBAGENT_MAX_SPAWNS_PER_RUN)
+		?? normalizeMaxSubagentSpawnsPerRun(configMaxSpawns)
+		?? DEFAULT_MAX_SUBAGENT_SPAWNS_PER_RUN;
 }
 
 // ============================================================================

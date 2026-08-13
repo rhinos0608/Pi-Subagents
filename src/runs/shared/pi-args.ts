@@ -23,8 +23,10 @@ import {
 	type JsonSchemaObject,
 	type LaunchResolvedChildExtensionsV1,
 	type ResolvedToolBudget,
+	type RunFanoutBudgetDescriptor,
 } from "../../shared/types.ts";
 import { THINKING_LEVELS } from "../../shared/model-info.ts";
+import { encodeRunFanoutBudgetDescriptor, RUN_FANOUT_BUDGET_ENV } from "./run-fanout-budget.ts";
 import {
 	TOOL_BUDGET_ENV,
 	TOOL_BUDGET_ZERO_AUTH_ENV,
@@ -162,6 +164,7 @@ export interface BuildPiArgsInput {
 	parentDepth?: number;
 	parentPath?: NestedPathEntry[];
 	parentCapabilityToken?: string;
+	runFanoutBudget?: RunFanoutBudgetDescriptor;
 	steerInboxDir?: string;
 	steerCapabilityPath?: string;
 	steerAckDir?: string;
@@ -731,6 +734,9 @@ export function buildPiArgs(input: BuildPiArgsInput): BuildPiArgsResult {
 			process.env[SUBAGENT_PARENT_CAPABILITY_TOKEN_ENV] ??
 			"")
 		: "";
+	env[RUN_FANOUT_BUDGET_ENV] = toolPlan.fanoutAuthorized
+		? (input.runFanoutBudget ? encodeRunFanoutBudgetDescriptor(input.runFanoutBudget) : process.env[RUN_FANOUT_BUDGET_ENV])
+		: undefined;
 	env.PI_SUBAGENT_INHERIT_PROJECT_CONTEXT = input.inheritProjectContext
 		? "1"
 		: "0";

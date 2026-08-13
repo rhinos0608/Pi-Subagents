@@ -349,6 +349,7 @@ async function runSingleAttempt(
 		parentControlInbox: options.nestedRoute?.controlInbox,
 		parentRootRunId: options.nestedRoute?.rootRunId,
 		parentCapabilityToken: options.nestedRoute?.capabilityToken,
+		runFanoutBudget: options.runFanoutBudget,
 		parentSessionId: options.parentSessionId,
 		steerInboxDir: options.steerInboxDir,
 		steerCapabilityPath: options.steerCapabilityPath,
