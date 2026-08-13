@@ -54,6 +54,20 @@ test("implementation challenges may complete with an explicit no-better-change r
 	});
 });
 
+test("revived implementation tasks that mention implementation challenge remain guarded", () => {
+	const result = evaluateCompletionMutationGuard({
+		agent: "worker",
+		task: "You are reviving a previous subagent conversation.\n\nFollow-up:\nFix the implementation challenge completion guard bug.",
+		messages: [assistantText("No better current-scope change is needed.")],
+	});
+
+	assert.deepEqual(result, {
+		expectedMutation: true,
+		attemptedMutation: false,
+		triggered: true,
+	});
+});
+
 test("implementation challenge reports with negated or uncertain no-better-change claims remain guarded", () => {
 	for (const report of [
 		"I cannot say no better current-scope change is needed.",

@@ -22,8 +22,7 @@ const READ_ONLY_BUILTIN_TOOLS = new Set([
 const CURSOR_FILE_MUTATION_THINKING =
 	/(?:^|\n)\s*Cursor (?:edit|write)\s*:/i;
 
-const REVIVED_TASK_PATTERN = /^You are reviving a previous subagent conversation\./;
-const IMPLEMENTATION_CHALLENGE_PATTERN = /\bimplementation challenge\b/i;
+const IMPLEMENTATION_CHALLENGE_TASK_PATTERN = /^You are reviving a previous subagent conversation\.\n\nFollow-up:\nRun implementation challenge pass (?:one|two|\d+) and implement any better current-scope change\.$/;
 const NO_BETTER_CHANGE_NEEDED_PATTERN = /^\s*no (?:better|further|additional) (?:current[- ]scope )?(?:code |source |file )?(?:change|changes|edit|edits|patch|patches) (?:is|are) needed[.!]?\s*$/i;
 const NO_BETTER_CHANGE_QUALIFIER_PATTERN = /\b(?:do\s+not|don't|dont|not|never|cannot|can't|cant|unable|uncertain|unsure|unclear|maybe|might|may|\w+n['’]t)\b/i;
 
@@ -102,8 +101,7 @@ export function evaluateCompletionMutationGuard(input: CompletionMutationGuardIn
 		? expectsImplementationMutation(input.agent, input.task)
 		: false;
 	const attemptedMutation = hasMutationToolCall(input.messages);
-	const noEditChallengeComplete = REVIVED_TASK_PATTERN.test(input.task)
-		&& IMPLEMENTATION_CHALLENGE_PATTERN.test(input.task)
+	const noEditChallengeComplete = IMPLEMENTATION_CHALLENGE_TASK_PATTERN.test(input.task)
 		&& reportsNoBetterChallengeChange(input.messages);
 	return {
 		expectedMutation,
