@@ -497,6 +497,17 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		assert.equal(status.endedAt !== undefined, true);
 	});
 
+	it("persists intercom detach receipts on failed async steps", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
+		mockPi.onCall({ output: "Detached for intercom coordination before task completion.", exitCode: -2 });
+		const id = `async-intercom-detach-${Date.now().toString(36)}`;
+		launchProtocolTest(id);
+		await waitForAsyncResultFile(id);
+		const status = JSON.parse(fs.readFileSync(path.join(ASYNC_DIR, id, "status.json"), "utf-8")) as AsyncStatusPayload;
+		assert.equal(status.state, "failed");
+		assert.equal(status.error, "Step failed: worker");
+		assert.equal(status.steps?.[0]?.error, "Detached for intercom coordination before task completion.");
+	});
+
 	it("persists absent output provenance when async lifecycle text is synthetic", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
 		mockPi.onCall({ jsonl: [mockAssistantMessage("", "tool_use")], stderr: "mock child failure", exitCode: 1 });
 		const id = `async-output-absent-${Date.now().toString(36)}`;
