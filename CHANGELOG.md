@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.48.0] - 2026-08-13
+
 ### Added
 - Add a durable per-run child fan-out budget with a default cap of 64 across static, dynamic, workflow, and nested child admissions. Thanks to @asjer for #1031.
 - Add an opt-in per-session cap for concurrently active top-level async runs, with atomic admission, resume transfer, status/Fleet/RPC/doctor visibility, and release gated by the verified process-terminal behavior from #1030. Thanks to @asjer for #1029.
