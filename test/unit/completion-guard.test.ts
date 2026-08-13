@@ -38,10 +38,12 @@ test("implementation task with no mutation triggers the completion guard", () =>
 	});
 });
 
+const implementationChallengeTask = "You are reviving a previous subagent conversation.\n\nFollow-up:\nRun implementation challenge pass two and implement any better current-scope change.";
+
 test("implementation challenges may complete with an explicit no-better-change report", () => {
 	const result = evaluateCompletionMutationGuard({
 		agent: "worker",
-		task: "You are reviving a previous subagent conversation.\n\nFollow-up:\nRun implementation challenge pass two and implement any better current-scope change.",
+		task: implementationChallengeTask,
 		messages: [assistantText("No better current-scope change is needed.")],
 	});
 
@@ -50,6 +52,19 @@ test("implementation challenges may complete with an explicit no-better-change r
 		attemptedMutation: false,
 		triggered: false,
 	});
+});
+
+test("implementation challenge reports with negated or uncertain no-better-change claims remain guarded", () => {
+	for (const report of [
+		"I cannot say no better current-scope change is needed.",
+		"Maybe no better current-scope change is needed.",
+	]) {
+		assert.equal(evaluateCompletionMutationGuard({
+			agent: "worker",
+			task: implementationChallengeTask,
+			messages: [assistantText(report)],
+		}).triggered, true, report);
+	}
 });
 
 test("declared read-only builtin tools suppress implementation-word false positives", () => {

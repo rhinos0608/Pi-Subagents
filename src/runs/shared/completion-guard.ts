@@ -25,6 +25,7 @@ const CURSOR_FILE_MUTATION_THINKING =
 const REVIVED_TASK_PATTERN = /^You are reviving a previous subagent conversation\./;
 const IMPLEMENTATION_CHALLENGE_PATTERN = /\bimplementation challenge\b/i;
 const NO_BETTER_CHANGE_NEEDED_PATTERN = /\bno (?:better|further|additional) (?:current[- ]scope )?(?:code |source |file )?(?:change|changes|edit|edits|patch|patches) (?:is|are) needed\b/i;
+const NO_BETTER_CHANGE_QUALIFIER_PATTERN = /\b(?:not|never|cannot|can't|unable|uncertain|unsure|maybe|might|may)\b/i;
 
 interface CompletionMutationGuardInput {
 	agent: string;
@@ -87,9 +88,15 @@ export function hasMutationToolCall(messages: Message[]): boolean {
 }
 
 function reportsNoBetterChallengeChange(messages: Message[]): boolean {
-	return messages.some((message) => message.role === "assistant" && message.content.some((part) =>
-		part.type === "text" && NO_BETTER_CHANGE_NEEDED_PATTERN.test(part.text),
-	));
+	return messages.some((message) => message.role === "assistant" && message.content.some((part) => {
+		if (part.type !== "text") return false;
+		const match = NO_BETTER_CHANGE_NEEDED_PATTERN.exec(part.text);
+		if (!match || match.index === undefined) return false;
+		const sentenceStart = Math.max(part.text.lastIndexOf(".", match.index), part.text.lastIndexOf("!", match.index), part.text.lastIndexOf("?", match.index)) + 1;
+		const sentenceEnd = part.text.slice(match.index).search(/[.!?]/);
+		const sentence = part.text.slice(sentenceStart, sentenceEnd === -1 ? undefined : match.index + sentenceEnd + 1);
+		return !NO_BETTER_CHANGE_QUALIFIER_PATTERN.test(sentence);
+	}));
 }
 
 export function evaluateCompletionMutationGuard(input: CompletionMutationGuardInput): CompletionMutationGuardResult {
