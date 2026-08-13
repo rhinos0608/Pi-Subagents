@@ -11,6 +11,7 @@
 - Escalate startup retries to file task delivery after an unexplained zero-activity `SIGKILL` child exit, so EDR-denied launches self-heal on retry in both foreground and background runs. Thanks to @yanqianglu for #1028.
 
 ### Fixed
+- Use full task-text hashes for LLM intent arbiter memoization so same-prefix review and implementation tasks cannot share a cached verdict.
 - Terminate async Pi writers as owned POSIX process groups on stop and timeout, and keep terminal process proof unknown until process-tree exit is verified. Thanks to @asjer for #1030.
 - Explain when a requested mission is scoped to another worktree by naming the current project root and mission directory (#1024).
 - Preserve the configured output reference when explicit acceptance rejects an otherwise completed foreground child, so useful reports remain available (#1023).

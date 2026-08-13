@@ -121,11 +121,11 @@ Forces depth-0 internal single, parallel, and chain runs into background mode an
 { "timeoutMs": 3600000 }
 ```
 
-Global default runtime deadline, in milliseconds, for subagent runs. It replaces the built-in 30-minute backstop for single, parallel, and chain launches — foreground runs, plus plain single-agent async runs — whenever neither the call (`timeoutMs`/`maxRuntimeMs`) nor the selected agent (frontmatter `timeoutMs`) sets one. Explicit call values and agent frontmatter defaults always win, so this only moves the *default*.
+Global default runtime deadline, in milliseconds, for subagent runs. It replaces the built-in 30-minute backstop for foreground launches (single, parallel, chain, and workflowScript) and plain single-agent async runs whenever no call-level `timeoutMs`/`maxRuntimeMs` applies. For single-agent launches, selected agent frontmatter `timeoutMs` still wins. This only moves the *default*.
 
-This is the knob a per-agent frontmatter `timeoutMs` cannot reach: parallel (`tasks: [...]`) and chain launches never adopt an agent's frontmatter timeout — that default applies to single-agent launches only — so a long fan-out otherwise falls back to the 30-minute default and is killed mid-run. Set `timeoutMs` to give every run mode the same generous default from one place.
+Use it when foreground orchestration or plain async single-agent runs need a longer default than 30 minutes. It does not set async composite top-level deadlines, and it does not replace async fan-out child deadlines.
 
-Composite async runs (async chains, parallel tasks, and scripted workflows) stay unbounded at the top level by design — their runner children are bounded individually — so this value does not cap them. Must be a positive integer no greater than `2147483647` (the largest delay a Node.js timer can honor, roughly 24.8 days); invalid or out-of-range values are ignored and the built-in defaults apply.
+Composite async runs (async chains, parallel tasks, and scripted workflows) stay unbounded at the top level by design. Their runner children are bounded individually by their own agent or runner defaults, so this value does not cap them. Must be a positive integer no greater than `2147483647` (the largest delay a Node.js timer can honor, roughly 24.8 days); invalid or out-of-range values are ignored and the built-in defaults apply.
 
 ## `globalConcurrencyLimit`
 
@@ -142,6 +142,8 @@ Caps simultaneously running children inside existing durable legacy multi-child 
 ```
 
 Optionally caps the total number of child subagent launches during one parent session, including completed and failed children, parallel task counts, static chain steps, and bounded dynamic fanout children. Sessions are unlimited by default. Set this value to `0` to disable a configured cap. `PI_SUBAGENT_MAX_SPAWNS_PER_SESSION` overrides the config for a process and follows the same positive-cap/zero-unlimited semantics.
+
+`subagent({ action: "status" })`, fleet status, and `subagent({ action: "doctor" })` expose used, effective limit, remaining capacity, grants, and the remaining grant allowance for this budget. A user may explicitly call `subagent({ action: "grant-spawn-budget", additional: 10 })` from the root interactive parent after all children settle and confirm the native prompt. Grants are additive: they never erase cumulative usage, are rejected for unlimited sessions and child/headless callers, and total granted capacity cannot exceed the original configured cap. Compaction remains part of the same logical parent session and does not reset usage or grants; starting a new parent session does.
 
 ## `maxSubagentSpawnsPerRun`
 
@@ -165,9 +167,7 @@ Queued, running, paused, and needs-attention runs retain capacity. Runner-backed
 
 This limit bounds current top-level async load. It is separate from cumulative `maxSubagentSpawnsPerSession`, `maxSubagentSpawnsPerRun`, and `globalConcurrencyLimit`.
 
-`subagent({ action: "status" })`, fleet status, and `subagent({ action: "doctor" })` expose used, effective limit, remaining capacity, grants, and the remaining grant allowance. Static chains and parallel calls fail before creating run artifacts or starting partial work when their declared capacity cannot fit. Later retries or unbounded dynamic work are not guaranteed by that preflight.
-
-A user may explicitly call `subagent({ action: "grant-spawn-budget", additional: 10 })` from the root interactive parent after all children settle and confirm the native prompt. Grants are additive: they never erase cumulative usage, are rejected for unlimited sessions and child/headless callers, and total granted capacity cannot exceed the original configured cap. Compaction remains part of the same logical parent session and does not reset usage or grants; starting a new parent session does.
+`subagent({ action: "status" })`, fleet status, and `subagent({ action: "doctor" })` expose used, effective limit, and remaining active capacity. Static chains and parallel calls fail before creating run artifacts or starting partial work when their declared capacity cannot fit. Later retries or unbounded dynamic work are not guaranteed by that preflight.
 
 ## `scheduledRuns`
 

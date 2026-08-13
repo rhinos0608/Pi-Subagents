@@ -68,6 +68,27 @@ describe("active async capacity", () => {
 		}
 	});
 
+	it("uses the injected clock for reservation and start timestamps", () => {
+		const rootDir = tempRoot();
+		let now = 100;
+		try {
+			const runner = acquireActiveAsyncCapacity({ sessionId: "session-clock", limit: 2, runId: "runner", kind: "runner", asyncDir: path.join(rootDir, "runner") }, { rootDir, now: () => now });
+			assert.ok(runner);
+			assert.equal(runner.owner.reservedAt, 100);
+			now = 200;
+			runner.markStarted("runner-process");
+			assert.equal(runner.owner.runnerStartedAt, 200);
+
+			now = 300;
+			const workflow = acquireActiveAsyncCapacity({ sessionId: "session-clock", limit: 2, runId: "workflow", kind: "workflow", asyncDir: path.join(rootDir, "workflow") }, { rootDir, now: () => now });
+			assert.ok(workflow);
+			workflow.markWorkflowStarted();
+			assert.equal(workflow.owner.runnerStartedAt, 300);
+		} finally {
+			fs.rmSync(rootDir, { recursive: true, force: true });
+		}
+	});
+
 	it("does not roll back when runner start was recorded only in memory", () => {
 		const rootDir = tempRoot();
 		try {

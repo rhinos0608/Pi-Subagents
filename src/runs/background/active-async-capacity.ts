@@ -263,7 +263,7 @@ function handleFor(owner: ActiveAsyncCapacityOwnerV1, limit: number, options: Ca
 			const claimed = withSlotClaim(dir, () => {
 				const current = matchingOwner(dir, owner);
 				if (!current) return false;
-				const next = { ...current, runnerProcessInstanceId, runnerStartedAt: Date.now() };
+				const next = { ...current, runnerProcessInstanceId, runnerStartedAt: options.now?.() ?? Date.now() };
 				// Mark memory first. If persistence fails after the process starts, caller
 				// cleanup must retain the occupied slot instead of rolling it back.
 				Object.assign(owner, next);
@@ -280,7 +280,7 @@ function handleFor(owner: ActiveAsyncCapacityOwnerV1, limit: number, options: Ca
 			const claimed = withSlotClaim(dir, () => {
 				const current = matchingOwner(dir, owner);
 				if (!current || current.kind !== "workflow") return false;
-				const next = { ...current, runnerStartedAt: Date.now() };
+				const next = { ...current, runnerStartedAt: options.now?.() ?? Date.now() };
 				Object.assign(owner, next);
 				try {
 					writePrivateAtomicJson(path.join(dir, "owner.json"), next);

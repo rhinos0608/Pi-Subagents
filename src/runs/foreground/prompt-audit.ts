@@ -3,10 +3,7 @@ import { convertToLlm, type ExtensionContext } from "@earendil-works/pi-coding-a
 import { streamSimple } from "@earendil-works/pi-ai/compat";
 import type { Model } from "@earendil-works/pi-ai";
 import type { ForegroundRunControl } from "../../shared/types.ts";
-import { PROMPT_REDACTED } from "../../shared/utils.ts";
-
 export type PromptAuditView = "authored" | "runtime" | "effective";
-export { PROMPT_REDACTED };
 
 export interface PromptAuditRerunContract {
 	params: Record<string, unknown>;

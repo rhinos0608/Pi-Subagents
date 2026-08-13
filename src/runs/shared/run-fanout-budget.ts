@@ -220,12 +220,7 @@ export function getRunFanoutBudgetSnapshot(descriptor: RunFanoutBudgetDescriptor
 	return { used, limit: valid.limit, remaining: Math.max(0, valid.limit - used) };
 }
 
-export function childRunFanoutBudget(descriptor: RunFanoutBudgetDescriptor, childPath: string): RunFanoutBudgetDescriptor {
-	const [qualified] = qualifyRunFanoutPaths(descriptor, [childPath]);
-	return { ...descriptor, parentPath: qualified };
-}
-
-export function qualifyRunFanoutPaths(descriptor: RunFanoutBudgetDescriptor, paths: string[]): string[] {
+function qualifyRunFanoutPaths(descriptor: RunFanoutBudgetDescriptor, paths: string[]): string[] {
 	const prefix = descriptor.parentPath?.trim();
 	return paths.map((item) => prefix ? `${prefix}/${item}` : item);
 }
@@ -280,6 +275,6 @@ export function formatRunFanoutBudget(snapshot: RunFanoutBudgetSnapshot): string
 	return `Run fan-out: ${snapshot.used}/${snapshot.limit} used, ${snapshot.remaining} remaining`;
 }
 
-export function formatRunFanoutRejection(rejection: RunFanoutRejection): string {
+function formatRunFanoutRejection(rejection: RunFanoutRejection): string {
 	return `Run fan-out limit reached at ${rejection.path} (${rejection.used}/${rejection.limit} used; ${rejection.requested} requested, ${rejection.remaining} remaining). No children from this admission group were started. Start a new top-level run or raise config.maxSubagentSpawnsPerRun.`;
 }

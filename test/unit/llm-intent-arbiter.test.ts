@@ -140,7 +140,7 @@ describe("createTaskMutationArbiter", () => {
 		assert.equal(verdict, "unavailable");
 	});
 
-	it("memoizes verdicts per task/message key", async () => {
+	it("memoizes verdicts per task", async () => {
 		let streamCalls = 0;
 		const arbiter = createTaskMutationArbiter(fakeCtx(), {
 			streamFn: async () => {
@@ -148,10 +148,24 @@ describe("createTaskMutationArbiter", () => {
 				throw new Error("fail");
 			},
 		})!;
-		const v1 = await arbiter("t", "m");
-		const v2 = await arbiter("t", "m");
+		const v1 = await arbiter("t");
+		const v2 = await arbiter("t");
 		assert.equal(v1, "unavailable");
 		assert.equal(v2, "unavailable");
-		assert.equal(streamCalls, 1); // second call served from cache
+		assert.equal(streamCalls, 1);
+	});
+
+	it("uses the full task as the cache key", async () => {
+		let streamCalls = 0;
+		const arbiter = createTaskMutationArbiter(fakeCtx(), {
+			streamFn: async () => {
+				streamCalls += 1;
+				throw new Error("fail");
+			},
+		})!;
+		const prefix = "x".repeat(180);
+		await arbiter(`${prefix}A`);
+		await arbiter(`${prefix}B`);
+		assert.equal(streamCalls, 2);
 	});
 });

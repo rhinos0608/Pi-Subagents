@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { Agent, type AgentTool, type StreamFn } from "@earendil-works/pi-agent-core";
 import { convertToLlm, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { streamSimple } from "@earendil-works/pi-ai/compat";
@@ -212,7 +213,7 @@ export function createTaskMutationArbiter(
 	if (!runtime) return undefined;
 	const cache = new Map<string, TaskMutationVerdict>();
 	return async (task) => {
-		const key = `${task.length}:${task.slice(0, 160)}`;
+		const key = createHash("sha256").update(task).digest("base64url");
 		const cached = cache.get(key);
 		if (cached) return cached;
 		const auth = await resolveArbiterAuth(ctx, runtime.model);
