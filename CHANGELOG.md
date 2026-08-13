@@ -3,29 +3,29 @@
 ## [Unreleased]
 
 ### Added
-- Add structured `{ agent, task? }` execution for one child while keeping `workflowScript` as the orchestration surface (#1059).
-- Add main-window renderer density controls for subagent call/result spacing and collapsed result height. Thanks to @pierre-mgmt for #1048.
-- Add `debug.run` for async run lifecycle diagnostics without exposing prompts, secrets, or transcripts (#1037).
-- Add `tools: "inherit"` for builtin role overrides, so one role can inherit Pi's normal tools and extensions without shadowing the agent file. Thanks to @estanexanavsem for #1047 and @davidarny for #1049.
+- Run a single child with `{ agent, task? }` when a full workflow script is not needed (#1059).
+- Adjust FleetView spacing and collapsed result height from the main window. Thanks to @pierre-mgmt for #1048.
+- Inspect async run state with `debug.run`, without exposing prompts, secrets, or transcripts (#1037).
+- Let builtin role overrides keep Pi's normal tools and extensions with `tools: "inherit"`. Thanks to @estanexanavsem for #1047 and @davidarny for #1049.
 - Add simple terminal examples for FleetView, the async widget, and inline tool display. Thanks to @czottmann for #1050.
 
 ### Changed
-- Clean up unreleased active-capacity and artifact packaging helpers without changing runtime behavior.
+- Clean up active-run limits and artifact packaging code without changing behavior.
 
 ### Fixed
-- Honor per-run `intercomBridge` overrides for async and nested workflow children without changing native completion delivery. Thanks to @jaudiger for #1072.
-- Recover workflow siblings by stable child run ID, preserve workflow fan-out identity on resume, and list terminal retained workflow children (#1066).
-- Render child session transcript fallback in standalone Herdr inspectors through extension-owned trusted session roots (#1069).
-- Keep watchdog reviews, permission arbitration, Prompt Audit rewriting, and completion intent arbitration on their authenticated provider stream across the Pi 0.81 and 0.84 agent constructor APIs. Thanks to @nuzayets for #1067.
-- Show children interrupted by a parent-stopped workflow as stopped instead of failed, and preserve the workflow stop reason (#1060).
-- Keep subagent artifacts and automatic mission records outside project worktrees by default, so read-only workflows do not make clean-tree checks fail (#1062).
-- Tell parents to continue after an async launch only until the next dependency barrier, so they consume a child result before dependent work makes it obsolete. Thanks to @exuanbo for #1045.
-- Tell wait callers to reply and wait instead of reviving a wrapper that detached for intercom coordination. Thanks to @yayamaz for #1053.
-- Derive default `workflowScript` child report paths from the workflow output path while keeping the workflow aggregate report separate, and reject child output path collisions before launch (#1038).
-- Allow resumed implementation challenge passes to complete without edits when they explicitly report that no better current-scope change is needed (#1054).
-- Harden the LLM intent arbiter: the model decision now carries a confidence level and only a high-confidence read_only rescues a failed run (read_only without high confidence is treated as implementation, keeping the guard fail-closed); tasks over 8000 characters are never arbitrated from partial evidence; and registry credentials are resolved as a method call on the model registry rather than a detached reference, so OAuth/header/environment authentication reaches the stream. Thanks to @MarcusNeufeldt for #1044.
+- Let a workflow child disable the intercom bridge for one run with `intercomBridge: { mode: "off" }`, while normal async completion still works. Thanks to @jaudiger for #1072.
+- Recover sibling children after a detached workflow fails (#1066).
+- Show child session transcripts in standalone Herdr inspectors when the transcript is in a trusted session folder (#1069).
+- Keep watchdog reviews, permission checks, Prompt Audit rewriting, and completion intent checks on the authenticated provider stream across the Pi 0.81 and 0.84 APIs. Thanks to @nuzayets for #1067.
+- Mark children stopped by a parent workflow as stopped, not failed, and keep the stop reason (#1060).
+- Keep subagent artifacts and automatic mission records out of project worktrees by default, so read-only workflows leave the tree clean (#1062).
+- Make parents wait at dependency barriers after async launches, so child results are available before dependent work continues. Thanks to @exuanbo for #1045.
+- Keep wait callers alive for intercom replies instead of reviving a detached wrapper. Thanks to @yayamaz for #1053.
+- Keep workflow summary reports separate from child reports, and reject report path collisions before launch (#1038).
+- Accept no-edit implementation challenge passes when the writer says the current solution is already best (#1054).
+- Make the mutation guard safer for LLM intent checks, long tasks, and provider authentication. Thanks to @MarcusNeufeldt for #1044.
 - Launch Herdr inspector panes with Node when Pi runs as a standalone executable. Thanks to @kevinpita for #1051.
-- Sanitize async run, nested run, and result transcript output before terminal display, extending the Fleet transcript sanitization from #823 to the run-status transcript views. Thanks to @riesbri for #1046.
+- Sanitize async, nested, and result transcript output before showing it in terminal views. Thanks to @riesbri for #1046.
 
 ## [0.48.0] - 2026-08-13
 
