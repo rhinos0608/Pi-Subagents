@@ -572,20 +572,26 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		});
 		const id = `async-launch-digest-${Date.now().toString(36)}`;
 		const privateExtension = path.join(tempDir, "extensions", "private-extension.ts");
+		const recoveryAgentConfig = makeAgent("worker", { completionGuard: false, extensions: [privateExtension], tools: ["read"], systemPrompt: "Base prompt" });
 		const launch = executeAsyncSingle(id, {
 			agent: "worker",
 			task: "Exercise launch digest reporting",
-			agentConfig: makeAgent("worker", { completionGuard: false, extensions: [privateExtension] }),
+			agentConfig: { ...recoveryAgentConfig, tools: ["read", "intercom", "contact_supervisor"], systemPrompt: "Base prompt\n\nIntercom orchestration channel:" },
+			recoveryAgentConfig,
 			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
 			artifactConfig: { enabled: false, includeInput: false, includeOutput: false, includeJsonl: false, includeMetadata: false, cleanupDays: 7 },
 			shareEnabled: false,
 			sessionRoot: path.join(tempDir, "sessions"),
 			maxSubagentDepth: 2,
 			acceptance: false,
+			intercomBridge: { mode: "off" },
 		});
 		assert.match(launch.details.launchContractDigest ?? "", /^[a-f0-9]{64}$/);
-		const recovery = JSON.parse(fs.readFileSync(path.join(ASYNC_DIR, id, "recovery-descriptor.json"), "utf-8")) as { runFanoutBudget?: { rootRunId?: string; limit?: number } };
+		const recovery = JSON.parse(fs.readFileSync(path.join(ASYNC_DIR, id, "recovery-descriptor.json"), "utf-8")) as { runFanoutBudget?: { rootRunId?: string; limit?: number }; intercomBridge?: { mode?: string }; tools?: string[]; systemPrompt?: string };
 		assert.deepEqual(recovery.runFanoutBudget && { rootRunId: recovery.runFanoutBudget.rootRunId, limit: recovery.runFanoutBudget.limit }, { rootRunId: id, limit: 64 });
+		assert.deepEqual(recovery.intercomBridge, { mode: "off" });
+		assert.deepEqual(recovery.tools, ["read"]);
+		assert.equal(recovery.systemPrompt, "Base prompt");
 		const payload = await readAsyncPayload(id);
 		const status = await waitForAsyncState(id, (candidate) => candidate.state === "complete" && candidate.runtimeAcknowledgedExtensions !== undefined);
 		assert.equal(payload.launchContractDigest, launch.details.launchContractDigest);

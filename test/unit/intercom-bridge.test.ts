@@ -104,6 +104,19 @@ describe("resolveIntercomBridge", () => {
 		assert.equal(bridge.extensionDir, NATIVE_INTERCOM_EXTENSION_DIR);
 	});
 
+	it("uses a per-run override instead of the global config", () => {
+		const bridge = resolveIntercomBridge({
+			config: { mode: "always", resultDelivery: true },
+			override: { mode: "off" },
+			context: "fresh",
+			orchestratorTarget: "main",
+		});
+
+		assert.equal(bridge.active, false);
+		assert.equal(bridge.mode, "off");
+		assert.equal(bridge.resultDelivery, false);
+	});
+
 	it("can disable external grouped-result delivery without disabling supervisor coordination", () => {
 		const bridge = resolveIntercomBridge({
 			config: { mode: "always", resultDelivery: false },

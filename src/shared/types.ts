@@ -528,6 +528,8 @@ export interface SteeringRecoveryDescriptor {
 	structuredOutputSchema?: JsonSchemaObject;
 	acceptance?: AcceptanceInput;
 	controlConfig?: ResolvedControlConfig;
+	/** Raw per-run bridge override. Omitted descriptors continue to use global config. */
+	intercomBridge?: IntercomBridgeConfig;
 	absoluteDeadlineAt?: number;
 	initialTurnBudget?: ResolvedTurnBudget;
 	initialToolBudget?: ResolvedToolBudget;

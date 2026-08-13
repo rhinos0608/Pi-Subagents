@@ -139,6 +139,7 @@ import {
 	type Details,
 	type ExtensionConfig,
 	type ForegroundRunControl,
+	type IntercomBridgeConfig,
 	type IntercomEventBus,
 	type JsonSchemaObject,
 	type MaxOutputConfig,
@@ -300,6 +301,8 @@ export interface SubagentParamsLike {
 	concurrency?: number;
 	worktree?: boolean;
 	context?: "fresh" | "fork";
+	/** Per-run intercom bridge config. It replaces the global config for this launch only. */
+	intercomBridge?: IntercomBridgeConfig;
 	async?: boolean;
 	foregroundOnly?: boolean;
 	timeoutMs?: number;
@@ -387,6 +390,8 @@ interface ExecutionContextData {
 	signal: AbortSignal;
 	onUpdate?: (r: AgentToolResult<Details>) => void;
 	agents: AgentConfig[];
+	/** Discovered agent definitions before per-run bridge injection. */
+	recoveryAgents: AgentConfig[];
 	runId: string;
 	shareEnabled: boolean;
 	sessionRoot: string;
@@ -1511,17 +1516,18 @@ async function resumeAsyncRun(input: {
 	const discoveredAgents = discovered.agents;
 	const modelScope = discovered.modelScope;
 	const sessionName = resolveIntercomSessionTarget(input.deps.pi.getSessionName(), input.ctx.sessionManager.getSessionId());
+	const recoveryDescriptor = "recoveryDescriptor" in target ? target.recoveryDescriptor : undefined;
 	const intercomBridge = resolveIntercomBridge({
 		config: input.deps.config.intercomBridge,
+		override: input.params.intercomBridge ?? recoveryDescriptor?.intercomBridge,
 		context: input.params.context,
 		orchestratorTarget: sessionName,
 	});
 	const agents = intercomBridge.active
 		? discoveredAgents.map((agent) => applyIntercomBridgeToAgent(agent, intercomBridge))
 		: discoveredAgents;
-	const recoveryDescriptor = "recoveryDescriptor" in target ? target.recoveryDescriptor : undefined;
-	const discoveredAgentConfig = agents.find((agent) => agent.name === target.agent);
-	const agentConfig: AgentConfig | undefined = discoveredAgentConfig ?? (recoveryDescriptor ? {
+	const discoveredAgentConfig = discoveredAgents.find((agent) => agent.name === target.agent);
+	const baseAgentConfig: AgentConfig | undefined = discoveredAgentConfig ?? (recoveryDescriptor ? {
 		name: recoveryDescriptor.agent,
 		description: "Persisted async recovery contract",
 		systemPrompt: "",
@@ -1531,7 +1537,7 @@ async function resumeAsyncRun(input: {
 		source: "project",
 		filePath: recoveryDescriptor.agentFilePath ?? path.join(getProjectSubagentsDir(recoveryDescriptor.cwd), "recovery-agent"),
 	} : undefined);
-	if (!agentConfig) {
+	if (!baseAgentConfig) {
 		return {
 			content: [{ type: "text", text: `Unknown agent for resume: ${target.agent}` }],
 			isError: true,
@@ -1672,7 +1678,8 @@ async function resumeAsyncRun(input: {
 		if (error instanceof ActiveAsyncCapacityError) return { content: [{ type: "text", text: error.message }], isError: true, details: { mode: "single", results: [], activeAsyncCapacity: error.snapshot } };
 		return { content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }], isError: true, details: { mode: "single", results: [] } };
 	}
-	const recoveryAgentConfig = recoveryDescriptor ? applySteeringRecoveryAgentConfig(agentConfig, recoveryDescriptor) : agentConfig;
+	const recoveryAgentConfig = recoveryDescriptor ? applySteeringRecoveryAgentConfig(baseAgentConfig, recoveryDescriptor) : baseAgentConfig;
+	const agentConfig = intercomBridge.active ? applyIntercomBridgeToAgent(recoveryAgentConfig, intercomBridge) : recoveryAgentConfig;
 	const artifactConfig: ArtifactConfig = recoveryDescriptor?.artifactConfig ?? omitUndefinedProperties({ ...DEFAULT_ARTIFACT_CONFIG, enabled: input.params.artifacts !== false, dir: input.deps.config.artifactDir ?? DEFAULT_ARTIFACT_CONFIG.dir });
 	const artifactsDir = recoveryDescriptor?.artifactsDir ?? getArtifactsDir(parentSessionFile, effectiveCwd, artifactConfig.dir);
 	const availableModels = input.ctx.modelRegistry.getAvailable().map(toModelInfo);
@@ -1682,7 +1689,8 @@ async function resumeAsyncRun(input: {
 		agent: target.agent,
 		task: buildRevivedAsyncTask(target as Parameters<typeof buildRevivedAsyncTask>[0], effectiveFollowUp),
 		goal: effectiveFollowUp,
-		agentConfig: recoveryAgentConfig,
+		agentConfig,
+		recoveryAgentConfig,
 		ctx: compactOptional<Parameters<typeof executeAsyncSingle>[1]["ctx"]>({
 			pi: input.deps.pi,
 			cwd: input.requestCwd,
@@ -1717,6 +1725,7 @@ async function resumeAsyncRun(input: {
 		worktreeSetupHookTimeoutMs: input.deps.config.worktreeSetupHookTimeoutMs,
 		worktreeBaseDir: input.deps.config.worktreeBaseDir,
 		controlConfig: recoveryDescriptor?.controlConfig ?? resolveControlConfig(input.deps.config.control, input.params.control),
+		intercomBridge: input.params.intercomBridge ?? recoveryDescriptor?.intercomBridge,
 		controlIntercomTarget: intercomBridge.active ? intercomBridge.orchestratorTarget : undefined,
 		childIntercomTarget: intercomBridge.active ? (agent, index) => resolveSubagentIntercomTarget(runId, agent, index) : undefined,
 		availableModels,
@@ -2870,6 +2879,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 			task: shouldForkAgent(contextPolicy, params.agent!) ? wrapForkTask(params.task ?? "") : (params.task ?? ""),
 			goal: params.task ?? "",
 			agentConfig: a,
+			recoveryAgentConfig: data.recoveryAgents.find((agent) => agent.name === params.agent),
 			ctx: asyncCtx,
 			availableModels,
 			cwd: effectiveCwd,
@@ -2894,6 +2904,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 			worktreeSetupHookTimeoutMs: deps.config.worktreeSetupHookTimeoutMs,
 			worktreeBaseDir: deps.config.worktreeBaseDir,
 			controlConfig,
+			intercomBridge: params.intercomBridge,
 			controlIntercomTarget,
 			childIntercomTarget: childIntercomTarget ? (agent, index) => childIntercomTarget(agent, index) : undefined,
 			nestedRoute,
@@ -4191,6 +4202,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 					task: shouldForkAgent(contextPolicy, params.agent!) ? wrapForkTask(task) : task,
 					goal: task,
 					agentConfig,
+					recoveryAgentConfig: data.recoveryAgents.find((agent) => agent.name === params.agent),
 					ctx: asyncCtx,
 					availableModels,
 					cwd: effectiveCwd,
@@ -4215,6 +4227,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 					worktreeSetupHookTimeoutMs: deps.config.worktreeSetupHookTimeoutMs,
 					worktreeBaseDir: deps.config.worktreeBaseDir,
 					controlConfig,
+					intercomBridge: params.intercomBridge,
 					controlIntercomTarget: data.intercomBridge.active ? data.intercomBridge.orchestratorTarget : undefined,
 					childIntercomTarget: data.intercomBridge.active ? (agent, index) => resolveSubagentIntercomTarget(id, agent, index) : undefined,
 					nestedRoute: data.nestedRoute,
@@ -4587,6 +4600,7 @@ export function prepareWorkflowLaunchParams(
 		const timeoutMs = childParams.timeoutMs ?? childParams.maxRuntimeMs ?? workflowDefaults.timeoutMs ?? workflowDefaults.maxRuntimeMs;
 		const turnBudget = childParams.turnBudget ?? workflowDefaults.turnBudget;
 		const toolBudget = childParams.toolBudget ?? workflowDefaults.toolBudget;
+		const intercomBridge = childParams.intercomBridge ?? workflowDefaults.intercomBridge;
 		return {
 			action: "resume",
 			id: childParams.resume.trim(),
@@ -4598,6 +4612,7 @@ export function prepareWorkflowLaunchParams(
 			...(timeoutMs !== undefined ? { timeoutMs: timeoutMs as number } : {}),
 			...(turnBudget !== undefined ? { turnBudget: turnBudget as TurnBudgetConfig } : {}),
 			...(toolBudget !== undefined ? { toolBudget: toolBudget as ToolBudgetConfig } : {}),
+			...(intercomBridge !== undefined ? { intercomBridge: intercomBridge as IntercomBridgeConfig } : {}),
 		};
 	}
 	const launchParams = {
@@ -5949,6 +5964,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		const sessionName = resolveIntercomSessionTarget(deps.pi.getSessionName(), ctx.sessionManager.getSessionId());
 		const intercomBridge = resolveIntercomBridge({
 			config: deps.config.intercomBridge,
+			override: effectiveParams.intercomBridge,
 			context: effectiveParams.context ?? (contextPolicy.usesFork ? "fork" : undefined),
 			orchestratorTarget: sessionName,
 		});
@@ -6211,6 +6227,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			signal,
 			onUpdate: onUpdateWithContext,
 			agents,
+			recoveryAgents: discoveredAgents,
 			runId,
 			shareEnabled,
 			sessionRoot,

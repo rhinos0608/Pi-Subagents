@@ -39,6 +39,26 @@ describe("workflow launch params", () => {
 		);
 	});
 
+	it("keeps a bridge override scoped to the target workflow child", () => {
+		assert.deepEqual(
+			prepareWorkflowLaunchParams(
+				{},
+				{ agent: "worker", task: "Run", intercomBridge: { mode: "off" } },
+				"workflow-run",
+				"isolated",
+			),
+			{
+				agent: "worker",
+				task: "Run",
+				intercomBridge: { mode: "off" },
+				async: false,
+				workflowParentRunId: "workflow-run",
+				workflowKey: "isolated",
+			},
+		);
+		assert.equal(prepareWorkflowLaunchParams({}, { agent: "worker", task: "Run" }, "workflow-run", "sibling").intercomBridge, undefined);
+	});
+
 	it("places workflow child gates inside managed worktree tasks", () => {
 		assert.deepEqual(
 			prepareWorkflowLaunchParams(
@@ -57,6 +77,25 @@ describe("workflow launch params", () => {
 					task: "Implement",
 					acceptance: { level: "verified", verify: [{ id: "gate", command: "npm test" }] },
 				}],
+			},
+		);
+	});
+
+	it("preserves a bridge override for retained workflow children", () => {
+		assert.deepEqual(
+			prepareWorkflowLaunchParams(
+				{},
+				{ resume: "retained-run", task: "Continue", intercomBridge: { mode: "off" } },
+				"workflow-run",
+				"continue",
+			),
+			{
+				action: "resume",
+				id: "retained-run",
+				message: "Continue",
+				workflowParentRunId: "workflow-run",
+				workflowKey: "continue",
+				intercomBridge: { mode: "off" },
 			},
 		);
 	});

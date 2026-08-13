@@ -13,6 +13,7 @@
 - Clean up unreleased active-capacity and artifact packaging helpers without changing runtime behavior.
 
 ### Fixed
+- Honor per-run `intercomBridge` overrides for async and nested workflow children without changing native completion delivery. Thanks to @jaudiger for #1072.
 - Recover workflow siblings by stable child run ID, preserve workflow fan-out identity on resume, and list terminal retained workflow children (#1066).
 - Render child session transcript fallback in standalone Herdr inspectors through extension-owned trusted session roots (#1069).
 - Keep watchdog reviews, permission arbitration, Prompt Audit rewriting, and completion intent arbitration on their authenticated provider stream across the Pi 0.81 and 0.84 agent constructor APIs. Thanks to @nuzayets for #1067.

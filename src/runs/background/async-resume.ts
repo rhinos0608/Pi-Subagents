@@ -307,7 +307,7 @@ export function readAsyncRecoveryDescriptor(asyncDir: string | undefined): Steer
 		"version", "launchContractDigest", "sourceRunId", "agentContract", "agent", "sessionFile", "cwd", "model", "fallbackModels", "thinking", "tools", "extensions",
 		"subagentOnlyExtensions", "mcpDirectTools", "systemPrompt", "systemPromptMode", "inheritProjectContext", "inheritSkills", "skills",
 		"skillPath", "agentFilePath", "completionGuard", "memory", "outputPath", "outputMode", "structuredOutputSchema", "acceptance", "sessionDir", "artifactConfig",
-		"artifactsDir", "maxOutput", "controlConfig", "absoluteDeadlineAt", "initialTurnBudget", "initialToolBudget", "maxSubagentDepth", "share", "capabilityCeiling",
+		"artifactsDir", "maxOutput", "controlConfig", "intercomBridge", "absoluteDeadlineAt", "initialTurnBudget", "initialToolBudget", "maxSubagentDepth", "share", "capabilityCeiling",
 		"launchResolvedExtensions", "runFanoutBudget",
 	]);
 	for (const field of Object.keys(parsed)) {
@@ -373,6 +373,16 @@ export function readAsyncRecoveryDescriptor(asyncDir: string | undefined): Steer
 		}
 		if (artifact.includeTranscript !== undefined && typeof artifact.includeTranscript !== "boolean") throw new Error(`Invalid async recovery descriptor '${descriptorPath}': artifactConfig.includeTranscript must be a boolean.`);
 		if (!Number.isInteger(artifact.cleanupDays) || (artifact.cleanupDays as number) < 0) throw new Error(`Invalid async recovery descriptor '${descriptorPath}': artifactConfig.cleanupDays must be a non-negative integer.`);
+	}
+	if (parsed.intercomBridge !== undefined) {
+		if (!parsed.intercomBridge || typeof parsed.intercomBridge !== "object" || Array.isArray(parsed.intercomBridge)) throw new Error(`Invalid async recovery descriptor '${descriptorPath}': intercomBridge must be an object.`);
+		const bridge = parsed.intercomBridge as Record<string, unknown>;
+		for (const field of Object.keys(bridge)) {
+			if (field !== "mode" && field !== "instructionFile" && field !== "resultDelivery") throw new Error(`Invalid async recovery descriptor '${descriptorPath}': intercomBridge.${field} is not supported.`);
+		}
+		if (bridge.mode !== undefined && bridge.mode !== "off" && bridge.mode !== "fork-only" && bridge.mode !== "always") throw new Error(`Invalid async recovery descriptor '${descriptorPath}': intercomBridge.mode is invalid.`);
+		if (bridge.instructionFile !== undefined && typeof bridge.instructionFile !== "string") throw new Error(`Invalid async recovery descriptor '${descriptorPath}': intercomBridge.instructionFile must be a string.`);
+		if (bridge.resultDelivery !== undefined && typeof bridge.resultDelivery !== "boolean") throw new Error(`Invalid async recovery descriptor '${descriptorPath}': intercomBridge.resultDelivery must be a boolean.`);
 	}
 	if (parsed.controlConfig !== undefined) {
 		if (!parsed.controlConfig || typeof parsed.controlConfig !== "object" || Array.isArray(parsed.controlConfig)) throw new Error(`Invalid async recovery descriptor '${descriptorPath}': controlConfig must be an object.`);
