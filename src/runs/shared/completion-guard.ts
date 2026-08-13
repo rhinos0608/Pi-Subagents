@@ -26,6 +26,7 @@ const REVIVED_TASK_PATTERN = /^You are reviving a previous subagent conversation
 const IMPLEMENTATION_CHALLENGE_PATTERN = /\bimplementation challenge\b/i;
 const NO_BETTER_CHANGE_NEEDED_PATTERN = /\bno (?:better|further|additional) (?:current[- ]scope )?(?:code |source |file )?(?:change|changes|edit|edits|patch|patches) (?:is|are) needed\b/i;
 const NO_BETTER_CHANGE_QUALIFIER_PATTERN = /\b(?:do\s+not|don't|dont|not|never|cannot|can't|cant|unable|uncertain|unsure|unclear|maybe|might|may)\b/i;
+const NO_BETTER_CHANGE_UNCERTAINTY_PATTERN = /\b(?:unable|uncertain|unsure|unclear|maybe|might|may)\b/i;
 
 interface CompletionMutationGuardInput {
 	agent: string;
@@ -88,15 +89,17 @@ export function hasMutationToolCall(messages: Message[]): boolean {
 }
 
 function reportsNoBetterChallengeChange(messages: Message[]): boolean {
-	return messages.some((message) => message.role === "assistant" && message.content.some((part) => {
-		if (part.type !== "text") return false;
-		const match = NO_BETTER_CHANGE_NEEDED_PATTERN.exec(part.text);
+	return messages.some((message) => {
+		if (message.role !== "assistant") return false;
+		const report = message.content.flatMap((part) => part.type === "text" ? [part.text] : []).join("\n");
+		const match = NO_BETTER_CHANGE_NEEDED_PATTERN.exec(report);
 		if (!match || match.index === undefined) return false;
-		const sentenceStart = Math.max(part.text.lastIndexOf(".", match.index), part.text.lastIndexOf("!", match.index), part.text.lastIndexOf("?", match.index)) + 1;
-		const sentenceEnd = part.text.slice(match.index).search(/[.!?]/);
-		const sentence = part.text.slice(sentenceStart, sentenceEnd === -1 ? undefined : match.index + sentenceEnd + 1);
-		return !NO_BETTER_CHANGE_QUALIFIER_PATTERN.test(sentence);
-	}));
+		const sentenceStart = Math.max(report.lastIndexOf(".", match.index), report.lastIndexOf("!", match.index), report.lastIndexOf("?", match.index)) + 1;
+		const sentenceEnd = report.slice(match.index).search(/[.!?]/);
+		const sentence = report.slice(sentenceStart, sentenceEnd === -1 ? undefined : match.index + sentenceEnd + 1);
+		return !NO_BETTER_CHANGE_UNCERTAINTY_PATTERN.test(report)
+			&& !NO_BETTER_CHANGE_QUALIFIER_PATTERN.test(sentence);
+	});
 }
 
 export function evaluateCompletionMutationGuard(input: CompletionMutationGuardInput): CompletionMutationGuardResult {
