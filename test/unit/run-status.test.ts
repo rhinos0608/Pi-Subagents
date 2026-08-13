@@ -238,6 +238,69 @@ describe("async run status inspection", () => {
 		}
 	});
 
+	it("escapes terminal control sequences in async output transcripts", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-run-status-transcript-unsafe-"));
+		try {
+			const asyncRoot = path.join(root, "runs");
+			const asyncDir = path.join(asyncRoot, "run-unsafe-output");
+			fs.mkdirSync(asyncDir, { recursive: true });
+			fs.writeFileSync(path.join(asyncDir, "output-0.log"), "safe \u001b]8;;https://attacker.invalid\u0007link\u001b]8;;\u0007 bidi \u202e", "utf-8");
+			fs.writeFileSync(path.join(asyncDir, "status.json"), JSON.stringify({
+				runId: "run-unsafe-output",
+				mode: "single",
+				state: "complete",
+				startedAt: 100,
+				lastUpdate: 200,
+				steps: [{ agent: "worker", status: "complete" }],
+			}, null, 2), "utf-8");
+
+			const result = inspectSubagentStatus({ id: "run-unsafe-output", view: "transcript" }, {
+				asyncDirRoot: asyncRoot,
+				resultsDir: path.join(root, "results"),
+			});
+
+			const text = textContent(result);
+			assert.doesNotMatch(text, /[\u001b\u0007\u202e]/u);
+			assert.match(text, /U\+001B/);
+			assert.match(text, /U\+202E/);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("keeps run metadata when child output contains binary content", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-run-status-transcript-binary-"));
+		try {
+			const asyncRoot = path.join(root, "runs");
+			const asyncDir = path.join(asyncRoot, "run-binary-output");
+			fs.mkdirSync(asyncDir, { recursive: true });
+			fs.writeFileSync(path.join(asyncDir, "output-0.log"), "useful line A\nuseful line B\n\u0000\n", "utf-8");
+			fs.writeFileSync(path.join(asyncDir, "status.json"), JSON.stringify({
+				runId: "run-binary-output",
+				mode: "single",
+				state: "complete",
+				startedAt: 100,
+				lastUpdate: 200,
+				steps: [{ agent: "worker", status: "complete" }],
+			}, null, 2), "utf-8");
+
+			const result = inspectSubagentStatus({ id: "run-binary-output", view: "transcript" }, {
+				asyncDirRoot: asyncRoot,
+				resultsDir: path.join(root, "results"),
+			});
+
+			// One malformed line must not erase run state, artifacts, or the safe lines.
+			const text = textContent(result);
+			assert.match(text, /Run: run-binary-output/);
+			assert.match(text, /State: complete/);
+			assert.match(text, /useful line A/);
+			assert.match(text, /useful line B/);
+			assert.match(text, /\[binary content omitted for safe display\]/);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("refuses symlink session transcript paths even under trusted roots", () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-run-status-transcript-session-"));
 		try {
@@ -377,6 +440,40 @@ describe("async run status inspection", () => {
 			assert.equal(result.isError, undefined);
 			assert.match(text, /run-current/);
 			assert.doesNotMatch(text, /run-other/);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("escapes terminal control sequences in remembered foreground transcripts", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-run-status-foreground-transcript-unsafe-"));
+		try {
+			const state = {
+				currentSessionId: "session-current",
+				asyncJobs: new Map(),
+				foregroundControls: new Map(),
+				foregroundRuns: new Map([["foreground-unsafe", {
+					runId: "foreground-unsafe",
+					mode: "single",
+					cwd: root,
+					sessionId: "session-current",
+					updatedAt: 100,
+					children: [{ agent: "worker", index: 0, status: "completed", finalOutput: "safe \u001b]8;;https://attacker.invalid\u0007link\u001b]8;;\u0007 bidi \u202e" }],
+				}]]),
+			} as unknown as SubagentState;
+
+			const result = inspectSubagentStatus({ id: "foreground-unsafe", view: "transcript" }, {
+				asyncDirRoot: path.join(root, "runs"),
+				resultsDir: path.join(root, "results"),
+				state,
+			});
+
+			const text = textContent(result);
+			assert.equal(result.isError, undefined);
+			assert.doesNotMatch(text, /[\u001b\u0007\u202e]/u);
+			assert.match(text, /U\+001B/);
+			assert.match(text, /U\+0007/);
+			assert.match(text, /U\+202E/);
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
 		}
@@ -669,6 +766,48 @@ describe("async run status inspection", () => {
 
 			assert.equal(result.isError, undefined);
 			assert.match(textContent(result), /Warning: Nested status unavailable:/);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+			fs.rmSync(path.dirname(route.eventSink), { recursive: true, force: true });
+		}
+	});
+
+	it("keeps safe nested session content parts around binary content", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-run-status-nested-session-binary-"));
+		const route = createNestedRoute("run-nested-session-binary-root");
+		try {
+			const sessionFile = path.join(root, "session.jsonl");
+			fs.writeFileSync(sessionFile, `${JSON.stringify({ message: { role: "assistant", content: [{ type: "text", text: "safe before" }, { type: "text", text: "\0" }, { type: "text", text: "safe after" }] } })}\n`, "utf-8");
+			writeNestedEvent(route, {
+				type: "subagent.nested.updated",
+				ts: 150,
+				parentRunId: "run-nested-session-binary-root",
+				parentStepIndex: 0,
+				child: {
+					id: "nested-session-binary-child",
+					parentRunId: "run-nested-session-binary-root",
+					parentStepIndex: 0,
+					depth: 1,
+					path: [{ runId: "run-nested-session-binary-root", stepIndex: 0, agent: "orchestrator" }],
+					state: "complete",
+					mode: "single",
+					agent: "worker",
+					sessionFile,
+					lastUpdate: 150,
+				},
+			});
+
+			const result = inspectSubagentStatus({ id: "nested-session-binary-child", view: "transcript" }, {
+				asyncDirRoot: path.join(root, "runs"),
+				resultsDir: path.join(root, "results"),
+				sessionRoots: [root],
+			});
+
+			const text = textContent(result);
+			assert.equal(result.isError, undefined);
+			assert.match(text, /safe before/);
+			assert.match(text, /\[binary content omitted for safe display\]/);
+			assert.match(text, /safe after/);
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
 			fs.rmSync(path.dirname(route.eventSink), { recursive: true, force: true });
