@@ -14,6 +14,7 @@
 
 ### Fixed
 - Recover workflow siblings by stable child run ID, preserve workflow fan-out identity on resume, and list terminal retained workflow children (#1066).
+- Render child session transcript fallback in standalone Herdr inspectors through extension-owned trusted session roots (#1069).
 - Keep watchdog reviews, permission arbitration, Prompt Audit rewriting, and completion intent arbitration on their authenticated provider stream across the Pi 0.81 and 0.84 agent constructor APIs. Thanks to @nuzayets for #1067.
 - Show children interrupted by a parent-stopped workflow as stopped instead of failed, and preserve the workflow stop reason (#1060).
 - Keep subagent artifacts and automatic mission records outside project worktrees by default, so read-only workflows do not make clean-tree checks fail (#1062).

@@ -151,6 +151,22 @@ describe("async job tracker", { skip: !available ? "pi packages not available" :
 		}
 	});
 
+	it("stores parent-resolved session roots from async start events", () => {
+		const asyncRoot = createTempDir("pi-async-job-tracker-session-root-");
+		try {
+			const state = createState();
+			const recorder = createEventRecorder();
+			const tracker = createTracker(recorder.pi, state as never, asyncRoot);
+			const sessionRoot = path.join(asyncRoot, "custom-sessions");
+
+			tracker.handleStarted({ id: "run-custom-session", asyncDir: path.join(asyncRoot, "run-custom-session"), agent: "worker", sessionRoot: path.join(sessionRoot, "..", "custom-sessions") });
+
+			assert.equal(state.asyncJobs.get("run-custom-session")?.sessionRoot, path.resolve(sessionRoot));
+		} finally {
+			removeTempDir(asyncRoot);
+		}
+	});
+
 	it("removes completed jobs after retention and requests a rerender", async () => {
 		const asyncRoot = createTempDir("pi-async-job-tracker-");
 		try {

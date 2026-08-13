@@ -1179,6 +1179,7 @@ export async function openSubagentFleet(ctx: ExtensionContext, state: SubagentSt
 			...(input.index !== undefined ? { index: input.index } : {}),
 		}, {
 			state,
+			sessionRoots: state.trustedSessionRoots,
 			cwd: state.baseCwd,
 			...(state.authorityPolicy ? { authorityPolicy: state.authorityPolicy } : {}),
 			...(state.missionStoreConfig ? { missions: state.missionStoreConfig } : {}),

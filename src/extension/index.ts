@@ -381,6 +381,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		...(config.authorityPolicy ? { authorityPolicy: config.authorityPolicy } : {}),
 		...(config.missions ? { missionStoreConfig: config.missions } : {}),
 		parentSessionFile: null,
+		trustedSessionRoots: [],
 		subagentInProgress: false,
 		subagentSpawns: {
 			sessionId: null,
@@ -759,6 +760,10 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		goalTurnId = 0;
 		state.currentSessionId = resolveCurrentSessionId(ctx.sessionManager);
 		state.parentSessionFile = ctx.sessionManager.getSessionFile();
+		state.trustedSessionRoots = [...new Set([
+			...(config.defaultSessionDir ? [path.resolve(expandTilde(config.defaultSessionDir))] : []),
+			...(state.parentSessionFile ? [getSubagentSessionRoot(state.parentSessionFile)] : []),
+		])];
 		state.subagentSpawns = {
 			sessionId: state.currentSessionId,
 			count: 0,

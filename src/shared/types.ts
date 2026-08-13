@@ -1259,6 +1259,8 @@ export interface AsyncStartedEvent {
 	asyncDir?: string;
 	/** Parent-resolved launch directory, used as a trusted artifact root while this session is live. */
 	cwd?: string;
+	/** Parent-resolved child session root, used only while this session owns the live run. */
+	sessionRoot?: string;
 	pid?: number;
 	sessionId?: string;
 	mode?: SubagentRunMode;
@@ -1462,6 +1464,8 @@ export interface AsyncJobState {
 	asyncDir: string;
 	/** Parent-resolved launch directory retained for trusted live artifact lookup. */
 	cwd?: string;
+	/** Parent-resolved child session root retained for trusted live transcript lookup. */
+	sessionRoot?: string;
 	status: "queued" | "running" | "complete" | "failed" | "paused" | "stopped" | "rejected";
 	/** Short caller-facing task/goal shown in fleet surfaces when available. */
 	description?: string;
@@ -1661,6 +1665,8 @@ export interface SubagentState {
 	/** Runtime mission-store snapshot used by optional inspector context. */
 	missionStoreConfig?: MissionStoreConfig;
 	parentSessionFile?: string | null;
+	/** Extension-owned roots trusted for child session transcript reads. */
+	trustedSessionRoots?: string[];
 	/** Last valid parent session model observed for this session; used when continuation contexts omit ctx.model. */
 	lastParentModel?: { provider: string; id: string };
 	subagentInProgress?: boolean;

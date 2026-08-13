@@ -561,6 +561,7 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 			asyncId: info.id,
 			asyncDir,
 			...(typeof info.cwd === "string" ? { cwd: path.resolve(info.cwd) } : {}),
+			...(typeof info.sessionRoot === "string" ? { sessionRoot: path.resolve(info.sessionRoot) } : {}),
 			status: "queued",
 			pid: typeof info.pid === "number" ? info.pid : undefined,
 			...(typeof info.sessionId === "string" ? { sessionId: info.sessionId } : {}),
