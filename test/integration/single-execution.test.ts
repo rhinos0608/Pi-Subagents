@@ -383,20 +383,29 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		assert.equal(output, "Hello from mock agent");
 	});
 
-	it("rejects action='single' with execution fields", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+	it("runs structured single-child requests through the workflow runtime", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		mockPi.onCall({ output: "Structured child completed" });
 		const executor = makeExecutor([makeAgent("echo")]);
 
 		const result = await executor.executePublic(
-			"single-alias",
-			{ action: "single", agent: "echo", task: "Run through alias" },
+			"structured-single",
+			{ agent: "echo", task: "Run through workflow", async: false, context: "fresh" },
 			new AbortController().signal,
 			undefined,
 			makeMinimalCtx(tempDir),
 		);
 
+		assert.equal(result.isError, undefined);
+		assert.equal(result.details.mode, "workflow");
+		assert.equal(mockPi.callCount(), 1);
+		assert.match(JSON.stringify(result.details), /Converted structured single-child request/);
+	});
+
+	it("rejects action='single' with execution fields", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		const executor = makeExecutor([makeAgent("echo")]);
+		const result = await executor.executePublic("single-alias", { action: "single", agent: "echo", task: "work" }, new AbortController().signal, undefined, makeMinimalCtx(tempDir));
 		assert.equal(result.isError, true);
-		assert.match(result.content[0]?.text ?? "", /Direct execution was removed/);
-		assert.equal(mockPi.callCount(), 0);
+		assert.match(result.content[0]?.text ?? "", /action='single' is not supported/);
 	});
 
 	it("rejects internal fan-out fields from public workflows", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {

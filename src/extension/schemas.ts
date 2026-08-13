@@ -255,11 +255,12 @@ const ControlOverrides = Type.Object({
 });
 
 const SubagentParamProperties = {
-	agent: Type.Optional(Type.String({ description: "Agent target for management actions such as get, update, delete, and models." })),
+	agent: Type.Optional(Type.String({ description: "Agent for one-child execution, or target for agent management actions." })),
+	task: Type.Optional(Type.String({ description: "Optional one-child task. Requires agent; cannot combine with action or workflowScript." })),
 	resume: Type.Optional(Type.String({ description: "Retained child run id for a workflowScript runs.run/runs.all item. Mutually exclusive with agent; task supplies the follow-up." })),
 	// Management action (when present, tool operates in management mode)
 	action: Type.Optional(Type.String({ minLength: 1,
-		description: "Optional management/control action. Omit this field for workflowScript execution; use it only for management/control actions."
+		description: "Optional management/control action. Omit this field for structured single-child or workflowScript execution; use it only for management/control actions."
 	})),
 	name: Type.Optional(Type.String({ description: "Human-readable name for action='schedule.create'." })),
 	id: Type.Optional(Type.String({

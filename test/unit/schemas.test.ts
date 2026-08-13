@@ -189,8 +189,10 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 		assert.equal(gate?.type, "string");
 		assert.equal(gate?.minLength, 1);
 		assert.match(String(gate?.description ?? ""), /cannot be combined with acceptance/i);
-		const properties = SubagentParams?.properties as Record<string, unknown> | undefined;
-		assert.equal(properties?.task, undefined, "task should only exist inside workflowScript children");
+		const properties = SubagentParams?.properties as Record<string, JsonSchemaNode> | undefined;
+		assert.equal(properties?.task?.type, "string");
+		assert.match(String(properties?.task?.description ?? ""), /one-child/i);
+		assert.match(String((properties?.agent as JsonSchemaNode | undefined)?.description ?? ""), /one-child/i);
 		assert.equal(properties?.clarify, undefined, "clarify should not be model-facing");
 		assert.ok(properties?.output, "output remains a workflow child default");
 	});
@@ -218,8 +220,7 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 		assert.equal(actionSchema.enum, undefined);
 		const description = String(actionSchema.description ?? "");
 		assert.match(description, /Optional management\/control action/);
-		assert.match(description, /Omit this field for workflowScript execution/);
-		assert.doesNotMatch(description, /\{agent, task\}/);
+		assert.match(description, /Omit this field for structured single-child or workflowScript execution/);
 		assert.match(description, /use it only for management\/control actions/);
 		assert.doesNotMatch(description, /orchestration\./);
 	});
