@@ -151,17 +151,50 @@ describe("async job tracker", { skip: !available ? "pi packages not available" :
 		}
 	});
 
-	it("stores parent-resolved session roots from async start events", () => {
+	it("stores only parent-registered session roots from async start events", () => {
 		const asyncRoot = createTempDir("pi-async-job-tracker-session-root-");
 		try {
 			const state = createState();
 			const recorder = createEventRecorder();
 			const tracker = createTracker(recorder.pi, state as never, asyncRoot);
 			const sessionRoot = path.join(asyncRoot, "custom-sessions");
+			state.liveAsyncSessionRoots = new Map([["run-custom-session", sessionRoot]]);
 
-			tracker.handleStarted({ id: "run-custom-session", asyncDir: path.join(asyncRoot, "run-custom-session"), agent: "worker", sessionRoot: path.join(sessionRoot, "..", "custom-sessions") });
+			tracker.handleStarted({ id: "run-custom-session", asyncDir: path.join(asyncRoot, "run-custom-session"), agent: "worker", sessionRoot: path.join(asyncRoot, "forged") });
 
-			assert.equal(state.asyncJobs.get("run-custom-session")?.sessionRoot, path.resolve(sessionRoot));
+			assert.equal(state.asyncJobs.get("run-custom-session")?.sessionRoot, sessionRoot);
+			assert.equal(state.liveAsyncSessionRoots.has("run-custom-session"), false);
+		} finally {
+			removeTempDir(asyncRoot);
+		}
+	});
+
+	it("ignores unregistered session roots from async start events", () => {
+		const asyncRoot = createTempDir("pi-async-job-tracker-forged-session-root-");
+		try {
+			const state = createState();
+			const recorder = createEventRecorder();
+			const tracker = createTracker(recorder.pi, state as never, asyncRoot);
+
+			tracker.handleStarted({ id: "run-forged-session", asyncDir: path.join(asyncRoot, "run-forged-session"), agent: "worker", sessionRoot: path.join(asyncRoot, "forged") });
+
+			assert.equal(state.asyncJobs.get("run-forged-session")?.sessionRoot, undefined);
+		} finally {
+			removeTempDir(asyncRoot);
+		}
+	});
+
+	it("clears pending live session roots on reset", () => {
+		const asyncRoot = createTempDir("pi-async-job-tracker-reset-session-root-");
+		try {
+			const state = createState();
+			const recorder = createEventRecorder();
+			const tracker = createTracker(recorder.pi, state as never, asyncRoot);
+			state.liveAsyncSessionRoots = new Map([["run-pending", path.join(asyncRoot, "sessions")]]);
+
+			tracker.resetJobs();
+
+			assert.equal(state.liveAsyncSessionRoots.size, 0);
 		} finally {
 			removeTempDir(asyncRoot);
 		}

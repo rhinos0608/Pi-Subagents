@@ -6418,7 +6418,12 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		};
 
 		let nestedForegroundStarted = false;
+		let asyncLaunchFailed = false;
 		try {
+			if (effectiveAsync) {
+				deps.state.liveAsyncSessionRoots ??= new Map();
+				deps.state.liveAsyncSessionRoots.set(asyncRunId, sessionRoot);
+			}
 			if (workflowLaunchObserver) {
 				const singleTask = hasTasks && effectiveParams.tasks?.length === 1 ? effectiveParams.tasks[0] : undefined;
 				const launch = hasSingle
@@ -6432,7 +6437,10 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 				}
 			}
 			const asyncResult = runAsyncPath(execData, deps);
-			if (asyncResult) return attachMission(withRunFanoutBudget(withResolvedContext(withForkThinkingNotes(asyncResult, forkThinkingDowngrades), contextPolicy.contextSummary), runFanoutBudget));
+			if (asyncResult) {
+				asyncLaunchFailed = asyncResult.isError === true;
+				return attachMission(withRunFanoutBudget(withResolvedContext(withForkThinkingNotes(asyncResult, forkThinkingDowngrades), contextPolicy.contextSummary), runFanoutBudget));
+			}
 			if (foregroundControl) {
 				writeNestedForegroundEvent("subagent.nested.started");
 				nestedForegroundStarted = true;
@@ -6454,10 +6462,12 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 				return attachMission(withRunFanoutBudget(withResolvedContext(withForkThinkingNotes(result, forkThinkingDowngrades), contextPolicy.contextSummary), runFanoutBudget, { annotateContent: runFanoutAnnotateContent }));
 			}
 		} catch (error) {
+			asyncLaunchFailed = effectiveAsync;
 			const errorResult = withForkThinkingNotes(toExecutionErrorResult(effectiveParams, error, contextPolicy.contextSummary), forkThinkingDowngrades);
 			if (nestedForegroundStarted) writeNestedForegroundEvent("subagent.nested.completed", errorResult);
 			return attachMission(errorResult);
 		} finally {
+			if (effectiveAsync && (asyncLaunchFailed || (activeAsyncCapacity && !activeAsyncCapacity.owner.runnerStartedAt))) deps.state.liveAsyncSessionRoots?.delete(asyncRunId);
 			if (activeAsyncCapacity && !activeAsyncCapacity.owner.runnerStartedAt) activeAsyncCapacity.rollback();
 			if (foregroundControl) {
 				settleForegroundSchedulingOwner(foregroundControl);

@@ -1669,6 +1669,8 @@ export interface SubagentState {
 	parentSessionFile?: string | null;
 	/** Extension-owned roots trusted for child session transcript reads. */
 	trustedSessionRoots?: string[];
+	/** Live async session roots created by this parent executor, keyed by run id. */
+	liveAsyncSessionRoots?: Map<string, string>;
 	/** Last valid parent session model observed for this session; used when continuation contexts omit ctx.model. */
 	lastParentModel?: { provider: string; id: string };
 	subagentInProgress?: boolean;

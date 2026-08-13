@@ -13,6 +13,7 @@
 - Clean up active-run limits and artifact packaging code without changing behavior.
 
 ### Fixed
+- Trust live Herdr session roots only when the parent executor registered them for that async run.
 - Let a workflow child disable the intercom bridge for one run with `intercomBridge: { mode: "off" }`, while normal async completion still works. Thanks to @jaudiger for #1072.
 - Recover sibling children after a detached workflow fails (#1066).
 - Show child session transcripts in standalone Herdr inspectors when the transcript is in a trusted session folder (#1069).
