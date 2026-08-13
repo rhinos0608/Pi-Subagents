@@ -22,6 +22,10 @@ const READ_ONLY_BUILTIN_TOOLS = new Set([
 const CURSOR_FILE_MUTATION_THINKING =
 	/(?:^|\n)\s*Cursor (?:edit|write)\s*:/i;
 
+const REVIVED_TASK_PATTERN = /^You are reviving a previous subagent conversation\./;
+const IMPLEMENTATION_CHALLENGE_PATTERN = /\bimplementation challenge\b/i;
+const NO_BETTER_CHANGE_NEEDED_PATTERN = /\bno (?:better|further|additional) (?:current[- ]scope )?(?:code |source |file )?(?:change|changes|edit|edits|patch|patches) (?:is|are) needed\b/i;
+
 interface CompletionMutationGuardInput {
 	agent: string;
 	task: string;
@@ -82,14 +86,23 @@ export function hasMutationToolCall(messages: Message[]): boolean {
 	return false;
 }
 
+function reportsNoBetterChallengeChange(messages: Message[]): boolean {
+	return messages.some((message) => message.role === "assistant" && message.content.some((part) =>
+		part.type === "text" && NO_BETTER_CHANGE_NEEDED_PATTERN.test(part.text),
+	));
+}
+
 export function evaluateCompletionMutationGuard(input: CompletionMutationGuardInput): CompletionMutationGuardResult {
 	const expectedMutation = hasMutationToolCapability(input.tools, input.mcpDirectTools)
 		? expectsImplementationMutation(input.agent, input.task)
 		: false;
 	const attemptedMutation = hasMutationToolCall(input.messages);
+	const noEditChallengeComplete = REVIVED_TASK_PATTERN.test(input.task)
+		&& IMPLEMENTATION_CHALLENGE_PATTERN.test(input.task)
+		&& reportsNoBetterChallengeChange(input.messages);
 	return {
 		expectedMutation,
 		attemptedMutation,
-		triggered: expectedMutation && !attemptedMutation,
+		triggered: expectedMutation && !attemptedMutation && !noEditChallengeComplete,
 	};
 }

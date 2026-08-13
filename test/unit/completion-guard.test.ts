@@ -28,13 +28,27 @@ test("implementation task with no mutation triggers the completion guard", () =>
 	const result = evaluateCompletionMutationGuard({
 		agent: "worker",
 		task: "Implement the approved fix",
-		messages: [assistantText("Plan: update the files...")],
+		messages: [assistantText("No better current-scope change is needed.")],
 	});
 
 	assert.deepEqual(result, {
 		expectedMutation: true,
 		attemptedMutation: false,
 		triggered: true,
+	});
+});
+
+test("implementation challenges may complete with an explicit no-better-change report", () => {
+	const result = evaluateCompletionMutationGuard({
+		agent: "worker",
+		task: "You are reviving a previous subagent conversation.\n\nFollow-up:\nRun implementation challenge pass two and implement any better current-scope change.",
+		messages: [assistantText("No better current-scope change is needed.")],
+	});
+
+	assert.deepEqual(result, {
+		expectedMutation: true,
+		attemptedMutation: false,
+		triggered: false,
 	});
 });
 
