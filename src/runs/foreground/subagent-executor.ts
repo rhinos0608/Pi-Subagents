@@ -307,6 +307,8 @@ export interface SubagentParamsLike {
 	foregroundOnly?: boolean;
 	timeoutMs?: number;
 	maxRuntimeMs?: number;
+	/** Optional hard per-tool-call timeout (ms). Known-fast tools also have a default. */
+	toolTimeoutMs?: number;
 	turnBudget?: TurnBudgetConfig;
 	/** Internal-only strict turn-boundary enforcement for versioned foreground delegation. */
 	enforceHardTurnLimit?: boolean;
@@ -409,6 +411,8 @@ interface ExecutionContextData {
 	nestedRoute?: NestedRouteInfo;
 	timeoutMs?: number;
 	deadlineAt?: number;
+	/** Raw global config.toolTimeoutMs, for per-step resolution in async runners. */
+	configToolTimeoutMs?: number;
 	turnBudget?: ResolvedTurnBudget;
 	toolBudget?: ResolvedToolBudget;
 	usageBudget?: UsageBudgetConfig;
@@ -2798,6 +2802,8 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 			toolBudget: data.toolBudget,
 			usageBudget: data.usageBudget,
 			configToolBudget: data.configToolBudget,
+			callToolTimeoutMs: data.params?.toolTimeoutMs,
+			configToolTimeoutMs: data.configToolTimeoutMs,
 			capabilityCeiling: data.capabilityCeiling,
 			runFanoutBudget: data.runFanoutBudget,
 			globalConcurrencyLimit: deps.config.globalConcurrencyLimit,
@@ -2845,6 +2851,8 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 			toolBudget: data.toolBudget,
 			usageBudget: data.usageBudget,
 			configToolBudget: data.configToolBudget,
+			callToolTimeoutMs: data.params?.toolTimeoutMs,
+			configToolTimeoutMs: data.configToolTimeoutMs,
 			capabilityCeiling: data.capabilityCeiling,
 			runFanoutBudget: data.runFanoutBudget,
 			globalConcurrencyLimit: deps.config.globalConcurrencyLimit,
@@ -2916,6 +2924,8 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 			toolBudget: data.toolBudget,
 			usageBudget: data.usageBudget,
 			configToolBudget: data.configToolBudget,
+			toolTimeoutMs: data.params?.toolTimeoutMs,
+			configToolTimeoutMs: data.configToolTimeoutMs,
 			capabilityCeiling: data.capabilityCeiling,
 			runFanoutBudget: data.runFanoutBudget,
 			parentWorkflowRunId: params.workflowParentRunId,
@@ -3005,6 +3015,8 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 		toolBudget: data.toolBudget,
 		usageBudget: data.usageBudget,
 		configToolBudget: data.configToolBudget,
+		callToolTimeoutMs: data.params?.toolTimeoutMs,
+		configToolTimeoutMs: data.configToolTimeoutMs,
 		permissions: deps.config.permissions,
 		globalConcurrencyLimit: deps.config.globalConcurrencyLimit,
 		capabilityCeiling: data.capabilityCeiling,
@@ -3072,6 +3084,8 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 				toolBudget: data.toolBudget,
 				usageBudget: data.usageBudget,
 				configToolBudget: data.configToolBudget,
+				callToolTimeoutMs: data.params?.toolTimeoutMs,
+				configToolTimeoutMs: data.configToolTimeoutMs,
 				capabilityCeiling: data.capabilityCeiling,
 				runFanoutBudget: data.runFanoutBudget,
 				globalConcurrencyLimit: deps.config.globalConcurrencyLimit,
@@ -3159,6 +3173,10 @@ interface ForegroundParallelRunInput {
 	worktreeSetup?: WorktreeSetup;
 	timeoutMs?: number;
 	deadlineAt?: number;
+	/** Per-call per-tool timeout, resolved separately for each task's agent. */
+	toolTimeoutMs?: number;
+	/** Raw global config.toolTimeoutMs, used by each task's resolver. */
+	configToolTimeoutMs?: number;
 	turnBudget?: ResolvedTurnBudget;
 	usageBudget?: UsageBudgetConfig;
 	toolBudgets: (ResolvedToolBudget | undefined)[];
@@ -3535,6 +3553,8 @@ async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Pr
 					share: input.shareEnabled || undefined,
 					maxOutput: input.maxOutput,
 					timeoutMs: input.timeoutMs,
+					toolTimeoutMs: input.toolTimeoutMs,
+					configToolTimeoutMs: input.configToolTimeoutMs,
 					turnBudget: input.turnBudget,
 					...(model ? { model } : {}),
 					...(effectiveSkills !== undefined ? { skill: effectiveSkills } : {}),
@@ -3614,6 +3634,8 @@ async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Pr
 			acceptanceContext: { mode: "parallel" },
 			onEffectivePrompt: input.foregroundControl ? (prompt) => updateLiveEffectivePrompt(input.foregroundControl!, index, prompt) : undefined,
 			timeoutMs: input.timeoutMs,
+			toolTimeoutMs: input.toolTimeoutMs,
+			configToolTimeoutMs: input.configToolTimeoutMs,
 			deadlineAt: input.deadlineAt,
 			turnBudget: input.turnBudget,
 			toolBudget: input.toolBudgets[index],
@@ -3863,6 +3885,8 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 					usageBudget: data.usageBudget,
 					toolBudget: data.toolBudget,
 					configToolBudget: data.configToolBudget,
+					callToolTimeoutMs: data.params?.toolTimeoutMs,
+					configToolTimeoutMs: data.configToolTimeoutMs,
 					globalConcurrencyLimit: deps.config.globalConcurrencyLimit,
 					runFanoutBudget: data.runFanoutBudget,
 				}));
@@ -3983,6 +4007,8 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 			worktreeSetup,
 			timeoutMs: data.timeoutMs,
 			deadlineAt,
+			toolTimeoutMs: data.params?.toolTimeoutMs,
+			configToolTimeoutMs: data.configToolTimeoutMs,
 			turnBudget: data.turnBudget,
 			usageBudget: data.usageBudget,
 			toolBudgets,
@@ -4377,6 +4403,8 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 			},
 			timeoutMs: data.timeoutMs,
 			deadlineAt,
+			toolTimeoutMs: params.toolTimeoutMs,
+			configToolTimeoutMs: data.configToolTimeoutMs,
 			turnBudget: data.turnBudget,
 			enforceHardTurnLimit: params.enforceHardTurnLimit,
 			toolBudget: effectiveToolBudget.toolBudget,
@@ -4973,7 +5001,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 					status.toolCount = toolCounts.length > 0 ? toolCounts.reduce((total, count) => total + count, 0) : undefined;
 					status.currentStep = runningSteps.length === 1 ? steps.indexOf(runningSteps[0]!) : undefined;
 				};
-				const workflowJob: AsyncJobState = { asyncId: workflowRunId, asyncDir, cwd: workflowCwd, status: "running", sessionId: currentSessionId ?? undefined, mode: "workflow", agents: [], steps: [], startedAt, updatedAt: startedAt, ...(timeout !== undefined ? { timeoutMs: timeout, deadlineAt: startedAt + timeout } : {}), workflow: status.workflow };
+				const workflowJob: AsyncJobState = { asyncId: workflowRunId, asyncDir, toolCallId, cwd: workflowCwd, status: "running", sessionId: currentSessionId ?? undefined, mode: "workflow", agents: [], steps: [], startedAt, updatedAt: startedAt, ...(timeout !== undefined ? { timeoutMs: timeout, deadlineAt: startedAt + timeout } : {}), workflow: status.workflow };
 				deps.state.asyncJobs.set(workflowRunId, workflowJob);
 				deps.state.fleetJobs ??= new Map();
 				deps.state.fleetJobs.set(workflowRunId, workflowJob);
@@ -6249,6 +6277,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			usageBudget: usageBudget.budget,
 			allowZeroToolBudget,
 			configToolBudget: configToolBudget.toolBudget,
+			configToolTimeoutMs: deps.config.toolTimeoutMs,
 			contextPolicy,
 			modelScope,
 			parentModel: requestParentModel,

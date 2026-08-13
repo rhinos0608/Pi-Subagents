@@ -676,7 +676,7 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		const activityDeadline = Date.now() + 5_000;
 		while (Date.now() < activityDeadline && !fs.existsSync(resultPath)) {
 			const candidate = JSON.parse(fs.readFileSync(statusPath, "utf-8")) as AsyncStatus;
-			if (candidate.activityState === "active_long_running" && candidate.steps?.[0]?.currentTool === "read") {
+			if (candidate.activityState === "needs_attention" && candidate.steps?.[0]?.currentTool === "read") {
 				liveStatus = candidate;
 				break;
 			}
@@ -684,7 +684,7 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		}
 
 		assert.ok(liveStatus, "expected workflow status to expose live child activity");
-		assert.equal(liveStatus.activityState, "active_long_running");
+		assert.equal(liveStatus.activityState, "needs_attention");
 		assert.equal(typeof liveStatus.lastActivityAt, "number");
 		assert.equal(liveStatus.currentTool, "read");
 		assert.match(liveStatus.currentPath ?? "", /src[/\\]example\.ts$/);
@@ -693,10 +693,10 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		assert.equal(liveStatus.steps?.[0]?.agent, "echo");
 		assert.match(liveStatus.steps?.[0]?.sessionFile ?? "", /session\.jsonl$/);
 		assert.equal(fs.existsSync(liveStatus.steps?.[0]?.sessionFile ?? ""), true);
-		assert.equal(liveStatus.steps?.[0]?.activityState, "active_long_running");
+		assert.equal(liveStatus.steps?.[0]?.activityState, "needs_attention");
 		assert.equal(typeof liveStatus.steps?.[0]?.lastActivityAt, "number");
 		assert.equal(liveStatus.steps?.[0]?.toolCount, 1);
-		assert.equal(asyncJobs.get(workflowRunId)?.activityState, "active_long_running");
+		assert.equal(asyncJobs.get(workflowRunId)?.activityState, "needs_attention");
 		assert.equal(asyncJobs.get(workflowRunId)?.steps?.[0]?.currentTool, "read");
 
 		const completionDeadline = Date.now() + 5_000;

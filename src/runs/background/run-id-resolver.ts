@@ -109,6 +109,22 @@ function hasExactForegroundId(state: SubagentState | undefined, id: string): boo
 	return Boolean(remembered && state.currentSessionId && remembered.sessionId === state.currentSessionId);
 }
 
+function exactLiveAsyncToolCallMatch(state: SubagentState | undefined, toolCallId: string, asyncDirRoot: string, resultsDir: string): AsyncRunMatch | undefined {
+	if (!state?.asyncJobs) return undefined;
+	const matches = [...state.asyncJobs.values()].filter((job) => job.toolCallId === toolCallId);
+	if (matches.length > 1) throw new Error(`Subagent tool-call id '${toolCallId}' is ambiguous across async runs. Use the returned asyncId instead.`);
+	const match = matches[0];
+	if (!match) return undefined;
+	return {
+		id: match.asyncId,
+		location: {
+			asyncDir: fs.existsSync(match.asyncDir) ? match.asyncDir : path.join(asyncDirRoot, match.asyncId),
+			resultPath: resultPathFor(resultsDir, match.asyncId),
+			resolvedId: match.asyncId,
+		},
+	};
+}
+
 function nestedScopeFromState(state: SubagentState | undefined): NestedRunResolutionScope | undefined {
 	if (!state) return undefined;
 	const routes: NestedRoute[] = [];
@@ -138,6 +154,8 @@ export function resolveSubagentRunId(id: string, deps: ResolveSubagentRunIdDeps 
 	if (hasExactForegroundId(deps.state, id)) return { kind: "foreground", id };
 	const exactAsync = exactAsyncLocation(id, asyncDirRoot, resultsDir);
 	if (exactAsync) return { kind: "async", id, location: exactAsync };
+	const exactLiveToolCallMatch = exactLiveAsyncToolCallMatch(deps.state, id, asyncDirRoot, resultsDir);
+	if (exactLiveToolCallMatch) return { kind: "async", id: exactLiveToolCallMatch.id, location: exactLiveToolCallMatch.location };
 	const exactToolCallIdMatches = toolCallIdAsyncLocations(id, asyncDirRoot, resultsDir);
 	if (exactToolCallIdMatches.length > 1) throw new Error(`Subagent tool-call id '${id}' is ambiguous across async runs. Use the returned asyncId instead.`);
 	if (exactToolCallIdMatches[0]) return { kind: "async", id: exactToolCallIdMatches[0].id, location: exactToolCallIdMatches[0].location };

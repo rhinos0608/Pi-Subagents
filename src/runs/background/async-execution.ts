@@ -24,6 +24,7 @@ import { buildSkillInjection, normalizeSkillInput, resolveSkillsWithFallback } f
 import { buildAgentMemoryInjection } from "../../agents/agent-memory.ts";
 import { PI_CODING_AGENT_PACKAGE_ROOT_ENV, PROMPT_REDACTED, resolveChildCwd } from "../../shared/utils.ts";
 import { buildModelCandidates, resolveEffectiveSubagentModel, resolveModelCandidate, resolveSubagentModelOverride, type AvailableModelInfo, type ParentModel } from "../shared/model-fallback.ts";
+import { resolveToolTimeoutMs, toolTimeoutFromEnv } from "../shared/tool-timeout.ts";
 import type { ModelScopeConfig } from "../shared/model-scope.ts";
 import { resolveEffectiveThinking } from "../../shared/model-info.ts";
 import { resolveExpectedWorktreeAgentCwd } from "../shared/worktree.ts";
@@ -174,6 +175,12 @@ interface AsyncChainParams {
 	toolBudget?: ResolvedToolBudget;
 	usageBudget?: UsageBudgetConfig;
 	configToolBudget?: ResolvedToolBudget;
+	/** Optional per-call hard toolTimeoutMs override (highest precedence). */
+	callToolTimeoutMs?: number;
+	/** Global config.toolTimeoutMs (third precedence, after agent frontmatter). */
+	configToolTimeoutMs?: number;
+	/** PI_SUBAGENT_TOOL_TIMEOUT_MS override (lowest precedence). */
+	toolTimeoutMsEnv?: string | undefined;
 	/** Global cap on simultaneously-running subagent tasks within the async run. */
 	globalConcurrencyLimit?: number;
 	capabilityCeiling?: ResolvedSubagentCapabilityCeiling;
@@ -225,10 +232,16 @@ interface AsyncSingleParams {
 	acceptance?: AcceptanceInput;
 	timeoutMs?: number;
 	absoluteDeadlineAt?: number;
+	/** Optional per-call hard toolTimeoutMs override (highest precedence). */
+	toolTimeoutMs?: number;
 	turnBudget?: { maxTurns: number; graceTurns?: number };
 	toolBudget?: ResolvedToolBudget | ToolBudgetConfig;
 	usageBudget?: UsageBudgetConfig;
 	configToolBudget?: ResolvedToolBudget;
+	/** Global config.toolTimeoutMs (third precedence, after agent frontmatter). */
+	configToolTimeoutMs?: number;
+	/** PI_SUBAGENT_TOOL_TIMEOUT_MS override (lowest precedence). */
+	toolTimeoutMsEnv?: string | undefined;
 	allowZeroToolBudget?: boolean;
 	capabilityCeiling?: ResolvedSubagentCapabilityCeiling;
 	runFanoutBudget?: RunFanoutBudgetDescriptor;
@@ -267,6 +280,12 @@ export interface AsyncRunnerStepBuildParams {
 	validateOutputBindings?: boolean;
 	toolBudget?: ResolvedToolBudget;
 	configToolBudget?: ResolvedToolBudget;
+	/** Optional per-call hard toolTimeoutMs override from the subagent invocation. */
+	callToolTimeoutMs?: number;
+	/** Global config.toolTimeoutMs (third precedence, after agent frontmatter). */
+	configToolTimeoutMs?: number;
+	/** PI_SUBAGENT_TOOL_TIMEOUT_MS override (lowest precedence). */
+	toolTimeoutMsEnv?: string | undefined;
 	capabilityCeiling?: ResolvedSubagentCapabilityCeiling;
 }
 
@@ -714,6 +733,13 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 		const toolBudgetInput = s.toolBudget ?? params.toolBudget ?? a.toolBudget ?? params.configToolBudget;
 		const resolvedToolBudget = validateToolBudgetConfig(toolBudgetInput, s.toolBudget ? "toolBudget" : a.toolBudget ? "agent.toolBudget" : "config.toolBudget");
 		if (resolvedToolBudget.error) throw new AsyncStartValidationError(resolvedToolBudget.error);
+		const resolvedToolTimeout = resolveToolTimeoutMs({
+			callValue: params.callToolTimeoutMs,
+			agentValue: a.defaultToolTimeoutMs,
+			configValue: params.configToolTimeoutMs,
+			envValue: params.toolTimeoutMsEnv ?? toolTimeoutFromEnv(),
+		});
+		if (resolvedToolTimeout.error) throw new AsyncStartValidationError(resolvedToolTimeout.error);
 		const stepCwd = resolveChildCwd(runnerCwd, s.cwd);
 		const instructionCwd = behaviorCwd ?? stepCwd;
 		const readExistenceCwd = behaviorCwd ? stepCwd : instructionCwd;
@@ -827,6 +853,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 			sessionFile,
 			maxSubagentDepth: resolveChildMaxSubagentDepth(maxSubagentDepth, a.maxSubagentDepth),
 			timeoutMs: a.defaultTimeoutMs ?? DEFAULT_ASYNC_TIMEOUT_MS,
+			toolTimeoutMs: resolvedToolTimeout.toolTimeoutMs,
 			waitToolEnabled: params.waitToolEnabled,
 			effectiveAcceptance: resolveEffectiveAcceptance({
 				explicit: s.acceptance,
@@ -1050,6 +1077,9 @@ export function executeAsyncChain(
 		asyncDir,
 		toolBudget: params.toolBudget,
 		configToolBudget: params.configToolBudget,
+		callToolTimeoutMs: params.callToolTimeoutMs,
+		configToolTimeoutMs: params.configToolTimeoutMs,
+		toolTimeoutMsEnv: params.toolTimeoutMsEnv ?? toolTimeoutFromEnv(),
 		capabilityCeiling,
 	});
 	if ("error" in built) {
@@ -1384,6 +1414,14 @@ export function executeAsyncSingle(
 		? deadlineAt - Date.now()
 		: params.timeoutMs;
 	if (timeoutMs !== undefined && timeoutMs <= 0) return formatAsyncStartError("single", "The source run's absolute deadline expired before recovery could launch.");
+	const resolvedToolTimeout = resolveToolTimeoutMs({
+		callValue: params.toolTimeoutMs,
+		agentValue: agentConfig.defaultToolTimeoutMs,
+		configValue: params.configToolTimeoutMs,
+		envValue: params.toolTimeoutMsEnv ?? toolTimeoutFromEnv(),
+	});
+	if (resolvedToolTimeout.error) return formatAsyncStartError("single", resolvedToolTimeout.error);
+	const toolTimeoutMs = resolvedToolTimeout.toolTimeoutMs;
 	const initialTurnBudget = params.turnBudget ? initialTurnBudgetState(params.turnBudget) : undefined;
 	const initialUsageBudget = usageBudgetState(params.usageBudget, undefined);
 	const resolvedSessionDir = params.sessionDir ?? (sessionRoot ? path.join(sessionRoot, `async-${id}`) : undefined);
@@ -1552,6 +1590,7 @@ export function executeAsyncSingle(
 				controlConfig,
 				timeoutMs,
 				deadlineAt,
+				toolTimeoutMs,
 				turnBudget: params.turnBudget,
 				toolBudget: params.toolBudget,
 				usageBudget: params.usageBudget,

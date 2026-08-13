@@ -215,7 +215,7 @@ export interface ControlEvent {
 	nestedRunId?: string;
 	nestingPath?: NestedRunAddress["path"];
 	message: string;
-	reason?: "idle" | "completion_guard" | "active_long_running" | "tool_failures" | "supervisor_request" | "time_threshold" | "turn_threshold" | "token_threshold";
+	reason?: "idle" | "completion_guard" | "active_long_running" | "tool_failures" | "supervisor_request" | "time_threshold" | "turn_threshold" | "token_threshold" | "tool_open_threshold";
 	turns?: number;
 	tokens?: number;
 	toolCount?: number;
@@ -1464,6 +1464,8 @@ export type AsyncJobStep = NonNullable<AsyncStatus["steps"]>[number] & {
 export interface AsyncJobState {
 	asyncId: string;
 	asyncDir: string;
+	/** Host tool-call id retained when it differs from the internal run id. */
+	toolCallId?: string;
 	/** Parent-resolved launch directory retained for trusted live artifact lookup. */
 	cwd?: string;
 	/** Parent-resolved child session root retained for trusted live transcript lookup. */
@@ -1767,6 +1769,10 @@ export interface RunSyncOptions {
 	interruptSignal?: AbortSignal;
 	timeoutMs?: number;
 	deadlineAt?: number;
+	/** Per-call per-tool timeout (ms), resolved with the agent/config/environment ladder at execution. */
+	toolTimeoutMs?: number;
+	/** Raw global config.toolTimeoutMs, used by the per-child resolver. */
+	configToolTimeoutMs?: number;
 	turnBudget?: ResolvedTurnBudget;
 	usageBudget?: UsageBudgetConfig;
 	/** Enforce maxTurns + graceTurns as a hard model-turn boundary. */
@@ -1940,6 +1946,15 @@ export interface ExtensionConfig {
 	 * Must be a positive integer; invalid values are ignored.
 	 */
 	timeoutMs?: number;
+	/**
+	 * Optional hard per-tool-call timeout in milliseconds. Bounds a single
+	 * subagent tool call inside the child; the run-level timeout remains
+	 * authoritative. Known-fast built-in tools have a five-minute default when
+	 * this is undefined. Precedence: call param > agent frontmatter > this config >
+	 * PI_SUBAGENT_TOOL_TIMEOUT_MS. Must be a positive integer; invalid values
+	 * are rejected with an error.
+	 */
+	toolTimeoutMs?: number;
 	control?: ControlConfig;
 	completionBatch?: CompletionBatchConfig;
 	turnBudget?: TurnBudgetConfig;
