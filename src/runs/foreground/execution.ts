@@ -91,7 +91,7 @@ import {
 	summarizeRecentMutatingFailures,
 } from "../shared/long-running-guard.ts";
 import { acceptanceFailureMessage, buildSkippedAcceptanceLedger, evaluateAcceptance, formatAcceptancePrompt, resolveEffectiveAcceptance, stripAcceptanceReport, validateAcceptanceInput } from "../shared/acceptance.ts";
-import { PROMPT_REDACTED } from "./prompt-audit.ts";
+import { PROMPT_REDACTED } from "../../shared/utils.ts";
 import { attachContractProjections, isAgentContractV1 } from "../shared/agent-contract.ts";
 import { appendTurnBudgetSystemPrompt, formatTurnBudgetOutput, initialTurnBudgetState, turnBudgetDecision, turnBudgetDeferredNote, turnBudgetDeferredState, turnBudgetExceededMessage, turnBudgetSoftNote, turnBudgetState } from "../shared/turn-budget.ts";
 import { initialToolBudgetState, toolBudgetState } from "../shared/tool-budget.ts";
