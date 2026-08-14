@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Fixed
+- Reject configured subagent models that are not in the active host model registry before spawning a child, instead of forwarding an invalid `--model` argument to Pi. Thanks to @DresvyanskiyDenis for #1093.
 - Start Herdr inspector and project pane commands with a shell-safe executable token, including paths that need quoting in Nushell. Thanks to @Rival for #1092.
 - Stop `agentContract.version` from using an `enum` on an integer, which Gemini's function-calling schema subset rejects (the property is dropped from the tool schema but stays in `required`, causing a `400: property is not defined` for every Gemini model). Integer bounds express the same constraint and are valid everywhere. Thanks to @MarcusNeufeldt for #1095.
 - Show supervisor-detached workflow children as paused and needing attention instead of failed while preserving recovery guidance (#1096).
