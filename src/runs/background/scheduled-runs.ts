@@ -361,6 +361,7 @@ export class ScheduledRunManager {
 	private readonly stores = new Map<string, ScheduleStore>();
 	private readonly contexts = new Map<string, ExtensionContext>();
 	private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
+	private readonly observedAsyncIds = new Set<string>();
 	private readonly now: () => number;
 	private readonly randomId: () => string;
 	private readonly timersApi: ScheduledRunTimers;
@@ -383,6 +384,7 @@ export class ScheduledRunManager {
 		this.store = undefined;
 		this.stores.clear();
 		this.contexts.clear();
+		this.observedAsyncIds.clear();
 	}
 
 	async handleToolCall(params: SubagentParamsLike, ctx: ExtensionContext): Promise<AgentToolResult<Details>> {
@@ -407,26 +409,7 @@ export class ScheduledRunManager {
 	}
 
 	observedCompletionRunIds(): Set<string> {
-		const runIds = new Set<string>();
-		for (const store of this.stores.values()) {
-			let ids: string[];
-			try {
-				ids = store.ids();
-			} catch (error) {
-				console.error(`Failed to inspect schedule store '${store.root}' during async completion discovery:`, error);
-				continue;
-			}
-			for (const id of ids) {
-				try {
-					for (const run of store.history(id)) {
-						if (run.state === "running" && run.asyncId) runIds.add(run.asyncId);
-					}
-				} catch (error) {
-					console.error(`Failed to inspect schedule '${id}' in '${store.root}' during async completion discovery:`, error);
-				}
-			}
-		}
-		return runIds;
+		return new Set(this.observedAsyncIds);
 	}
 
 	handleAsyncCompletion(payload: unknown): void {
@@ -566,6 +549,7 @@ export class ScheduledRunManager {
 	private restoreOne(store: ScheduleStore, schedule: ScheduleRecord): void {
 		if (schedule.activeRunId) {
 			const run = store.history(schedule.id).find((item) => item.id === schedule.activeRunId);
+			if (run?.state === "running" && run.asyncId) this.observedAsyncIds.add(run.asyncId);
 			const startedAt = run?.startedAt ? Date.parse(run.startedAt) : Number.NaN;
 			if (run?.state === "running" && run.asyncDir) {
 				try {
@@ -661,6 +645,7 @@ export class ScheduledRunManager {
 			if (result.isError || !asyncId) throw new Error(result.content.find((item) => item.type === "text")?.text ?? "Scheduled launch failed.");
 			run.asyncId = asyncId;
 			run.asyncDir = result.details?.asyncDir;
+			this.observedAsyncIds.add(asyncId);
 			store.writeRun(schedule, run, "schedule.run.attached_async");
 			this.arm(schedule, store);
 			return run;
@@ -695,6 +680,7 @@ export class ScheduledRunManager {
 			schedule.trigger.nextRunAt = nextAfter(schedule.trigger, planned, now);
 			store.writeRun(schedule, skipped, "schedule.skipped_overlap");
 		}
+		if (run.asyncId) this.observedAsyncIds.delete(run.asyncId);
 		run.state = success ? "completed" : "failed_run";
 		run.completedAt = timestamp(now);
 		if (!success && error) run.error = error;

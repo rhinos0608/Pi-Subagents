@@ -31,6 +31,7 @@ import { createSubagentParamsSchema } from "./schemas.ts";
 import { createSubagentExecutor, type SubagentParamsLike } from "../runs/foreground/subagent-executor.ts";
 import { createAsyncJobTracker } from "../runs/background/async-job-tracker.ts";
 import { getActiveAsyncCapacitySnapshot, resolveMaxActiveAsyncRunsPerSession } from "../runs/background/active-async-capacity.ts";
+import { cleanupResultIndexes } from "../runs/background/result-files.ts";
 import { createResultWatcher } from "../runs/background/result-watcher.ts";
 import { createScheduledRunManager } from "../runs/background/scheduled-runs.ts";
 import { registerSlashCommands } from "../slash/slash-commands.ts";
@@ -81,6 +82,13 @@ import {
 } from "./control-notices.ts";
 
 export { loadConfig, resolveAsyncByDefault } from "./config.ts";
+
+const SLOW_RELOAD_PHASE_MS = 250;
+
+function logSlowPhase(label: string, startedAt: number): void {
+	const elapsed = Date.now() - startedAt;
+	if (elapsed >= SLOW_RELOAD_PHASE_MS) console.error(`Subagent reload phase '${label}' took ${elapsed}ms.`);
+}
 
 function workflowLaneKeys(script: string): string[] {
 	const keys: string[] = [];
@@ -373,6 +381,14 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	const tempArtifactsDir = getArtifactsDir(null);
 	const artifactCleanupDays = config.artifactConfig?.cleanupDays ?? DEFAULT_ARTIFACT_CONFIG.cleanupDays;
 	cleanupAllArtifactDirs(artifactCleanupDays);
+	const resultIndexCleanupTimer = setTimeout(() => {
+		try {
+			cleanupResultIndexes(DIRS.results);
+		} catch (error) {
+			console.error("Failed to clean stale subagent result indexes:", error);
+		}
+	}, 30_000);
+	resultIndexCleanupTimer.unref?.();
 
 	const state: SubagentState = {
 		baseCwd: "",
@@ -455,6 +471,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	);
 
 	const runtimeCleanup = () => {
+		clearTimeout(resultIndexCleanupTimer);
 		stopResultWatcher();
 		state.currentSessionId = null;
 		completionNotifier.dispose();
@@ -783,18 +800,38 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 			}
 		}
 		state.lastUiContext = ctx;
+		let phaseStartedAt = Date.now();
 		refreshActiveAsyncCapacity();
+		logSlowPhase("active-capacity", phaseStartedAt);
+		phaseStartedAt = Date.now();
 		cleanupSessionArtifacts(ctx);
+		logSlowPhase("session-artifact-cleanup", phaseStartedAt);
 		state.foregroundControls.clear();
 		state.lastForegroundControlId = null;
+		phaseStartedAt = Date.now();
 		resetJobs(ctx);
+		logSlowPhase("reset-jobs", phaseStartedAt);
+		phaseStartedAt = Date.now();
 		restoreForegroundRunHistory(state, { resultsDir: DIRS.results });
+		logSlowPhase("foreground-history", phaseStartedAt);
+		phaseStartedAt = Date.now();
 		restoreActiveJobs(ctx);
+		logSlowPhase("active-job-restore", phaseStartedAt);
+		phaseStartedAt = Date.now();
 		scheduledRunManager.bindSession(ctx);
+		logSlowPhase("scheduled-runs", phaseStartedAt);
+		phaseStartedAt = Date.now();
 		restoreSlashFinalSnapshots(ctx.sessionManager.getEntries());
+		logSlowPhase("slash-snapshots", phaseStartedAt);
+		phaseStartedAt = Date.now();
 		waitSubscriptionManager.restore();
+		logSlowPhase("wait-subscriptions", phaseStartedAt);
+		phaseStartedAt = Date.now();
 		startResultWatcher();
+		logSlowPhase("result-watcher-start", phaseStartedAt);
+		phaseStartedAt = Date.now();
 		primeExistingResults({ triggerTurn: !recovering });
+		logSlowPhase("result-prime", phaseStartedAt);
 		fleetStatus?.setContext(ctx);
 	};
 
@@ -837,6 +874,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 
 	pi.on("session_shutdown", async () => {
 		state.widgetsSuspended = false;
+		clearTimeout(resultIndexCleanupTimer);
 		stopResultWatcher();
 		state.currentSessionId = null;
 		state.parentSessionFile = null;

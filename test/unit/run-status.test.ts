@@ -33,6 +33,7 @@ describe("async run status inspection", () => {
 			fs.writeFileSync(sessionFile, "", "utf-8");
 			fs.writeFileSync(path.join(asyncDir, "status.json"), JSON.stringify({
 				runId: "run-stale",
+				sessionId: "session-current",
 				mode: "single",
 				state: "running",
 				pid: 12345,
@@ -668,6 +669,7 @@ describe("async run status inspection", () => {
 			}, null, 2), "utf-8");
 			fs.writeFileSync(path.join(nestedAsyncDir, "status.json"), JSON.stringify({
 				runId: "nested-stale",
+				sessionId: "session-nested",
 				mode: "single",
 				state: "running",
 				pid: 54321,

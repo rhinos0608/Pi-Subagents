@@ -294,6 +294,7 @@ describe("recurring schedule execution", () => {
 		assert.deepEqual(h.launches[0]?.params, { workflowScript: "return runs.run('main', { agent: 'worker', task: 'Maintain backlog' })", async: true, context: "fresh", cwd: h.ctx.cwd, mission: false });
 		h.launches[0]!.resolve({ content: [{ type: "text", text: "Async worker" }], details: { mode: "single", results: [], asyncId: "async-1", asyncDir: "/tmp/async-1" } });
 		await flush();
+		assert.deepEqual([...h.manager.observedCompletionRunIds()], ["async-1"]);
 
 		let history = await h.manager.handleToolCall({ action: "schedule.history", id: "hourly" }, h.ctx);
 		assert.match(text(history), /running.*async async-1/);
@@ -304,6 +305,7 @@ describe("recurring schedule execution", () => {
 		assert.equal(fs.readdirSync(path.join(dir, "runs")).length, 1);
 
 		h.manager.handleAsyncCompletion({ runId: "async-1", success: true, summary: "Done" });
+		assert.deepEqual([...h.manager.observedCompletionRunIds()], []);
 		history = await h.manager.handleToolCall({ action: "schedule.history", id: "hourly" }, h.ctx);
 		assert.match(text(history), /completed.*async async-1/);
 		assert.equal(fs.existsSync(path.join(dir, "active.lock")), false);

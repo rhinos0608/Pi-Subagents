@@ -20,6 +20,7 @@ import { resolveStepBehavior } from "../shared/settings.ts";
 import { agentDefinitionDigest, AGENT_DEFINITION_PROJECTION_VERSION, launchBindingDigest } from "../shared/launch-contract.ts";
 import { DIRS, TEMP_ROOT_DIR } from "../shared/types.ts";
 import { processTerminalCandidatePath, processTerminalPath } from "../runs/background/process-terminal.ts";
+import { resultFilePath } from "../runs/background/result-files.ts";
 import { nestedResultsPath } from "../runs/shared/nested-events.ts";
 
 export const SUBAGENT_LAUNCH_CONTRACT_VERSION = 2 as const;
@@ -295,7 +296,7 @@ export async function resolveSubagentLaunchContract(input: SubagentLaunchContrac
 		: path.join(DIRS.async, runId);
 	const lifecycleResultPath = input.nestedRootRunId
 		? nestedResultsPath(input.nestedRootRunId, runId)
-		: path.join(DIRS.results, `${runId}.json`);
+		: resultFilePath(DIRS.results, runId);
 	if (!sessionDir) diagnostics.push({ code: "host_required", severity: "host-required", message: "No sessionRoot/sessionDir was supplied; exact child session paths require the Pi host session-root policy." });
 	if (input.availableModels === undefined && (input.model || agent.model || input.parentModel)) {
 		diagnostics.push({ code: "host_required", severity: "host-required", message: "No availableModels snapshot was supplied; model resolution may differ from the active Pi host registry." });

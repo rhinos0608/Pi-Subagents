@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Changed
+- Reduce reload work for large async histories by indexing the async result inbox by session, observer, and tool-call id instead of scanning every old result file; also age stale terminal active markers and throttle replay cleanup scans.
+
 ## [0.49.0] - 2026-08-13
 
 ### Added
