@@ -13,6 +13,7 @@
 
 ### Changed
 - Remove legacy subagent tool compatibility fields for append-step control, schedule aliases, async recovery metadata, and string mission goals.
+- Remove chain approval checkpoint steps and the `approve-checkpoint` / `reject-checkpoint` controls.
 - Clarify that subagent reviews and gates should stay async unless foreground behavior is the actual requirement.
 - Remove `prompts.render` from `workflowScript`; pass explicit task text to `runs.run` or use `/prompt-workflow` for reusable prompt templates.
 

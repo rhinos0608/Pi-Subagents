@@ -50,6 +50,9 @@ export function normalizePublicSubagentExecution<T extends PublicSubagentExecuti
 		if (legacyAction === "append-step") {
 			return { ok: false, error: "Legacy append-step control was removed from the public subagent tool; use current workflowScript orchestration.", mode: "management" };
 		}
+		if (legacyAction === "approve-checkpoint" || legacyAction === "reject-checkpoint") {
+			return { ok: false, error: "Legacy checkpoint approval controls were removed from the public subagent tool; use current workflowScript orchestration.", mode: "management" };
+		}
 		if (legacyAction === "single") {
 			return { ok: false, error: "action='single' is not supported. Omit action and pass { agent, task } for one child.", mode: "workflow" };
 		}

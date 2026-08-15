@@ -15,7 +15,7 @@ import { appendAgentRefinementOverlay } from "../../agents/agent-refinements.ts"
 import { writePrivateAtomicJson } from "../../shared/atomic-json.ts";
 import { applyThinkingSuffix, projectLaunchResolvedChildExtensions, resolvePiLaunchToolPlan } from "../shared/pi-args.ts";
 import { injectOutputPathSystemPrompt, injectSingleOutputInstruction, normalizeSingleOutputOverride, resolveSingleOutputPath, validateFileOnlyOutputMode } from "../shared/single-output.ts";
-import { buildChainInstructions, isCheckpointStep, isDynamicParallelStep, isParallelStep, resolveChainPath, resolveExistingReadPaths, resolveStepBehavior, suppressProgressForReadOnlyTask, writeInitialProgressFile, type ChainStep, type ResolvedStepBehavior, type SequentialStep, type StepOverrides } from "../../shared/settings.ts";
+import { buildChainInstructions, isDynamicParallelStep, isParallelStep, resolveChainPath, resolveExistingReadPaths, resolveStepBehavior, suppressProgressForReadOnlyTask, writeInitialProgressFile, type ChainStep, type ResolvedStepBehavior, type SequentialStep, type StepOverrides } from "../../shared/settings.ts";
 import type { RunnerStep } from "../shared/parallel-utils.ts";
 import type { ContextMode } from "../shared/context-mode.ts";
 import { resolvePiPackageRoot } from "../shared/pi-spawn.ts";
@@ -669,13 +669,11 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 		: chain;
 	const firstStep = chain[0];
 	const originalTask = params.task ?? (firstStep
-		? (isCheckpointStep(firstStep)
-			? undefined
-			: isParallelStep(firstStep)
-				? firstStep.parallel[0]?.task
-				: isDynamicParallelStep(firstStep)
-					? firstStep.parallel.task
-					: (firstStep as SequentialStep).task)
+		? (isParallelStep(firstStep)
+			? firstStep.parallel[0]?.task
+			: isDynamicParallelStep(firstStep)
+				? firstStep.parallel.task
+				: (firstStep as SequentialStep).task)
 		: undefined);
 	try {
 		if (params.validateOutputBindings !== false) {
@@ -688,13 +686,11 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 	const workflowGraph = buildWorkflowGraphSnapshot({ runId: id, mode: resultMode, steps: graphChain });
 
 	for (const s of chain) {
-		const stepAgents = isCheckpointStep(s)
-			? []
-			: isParallelStep(s)
-				? s.parallel.map((t) => t.agent)
-				: isDynamicParallelStep(s)
-					? [s.parallel.agent]
-					: [(s as SequentialStep).agent];
+		const stepAgents = isParallelStep(s)
+			? s.parallel.map((t) => t.agent)
+			: isDynamicParallelStep(s)
+				? [s.parallel.agent]
+				: [(s as SequentialStep).agent];
 		for (const agentName of stepAgents) {
 			if (!agents.find((x) => x.name === agentName)) {
 				return { error: `Unknown agent: ${agentName}` };
@@ -890,9 +886,6 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 
 	try {
 		const builtSteps = chain.map((s, stepIndex) => {
-			if (isCheckpointStep(s)) {
-				return { checkpoint: s.checkpoint, ...(s.message ? { message: s.message } : {}), phase: s.phase, label: s.label };
-			}
 			if (isParallelStep(s)) {
 				const parallelBehaviors = s.parallel.map((task) => {
 					const agent = agents.find((candidate) => candidate.name === task.agent)!;
@@ -1028,7 +1021,6 @@ export function executeAsyncChain(
 	const resultMode = params.resultMode ?? "chain";
 	const acceptanceErrors = validateExecutionAcceptance({
 		chain: chain.map((step) => {
-			if (isCheckpointStep(step)) return {};
 			if (isParallelStep(step)) return { parallel: step.parallel };
 			if (isDynamicParallelStep(step)) return { acceptance: step.acceptance, parallel: step.parallel };
 			return { acceptance: step.acceptance };
