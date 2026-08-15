@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Changed
+- Remove `prompts.render` from `workflowScript`; pass explicit task text to `runs.run` or use `/prompt-workflow` for reusable prompt templates.
+
 ## [0.50.0] - 2026-08-15
 
 ### Added
