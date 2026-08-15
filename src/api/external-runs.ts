@@ -95,6 +95,8 @@ function identity(value: unknown, field: string, maxLength: number = EXTERNAL_RU
 	return value;
 }
 
+function displayText(value: unknown, field: string, maxLength: number): string | undefined;
+function displayText(value: unknown, field: string, maxLength: number, required: true): string;
 function displayText(value: unknown, field: string, maxLength: number, required = false): string | undefined {
 	if (value === undefined && !required) return undefined;
 	if (typeof value !== "string" || value.length === 0) throw new Error(`${field} must be a non-empty string.`);
@@ -103,6 +105,8 @@ function displayText(value: unknown, field: string, maxLength: number, required 
 	return truncateDisplayText(safe, maxLength);
 }
 
+function timestamp(value: unknown, field: string): number | undefined;
+function timestamp(value: unknown, field: string, required: true): number;
 function timestamp(value: unknown, field: string, required = false): number | undefined {
 	if (value === undefined && !required) return undefined;
 	if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0 || value > 8_640_000_000_000_000) throw new Error(`${field} must be a non-negative safe timestamp.`);
@@ -110,8 +114,8 @@ function timestamp(value: unknown, field: string, required = false): number | un
 }
 
 function state(value: unknown, field: string): ExternalRunState {
-	if (!["queued", "running", "completed", "failed", "stopped"].includes(value as string)) throw new Error(`${field} is invalid.`);
-	return value as ExternalRunState;
+	if (value === "queued" || value === "running" || value === "completed" || value === "failed" || value === "stopped") return value;
+	throw new Error(`${field} is invalid.`);
 }
 
 function validateRun(value: unknown): ExternalRun {
@@ -125,10 +129,10 @@ function validateRun(value: unknown): ExternalRun {
 	return {
 		id: identity(run.id, "External run id"),
 		sessionId: identity(run.sessionId, "External run sessionId", EXTERNAL_RUN_LIMITS.maxSessionIdLength),
-		source: displayText(run.source, "External run source", EXTERNAL_RUN_LIMITS.maxTextLength, true)!,
-		label: displayText(run.label, "External run label", EXTERNAL_RUN_LIMITS.maxTextLength, true)!,
+		source: displayText(run.source, "External run source", EXTERNAL_RUN_LIMITS.maxTextLength, true),
+		label: displayText(run.label, "External run label", EXTERNAL_RUN_LIMITS.maxTextLength, true),
 		state: state(run.state, "External run state"),
-		startedAt: timestamp(run.startedAt, "External run startedAt", true)!,
+		startedAt: timestamp(run.startedAt, "External run startedAt", true),
 		...(updatedAt !== undefined ? { updatedAt } : {}),
 		...(endedAt !== undefined ? { endedAt } : {}),
 		...(currentAction ? { currentAction } : {}),

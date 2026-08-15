@@ -297,6 +297,30 @@ test("viewer strips split terminal control sequences across poll ticks", { skip:
 	assert.doesNotMatch(output, /\u001b|31m|secret|title|\u0000|\u0001|\r|\t|\u007f/);
 });
 
+test("mirror output keeps small writes that hit stream backpressure before the byte limit", { skip: process.platform === "win32" ? "Orca progress tabs are not supported on Windows" : undefined }, async () => {
+	const dir = tempDir();
+	const capture = path.join(dir, "capture.json");
+	const fakeOrca = writeCaptureOrca(dir);
+	const runId = `progress-backpressure-${Date.now()}`;
+	const tab = createOrcaProgressTab({
+		cwd: dir,
+		runId,
+		agent: "worker",
+		index: 0,
+		config: { enabled: true },
+		command: fakeOrca,
+		env: { ...process.env, ORCA_TEST_CAPTURE: capture },
+	});
+	assert.ok(tab);
+	for (let index = 0; index < 2_000; index++) tab.append(`line-${index.toString().padStart(4, "0")} ${"x".repeat(80)}\n`);
+	tab.finish("completed");
+	const log = progressFile(`${runId}-0-`, ".log");
+	await waitForFile(log.replace(/\.log$/, ".done"));
+	const text = fs.readFileSync(log, "utf-8");
+	assert.match(text, /line-1999/);
+	assert.doesNotMatch(text, /progress mirror truncated/);
+});
+
 test("mirror output truncates at a finite byte bound", { skip: process.platform === "win32" ? "Orca progress tabs are not supported on Windows" : undefined }, async () => {
 	const dir = tempDir();
 	const capture = path.join(dir, "capture.json");

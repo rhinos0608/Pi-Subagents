@@ -298,7 +298,7 @@ export function createOrcaProgressTab(input: {
 		}
 		scheduledBytes += bytes;
 		try {
-			if (!logStream.write(text)) truncated = true;
+			logStream.write(text);
 		} catch {
 			failObserver();
 		}
