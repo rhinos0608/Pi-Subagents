@@ -429,3 +429,19 @@ Controls smart batching of async-completion notifications. When several backgrou
 ## `permissions`
 
 Native child tool permission rules. See [watchdog.md](watchdog.md#native-child-tool-permissions).
+
+## `PI_SUBAGENT_FS_RETRY_MAX_TOTAL_MS`
+
+Caps the total time a single retried filesystem operation may sleep, in milliseconds. Environment-only; there is no config key.
+
+Atomic status and result writes retry on `EACCES`, `EBUSY`, and `EPERM`, which on Windows are usually a scanner or a sibling process holding the destination of a rename for a moment. The retry ladder sleeps up to about 7.9s in total, and it sleeps *synchronously* — `Atomics.wait` parks the calling thread rather than spinning.
+
+That is the right trade-off for a CLI. It is the wrong one for a long-lived process that loads `pi-subagents` in-process and runs those writers on its event loop: one contended rename stalls everything it serves for the length of the ladder, and because the thread is parked rather than busy, it presents as an unresponsive process sitting at 0% CPU. A wide fanout makes contention on a single `status.json` likely.
+
+Set this to bound that stall. The ladder keeps its number of attempts and only the sleeps shrink, because `run-fanout-budget` and mission state locking use the ladder's length as their attempt budget:
+
+```text
+PI_SUBAGENT_FS_RETRY_MAX_TOTAL_MS=1000
+```
+
+Unset by default, so behaviour is unchanged unless you opt in. Opting in trades lock-wait tolerance for responsiveness: entries clamped to `0` return immediately, so contention that would previously have been waited out surfaces as an error sooner. Values that are not a non-negative integer fail instead of being coerced.
