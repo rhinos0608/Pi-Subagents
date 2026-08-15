@@ -54,12 +54,12 @@ describe("subagent action recovery", () => {
 		assert.match(message, /Valid: .*status/);
 	});
 
-	it("does not list removed append-step control", () => {
+	it("does not list removed legacy controls", () => {
 		const message = unknownSubagentActionMessage("not-a-real-action");
 
 		assert.doesNotMatch(message, /append-step/);
-		assert.match(message, /approve-checkpoint/);
-		assert.match(message, /reject-checkpoint/);
+		assert.doesNotMatch(message, /approve-checkpoint/);
+		assert.doesNotMatch(message, /reject-checkpoint/);
 	});
 
 	it("does not suggest a destructive near-miss", () => {

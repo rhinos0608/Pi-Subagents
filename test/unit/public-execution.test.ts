@@ -27,8 +27,6 @@ describe("public subagent execution normalization", () => {
 			},
 		});
 		assert.deepEqual(normalizePublicSubagentExecution({ action: " list " }), { ok: true, params: { action: "list" } });
-		assert.deepEqual(normalizePublicSubagentExecution({ action: "approve-checkpoint", id: "run" }), { ok: true, params: { action: "approve-checkpoint", id: "run" } });
-		assert.deepEqual(normalizePublicSubagentExecution({ action: "reject-checkpoint", id: "run" }), { ok: true, params: { action: "reject-checkpoint", id: "run" } });
 		assert.deepEqual(
 			normalizePublicSubagentExecution({ action: " schedule.create ", every: "1h", workflowScript: "return 1" }),
 			{ ok: true, params: { action: "schedule.create", every: "1h", workflowScript: "return 1" } },
@@ -53,6 +51,8 @@ describe("public subagent execution normalization", () => {
 			{ action: "parallel" },
 			{ action: "chain" },
 			{ action: "append-step", id: "run", step: { agent: "worker" } },
+			{ action: "approve-checkpoint", id: "run" },
+			{ action: "reject-checkpoint", id: "run" },
 			{ agent: "" },
 			{ agent: 42 },
 			{ task: "work" },

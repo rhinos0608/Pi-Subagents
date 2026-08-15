@@ -290,8 +290,7 @@ describe("async stale-run reconciliation", () => {
 				startedAt: 1000,
 				lastUpdate: 1000,
 				currentStep: 0,
-				checkpoint: { name: "review", status: "rejected", stepIndex: 0 },
-				steps: [{ agent: "checkpoint:review", status: "rejected", startedAt: 1000, error: "Checkpoint 'review' rejected." }],
+				steps: [{ agent: "worker", status: "rejected", startedAt: 1000, error: "Run rejected." }],
 			});
 			const publicResultPath = path.join(resultsDir, "run-rejected.json");
 			fs.mkdirSync(publicResultPath, { recursive: true });
@@ -301,8 +300,8 @@ describe("async stale-run reconciliation", () => {
 				sessionId: "session-current",
 				success: false,
 				state: "rejected",
-				summary: "Checkpoint 'review' rejected.",
-				results: [{ agent: "checkpoint:review", success: false, error: "Checkpoint 'review' rejected." }],
+				summary: "Run rejected.",
+				results: [{ agent: "worker", success: false, error: "Run rejected." }],
 			});
 
 			const result = reconcileAsyncRun(asyncDir, {
@@ -314,7 +313,7 @@ describe("async stale-run reconciliation", () => {
 			assert.equal(result.repaired, false);
 			assert.equal(result.status?.state, "rejected");
 			assert.equal(result.status?.steps?.[0]?.status, "rejected");
-			assert.match(fs.readFileSync(result.resultPath!, "utf-8"), /review/);
+			assert.match(fs.readFileSync(result.resultPath!, "utf-8"), /Run rejected/);
 		} finally {
 			console.error = originalError;
 			fs.rmSync(root, { recursive: true, force: true });

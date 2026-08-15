@@ -194,8 +194,6 @@ subagent({ action: "resume", id: "<nested-run-id>", message: "follow-up for a ne
 subagent({ action: "steer", id: "<run-id>", message: "guidance for the running child" })
 subagent({ action: "steer", id: "<run-id>", mode: "follow_up", message: "check this after the current turn" })
 subagent({ action: "steer", id: "<run-id>", index: 1, mode: "auto", message: "guidance for child 2" })
-subagent({ action: "approve-checkpoint", id: "<run-id>" })
-subagent({ action: "reject-checkpoint", id: "<run-id>" })
 subagent({ action: "doctor" })
 ```
 

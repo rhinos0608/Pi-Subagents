@@ -87,7 +87,7 @@ import {
 	stripDetailsOutputsForIntercomReceipt,
 } from "../../intercom/result-intercom.ts";
 import { applySteeringRecoveryAgentConfig, buildRevivedAsyncTask, resolveAsyncResumeTarget, resolveAsyncRunLocation } from "../background/async-resume.ts";
-import { deliverCheckpointDecisionRequest, deliverInterruptRequest, readRevivalBriefs, requestAsyncSteer, type SteerDeliveryMode } from "../background/control-channel.ts";
+import { deliverInterruptRequest, readRevivalBriefs, requestAsyncSteer, type SteerDeliveryMode } from "../background/control-channel.ts";
 import { updateSteeringTarget, waitForSteeringAction } from "../background/steering.ts";
 import { steerAsyncRun } from "./async-steering-action.ts";
 import {
@@ -172,7 +172,7 @@ import {
 } from "../../shared/types.ts";
 
 const MUTATING_MANAGEMENT_ACTIONS = new Set(["create", "update", "delete", "eject", "disable", "enable", "reset", "grant-spawn-budget", "watchdog.configure", "mission.create", "mission.update", "mission.resolve-decision", "mission.attach-run", "mission.close", "inspector.open", "inspector.close", "project.open", "project.close", "worktree.discard", "refine", "refine.rollback", "dismiss", "schedule.create", "schedule.pause", "schedule.resume", "schedule.run", "schedule.run-due", "schedule.delete"]);
-const DESTRUCTIVE_MANAGEMENT_ACTIONS = new Set(["delete", "eject", "disable", "reset", "mission.close", "worktree.discard", "refine.rollback", "inspector.close", "project.close", "stop", "interrupt", "reject-checkpoint", "schedule.delete"]);
+const DESTRUCTIVE_MANAGEMENT_ACTIONS = new Set(["delete", "eject", "disable", "reset", "mission.close", "worktree.discard", "refine.rollback", "inspector.close", "project.close", "stop", "interrupt", "schedule.delete"]);
 
 function editDistance(left: string, right: string): number {
 	const previous = Array.from({ length: right.length + 1 }, (_, index) => index);
@@ -550,7 +550,7 @@ function countRequestedSubagentSpawns(params: SubagentParamsLike, config: Extens
 function staticRunFanoutPaths(params: SubagentParamsLike): string[] {
 	if (params.tasks) return params.tasks.map((_, index) => `tasks[${index}]`);
 	if (params.chain) return params.chain.flatMap((step, stepIndex) => {
-		if (isDynamicParallelStep(step) || "checkpoint" in step) return [];
+		if (isDynamicParallelStep(step)) return [];
 		if (isParallelStep(step)) return step.parallel.map((_, itemIndex) => `chain[${stepIndex}].parallel[${itemIndex}]`);
 		return [`chain[${stepIndex}]`];
 	});
@@ -624,7 +624,7 @@ function foregroundChildActivityFromProgress(progress: SingleResult["progress"] 
 	};
 }
 
-function rememberForegroundRun(state: SubagentState, input: { runId: string; mode: "single" | "parallel" | "chain"; cwd: string; sessionId: string | null; results: SingleResult[]; checkpoint?: Details["checkpoint"] }): void {
+function rememberForegroundRun(state: SubagentState, input: { runId: string; mode: "single" | "parallel" | "chain"; cwd: string; sessionId: string | null; results: SingleResult[] }): void {
 	state.foregroundRuns ??= new Map();
 	const previous = state.foregroundRuns.get(input.runId);
 	const updatedAt = Date.now();
@@ -634,7 +634,6 @@ function rememberForegroundRun(state: SubagentState, input: { runId: string; mod
 		cwd: input.cwd,
 		...(input.sessionId ? { sessionId: input.sessionId } : {}),
 		updatedAt,
-		...(input.checkpoint ? { checkpoint: input.checkpoint } : {}),
 		children: input.results.map((result, index) => {
 			const child = {
 				agent: result.agent,
@@ -1211,7 +1210,7 @@ function appendStepToAsyncChain(input: {
 		const startIndex = (status.chainStepCount ?? status.steps?.length ?? 0) + pendingAppendRequests.reduce((total, request) => total + request.steps.length, 0);
 		const appendPaths = chain.flatMap((step, localIndex) => {
 			const absoluteIndex = startIndex + localIndex;
-			if (isDynamicParallelStep(step) || "checkpoint" in step) return [];
+			if (isDynamicParallelStep(step)) return [];
 			if (isParallelStep(step)) return step.parallel.map((_, itemIndex) => `chain[${absoluteIndex}].parallel[${itemIndex}]`);
 			return [`chain[${absoluteIndex}]`];
 		});
@@ -3106,7 +3105,7 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 		else rawChainDetails.usageBudget = usageBudget;
 	}
 	const chainDetails = rawChainDetails ? compactForegroundDetails(rawChainDetails) : undefined;
-	if (chainDetails) rememberForegroundRun(deps.state, { runId, mode: "chain", cwd: effectiveCwd, sessionId: data.parentSessionId, results: chainDetails.results, checkpoint: chainDetails.checkpoint });
+	if (chainDetails) rememberForegroundRun(deps.state, { runId, mode: "chain", cwd: effectiveCwd, sessionId: data.parentSessionId, results: chainDetails.results });
 	const intercomReceipt = chainDetails && !chainDetails.results.some((result) => result.interrupted || result.detached)
 		? await maybeBuildForegroundIntercomReceipt({
 			pi: deps.pi,
@@ -5693,61 +5692,6 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 					}
 				}
 				return withBudget(inspectSubagentStatus(paramsWithResolvedCwd, omitUndefinedProperties({ state: deps.state, nested: nestedScope, sessionRoots })));
-			}
-
-			if (action === "approve-checkpoint" || action === "reject-checkpoint") {
-				deps.state.currentSessionId = resolveCurrentSessionId(ctx.sessionManager);
-				const targetRunId = paramsWithResolvedCwd.runId ?? paramsWithResolvedCwd.id;
-				if (!targetRunId && !paramsWithResolvedCwd.dir) {
-					return { content: [{ type: "text", text: `action='${action}' requires id or dir.` }], isError: true, details: { mode: "management", results: [] } };
-				}
-				try {
-					const resolved = targetRunId ? resolveSubagentRunId(targetRunId, omitUndefinedProperties({ state: deps.state, nested: nestedResolutionScopeForExecutor(deps) })) : undefined;
-					const decision = action === "approve-checkpoint" ? "approved" : "rejected";
-					if (resolved?.kind === "foreground") {
-						const run = deps.state.foregroundRuns?.get(resolved.id);
-						if (!run?.checkpoint || run.checkpoint.status !== "pending") {
-							return { content: [{ type: "text", text: `Run '${resolved.id}' is not paused at an approval checkpoint.` }], isError: true, details: { mode: "management", results: [] } };
-						}
-						if (deps.state.currentSessionId && run.sessionId !== deps.state.currentSessionId) {
-							return { content: [{ type: "text", text: `Run '${resolved.id}' was not found in the active session.` }], isError: true, details: { mode: "management", results: [] } };
-						}
-						const decidedAt = Date.now();
-						const checkpoint: NonNullable<Details["checkpoint"]> = decision === "approved"
-							? { ...run.checkpoint, status: "approved", approvedAt: decidedAt }
-							: { ...run.checkpoint, status: "rejected", rejectedAt: decidedAt };
-						run.checkpoint = checkpoint;
-						run.updatedAt = decidedAt;
-						return {
-							content: [{ type: "text", text: `Checkpoint '${checkpoint.name}' ${decision} for foreground run ${resolved.id}.` }],
-							details: { mode: "management", results: [], checkpoint },
-						};
-					}
-					const location = paramsWithResolvedCwd.dir
-						? resolveAsyncRunLocation(paramsWithResolvedCwd, DIRS.async, DIRS.results)
-						: resolved?.kind === "async"
-							? resolved.location
-							: undefined;
-					if (!location?.asyncDir) {
-						return { content: [{ type: "text", text: `action='${action}' targets paused foreground or async checkpoints. No matching run found.` }], isError: true, details: { mode: "management", results: [] } };
-					}
-					const status = readStatus(location.asyncDir);
-					const runId = status?.runId ?? location.resolvedId ?? targetRunId ?? path.basename(location.asyncDir);
-					if (!status?.checkpoint || status.state !== "paused") {
-						return { content: [{ type: "text", text: `Run '${runId}' is not paused at an approval checkpoint.` }], isError: true, details: { mode: "management", results: [] } };
-					}
-					if (deps.state.currentSessionId && status.sessionId !== deps.state.currentSessionId) {
-						return { content: [{ type: "text", text: `Run '${runId}' was not found in the active session.` }], isError: true, details: { mode: "management", results: [] } };
-					}
-					deliverCheckpointDecisionRequest({ asyncDir: location.asyncDir, decision, source: "subagent-action", ...(paramsWithResolvedCwd.message ? { reason: paramsWithResolvedCwd.message } : {}) });
-					return {
-						content: [{ type: "text", text: `Checkpoint '${status.checkpoint.name}' ${decision} for run ${runId}.` }],
-						details: { mode: "management", results: [], checkpoint: { ...status.checkpoint, status: decision } },
-					};
-				} catch (error) {
-					const text = error instanceof Error ? error.message : String(error);
-					return { content: [{ type: "text", text }], isError: true, details: { mode: "management", results: [] } };
-				}
 			}
 			if (action === "resume") {
 				return resumeAsyncRun(omitUndefinedProperties({ params: paramsWithResolvedCwd, requestCwd, ctx, deps, parentModel: requestParentModel, signal }));
