@@ -34,6 +34,48 @@ function readManifest(manifestPath: string): ParallelHandoffManifest | undefined
 	return parsed;
 }
 
+function resolveExistingPath(candidate: string): string {
+	try {
+		return fs.realpathSync(candidate);
+	} catch {
+		return path.resolve(candidate);
+	}
+}
+
+function pathInside(root: string, candidate: string): boolean {
+	const relative = path.relative(root, candidate);
+	return relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+}
+
+export function resolveRetainedWorktreeCwd(manifestPath: string, runId: string, childIndex: number): string | undefined {
+	const manifest = readManifest(manifestPath);
+	if (!manifest) return undefined;
+	if (manifest.runId !== runId) throw new Error(`Managed worktree handoff belongs to run '${manifest.runId}', not '${runId}'.`);
+	const match = manifest.groups
+		.flatMap((group) => group.children.map((child) => ({ group, child })))
+		.find(({ child }) => child.index === childIndex);
+	if (!match) return undefined;
+	const cleanup = match.group.cleanup.tasks.find((task) => task.index === match.child.taskIndex);
+	if (!cleanup) throw new Error(`Async run '${runId}' child ${childIndex} has no managed worktree cleanup record.`);
+	const relativeCwd = path.relative(resolveExistingPath(match.group.repoRoot), resolveExistingPath(manifest.cwd));
+	if (path.isAbsolute(relativeCwd) || relativeCwd === ".." || relativeCwd.startsWith(`..${path.sep}`)) throw new Error(`Async run '${runId}' has an invalid managed worktree cwd.`);
+	const requiredCwd = path.join(cleanup.path, relativeCwd);
+	if (cleanup.worktreeRemoved || cleanup.branchRemoved) throw new Error(`Async run '${runId}' required managed worktree was removed: ${requiredCwd}`);
+	let worktreeRoot = "";
+	let resolvedRequiredCwd = "";
+	try {
+		const rootStat = fs.lstatSync(cleanup.path);
+		if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) throw new Error("worktree root is not a directory");
+		worktreeRoot = fs.realpathSync(cleanup.path);
+		if (!fs.statSync(requiredCwd).isDirectory()) throw new Error("path is not a directory");
+		resolvedRequiredCwd = fs.realpathSync(requiredCwd);
+	} catch (error) {
+		throw new Error(`Async run '${runId}' required managed worktree cwd is missing: ${requiredCwd}`, { cause: error instanceof Error ? error : undefined });
+	}
+	if (!pathInside(worktreeRoot, resolvedRequiredCwd)) throw new Error(`Async run '${runId}' has an invalid managed worktree cwd.`);
+	return requiredCwd;
+}
+
 function referenceFor(manifestPath: string, manifest: ParallelHandoffManifest): ParallelHandoffReference {
 	const children = manifest.groups.flatMap((group) => group.children);
 	return {

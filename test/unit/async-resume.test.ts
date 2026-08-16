@@ -42,6 +42,153 @@ describe("async resume lookup", () => {
 		}
 	});
 
+	it("resolves a retained managed worktree cwd and fails closed when it is missing", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-async-resume-missing-cwd-"));
+		try {
+			const asyncRoot = path.join(root, "runs");
+			const asyncDir = path.join(asyncRoot, "run-missing-cwd");
+			const sessionFile = path.join(root, "session.jsonl");
+			const worktreeCwd = path.join(root, "managed-worktree");
+			fs.writeFileSync(sessionFile, "", "utf-8");
+			fs.mkdirSync(worktreeCwd);
+			writeJson(path.join(asyncDir, "status.json"), {
+				runId: "run-missing-cwd", mode: "single", state: "complete", startedAt: 100, endedAt: 200, lastUpdate: 200,
+				cwd: root,
+				steps: [{ agent: "worker", status: "complete", sessionFile }],
+			});
+			writeJson(path.join(asyncDir, "handoff.json"), {
+				version: 1, runId: "run-missing-cwd", mode: "single", source: "async", cwd: root, createdAt: 100, updatedAt: 200,
+				groups: [{
+					stepIndex: 0, baseCommit: "deadbeef", repoRoot: root,
+					children: [{ index: 0, taskIndex: 0, agent: "worker", status: "completed", summary: "done", patch: { path: path.join(root, "patch"), branch: "branch", changed: false, diffStat: "", filesChanged: 0, insertions: 0, deletions: 0 } }],
+					cleanup: { state: "partial", pruned: true, tasks: [{ index: 0, path: worktreeCwd, branch: "branch", worktreeRemoved: false, branchRemoved: false, preserved: true }] },
+				}],
+			});
+
+			const target = resolveAsyncResumeTarget({ id: "run-missing-cwd" }, { asyncDirRoot: asyncRoot, resultsDir: path.join(root, "results") });
+			assert.equal(target.cwd, worktreeCwd);
+			fs.rmSync(worktreeCwd, { recursive: true });
+
+			assert.throws(
+				() => resolveAsyncResumeTarget({ id: "run-missing-cwd" }, { asyncDirRoot: asyncRoot, resultsDir: path.join(root, "results") }),
+				/required managed worktree cwd is missing/,
+			);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("resolves a retained managed worktree cwd in the original repository subdirectory", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-async-resume-nested-cwd-"));
+		try {
+			const asyncRoot = path.join(root, "runs");
+			const asyncDir = path.join(asyncRoot, "run-nested-cwd");
+			const repoRoot = path.join(root, "repo");
+			const repoCwd = path.join(repoRoot, "packages", "feature");
+			const worktreeRoot = path.join(root, "managed-worktree");
+			const worktreeCwd = path.join(worktreeRoot, "packages", "feature");
+			const sessionFile = path.join(root, "session.jsonl");
+			fs.mkdirSync(repoCwd, { recursive: true });
+			fs.mkdirSync(worktreeCwd, { recursive: true });
+			fs.writeFileSync(sessionFile, "", "utf-8");
+			writeJson(path.join(asyncDir, "status.json"), {
+				runId: "run-nested-cwd", mode: "single", state: "complete", startedAt: 100, endedAt: 200, lastUpdate: 200,
+				cwd: repoCwd,
+				steps: [{ agent: "worker", status: "complete", sessionFile }],
+			});
+			writeJson(path.join(asyncDir, "handoff.json"), {
+				version: 1, runId: "run-nested-cwd", mode: "single", source: "async", cwd: repoCwd, createdAt: 100, updatedAt: 200,
+				groups: [{
+					stepIndex: 0, baseCommit: "deadbeef", repoRoot,
+					children: [{ index: 0, taskIndex: 0, agent: "worker", status: "completed", summary: "done", patch: { path: path.join(root, "patch"), branch: "branch", changed: false, diffStat: "", filesChanged: 0, insertions: 0, deletions: 0 } }],
+					cleanup: { state: "partial", pruned: true, tasks: [{ index: 0, path: worktreeRoot, branch: "branch", worktreeRemoved: false, branchRemoved: false, preserved: true }] },
+				}],
+			});
+
+			const target = resolveAsyncResumeTarget({ id: "run-nested-cwd" }, { asyncDirRoot: asyncRoot, resultsDir: path.join(root, "results") });
+			assert.equal(target.cwd, worktreeCwd);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("resumes a normal child when a sibling has a managed worktree handoff", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-async-resume-mixed-cwd-"));
+		try {
+			const asyncRoot = path.join(root, "runs");
+			const asyncDir = path.join(asyncRoot, "run-mixed-cwd");
+			const worktreeCwd = path.join(root, "managed-worktree");
+			const sessionFile = path.join(root, "session.jsonl");
+			fs.mkdirSync(worktreeCwd);
+			fs.writeFileSync(sessionFile, "", "utf-8");
+			writeJson(path.join(asyncDir, "status.json"), {
+				runId: "run-mixed-cwd", mode: "parallel", state: "complete", startedAt: 100, endedAt: 200, lastUpdate: 200, cwd: root,
+				steps: [{ agent: "worktree-worker", status: "complete" }, { agent: "normal-worker", status: "complete", sessionFile }],
+			});
+			writeJson(path.join(asyncDir, "handoff.json"), {
+				version: 1, runId: "run-mixed-cwd", mode: "parallel", source: "async", cwd: root, createdAt: 100, updatedAt: 200,
+				groups: [{
+					stepIndex: 0, baseCommit: "deadbeef", repoRoot: root,
+					children: [{ index: 0, taskIndex: 0, agent: "worktree-worker", status: "completed", summary: "done", patch: { path: path.join(root, "patch"), branch: "branch", changed: false, diffStat: "", filesChanged: 0, insertions: 0, deletions: 0 } }],
+					cleanup: { state: "partial", pruned: true, tasks: [{ index: 0, path: worktreeCwd, branch: "branch", worktreeRemoved: false, branchRemoved: false, preserved: true }] },
+				}],
+			});
+
+			const target = resolveAsyncResumeTarget({ id: "run-mixed-cwd", index: 1 }, { asyncDirRoot: asyncRoot, resultsDir: path.join(root, "results") });
+			assert.equal(target.agent, "normal-worker");
+			assert.equal(target.cwd, root);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("rejects a retained managed worktree cwd that resolves outside the preserved worktree", (context) => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-async-resume-escaped-cwd-"));
+		try {
+			const asyncRoot = path.join(root, "runs");
+			const asyncDir = path.join(asyncRoot, "run-escaped-cwd");
+			const repoRoot = path.join(root, "repo");
+			const repoCwd = path.join(repoRoot, "pkg");
+			const worktreeRoot = path.join(root, "managed-worktree");
+			const outsideCwd = path.join(root, "outside");
+			const sessionFile = path.join(root, "session.jsonl");
+			fs.mkdirSync(repoCwd, { recursive: true });
+			fs.mkdirSync(worktreeRoot);
+			fs.mkdirSync(outsideCwd);
+			fs.writeFileSync(sessionFile, "", "utf-8");
+			try {
+				fs.symlinkSync(outsideCwd, path.join(worktreeRoot, "pkg"), "dir");
+			} catch (error) {
+				const code = (error as NodeJS.ErrnoException).code;
+				if (code === "EPERM" || code === "EACCES") {
+					context.skip("directory symlink creation is unavailable");
+					return;
+				}
+				throw error;
+			}
+			writeJson(path.join(asyncDir, "status.json"), {
+				runId: "run-escaped-cwd", mode: "single", state: "complete", startedAt: 100, endedAt: 200, lastUpdate: 200,
+				cwd: repoCwd,
+				steps: [{ agent: "worker", status: "complete", sessionFile }],
+			});
+			writeJson(path.join(asyncDir, "handoff.json"), {
+				version: 1, runId: "run-escaped-cwd", mode: "single", source: "async", cwd: repoCwd, createdAt: 100, updatedAt: 200,
+				groups: [{
+					stepIndex: 0, baseCommit: "deadbeef", repoRoot,
+					children: [{ index: 0, taskIndex: 0, agent: "worker", status: "completed", summary: "done", patch: { path: path.join(root, "patch"), branch: "branch", changed: false, diffStat: "", filesChanged: 0, insertions: 0, deletions: 0 } }],
+					cleanup: { state: "partial", pruned: true, tasks: [{ index: 0, path: worktreeRoot, branch: "branch", worktreeRemoved: false, branchRemoved: false, preserved: true }] },
+				}],
+			});
+
+			assert.throws(
+				() => resolveAsyncResumeTarget({ id: "run-escaped-cwd" }, { asyncDirRoot: asyncRoot, resultsDir: path.join(root, "results") }),
+				/invalid managed worktree cwd/,
+			);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("preserves and validates persisted capability ceilings for resume", () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-async-resume-ceiling-"));
 		try {
