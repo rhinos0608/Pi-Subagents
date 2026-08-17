@@ -33,13 +33,82 @@ function formatError(error: ExternalJobProviderError, provider: string): string 
 	return `External-job provider '${provider}' failed closed (${error.code}): ${error.message}.${blocking}`;
 }
 
+function isNotFound(error: unknown): boolean {
+	return typeof error === "object" && error !== null && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function malformedStatus(statusPath: string): ExternalJobProviderError {
+	return new ExternalJobProviderError(`Malformed external-job status '${statusPath}'. Refusing to redispatch the prompt.`, { code: "status-unreadable" });
+}
+
+function parseExternalJobStatus(value: unknown, statusPath: string): ExternalJobStatus {
+	if (!isRecord(value)) throw malformedStatus(statusPath);
+	const provider = value.provider;
+	const promptDigest = value.promptDigest;
+	const state = value.state;
+	if (typeof provider !== "string" || provider.length === 0) throw malformedStatus(statusPath);
+	if (typeof promptDigest !== "string" || promptDigest.length === 0) throw malformedStatus(statusPath);
+	if (state !== "queued" && state !== "running" && state !== "completed" && state !== "failed" && state !== "stopped" && state !== "blocked") throw malformedStatus(statusPath);
+	if (value.options !== undefined && !isRecord(value.options)) throw malformedStatus(statusPath);
+	const providerJobId = value.providerJobId;
+	const handleUrl = value.handleUrl;
+	const conversationUrl = value.conversationUrl;
+	const resultArtifactPath = value.resultArtifactPath;
+	const failureCode = value.failureCode;
+	const failureMessage = value.failureMessage;
+	const blockingJobId = value.blockingJobId;
+	const startedAt = value.startedAt;
+	const updatedAt = value.updatedAt;
+	if (providerJobId !== undefined && (typeof providerJobId !== "string" || providerJobId.length === 0)) throw malformedStatus(statusPath);
+	if (handleUrl !== undefined && typeof handleUrl !== "string") throw malformedStatus(statusPath);
+	if (conversationUrl !== undefined && typeof conversationUrl !== "string") throw malformedStatus(statusPath);
+	if (resultArtifactPath !== undefined && typeof resultArtifactPath !== "string") throw malformedStatus(statusPath);
+	if (failureCode !== undefined && typeof failureCode !== "string") throw malformedStatus(statusPath);
+	if (failureMessage !== undefined && typeof failureMessage !== "string") throw malformedStatus(statusPath);
+	if (blockingJobId !== undefined && typeof blockingJobId !== "string") throw malformedStatus(statusPath);
+	if (startedAt !== undefined && typeof startedAt !== "number") throw malformedStatus(statusPath);
+	if (updatedAt !== undefined && typeof updatedAt !== "number") throw malformedStatus(statusPath);
+	return {
+		provider,
+		promptDigest,
+		options: value.options ?? {},
+		state,
+		...(providerJobId ? { providerJobId } : {}),
+		...(handleUrl ? { handleUrl } : {}),
+		...(conversationUrl ? { conversationUrl } : {}),
+		...(resultArtifactPath ? { resultArtifactPath } : {}),
+		...(failureCode ? { failureCode } : {}),
+		...(failureMessage ? { failureMessage } : {}),
+		...(blockingJobId ? { blockingJobId } : {}),
+		...(startedAt !== undefined ? { startedAt } : {}),
+		...(updatedAt !== undefined ? { updatedAt } : {}),
+	};
+}
+
 function readExistingExternalJob(asyncDir: string, stepIndex: number): ExternalJobStatus | undefined {
+	const statusPath = path.join(asyncDir, "status.json");
+	let raw: string;
 	try {
-		const status = JSON.parse(fs.readFileSync(path.join(asyncDir, "status.json"), "utf-8")) as { steps?: Array<{ externalJob?: ExternalJobStatus }> };
-		return status.steps?.[stepIndex]?.externalJob;
-	} catch {
-		return undefined;
+		raw = fs.readFileSync(statusPath, "utf-8");
+	} catch (error) {
+		if (isNotFound(error)) return undefined;
+		throw new ExternalJobProviderError(`Unreadable external-job status '${statusPath}'. Refusing to redispatch the prompt.`, { code: "status-unreadable", cause: error });
 	}
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(raw);
+	} catch (error) {
+		throw new ExternalJobProviderError(`Malformed external-job status '${statusPath}'. Refusing to redispatch the prompt.`, { code: "status-unreadable", cause: error });
+	}
+	if (!isRecord(parsed) || !Array.isArray(parsed.steps)) throw malformedStatus(statusPath);
+	const step = parsed.steps[stepIndex];
+	if (step === undefined || !isRecord(step)) throw malformedStatus(statusPath);
+	if (step.externalJob === undefined) return undefined;
+	return parseExternalJobStatus(step.externalJob, statusPath);
 }
 
 function statusFromHandle(input: {
@@ -129,7 +198,7 @@ export async function runExternalJob(input: {
 	const startedAt = Date.now();
 	let timedOut = false;
 	let stopped = false;
-	let current = readExistingExternalJob(input.asyncDir, input.stepIndex);
+	let current: ExternalJobStatus | undefined;
 	const timeout = () => { timedOut = true; };
 	const stop = () => { stopped = true; };
 	input.registerTimeout?.(timeout);
@@ -146,6 +215,7 @@ export async function runExternalJob(input: {
 		return new ExternalJobProviderError(message, { code: stopped ? "local-stop" : "local-timeout" });
 	};
 	try {
+		current = readExistingExternalJob(input.asyncDir, input.stepIndex);
 		let handle: ExternalJobHandle;
 		if (current?.providerJobId) {
 			if (current.provider !== provider || current.promptDigest !== promptDigest) {
