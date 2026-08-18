@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
-import { handleCreate, handleList, handleManagementAction, handleUpdate } from "../../src/agents/agent-management.ts";
+import { editableAgentConfig, handleCreate, handleList, handleManagementAction, handleUpdate } from "../../src/agents/agent-management.ts";
 import { EXTRA_AGENT_DIRS_ENV } from "../../src/agents/agents.ts";
 import { clearSkillCache } from "../../src/agents/skills.ts";
 import { PI_CODING_AGENT_PACKAGE_ROOT_ENV } from "../../src/shared/utils.ts";
@@ -604,7 +604,69 @@ describe("agent management config parsing", () => {
 
 		const got = handleManagementAction("get", { agent: "child-tool-user" }, ctx);
 		assert.equal(got.isError, false);
-		assert.match(readText(got), /Subagent-only extensions: \.\/tools\/child-only\.ts, \/opt\/pi\/child\.ts/);
+		assert.ok(readText(got).includes("Subagent-only extensions: " + path.join(tempDir, ".pi", "agents", "tools", "child-only.ts") + ", /opt/pi/child.ts"));
+	});
+
+	it("preserves relative extension paths during unrelated updates", () => {
+		const ctx = { cwd: tempDir, modelRegistry: { getAvailable: () => [] } };
+		const agentPath = path.join(tempDir, ".pi", "agents", "portable.md");
+		fs.mkdirSync(path.dirname(agentPath), { recursive: true });
+		fs.writeFileSync(
+			agentPath,
+			"---\nname: portable\ndescription: Portable agent\nextensions: ./tools/parent.ts, package-extension\nsubagentOnlyExtensions: ../child.ts, ~/shared.ts\n---\nOriginal prompt.\n",
+		);
+
+		const updated = handleUpdate({ agent: "portable", config: { description: "Updated agent" } }, ctx);
+
+		assert.equal(updated.isError, false);
+		const content = fs.readFileSync(agentPath, "utf-8");
+		assert.match(content, /^description: Updated agent$/m);
+		assert.match(content, /^extensions: \.\/tools\/parent\.ts, package-extension$/m);
+		assert.match(content, /^subagentOnlyExtensions: \.\.\/child\.ts, ~\/shared\.ts$/m);
+		assert.ok(!content.includes(tempDir));
+	});
+
+	it("fails when extension frontmatter cannot be reread", () => {
+		const filePath = path.join(tempDir, ".pi", "agents", "removed.md");
+		assert.throws(
+			() => editableAgentConfig({
+				name: "removed",
+				description: "Removed agent",
+				systemPromptMode: "replace",
+				inheritProjectContext: false,
+				inheritSkills: false,
+				systemPrompt: "Original prompt.",
+				source: "project",
+				filePath,
+				extensions: [path.join(tempDir, ".pi", "agents", "tools", "parent.ts")],
+			}),
+			/ENOENT/,
+		);
+	});
+
+	it("returns a structured error when a definition disappears after discovery", () => {
+		const agentPath = path.join(tempDir, ".pi", "agents", "removed-during-update.md");
+		fs.mkdirSync(path.dirname(agentPath), { recursive: true });
+		fs.writeFileSync(
+			agentPath,
+			"---\nname: removed-during-update\ndescription: Temporary agent\nextensions: ./tools/parent.ts\n---\nOriginal prompt.\n",
+		);
+		let cwdReads = 0;
+		const ctx = {
+			get cwd() {
+				cwdReads += 1;
+				// handleUpdate reads cwd again after discovery, which models the definition disappearing between reads.
+				if (cwdReads === 2) fs.unlinkSync(agentPath);
+				return tempDir;
+			},
+			modelRegistry: { getAvailable: () => [] },
+		};
+
+		const updated = handleUpdate({ agent: "removed-during-update", config: { description: "Updated agent" } }, ctx);
+
+		assert.equal(updated.isError, true);
+		assert.match(readText(updated), /Could not reread agent definition .*removed-during-update\.md before updating 'removed-during-update':.*ENOENT/);
+		assert.equal(fs.existsSync(agentPath), false);
 	});
 
 	it("does not serialize settings overrides into custom agent frontmatter during updates", () => {

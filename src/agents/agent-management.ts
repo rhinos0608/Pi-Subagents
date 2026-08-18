@@ -27,7 +27,7 @@ import { discoverAvailableSkills, resolveSkills } from "./skills.ts";
 import {
 	buildProactiveSkillSubagentRecommendationLines,
 } from "./proactive-skills.ts";
-import { parseFrontmatter } from "./frontmatter.ts";
+import { parseFrontmatter, parseFrontmatterList } from "./frontmatter.ts";
 import { toModelInfo } from "../shared/model-info.ts";
 import { resolveSubagentModelOverride, type ParentModel } from "../runs/shared/model-fallback.ts";
 import { validateToolBudgetConfig } from "../runs/shared/tool-budget.ts";
@@ -196,6 +196,18 @@ function skillsWarning(cwd: string, agent: Pick<AgentConfig, "skills" | "skillPa
 	return missing.length ? `Warning: skills not found: ${missing.join(", ")}.` : undefined;
 }
 
+function withDeclaredExtensionPaths(config: AgentConfig, filePath: string): AgentConfig {
+	const { frontmatter } = parseFrontmatter(fs.readFileSync(filePath, "utf-8"));
+	const { extensions: _extensions, subagentOnlyExtensions: _subagentOnlyExtensions, ...withoutResolvedExtensions } = config;
+	return {
+		...withoutResolvedExtensions,
+		...(frontmatter.extensions !== undefined ? { extensions: parseFrontmatterList(frontmatter.extensions) ?? [] } : {}),
+		...(frontmatter.subagentOnlyExtensions !== undefined
+			? { subagentOnlyExtensions: parseFrontmatterList(frontmatter.subagentOnlyExtensions) ?? [] }
+			: {}),
+	};
+}
+
 export function editableAgentConfig(agent: AgentConfig): AgentConfig {
 	const { extensions: _extensions, ...withoutExtensions } = agent;
 	const base = agent.override?.base;
@@ -220,13 +232,13 @@ export function editableAgentConfig(agent: AgentConfig): AgentConfig {
 		...editable
 	} = withoutExtensions;
 	if (!base) {
-		return {
+		return withDeclaredExtensionPaths({
 			...withoutExtensions,
 			...(agent.extensionsFromDefault ? {} : agent.extensions !== undefined ? { extensions: [...agent.extensions] } : {}),
-		};
+		}, agent.filePath);
 	}
 
-	return {
+	return withDeclaredExtensionPaths({
 		...editable,
 		...(base.model !== undefined ? { model: base.model } : {}),
 		...(base.fallbackModels !== undefined ? { fallbackModels: [...base.fallbackModels] } : {}),
@@ -245,7 +257,7 @@ export function editableAgentConfig(agent: AgentConfig): AgentConfig {
 		...(base.extensions !== undefined ? { extensions: [...base.extensions] } : {}),
 		...(base.subagentOnlyExtensions !== undefined ? { subagentOnlyExtensions: [...base.subagentOnlyExtensions] } : {}),
 		...(base.completionGuard !== undefined ? { completionGuard: base.completionGuard } : {}),
-	};
+	}, agent.filePath);
 }
 
 function readAgentFrontmatterFields(filePath: string): Set<string> {
@@ -806,7 +818,13 @@ export function handleUpdate(params: ManagementParams, ctx: ManagementContext): 
 	if ("content" in targetOrError) return targetOrError;
 	const target = targetOrError;
 	if (target.source !== "user" && target.source !== "project") return result(`Cannot update ${target.source} agent '${target.name}'. Eject it to user or project scope first.`, true);
-	const updated = editableAgentConfig(target);
+	let updated: AgentConfig;
+	try {
+		updated = editableAgentConfig(target);
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		return result(`Could not reread agent definition ${target.filePath} before updating '${target.name}': ${message}`, true);
+	}
 	const oldName = target.name;
 	if (hasKey(cfg, "name") && (typeof cfg.name !== "string" || !cfg.name.trim())) return result("config.name must be a non-empty string when provided.", true);
 	if (hasKey(cfg, "description") && (typeof cfg.description !== "string" || !cfg.description.trim())) return result("config.description must be a non-empty string when provided.", true);
