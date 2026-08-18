@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { writeAtomicJson } from "../../shared/atomic-json.ts";
 import { MISSION_BINDING_FILE } from "../../missions/lifecycle.ts";
-import { encodeIndexSegment, MAX_INDEX_SEGMENT_BYTES } from "./index-segment.ts";
+import { encodeIndexSegment, indexSegmentAliases, MAX_INDEX_SEGMENT_BYTES } from "./index-segment.ts";
 
 const RESULT_INDEX_VERSION = 1;
 const RESULT_INDEX_DIR = "result-index";
@@ -32,6 +32,10 @@ function encodedJsonFileName(value: string): string {
 	return `${encodeIndexSegment(value, MAX_JSON_FILE_STEM_BYTES)}${JSON_EXTENSION}`;
 }
 
+function encodedJsonFileNames(value: string): string[] {
+	return indexSegmentAliases(value, MAX_JSON_FILE_STEM_BYTES).map((segment) => `${segment}${JSON_EXTENSION}`);
+}
+
 function nonEmptyString(value: unknown): string | undefined {
 	return typeof value === "string" && value.length > 0 ? value : undefined;
 }
@@ -48,8 +52,16 @@ function sessionIndexDir(resultsDir: string, sessionId: string): string {
 	return path.join(resultsDir, RESULT_INDEX_DIR, SESSION_INDEX_DIR, encodeSegment(sessionId));
 }
 
+function sessionIndexDirs(resultsDir: string, sessionId: string): string[] {
+	return indexSegmentAliases(sessionId).map((segment) => path.join(resultsDir, RESULT_INDEX_DIR, SESSION_INDEX_DIR, segment));
+}
+
 function resultIndexPath(resultsDir: string, sessionId: string, runId: string): string {
 	return path.join(sessionIndexDir(resultsDir, sessionId), encodedJsonFileName(runId));
+}
+
+function resultIndexPaths(resultsDir: string, sessionId: string, runId: string): string[] {
+	return sessionIndexDirs(resultsDir, sessionId).flatMap((dir) => encodedJsonFileNames(runId).map((fileName) => path.join(dir, fileName)));
 }
 
 function runIndexPath(resultsDir: string, runId: string): string {
@@ -58,6 +70,21 @@ function runIndexPath(resultsDir: string, runId: string): string {
 
 function resultPendingPath(resultsDir: string, sessionId: string, runId: string): string {
 	return path.join(resultsDir, RESULT_PENDING_DIR, encodeSegment(sessionId), encodedJsonFileName(runId));
+}
+
+function resultPendingPaths(resultsDir: string, sessionId: string, runId: string): string[] {
+	return indexSegmentAliases(sessionId).flatMap((segment) => encodedJsonFileNames(runId).map((fileName) => path.join(resultsDir, RESULT_PENDING_DIR, segment, fileName)));
+}
+
+function pendingSessionDirs(resultsDir: string, sessionId: string): string[] {
+	return indexSegmentAliases(sessionId).map((segment) => path.join(resultsDir, RESULT_PENDING_DIR, segment));
+}
+
+function firstExistingResultFile(paths: string[]): string | undefined {
+	for (const filePath of paths) {
+		if (existingResultFile(filePath)) return filePath;
+	}
+	return undefined;
 }
 
 function observerIndexDir(resultsDir: string, observer: string): string {
@@ -153,15 +180,19 @@ export function writeAsyncResultFile(resultPath: string, data: Record<string, un
 export function removeResultIndex(resultsDir: string, sessionId: string | undefined, runId: string | undefined, toolCallId?: string): void {
 	if (!runId) return;
 	if (sessionId) {
-		try {
-			fs.rmSync(resultIndexPath(resultsDir, sessionId, runId), { force: true });
-		} catch {
-			// Index cleanup must not affect result delivery.
+		for (const indexPath of resultIndexPaths(resultsDir, sessionId, runId)) {
+			try {
+				fs.rmSync(indexPath, { force: true });
+			} catch {
+				// Index cleanup must not affect result delivery.
+			}
 		}
-		try {
-			fs.rmSync(resultPendingPath(resultsDir, sessionId, runId), { force: true });
-		} catch {
-			// Pending cleanup must not affect result delivery.
+		for (const pendingPath of resultPendingPaths(resultsDir, sessionId, runId)) {
+			try {
+				fs.rmSync(pendingPath, { force: true });
+			} catch {
+				// Pending cleanup must not affect result delivery.
+			}
 		}
 	}
 	try {
@@ -202,7 +233,7 @@ function existingResultFile(resultPath: string): boolean {
 }
 
 function pendingResultExists(resultsDir: string, sessionId: string, runId: string): boolean {
-	return existingResultFile(resultPendingPath(resultsDir, sessionId, runId));
+	return firstExistingResultFile(resultPendingPaths(resultsDir, sessionId, runId)) !== undefined;
 }
 
 function pendingResultPayloadMatches(filePath: string, sessionId: string, runId: string): boolean {
@@ -215,10 +246,15 @@ function pendingResultPayloadMatches(filePath: string, sessionId: string, runId:
 	}
 }
 
+function assertPendingResultPayloadMatches(filePath: string, sessionId: string, runId: string): boolean {
+	const data = JSON.parse(fs.readFileSync(filePath, "utf-8")) as Record<string, unknown>;
+	return (nonEmptyString(data.runId) ?? nonEmptyString(data.id)) === runId && nonEmptyString(data.sessionId) === sessionId;
+}
+
 export function promotePendingResultFile(resultsDir: string, sessionId: string, runId: string, file = resultFileName(runId), options: { logFailure?: boolean } = {}): "none" | "promoted" | "pending" {
 	if (file !== path.basename(file) || !file.endsWith(".json")) return "none";
-	const pendingPath = resultPendingPath(resultsDir, sessionId, runId);
-	if (!existingResultFile(pendingPath)) return "none";
+	const pendingPath = firstExistingResultFile(resultPendingPaths(resultsDir, sessionId, runId));
+	if (!pendingPath) return "none";
 	const resultPath = path.join(resultsDir, file);
 	try {
 		// POSIX rename replaces the destination atomically. Deleting it first lets a
@@ -251,10 +287,15 @@ interface ResultPayloadLocation {
 
 function pendingResultLocationForSessionRun(resultsDir: string, sessionId: string, runId: string, file = resultFileName(runId)): ResultPayloadLocation | undefined {
 	if (file !== path.basename(file) || !file.endsWith(".json")) return undefined;
-	const pendingPath = resultPendingPath(resultsDir, sessionId, runId);
-	return existingResultFile(pendingPath) && pendingResultPayloadMatches(pendingPath, sessionId, runId)
-		? { file, path: pendingPath, state: "pending" }
-		: undefined;
+	const pendingPath = firstExistingResultFile(resultPendingPaths(resultsDir, sessionId, runId));
+	if (!pendingPath || !pendingResultPayloadMatches(pendingPath, sessionId, runId)) return undefined;
+	return { file, path: pendingPath, state: "pending" };
+}
+
+export function fallbackResultPayloadPathForSessionRun(resultsDir: string, sessionId: string, runId: string): string | undefined {
+	const pendingPath = firstExistingResultFile(resultPendingPaths(resultsDir, sessionId, runId));
+	if (!pendingPath || !assertPendingResultPayloadMatches(pendingPath, sessionId, runId)) return undefined;
+	return pendingPath;
 }
 
 function resultPayloadLocationFromIndex(resultsDir: string, entry: ResultIndexEntry): ResultPayloadLocation | undefined {
@@ -269,15 +310,20 @@ function resultPayloadLocationFromIndex(resultsDir: string, entry: ResultIndexEn
 }
 
 function readResultIndexForSessionRun(resultsDir: string, sessionId: string, runId: string): ResultIndexEntry | undefined {
-	try {
-		const entry = parseResultIndexEntry(JSON.parse(fs.readFileSync(resultIndexPath(resultsDir, sessionId, runId), "utf-8")));
-		if (!entry || entry.sessionId !== sessionId || entry.runId !== runId) return undefined;
-		return entry;
-	} catch (error) {
-		const code = (error as NodeJS.ErrnoException).code;
-		if (code !== "ENOENT" && code !== "ENOTDIR") console.error(`Ignoring invalid async result index for '${runId}':`, error);
-		return undefined;
+	for (const indexPath of resultIndexPaths(resultsDir, sessionId, runId)) {
+		try {
+			const entry = parseResultIndexEntry(JSON.parse(fs.readFileSync(indexPath, "utf-8")));
+			if (!entry || entry.sessionId !== sessionId || entry.runId !== runId) continue;
+			return entry;
+		} catch (error) {
+			const code = (error as NodeJS.ErrnoException).code;
+			if (code === "EPERM" || code === "EACCES") throw error;
+			if (code !== "ENOENT" && code !== "ENOTDIR") {
+				console.error(`Ignoring invalid async result index for '${runId}':`, error);
+			}
+		}
 	}
+	return undefined;
 }
 
 export function resultPayloadPathForSessionRun(resultsDir: string, sessionId: string, runId: string): string | undefined {
@@ -332,7 +378,7 @@ function listIndexFiles(dir: string): string[] {
 			.map((entry) => path.join(dir, entry.name));
 	} catch (error) {
 		const code = (error as NodeJS.ErrnoException).code;
-		if (code === "ENOENT" || code === "ENOTDIR") return [];
+		if (code === "ENOENT" || code === "ENOTDIR" || code === "EPERM" || code === "EACCES") return [];
 		throw error;
 	}
 	return files;
@@ -357,38 +403,46 @@ function resultFilesFromIndexDir(resultsDir: string, dir: string, includePending
 }
 
 export function resultFilesForSession(resultsDir: string, sessionId: string): string[] {
-	return resultFilesFromIndexDir(resultsDir, sessionIndexDir(resultsDir, sessionId));
+	const files = new Set<string>();
+	for (const dir of sessionIndexDirs(resultsDir, sessionId)) {
+		for (const file of resultFilesFromIndexDir(resultsDir, dir)) files.add(file);
+	}
+	return [...files];
 }
 
 function pendingResultFilesForSession(resultsDir: string, sessionId: string): string[] {
-	const dir = path.join(resultsDir, RESULT_PENDING_DIR, encodeSegment(sessionId));
-	let entries: fs.Dirent[];
-	try {
-		entries = fs.readdirSync(dir, { withFileTypes: true });
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-		throw error;
-	}
 	const files = new Set<string>();
-	for (const entry of entries) {
-		if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
-		const pendingPath = path.join(dir, entry.name);
+	for (const dir of pendingSessionDirs(resultsDir, sessionId)) {
+		let entries: fs.Dirent[];
 		try {
-			const data = JSON.parse(fs.readFileSync(pendingPath, "utf-8")) as Record<string, unknown>;
-			const runId = nonEmptyString(data.runId) ?? nonEmptyString(data.id);
-			if (runId && nonEmptyString(data.sessionId) === sessionId) files.add(resultFileName(runId));
+			entries = fs.readdirSync(dir, { withFileTypes: true });
 		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code !== "ENOENT") console.error(`Ignoring invalid pending async result '${pendingPath}':`, error);
+			const code = (error as NodeJS.ErrnoException).code;
+			if (code === "ENOENT" || code === "ENOTDIR" || code === "EPERM" || code === "EACCES") continue;
+			throw error;
+		}
+		for (const entry of entries) {
+			if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
+			const pendingPath = path.join(dir, entry.name);
+			try {
+				const data = JSON.parse(fs.readFileSync(pendingPath, "utf-8")) as Record<string, unknown>;
+				const runId = nonEmptyString(data.runId) ?? nonEmptyString(data.id);
+				if (runId && nonEmptyString(data.sessionId) === sessionId) files.add(resultFileName(runId));
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "ENOENT") console.error(`Ignoring invalid pending async result '${pendingPath}':`, error);
+			}
 		}
 	}
 	return [...files];
 }
 
 export function resultCandidateFilesForSession(resultsDir: string, sessionId: string): string[] {
-	return [...new Set([
-		...resultFilesFromIndexDir(resultsDir, sessionIndexDir(resultsDir, sessionId), true),
-		...pendingResultFilesForSession(resultsDir, sessionId),
-	])];
+	const files = new Set<string>();
+	for (const dir of sessionIndexDirs(resultsDir, sessionId)) {
+		for (const file of resultFilesFromIndexDir(resultsDir, dir, true)) files.add(file);
+	}
+	for (const file of pendingResultFilesForSession(resultsDir, sessionId)) files.add(file);
+	return [...files];
 }
 
 export function resultFilesForToolCall(resultsDir: string, toolCallId: string): string[] {
@@ -416,7 +470,8 @@ export function cleanupResultIndexes(resultsDir: string, now = Date.now(), maxAg
 		try {
 			entries = fs.readdirSync(dir, { withFileTypes: true });
 		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+			const code = (error as NodeJS.ErrnoException).code;
+			if (code === "ENOENT" || code === "ENOTDIR" || code === "EPERM" || code === "EACCES") return;
 			throw error;
 		}
 		for (const entry of entries) {

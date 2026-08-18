@@ -289,4 +289,115 @@ describe("result file indexes", () => {
 			fs.rmSync(resultsDir, { recursive: true, force: true });
 		}
 	});
+
+	it("round-trips results for Windows session file paths", () => {
+		const resultsDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-result-files-win-session-"));
+		try {
+			const sessionId = String.raw`C:\Users\theap\.pi\agent\sessions\leaf.jsonl`;
+			const runId = "win-session-run";
+			const resultPath = path.join(resultsDir, `${runId}.json`);
+			writeAsyncResultFile(resultPath, { id: runId, runId, sessionId, success: true });
+
+			const sessionDirs = fs.readdirSync(path.join(resultsDir, "result-index", "sessions"));
+			assert.equal(sessionDirs.length, 1);
+			assert.match(sessionDirs[0]!, /^~sha256-[a-f0-9]{64}$/);
+			assert.deepEqual(resultFilesForSession(resultsDir, sessionId), [`${runId}.json`]);
+			assert.deepEqual(resultCandidateFilesForSession(resultsDir, sessionId), [`${runId}.json`]);
+		} finally {
+			fs.rmSync(resultsDir, { recursive: true, force: true });
+		}
+	});
+
+	it("reads a pre-hash URI-encoded session index after the encoding change", () => {
+		const resultsDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-result-files-legacy-session-"));
+		try {
+			const sessionId = String.raw`C:\Users\theap\.pi\agent\sessions\leaf.jsonl`;
+			const runId = "legacy-session-run";
+			const resultPath = path.join(resultsDir, `${runId}.json`);
+			writeAsyncResultFile(resultPath, { id: runId, runId, sessionId, success: true });
+
+			const currentDir = path.join(resultsDir, "result-index", "sessions", encodeIndexSegment(sessionId));
+			const historicalDir = path.join(resultsDir, "result-index", "sessions", encodeURIComponent(sessionId));
+			fs.renameSync(currentDir, historicalDir);
+
+			assert.deepEqual(resultFilesForSession(resultsDir, sessionId), [`${runId}.json`]);
+			assert.equal(resultPayloadPathForSessionRun(resultsDir, sessionId, runId), resultPath);
+		} finally {
+			fs.rmSync(resultsDir, { recursive: true, force: true });
+		}
+	});
+
+	it("reads a pre-hash extension-like run index filename", () => {
+		const resultsDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-result-files-legacy-run-"));
+		try {
+			const sessionId = "session-a";
+			const runId = "legacy.jsonl";
+			const resultPath = path.join(resultsDir, `${runId}.json`);
+			writeAsyncResultFile(resultPath, { id: runId, runId, sessionId, success: true });
+
+			const indexDir = path.join(resultsDir, "result-index", "sessions", encodeIndexSegment(sessionId));
+			const [currentFile] = fs.readdirSync(indexDir);
+			assert.ok(currentFile);
+			fs.renameSync(path.join(indexDir, currentFile), path.join(indexDir, `${runId}.json`));
+
+			assert.equal(resultPayloadPathForSessionRun(resultsDir, sessionId, runId), resultPath);
+		} finally {
+			fs.rmSync(resultsDir, { recursive: true, force: true });
+		}
+	});
+
+	it("reads a pre-hash extension-like pending filename", () => {
+		const resultsDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-result-files-legacy-pending-"));
+		const originalError = console.error;
+		try {
+			const sessionId = "session-a";
+			const runId = "legacy.jsonl";
+			const resultPath = path.join(resultsDir, `${runId}.json`);
+			fs.mkdirSync(resultPath);
+			console.error = () => {};
+			writePendingAsyncResultFile(resultPath, { id: runId, runId, sessionId, success: true });
+
+			const currentPath = pendingPath(resultsDir, sessionId, runId);
+			const historicalPath = path.join(path.dirname(currentPath), `${runId}.json`);
+			fs.renameSync(currentPath, historicalPath);
+
+			assert.equal(resultPayloadPathForSessionRun(resultsDir, sessionId, runId), historicalPath);
+		} finally {
+			console.error = originalError;
+			fs.rmSync(resultsDir, { recursive: true, force: true });
+		}
+	});
+
+	it("throws access-denied direct session index reads", (t) => {
+		const resultsDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-result-files-eacces-index-"));
+		const error = new Error("permission denied") as NodeJS.ErrnoException;
+		error.code = "EACCES";
+		try {
+			writeAsyncResultFile(path.join(resultsDir, "blocked.json"), { id: "blocked", runId: "blocked", sessionId: "session-a", success: true });
+			t.mock.method(fsDefault, "readFileSync", () => { throw error; });
+			syncBuiltinESMExports();
+
+			assert.throws(() => resultPayloadPathForSessionRun(resultsDir, "session-a", "blocked"), (thrown) => thrown === error);
+		} finally {
+			t.mock.restoreAll();
+			syncBuiltinESMExports();
+			fs.rmSync(resultsDir, { recursive: true, force: true });
+		}
+	});
+
+	it("returns no session candidates when the session index is unlistable", () => {
+		const resultsDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-result-files-eperm-scan-"));
+		const error = new Error("operation not permitted") as NodeJS.ErrnoException;
+		error.code = "EPERM";
+		const originalReaddirSync = fsDefault.readdirSync;
+		try {
+			fsDefault.readdirSync = (() => { throw error; }) as typeof fsDefault.readdirSync;
+			syncBuiltinESMExports();
+			assert.deepEqual(resultCandidateFilesForSession(resultsDir, "session-a"), []);
+		} finally {
+			fsDefault.readdirSync = originalReaddirSync;
+			syncBuiltinESMExports();
+			fs.rmSync(resultsDir, { recursive: true, force: true });
+		}
+	});
 });
