@@ -3848,6 +3848,9 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			};
 			if (workflowRunId) {
 				const toolCallId = _id;
+				const workflowSessionRoot = requestParams.sessionDir
+					? path.resolve(deps.expandTilde(requestParams.sessionDir))
+					: trustedSessionRootsForStatus(ctx, deps)[0];
 				const asyncDir = path.join(DIRS.async, workflowRunId);
 				const resultPath = resultFilePath(DIRS.results, workflowRunId);
 				const statusPath = path.join(asyncDir, "status.json");
@@ -3877,6 +3880,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 					lastUpdate: startedAt,
 					...(timeout !== undefined ? { deadlineAt: startedAt + timeout, timeoutMs: timeout } : {}),
 					cwd: workflowCwd,
+					...(workflowSessionRoot ? { sessionRoot: workflowSessionRoot } : {}),
 					pid: process.pid,
 					steps: [],
 					workflow: { trace: [], emits: [], console: [] },
@@ -3945,7 +3949,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 					status.toolCount = toolCounts.length > 0 ? toolCounts.reduce((total, count) => total + count, 0) : undefined;
 					status.currentStep = runningSteps.length === 1 ? steps.indexOf(runningSteps[0]!) : undefined;
 				};
-				const workflowJob: AsyncJobState = { asyncId: workflowRunId, asyncDir, toolCallId, cwd: workflowCwd, status: "running", sessionId: currentSessionId ?? undefined, mode: "workflow", agents: [], steps: [], startedAt, updatedAt: startedAt, ...(timeout !== undefined ? { timeoutMs: timeout, deadlineAt: startedAt + timeout } : {}), workflow: status.workflow };
+				const workflowJob: AsyncJobState = { asyncId: workflowRunId, asyncDir, toolCallId, cwd: workflowCwd, ...(workflowSessionRoot ? { sessionRoot: workflowSessionRoot } : {}), status: "running", sessionId: currentSessionId ?? undefined, mode: "workflow", agents: [], steps: [], startedAt, updatedAt: startedAt, ...(timeout !== undefined ? { timeoutMs: timeout, deadlineAt: startedAt + timeout } : {}), workflow: status.workflow };
 				deps.state.asyncJobs.set(workflowRunId, workflowJob);
 				deps.state.fleetJobs ??= new Map();
 				deps.state.fleetJobs.set(workflowRunId, workflowJob);
