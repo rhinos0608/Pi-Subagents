@@ -4,6 +4,7 @@ import type { AsyncStatus } from "../../shared/types.ts";
 import { readStatus } from "../../shared/utils.ts";
 import { encodeIndexSegment } from "./index-segment.ts";
 import { updateTerminalRunIndex } from "./terminal-run-index.ts";
+import { isStorageCapacityError } from "../../shared/file-system-retry.ts";
 
 export const ACTIVE_RUN_INDEX_DIR = ".active-runs";
 export const DEFAULT_STALE_TERMINAL_ACTIVE_MARKER_MS = 24 * 60 * 60 * 1000;
@@ -75,7 +76,7 @@ export function releaseActiveRunIndex(asyncDir: string): void {
 	releaseToolCallAliases(asyncDir);
 }
 
-export function updateActiveRunIndex(asyncDir: string, state: AsyncStatus["state"], toolCallId?: string): void {
+export function updateActiveRunIndex(asyncDir: string, state: AsyncStatus["state"], toolCallId?: string, options: { retryCapacityErrors?: boolean } = {}): void {
 	const marker = markerPath(asyncDir);
 	if (isActiveAsyncState(state)) {
 		fs.mkdirSync(path.dirname(marker), { recursive: true });
@@ -99,6 +100,7 @@ export function updateActiveRunIndex(asyncDir: string, state: AsyncStatus["state
 		try {
 			updateTerminalRunIndex(asyncDir, status);
 		} catch (error) {
+			if (options.retryCapacityErrors && isStorageCapacityError(error)) throw error;
 			console.error(`Failed to write async terminal-run index for '${asyncDir}':`, error);
 		}
 	}
