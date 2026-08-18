@@ -2862,8 +2862,15 @@ function resolveConfiguredSingleRunOutputBaseDir(deps: ExecutorDeps): string | u
 		: undefined;
 }
 
+export function sanitizeRunPathSegment(value: string, maxBytes = 120): string {
+	const sanitized = value.trim().replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+|_+$/g, "");
+	if (!sanitized) return "unknown";
+	if (Buffer.byteLength(sanitized, "utf-8") <= maxBytes) return sanitized;
+	return sanitized.slice(0, maxBytes).replace(/_+$/, "") || "unknown";
+}
+
 function resolveSingleRunOutputBaseDir(deps: ExecutorDeps, artifactsDir: string, runId: string): string {
-	return resolveConfiguredSingleRunOutputBaseDir(deps) ?? path.join(artifactsDir, "outputs", runId);
+	return resolveConfiguredSingleRunOutputBaseDir(deps) ?? path.join(artifactsDir, "outputs", sanitizeRunPathSegment(runId));
 }
 
 function resolveWorkflowAggregateOutputPath(
@@ -2882,7 +2889,7 @@ function workflowChildDefaultOutput(aggregateOutputPath: string | undefined, art
 		const parsed = path.parse(aggregateOutputPath);
 		return path.join(parsed.dir, `${parsed.name}.${workflowKey}${parsed.ext || ".md"}`);
 	}
-	return path.join(artifactsDir, "outputs", workflowRunId, `${workflowKey}.md`);
+	return path.join(artifactsDir, "outputs", sanitizeRunPathSegment(workflowRunId), `${workflowKey}.md`);
 }
 
 function writeWorkflowAggregateOutput(outputPath: string | undefined, text: string, producedChildOutputPaths: ReadonlySet<string>): string | undefined {
