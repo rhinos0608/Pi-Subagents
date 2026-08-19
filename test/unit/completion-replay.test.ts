@@ -47,7 +47,12 @@ describe("completion replay", () => {
 			const replay = readCompletionReplay(resultsDir, "run-a", { sessionId: "session-a", now: now + 1 });
 			assert.equal(replay?.version, 1);
 			assert.equal(replay?.completion.archivePath, replay?.archivePath);
-			assert.equal(readCompletionArchive(replay!.archivePath)?.entries[0]?.text, "[worker]\nfinished output");
+			assert.deepEqual(readCompletionArchive(replay!.archivePath)?.entries[0], {
+				agent: "worker",
+				resultIndex: 0,
+				source: "result-tail",
+				text: "finished output",
+			});
 
 			const terminal = [{ id: "run-a", sessionId: "session-a" }] as AsyncRunSummary[];
 			const completions = collectWaitCompletions(terminal, makeState(), resultsDir);
@@ -283,9 +288,11 @@ describe("completion replay", () => {
 				],
 			}, Date.now());
 			const archive = readCompletionArchive(archivePath);
-			assert.deepEqual(archive?.entries[0], { agent: "saved", source: "output-artifact", path: savedOutput });
+			assert.deepEqual(archive?.entries[0], { agent: "saved", resultIndex: 0, source: "output-artifact", path: savedOutput });
 			const fallback = archive?.entries[1];
 			assert.equal(fallback?.source, "result-tail");
+			assert.equal(fallback?.agent, "fallback");
+			assert.equal(fallback?.resultIndex, 1);
 			assert.equal(fallback?.truncated, true);
 			assert.ok(Buffer.byteLength(fallback?.text ?? "", "utf-8") <= 64 * 1024);
 			assert.match(fallback?.text ?? "", /-tail$/);

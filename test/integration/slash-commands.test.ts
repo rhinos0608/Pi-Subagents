@@ -7,7 +7,7 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 
 import { scheduledRunStorePath } from "../../src/runs/background/scheduled-runs.ts";
 import { SUBAGENT_FANOUT_CHILD_ENV } from "../../src/runs/shared/pi-args.ts";
-import { ASYNC_DIR } from "../../src/shared/types.ts";
+import { ASYNC_DIR, DIRS } from "../../src/shared/types.ts";
 import type { WatchdogReviewFunction } from "../../src/watchdog/runtime.ts";
 
 const SLASH_RESULT_TYPE = "subagent-slash-result";
@@ -900,5 +900,116 @@ Valid foo.
 		assert.equal(commands.has("chain"), false);
 		assert.equal(commands.has("parallel"), false);
 		assert.equal(commands.has("run-chain"), false);
+	});
+});
+
+describe("subagents-inspect-rpc command", { skip: !available ? "slash-commands.ts not importable" : undefined }, () => {
+	function writeInspectableRun(runId: string, sessionId: string) {
+		const asyncDir = path.join(ASYNC_DIR, runId);
+		fs.mkdirSync(asyncDir, { recursive: true });
+		fs.mkdirSync(DIRS.results, { recursive: true });
+		const sessionRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pi-inspect-itest-session-"));
+		const sessionFile = path.join(sessionRoot, "session.jsonl");
+		fs.writeFileSync(sessionFile, [
+			JSON.stringify({ message: { role: "user", content: "inspect me" } }),
+			JSON.stringify({ message: { role: "assistant", content: [{ type: "text", text: "inspected" }] } }),
+		].join("\n") + "\n", "utf-8");
+		fs.writeFileSync(path.join(asyncDir, "status.json"), JSON.stringify({
+			runId,
+			sessionId,
+			mode: "single",
+			state: "complete",
+			startedAt: 100,
+			endedAt: 200,
+			lastUpdate: 200,
+			sessionFile,
+			sessionRoot,
+			steps: [{ agent: "worker", status: "complete", startedAt: 100, endedAt: 150, sessionFile }],
+		}, null, 2), "utf-8");
+		return { asyncDir, sessionRoot };
+	}
+
+	function makeInspectCtx(mode: string) {
+		const widgetCalls: Array<{ key: string; value: unknown }> = [];
+		const notifications: string[] = [];
+		const ctx = {
+			mode,
+			hasUI: true,
+			cwd: process.cwd(),
+			ui: {
+				setWidget: (key: string, value: unknown) => { widgetCalls.push({ key, value }); },
+				notify: (message: string) => { notifications.push(message); },
+				setStatus: () => {},
+				setToolsExpanded: () => {},
+			},
+			sessionManager: { getSessionFile: () => null, getSessionId: () => "session-itest" },
+		};
+		return { ctx, widgetCalls, notifications };
+	}
+
+	function registerWithState(sessionId: string | null, trustedSessionRoots: string[] = []) {
+		const commands = new Map<string, RegisteredSlashCommand>();
+		const pi = {
+			events: createEventBus(),
+			registerCommand(name: string, spec: RegisteredSlashCommand) { commands.set(name, spec); },
+			registerShortcut() {},
+			sendMessage() {},
+		};
+		const state = { ...createState(process.cwd()), currentSessionId: sessionId, trustedSessionRoots };
+		registerSlashCommands!(pi as never, state as never);
+		return commands;
+	}
+
+	it("emits a correlated payload widget then retracts it on RPC surfaces", async () => {
+		writeInspectableRun("run-itest", "session-itest");
+		const commands = registerWithState("session-itest");
+		const { ctx, widgetCalls, notifications } = makeInspectCtx("rpc");
+		await commands.get("subagents-inspect-rpc")!.handler("req-itest run-itest", ctx);
+
+		assert.deepEqual(widgetCalls.map((call) => call.key), ["subagent-inspect", "subagent-inspect"]);
+		const [set, clear] = widgetCalls;
+		assert.equal(clear!.value, undefined);
+		const lines = set!.value as string[];
+		assert.equal(lines.length, 1);
+		assert.ok(lines[0]!.startsWith("PI_SUBAGENT_INSPECT_JSON:"));
+		const reply = JSON.parse(lines[0]!.slice("PI_SUBAGENT_INSPECT_JSON:".length));
+		assert.equal(reply.kind, "pi-subagents.inspect-reply");
+		assert.equal(reply.version, 1);
+		assert.equal(reply.requestId, "req-itest");
+		assert.equal(reply.status, "complete");
+		assert.equal(reply.task, "inspect me");
+		assert.equal(reply.error, undefined);
+		assert.equal(JSON.stringify(reply).includes("session.jsonl"), false);
+		assert.equal(notifications.length, 0);
+	});
+
+	it("answers foreign_session for runs owned by another session", async () => {
+		writeInspectableRun("run-itest-foreign", "session-other");
+		const commands = registerWithState("session-itest");
+		const { ctx, widgetCalls } = makeInspectCtx("rpc");
+		await commands.get("subagents-inspect-rpc")!.handler("req-foreign run-itest-foreign", ctx);
+		const lines = widgetCalls[0]!.value as string[];
+		const reply = JSON.parse(lines[0]!.slice("PI_SUBAGENT_INSPECT_JSON:".length));
+		assert.equal(reply.error?.code, "foreign_session");
+		assert.equal(reply.messages, undefined);
+	});
+
+	it("answers invalid_request with the echoed requestId for malformed args", async () => {
+		const commands = registerWithState("session-itest");
+		const { ctx, widgetCalls } = makeInspectCtx("rpc");
+		await commands.get("subagents-inspect-rpc")!.handler("req-bad", ctx);
+		const lines = widgetCalls[0]!.value as string[];
+		const reply = JSON.parse(lines[0]!.slice("PI_SUBAGENT_INSPECT_JSON:".length));
+		assert.equal(reply.error?.code, "invalid_request");
+		assert.equal(reply.requestId, "req-bad");
+	});
+
+	it("degrades to a notification in TUI mode without emitting widgets", async () => {
+		writeInspectableRun("run-itest-tui", "session-itest");
+		const commands = registerWithState("session-itest");
+		const { ctx, widgetCalls, notifications } = makeInspectCtx("tui");
+		await commands.get("subagents-inspect-rpc")!.handler("req-tui run-itest-tui", ctx);
+		assert.equal(widgetCalls.length, 0);
+		assert.match(notifications[0] ?? "", /RPC surfaces/);
 	});
 });

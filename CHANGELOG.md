@@ -2,13 +2,19 @@
 
 ## [Unreleased]
 
+### Added
+- Add `/subagents-inspect-rpc`, a host-facing bridge command that answers on-demand async child inspection requests with a correlated, bounded `PI_SUBAGENT_INSPECT_JSON:` widget payload (task, transcript window, final output), so RPC hosts can inspect children without a model turn while the live status feed stays small. Thanks to [@yanqianglu](https://github.com/yanqianglu) for #1254.
+
 ### Changed
 - Guide oracle plan and design advice through a short same-session consultation when a material tradeoff remains, while keeping the parent as final decision-maker (#1245).
 - Improve bundled role and parent prompts for source-first discovery in noisy codebases (#1247).
 
 ### Fixed
+- Keep completed inspect RPC output available from the durable completion replay after result delivery consumes its one-shot payload, including per-child inline result tails (#1254).
 - Wake the idle parent when an async workflow child needs attention, and persist that control event on the enclosing workflow. Status already showed the stall; the parent notice did not. Thanks to [@Yibo-Zhang](https://github.com/Yibo-Zhang) for #1266.
+
 - Resolve Hugging Face-style `owner/name` model ids against the registry instead of treating every slash as `provider/id`. Fully qualified `huggingface/owner/name` still wins, and a first path segment that matches a registered provider still means `provider/id`. Thanks to [@mr-brobot](https://github.com/mr-brobot) for #1264.
+
 - Make Surf's `gpt-pro` agent an optional package integration instead of a pi-subagents builtin. Users who disabled the old builtin workaround should remove `agentOverrides.gpt-pro.disabled` before using Surf's package agent. Thanks to [@binhex](https://github.com/binhex) for #1256.
 - Keep public structured single-child calls synchronous when `asyncByDefault:false` and `async` is omitted. Thanks to [@Nofuture123](https://github.com/Nofuture123) for #1257.
 - Trust the running parent session model when no model is configured, so gateway and proxy parent models can launch children outside the host registry. Thanks to [@Nofuture123](https://github.com/Nofuture123) for #1258.

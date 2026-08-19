@@ -18,6 +18,7 @@ import type { SubagentParamsLike } from "../runs/foreground/subagent-executor.ts
 import { findModelInfo, toModelInfo } from "../shared/model-info.ts";
 import { formatTokens, shortenPath } from "../shared/formatters.ts";
 import { listAsyncRuns, formatAsyncRunProgressLabel, type AsyncRunSummary } from "../runs/background/async-status.ts";
+import { encodeInspectReply, handleInspectRpcArgs, INSPECT_WIDGET_KEY } from "../runs/background/inspect-rpc.ts";
 import { listScheduledRunSummaries } from "../runs/background/scheduled-runs.ts";
 import { SUBAGENT_FANOUT_CHILD_ENV } from "../runs/shared/pi-args.ts";
 import type { SlashSubagentResponse, SlashSubagentUpdate } from "./slash-bridge.ts";
@@ -708,6 +709,23 @@ export function registerSlashCommands(
 		description: "Show subagent diagnostics",
 		handler: async (_args, ctx) => {
 			await runSlashSubagent(pi, ctx, { action: "doctor" });
+		},
+	});
+
+	pi.registerCommand("subagents-inspect-rpc", {
+		description: "Host integration bridge: answer an async child inspection request with a correlated widget payload (no model turn)",
+		handler: async (args, ctx) => {
+			if (ctx.mode === "tui") {
+				ctx.ui.notify("Inspection replies are emitted only on RPC surfaces. Use /subagents or subagent({ action: \"status\", view: \"transcript\" }) interactively.", "info");
+				return;
+			}
+			if (!ctx.hasUI) return;
+			const reply = handleInspectRpcArgs(args, { state });
+			// Emit-then-retract in one handler: stdio delivers the two widget
+			// updates in order, the host buffers the payload by requestId, and
+			// the dedicated key never accumulates visible state.
+			ctx.ui.setWidget(INSPECT_WIDGET_KEY, encodeInspectReply(reply));
+			ctx.ui.setWidget(INSPECT_WIDGET_KEY, undefined);
 		},
 	});
 
