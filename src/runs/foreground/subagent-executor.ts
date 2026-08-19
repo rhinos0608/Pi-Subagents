@@ -28,7 +28,7 @@ import { normalizePublicSubagentExecution } from "../../extension/public-executi
 import { runSync } from "./execution.ts";
 import { handleWatchdogToolAction, WATCHDOG_TOOL_ACTIONS } from "../../watchdog/tool-actions.ts";
 import type { MainWatchdogRuntime } from "../../watchdog/runtime.ts";
-import { buildModelCandidates, normalizeParentModel, resolveEffectiveSubagentModel, resolveModelCandidate, type ParentModel } from "../shared/model-fallback.ts";
+import { buildModelCandidates, inheritsParentModel, normalizeParentModel, resolveEffectiveSubagentModel, resolveModelCandidate, type ParentModel } from "../shared/model-fallback.ts";
 import { formatRetainedChildren, listRetainedChildren } from "../background/retained-children.ts";
 import type { ModelScopeConfig } from "../shared/model-scope.ts";
 import { aggregateParallelOutputs } from "../shared/parallel-utils.ts";
@@ -389,8 +389,8 @@ interface ExecutorDeps {
 	kill?: (pid: number, signal?: NodeJS.Signals | 0) => boolean;
 }
 
-type ForkSessionFileForTask = (agentName: string, idx?: number, modelOverride?: string) => string | undefined;
-type ForkThinkingOverrideForTask = (agentName: string, idx?: number, modelOverride?: string) => AgentConfig["thinking"] | undefined;
+type ForkSessionFileForTask = (agentName: string, idx?: number, modelOverride?: string, modelOverrideFromParent?: boolean) => string | undefined;
+type ForkThinkingOverrideForTask = (agentName: string, idx?: number, modelOverride?: string, modelOverrideFromParent?: boolean) => AgentConfig["thinking"] | undefined;
 
 interface ExecutionContextData {
 	params: SubagentParamsLike;
@@ -1728,6 +1728,7 @@ async function resumeAsyncRun(input: {
 			...(input.deps.state.currentSessionId ? { parentSessionId: input.deps.state.currentSessionId } : {}),
 		},
 		modelOverride: recoveryDescriptor?.model ?? target.model,
+		modelOverrideFromParent: recoveryDescriptor?.modelOverrideFromParent,
 		thinkingOverride: recoveryDescriptor?.thinking ?? target.thinking,
 		outputBaseDir: resolveSingleRunOutputBaseDir(input.deps, artifactsDir, runId),
 		maxSubagentDepth: recoveryDescriptor?.maxSubagentDepth ?? resolveCurrentMaxSubagentDepth(input.deps.config.maxSubagentDepth),
@@ -2778,6 +2779,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 		const modelOverride = a.runner?.type === "external-cli" || a.runner?.type === "external-job"
 			? params.model ?? (externalRunnerWithoutExplicitModel ? undefined : a.model)
 			: resolveEffectiveSubagentModel(params.model as string | undefined, a.model, parentModel, availableModels, currentProvider, data.modelScope === undefined ? {} : { scope: data.modelScope });
+		const modelOverrideFromParent = inheritsParentModel(params.model as string | undefined, a.model, parentModel);
 		return executeAsyncSingle(id, compactOptional<Parameters<typeof executeAsyncSingle>[1]>({
 			agent: params.agent!,
 			task: shouldForkAgent(contextPolicy, params.agent!) ? wrapForkTask(params.task ?? "") : (params.task ?? ""),
@@ -2793,7 +2795,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 			shareEnabled,
 			activeAsyncCapacity: data.activeAsyncCapacity,
 			sessionRoot,
-			sessionFile: sessionFileForTask(params.agent!, 0, modelOverride),
+			sessionFile: sessionFileForTask(params.agent!, 0, modelOverride, modelOverrideFromParent),
 			context: contextPolicy.contextForAgent(params.agent!),
 			skills,
 			output: effectiveOutput,
@@ -2801,7 +2803,8 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 			...(params.reads !== undefined ? { reads: params.reads } : {}),
 			outputBaseDir: resolveSingleRunOutputBaseDir(deps, artifactsDir, id),
 			modelOverride,
-			thinkingOverride: externalRunnerWithoutExplicitModel ? undefined : thinkingOverrideForTask(params.agent!, 0, modelOverride),
+			modelOverrideFromParent,
+			thinkingOverride: externalRunnerWithoutExplicitModel ? undefined : thinkingOverrideForTask(params.agent!, 0, modelOverride, modelOverrideFromParent),
 			maxSubagentDepth,
 			waitToolEnabled: deps.waitToolEnabled,
 			...(params.worktree === true ? { worktree: true } : {}),
@@ -3124,6 +3127,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 		currentProvider,
 		data.modelScope === undefined ? {} : { scope: data.modelScope },
 	);
+	const modelOverrideFromParent = inheritsParentModel(params.model as string | undefined, agentConfig.model, parentModel);
 	let skillOverride: string[] | false | undefined = normalizeSkillInput(params.skill);
 	let readsOverride: string[] | false | undefined = params.reads;
 	const rawOutput = params.output !== undefined ? params.output : agentConfig.output;
@@ -3198,7 +3202,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 	let detachForeground: ((reason?: string) => boolean) | undefined;
 	const foregroundControl = deps.state.foregroundControls.get(runId);
 	if (foregroundControl) {
-		const thinking = resolveEffectiveThinking(modelOverride, thinkingOverrideForTask(params.agent!, 0, modelOverride));
+		const thinking = resolveEffectiveThinking(modelOverride, thinkingOverrideForTask(params.agent!, 0, modelOverride, modelOverrideFromParent));
 		beginForegroundChild(foregroundControl, omitUndefinedProperties({
 			index: 0,
 			agent: params.agent!,
@@ -3243,7 +3247,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 			intercomEvents: deps.pi.events,
 			runId,
 			sessionDir: sessionDirForIndex(0),
-			sessionFile: sessionFileForTask(params.agent!, 0, modelOverride),
+			sessionFile: sessionFileForTask(params.agent!, 0, modelOverride, modelOverrideFromParent),
 			share: shareEnabled,
 			artifactsDir: artifactConfig.enabled ? artifactsDir : undefined,
 			artifactConfig,
@@ -3260,7 +3264,8 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 			nestedRoute: foregroundControl?.nestedRoute,
 			index: 0,
 			modelOverride,
-			thinkingOverride: thinkingOverrideForTask(params.agent!, 0, modelOverride),
+			modelOverrideFromParent,
+			thinkingOverride: thinkingOverrideForTask(params.agent!, 0, modelOverride, modelOverrideFromParent),
 			availableModels,
 			preferredModelProvider: currentProvider,
 			modelScope: data.modelScope,
@@ -5059,30 +5064,33 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 
 		let forkSessionFileForIndex: (idx?: number) => string | undefined = () => undefined;
 		let forkThinkingOverrideForIndex: (idx?: number) => AgentConfig["thinking"] | undefined = () => undefined;
-		let prepareForkThinking = (_agentName: string, _index: number, _modelOverride?: string): void => {};
+		let prepareForkThinking = (_agentName: string, _index: number, _modelOverride?: string, _modelOverrideFromParent?: boolean): void => {};
 		const forkThinkingRequirements = new Map<number, boolean>();
 		const forkThinkingDowngrades = new Map<number, string>();
 		try {
 			const forkAvailableModels = contextPolicy.usesFork ? ctx.modelRegistry.getAvailable().map(toModelInfo) : [];
 			const parentModel = requestParentModel;
-			prepareForkThinking = (agentName, index, modelOverride) => {
+			prepareForkThinking = (agentName, index, modelOverride, modelOverrideFromParent) => {
 				const agentConfig = agents.find((agent) => agent.name === agentName);
 				if (agentConfig?.runner?.type === "external-cli" || agentConfig?.runner?.type === "external-job") {
 					forkThinkingRequirements.set(index, true);
 					return;
 				}
-				const primaryModel = resolveEffectiveSubagentModel(
-					modelOverride,
-					agentConfig?.model,
-					parentModel,
-					forkAvailableModels,
-					parentModel?.provider,
-				);
+				const primaryModel = modelOverrideFromParent
+					? modelOverride
+					: resolveEffectiveSubagentModel(
+						modelOverride,
+						agentConfig?.model,
+						parentModel,
+						forkAvailableModels,
+						parentModel?.provider,
+					);
 				const candidates = buildModelCandidates(
 					primaryModel,
 					agentConfig?.fallbackModels,
 					forkAvailableModels,
 					parentModel?.provider,
+					{ primaryModelFromParent: modelOverrideFromParent ?? inheritsParentModel(modelOverride, agentConfig?.model, parentModel) },
 				);
 				forkThinkingRequirements.set(
 					index,
@@ -5194,20 +5202,20 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		}
 		const sessionDirForIndex = (idx?: number) =>
 			path.join(sessionRoot, `run-${idx ?? 0}`);
-		const forkSessionFileForTask: ForkSessionFileForTask = (agentName, idx = 0, modelOverride) => {
+		const forkSessionFileForTask: ForkSessionFileForTask = (agentName, idx = 0, modelOverride, modelOverrideFromParent) => {
 			if (!shouldForkAgent(contextPolicy, agentName)) return undefined;
-			prepareForkThinking(agentName, idx, modelOverride);
+			prepareForkThinking(agentName, idx, modelOverride, modelOverrideFromParent);
 			return forkSessionFileForIndex(idx);
 		};
-		const forkThinkingOverrideForTask: ForkThinkingOverrideForTask = (agentName, idx = 0, modelOverride) => {
+		const forkThinkingOverrideForTask: ForkThinkingOverrideForTask = (agentName, idx = 0, modelOverride, modelOverrideFromParent) => {
 			if (!shouldForkAgent(contextPolicy, agentName)) return delegatedThinkingOverride;
-			prepareForkThinking(agentName, idx, modelOverride);
+			prepareForkThinking(agentName, idx, modelOverride, modelOverrideFromParent);
 			const override = forkThinkingOverrideForIndex(idx);
 			if (override === "off") forkThinkingDowngrades.set(idx, agentName);
 			return override ?? delegatedThinkingOverride;
 		};
-		const childSessionFileForTask: ForkSessionFileForTask = (agentName, idx, modelOverride) =>
-			forkSessionFileForTask(agentName, idx, modelOverride) ?? path.join(sessionDirForIndex(idx), "session.jsonl");
+		const childSessionFileForTask: ForkSessionFileForTask = (agentName, idx, modelOverride, modelOverrideFromParent) =>
+			forkSessionFileForTask(agentName, idx, modelOverride, modelOverrideFromParent) ?? path.join(sessionDirForIndex(idx), "session.jsonl");
 		const childSessionFileForIndex = (idx?: number) =>
 			path.join(sessionDirForIndex(idx), "session.jsonl");
 		try {

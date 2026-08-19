@@ -508,6 +508,7 @@ export interface SteeringRecoveryDescriptor {
 	sessionFile?: string;
 	cwd: string;
 	model?: string;
+	modelOverrideFromParent?: boolean;
 	fallbackModels?: string[];
 	thinking?: string;
 	tools?: string[];
@@ -1850,6 +1851,8 @@ export interface RunSyncOptions {
 	nestedRoute?: NestedRouteInfo;
 	/** Override the agent's default model (format: "provider/id" or just "id") */
 	modelOverride?: string;
+	/** The override came from the running parent session, not configuration. */
+	modelOverrideFromParent?: boolean;
 	/** LLM intent arbiter for the completion mutation guard (rescues read-only review runs). */
 	llmIntentArbiter?: import("../runs/shared/llm-intent-arbiter.ts").TaskMutationArbiter;
 	/** Override the agent's default thinking level for this run */
