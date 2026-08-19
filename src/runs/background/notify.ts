@@ -14,7 +14,7 @@ import {
 	createCompletionBatcher,
 	resolveCompletionBatchConfig,
 } from "./completion-batcher.ts";
-import { SUBAGENT_ASYNC_COMPLETE_EVENT, SUBAGENT_FOREGROUND_COMPLETE_EVENT, type ParallelHandoffReference, type SubagentState } from "../../shared/types.ts";
+import { SUBAGENT_ASYNC_COMPLETE_EVENT, SUBAGENT_FOREGROUND_COMPLETE_EVENT, type ParallelHandoffReference, type ScheduleOrigin, type SubagentState } from "../../shared/types.ts";
 import { isUnexplainedProcessSignal } from "../shared/process-signal.ts";
 
 export interface SubagentNotifyDetails {
@@ -28,7 +28,7 @@ export interface SubagentNotifyDetails {
 	sessionValue?: string;
 	handoffPath?: string;
 	/** Present when a durable schedule launched the run. */
-	scheduleOrigin?: { id: string; name?: string };
+	scheduleOrigin?: ScheduleOrigin;
 }
 
 export interface CompletionNotification {
@@ -70,6 +70,7 @@ export interface CompletionNotification {
 	/** True when an acknowledged grouped intercom relay already delivered this run. */
 	intercomDelivered?: boolean;
 	parallelHandoff?: ParallelHandoffReference;
+	scheduleOrigin?: ScheduleOrigin;
 }
 
 interface NotifyTimerApi {
@@ -122,7 +123,7 @@ export function parseSubagentNotifyContent(content: string): SubagentNotifyDetai
 	// Restore the schedule origin so a re-rendered notice keeps its attribution and
 	// does not fold the line into the result preview.
 	const scheduleMatch = (body[0] ?? "").match(/^Scheduled run from \*\*(.+?)\*\* \(schedule (.+?)\)\.$/);
-	let parsedScheduleOrigin: { id: string; name?: string } | undefined;
+	let parsedScheduleOrigin: ScheduleOrigin | undefined;
 	if (scheduleMatch) {
 		const label = scheduleMatch[1]!;
 		const id = scheduleMatch[2]!;
@@ -244,12 +245,9 @@ export function buildCompletionDetails(result: CompletionNotification): Subagent
 				: result.sessionFile
 					? { label: "Session file", value: result.sessionFile }
 					: undefined;
-	const scheduleOriginRaw = result.scheduleOrigin;
-	const scheduleOrigin = scheduleOriginRaw && typeof scheduleOriginRaw === "object" && typeof (scheduleOriginRaw as { id?: unknown }).id === "string"
-		? {
-			id: (scheduleOriginRaw as { id: string }).id,
-			...(typeof (scheduleOriginRaw as { name?: unknown }).name === "string" ? { name: (scheduleOriginRaw as { name: string }).name } : {}),
-		}
+	const rawOrigin = result.scheduleOrigin;
+	const scheduleOrigin = rawOrigin && typeof rawOrigin.id === "string"
+		? { id: rawOrigin.id, ...(typeof rawOrigin.name === "string" ? { name: rawOrigin.name } : {}) }
 		: undefined;
 	return {
 		agent,

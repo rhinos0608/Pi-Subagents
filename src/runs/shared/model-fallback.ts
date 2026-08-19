@@ -41,7 +41,7 @@ export function normalizeParentModel(model: unknown): ParentModel | undefined {
 /**
  * Normalize a model id or provider segment for fuzzy comparison: case-fold,
  * treat dots/underscores as dashes (so `4.5` matches `4-5`), and collapse
- * repeated separators. Pure.
+ * repeated separators.
  */
 export function normalizeModelSegment(segment: string): string {
 	return segment
@@ -58,7 +58,7 @@ function isPlausibleDateStamp(year: string, month: string, day: string): boolean
 	return yyyy >= 1900 && yyyy <= 2099 && mm >= 1 && mm <= 12 && dd >= 1 && dd <= 31;
 }
 
-/** Drop a trailing date stamp (`-20251001` or `-2025-10-01`) so dated and undated ids match. Pure. */
+/** Drop a trailing date stamp (`-20251001` or `-2025-10-01`) so dated and undated ids match. */
 function stripTrailingDateStamp(segment: string): string {
 	const dashed = /^(.*)-(\d{4})-(\d{2})-(\d{2})$/.exec(segment);
 	if (dashed && isPlausibleDateStamp(dashed[2]!, dashed[3]!, dashed[4]!)) return dashed[1]!;
@@ -140,7 +140,7 @@ function resolveBaseModelCandidate(
  * query only matches within the named provider — this never silently switches
  * providers for security/cost-sensitive configs. Returns the matched `fullId`,
  * or `undefined` when there is no match or the match is ambiguous across
- * providers (and no `preferredProvider` disambiguates). Pure.
+ * providers (and no `preferredProvider` disambiguates).
  */
 export function fuzzyResolveModel(
 	baseModel: string,
@@ -172,7 +172,7 @@ export function fuzzyResolveModel(
  * thinking suffix). Exact registry matches win; fuzzy normalization
  * (separator/case/date-stamp via {@link fuzzyResolveModel}) is a fallback so
  * spelling differences still resolve. Never switches providers for a qualified
- * query. Pure.
+ * query.
  */
 export function resolveModelCandidate(
 	model: string | undefined,

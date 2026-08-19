@@ -59,7 +59,7 @@ export function promotePausedWorkflowIfSettled(status: AsyncStatus): AsyncStatus
 		|| (candidate.status === "paused" && candidate.activityState === "needs_attention")
 	) === true;
 	if (stillOpen || !next.steps?.length) return undefined;
-	const failed = next.steps.some((candidate) => candidate.status === "failed") === true;
+	const failed = next.steps.some((candidate) => candidate.status === "failed");
 	const updatedAt = Date.now();
 	next.lastUpdate = updatedAt;
 	next.state = failed ? "failed" : "complete";

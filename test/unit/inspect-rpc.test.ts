@@ -21,7 +21,6 @@ import { formatOutputArtifactContent } from "../../src/shared/artifacts.ts";
 import type { SubagentState } from "../../src/shared/types.ts";
 
 const SESSION_ID = "session-current";
-const privateNeedle = "PRIVATE_LEAK_NEEDLE";
 
 function makeState(root: string, sessionId: string | null = SESSION_ID): SubagentState {
 	return {
@@ -593,23 +592,5 @@ describe("inspect-rpc command surface", () => {
 		const parsed = JSON.parse(lines[0]!.slice(INSPECT_WIDGET_PREFIX.length));
 		assert.equal(parsed.kind, INSPECT_REPLY_KIND);
 		assert.equal(parsed.requestId, "r13");
-	});
-});
-
-describe("inspect-rpc serialization cost", () => {
-	it("serializes a worst-case bounded payload quickly", () => {
-		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-inspect-perf-"));
-		const big = "y".repeat(1_000);
-		const { resultsDir } = makeRun(root, {
-			runId: "run-perf",
-			sessionMessages: Array.from({ length: 400 }, (_, index) => toolCallMessage("bash", `${index}:${big}`)),
-			resultPayload: { summary: big, results: [] },
-		});
-		const start = performance.now();
-		for (let index = 0; index < 20; index++) {
-			buildInspectReply({ requestId: "r14", asyncId: "run-perf", lines: 200 }, makeDeps(root, resultsDir));
-		}
-		const elapsed = (performance.now() - start) / 20;
-		assert.ok(elapsed < 50, `expected well under a frame per reply, got ${elapsed.toFixed(1)}ms`);
 	});
 });

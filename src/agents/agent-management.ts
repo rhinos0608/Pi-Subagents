@@ -201,9 +201,9 @@ function withDeclaredExtensionPaths(config: AgentConfig, filePath: string): Agen
 	const { extensions: _extensions, subagentOnlyExtensions: _subagentOnlyExtensions, ...withoutResolvedExtensions } = config;
 	return {
 		...withoutResolvedExtensions,
-		...(frontmatter.extensions !== undefined ? { extensions: parseFrontmatterList(frontmatter.extensions) ?? [] } : {}),
+		...(frontmatter.extensions !== undefined ? { extensions: parseFrontmatterList(frontmatter.extensions) } : {}),
 		...(frontmatter.subagentOnlyExtensions !== undefined
-			? { subagentOnlyExtensions: parseFrontmatterList(frontmatter.subagentOnlyExtensions) ?? [] }
+			? { subagentOnlyExtensions: parseFrontmatterList(frontmatter.subagentOnlyExtensions) }
 			: {}),
 	};
 }

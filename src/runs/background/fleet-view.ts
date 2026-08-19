@@ -156,28 +156,7 @@ function stringifyJsonPreview(value: unknown, maxLength = 240): string {
 	return raw.length > maxLength ? `${raw.slice(0, maxLength)}…` : raw;
 }
 
-function contentText(content: unknown): string {
-	if (typeof content === "string") return content;
-	if (!Array.isArray(content)) return "";
-	return content.map((part) => {
-		if (!part || typeof part !== "object") return "";
-		const entry = part as { type?: unknown; text?: unknown; name?: unknown; toolName?: unknown; args?: unknown; result?: unknown; content?: unknown };
-		if (typeof entry.text === "string") return entry.text;
-		if (entry.type === "toolCall" || entry.type === "tool_call") {
-			const name = typeof entry.name === "string" ? entry.name : typeof entry.toolName === "string" ? entry.toolName : "tool";
-			return `[tool: ${name}${entry.args === undefined ? "" : ` ${stringifyJsonPreview(entry.args)}`}]`;
-		}
-		if (entry.type === "toolResult" || entry.type === "tool_result") {
-			return `[tool result${entry.result === undefined ? "" : `: ${stringifyJsonPreview(entry.result)}`}]`;
-		}
-		if (entry.content !== undefined) return stringifyJsonPreview(entry.content);
-		return "";
-	}).filter(Boolean).join("\n");
-}
-
-/** One structured content part of a session JSONL record. The prose transcript
- *  formatters and the host-facing inspection serializer both build on this so
- *  artifact parsing lives in exactly one place. */
+/** One structured content part of a session JSONL record. Shared by the prose transcript formatter and inspect RPC. */
 export interface SessionTranscriptMessage {
 	role: string;
 	kind: "text" | "toolCall" | "toolResult";

@@ -9,15 +9,7 @@ import { resultPayloadPathForSessionRun } from "./result-files.ts";
 import { resolveSubagentRunId } from "./run-id-resolver.ts";
 import { reconcileAsyncRun, reconcileNestedAsyncDescendants } from "./stale-run-reconciler.ts";
 
-/**
- * On-demand, host-facing async child inspection.
- *
- * Complements the bounded live status snapshot (#1100): the snapshot answers
- * "is it running", this answers "what was it asked and what did it say" — but
- * only on explicit request, only for runs owned by the current session, and
- * only after the same reconciliation the status action performs. Nothing here
- * is persisted or broadcast; every request re-reads canonical artifacts.
- */
+/** On-demand inspection of current-session async children. Re-reads canonical artifacts after the same reconciliation as status; nothing is persisted or broadcast. */
 
 export const INSPECT_REPLY_KIND = "pi-subagents.inspect-reply";
 export const INSPECT_REPLY_VERSION = 1;
@@ -57,9 +49,6 @@ export interface InspectReply {
 	childId?: string;
 	status?: AsyncStatus["state"];
 	label?: string;
-	/** Delegated task text, recovered from the child session's first user
-	 *  message. Only populated for fresh-context children: for forked sessions
-	 *  the first user message is inherited parent history, not the task. */
 	task?: string;
 	messages?: InspectReplyMessage[];
 	finalOutput?: string;
@@ -116,7 +105,6 @@ function errorReply(request: Partial<InspectRequest>, code: InspectErrorCode, me
 	};
 }
 
-/** `/subagents-inspect-rpc <requestId> <asyncId> [childId] [--lines N]` */
 export function parseInspectRequest(args: string): { request?: InspectRequest; error?: string } {
 	const tokens = args.trim().split(/\s+/).filter(Boolean);
 	const positional: string[] = [];
@@ -149,7 +137,6 @@ export function parseInspectRequest(args: string): { request?: InspectRequest; e
 interface ResolvedNode {
 	asyncDir: string;
 	status: AsyncStatus;
-	/** Step index within status.steps when childId targeted a direct step. */
 	stepIndex?: number;
 	label?: string;
 }
@@ -243,7 +230,7 @@ function readSessionBackedOutput(sessionPath: string, trustedRoots: string[]): {
 	return { output: parts.map((part) => part.text).join("\n") };
 }
 
-function readResultOutput(resultsDir: string, sessionId: string, runId: string, stepIndex: number | undefined, trustedRoots: string[], stepAgent?: string): { output?: string; errorText?: string } {
+function readResultOutput(resultsDir: string, sessionId: string, runId: string, stepIndex: number | undefined, trustedRoots: string[], stepAgent: string | undefined, now: () => number): { output?: string; errorText?: string } {
 	const resultPath = resultPayloadPathForSessionRun(resultsDir, sessionId, runId);
 	if (resultPath) return resultOutput(JSON.parse(fs.readFileSync(resultPath, "utf-8")) as unknown, stepIndex);
 	// Read the raw record first: readCompletionReplay best-effort deletes
@@ -256,7 +243,8 @@ function readResultOutput(resultsDir: string, sessionId: string, runId: string, 
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 	}
-	const replay = readCompletionReplay(resultsDir, runId, { sessionId });
+	const nowMs = now();
+	const replay = readCompletionReplay(resultsDir, runId, { sessionId, now: nowMs });
 	if (!replay) {
 		// readCompletionReplay also returns undefined for absent, expired, foreign,
 		// and unknown-version records. A current-version, unexpired record for this
@@ -265,7 +253,7 @@ function readResultOutput(resultsDir: string, sessionId: string, runId: string, 
 		// no finalOutput.
 		if (isRecord(rawReplay) && rawReplay.version === 1 && rawReplay.runId === runId
 			&& rawReplay.sessionId === sessionId
-			&& typeof rawReplay.expiresAt === "number" && rawReplay.expiresAt > Date.now()) {
+			&& typeof rawReplay.expiresAt === "number" && rawReplay.expiresAt > nowMs) {
 			throw new Error("Completion replay record failed validation.");
 		}
 		return {};
@@ -371,8 +359,6 @@ export function buildInspectReply(request: InspectRequest, deps: InspectDeps = {
 			? { asyncDir, status }
 			: findChildNode(status, asyncDir, request.childId);
 		if ("error" in node) return errorReply(request, "not_found", node.error);
-		// A child resolved into a different async directory: re-check ownership
-		// and reconcile that directory before reading it.
 		if (node.asyncDir !== asyncDir) {
 			if (node.status.sessionId !== currentSessionId) {
 				return errorReply(request, "foreign_session", "Inspection is only available for async runs owned by the current session.");
@@ -407,7 +393,7 @@ export function buildInspectReply(request: InspectRequest, deps: InspectDeps = {
 			}
 		}
 
-		const result = readResultOutput(resultsDir, currentSessionId, node.status.runId, node.stepIndex, trustedRoots, step?.agent);
+		const result = readResultOutput(resultsDir, currentSessionId, node.status.runId, node.stepIndex, trustedRoots, step?.agent, deps.now ?? Date.now);
 		const failedText = step?.error ?? node.status.error;
 		if (result.output === undefined && result.errorText === undefined && failedText !== undefined) {
 			return errorReply(request, "internal", "Inspection could not read the async run artifacts.");
@@ -444,14 +430,11 @@ export function encodeInspectReply(reply: InspectReply): string[] {
 	return [`${INSPECT_WIDGET_PREFIX}${JSON.stringify(reply)}`];
 }
 
-/** Handle the raw argument string from the extension command. Always returns
- *  a reply; malformed requests get invalid_request with the caller's requestId
- *  echoed when it is well-formed enough to correlate. */
+/** Parse the slash-command args and always return a correlated inspect reply. */
 export function handleInspectRpcArgs(args: string, deps: InspectDeps = {}): InspectReply {
 	const parsed = parseInspectRequest(args);
 	if (parsed.error || !parsed.request) {
-		// Echo the caller's requestId when it is at least well-formed, so the
-		// host can still correlate the failure with its pending request.
+		// Echo a well-formed requestId so the host can correlate the failure.
 		const firstToken = args.trim().split(/\s+/)[0];
 		const echo = firstToken !== undefined && REQUEST_ID_PATTERN.test(firstToken) ? { requestId: firstToken } : {};
 		return errorReply(echo, "invalid_request", parsed.error ?? "Invalid inspect request.");

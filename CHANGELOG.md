@@ -8,6 +8,7 @@
 ### Changed
 - Guide oracle plan and design advice through a short same-session consultation when a material tradeoff remains, while keeping the parent as final decision-maker (#1245).
 - Improve bundled role and parent prompts for source-first discovery in noisy codebases (#1247).
+- Tighten restating comments and extra blank lines in the unreleased inspect, model-id, and changelog notes.
 
 ### Fixed
 - Stop spawning setuid `/bin/ps` for process start identity on macOS and FreeBSD. Seatbelt sandboxes such as nono no longer report `forbidden-exec-sugid` from session leases, retention locks, external-job claims, or mission state. Those platforms stay fail-closed without pid-reuse detection. Thanks to [@jdumas](https://github.com/jdumas) for #1273.
@@ -18,9 +19,7 @@
 - Keep completed inspect RPC output available from the durable completion replay after result delivery consumes its one-shot payload, including per-child inline result tails (#1254).
 - After a workflow child detaches for supervisor coordination, clear attention once the reply is delivered, keep `subagent_wait` blocked until the child exits, and reconcile the paused workflow when that child completes. Keep the terminal result even after the paused payload was already delivered. Hosts should keep that parent session until reconcile writes `complete` or `failed`. Resume a timed-out workflow from its persisted child session even when the workflow dir has no recovery descriptor. Thanks to [@skystar567](https://github.com/skystar567) for #1263.
 - Wake the idle parent when an async workflow child needs attention, and persist that control event on the enclosing workflow. Status already showed the stall; the parent notice did not. Thanks to [@Yibo-Zhang](https://github.com/Yibo-Zhang) for #1266.
-
 - Resolve Hugging Face-style `owner/name` model ids against the registry instead of treating every slash as `provider/id`. Fully qualified `huggingface/owner/name` still wins, and a first path segment that matches a registered provider still means `provider/id`. Thanks to [@mr-brobot](https://github.com/mr-brobot) for #1264.
-
 - Make Surf's `gpt-pro` agent an optional package integration instead of a pi-subagents builtin. Users who disabled the old builtin workaround should remove `agentOverrides.gpt-pro.disabled` before using Surf's package agent. Thanks to [@binhex](https://github.com/binhex) for #1256.
 - Keep public structured single-child calls synchronous when `asyncByDefault:false` and `async` is omitted. Thanks to [@Nofuture123](https://github.com/Nofuture123) for #1257.
 - Trust the running parent session model when no model is configured, so gateway and proxy parent models can launch children outside the host registry. Thanks to [@Nofuture123](https://github.com/Nofuture123) for #1258.

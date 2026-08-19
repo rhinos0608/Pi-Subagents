@@ -2970,12 +2970,6 @@ function appendWorkflowOutputWarning(text: string, warning: string | undefined):
 	return warning ? `${text}\n\n${warning}` : text;
 }
 
-function resolveWorkflowChildResumeOutputPath(params: Record<string, unknown>, state: SubagentState): string | undefined {
-	if (typeof params.resume !== "string") return undefined;
-	const target = resolveResumeTarget({ id: params.resume.trim(), index: params.index } as SubagentParamsLike, state);
-	return "recoveryDescriptor" in target ? target.recoveryDescriptor?.outputPath : undefined;
-}
-
 function resolveWorkflowChildOutputPath(input: {
 	ctxCwd: string;
 	workflowCwd: string;
@@ -2989,8 +2983,15 @@ function resolveWorkflowChildOutputPath(input: {
 	key: string;
 	params: Record<string, unknown>;
 }): { path?: string; inherited: boolean } {
-	const resumeOutputPath = typeof input.params.resume === "string" ? resolveWorkflowChildResumeOutputPath(input.params, input.state!) : undefined;
-	if (typeof input.params.resume === "string") return { path: resumeOutputPath, inherited: false };
+	if (typeof input.params.resume === "string") {
+		if (!input.state) return { path: undefined, inherited: false };
+		const index = input.params.index;
+		const target = resolveResumeTarget({
+			id: input.params.resume.trim(),
+			...(typeof index === "number" && Number.isInteger(index) ? { index } : {}),
+		}, input.state);
+		return { path: "recoveryDescriptor" in target ? target.recoveryDescriptor?.outputPath : undefined, inherited: false };
+	}
 	const rawOutput = input.params.output;
 	const hasExplicitOutput = typeof rawOutput === "string" || typeof rawOutput === "boolean";
 	const childCwd = typeof input.params.cwd === "string" ? resolveChildCwd(input.workflowCwd, input.params.cwd) : input.workflowCwd;
@@ -3718,7 +3719,7 @@ export function prepareWorkflowLaunchParams(
 		return {
 			action: "resume",
 			id: childParams.resume.trim(),
-			...(childParams.index !== undefined ? { index: childParams.index as number } : {}),
+			...(typeof childParams.index === "number" && Number.isInteger(childParams.index) ? { index: childParams.index } : {}),
 			message: typeof childParams.task === "string" ? childParams.task.trim() : "",
 			workflowParentRunId: parentWorkflowRunId,
 			workflowKey,
