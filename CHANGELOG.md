@@ -2,25 +2,32 @@
 
 ## [Unreleased]
 
+## [0.52.0] - 2026-08-19
+
+### Highlights
+- Async workflows are much harder to break mid-flight: a transient status-file lock, a stalled child, or a paused supervisor hand-off no longer fails or loses an otherwise healthy run.
+- Hosts can now inspect a running or completed async child on demand — task, recent transcript, and final output — without spending a model turn, and that output stays available after delivery.
+- macOS and FreeBSD sandboxes stop warning about setuid `/bin/ps`, and Windows stops flashing console windows during busy runs.
+- Gateway and proxy models work better: children can inherit the parent's session model, and Hugging Face-style `owner/name` model ids resolve correctly.
+
 ### Added
 - Add `/subagents-inspect-rpc`, a host-facing bridge command that answers on-demand async child inspection requests with a correlated, bounded `PI_SUBAGENT_INSPECT_JSON:` widget payload (task, transcript window, final output), so RPC hosts can inspect children without a model turn while the live status feed stays small. Thanks to [@yanqianglu](https://github.com/yanqianglu) for #1254.
 
 ### Changed
 - Guide oracle plan and design advice through a short same-session consultation when a material tradeoff remains, while keeping the parent as final decision-maker (#1245).
 - Improve bundled role and parent prompts for source-first discovery in noisy codebases (#1247).
-- Tighten restating comments and extra blank lines in the unreleased inspect, model-id, and changelog notes.
+- Make Surf's `gpt-pro` agent an optional package integration instead of a pi-subagents builtin. If you disabled the old builtin workaround, remove `agentOverrides.gpt-pro.disabled` before using Surf's package agent. Thanks to [@binhex](https://github.com/binhex) for #1256.
 
 ### Fixed
-- Stop spawning setuid `/bin/ps` for process start identity on macOS and FreeBSD. Seatbelt sandboxes such as nono no longer report `forbidden-exec-sugid` from session leases, retention locks, external-job claims, or mission state. Those platforms stay fail-closed without pid-reuse detection. Thanks to [@jdumas](https://github.com/jdumas) for #1273.
-- Keep async workflow status journaling out of workflow control flow. A transient Windows lock on `status.json` could outlast the bounded rename retry and throw from inside `persist()`, which runs inside the promises a `workflowScript` awaits. One locked write therefore marked an already-completed child failed and aborted its still-running siblings through `Promise.all` in `runs.all`. Status updates after initial run creation now degrade with a `subagent.workflow.status_write_failed` event instead of failing the run, the workflow event log tolerates the same transient lock errors it already tolerates for a full disk, and a throwing `onTrace` host callback can no longer reject a child promise. Follow-up to #1143. Thanks to [@MarcusNeufeldt](https://github.com/MarcusNeufeldt) for #1272.
-- Keep a still-paused workflow result when reconcile republishes updated child output during paused delivery. The watcher compares top-level `timestamp` as well as `state`, so a same-state revision is not overwritten or deleted as the old payload.
+- Stop spawning setuid `/bin/ps` for process start identity on macOS and FreeBSD. Sandboxes such as nono no longer report `forbidden-exec-sugid` from session leases, retention locks, external-job claims, or mission state. Those platforms stay fail-closed without pid-reuse detection. Thanks to [@jdumas](https://github.com/jdumas) for #1273.
+- Stop a transient lock on `status.json` (seen on Windows) from failing an already-completed workflow child and aborting its still-running siblings. Status updates after launch now degrade to a `subagent.workflow.status_write_failed` event instead of failing the run, and a throwing `onTrace` host callback can no longer reject a child promise. Follow-up to #1143. Thanks to [@MarcusNeufeldt](https://github.com/MarcusNeufeldt) for #1272.
+- Keep a still-paused workflow result when reconcile republishes updated child output during paused delivery, so a same-state revision is not overwritten or deleted as the old payload.
 - Persist async terminal `status.json` before publishing the result file, so observers cannot see a completed result while the run still looks `running`.
-- Stop Windows opening a console window for each child process spawned for bookkeeping. `spawnSync` and `execFileSync` default to `windowsHide: false`, so the Git, `gh`, PowerShell and `npm root -g` helpers used for process liveness, acceptance snapshots, worktree commands, chat progress, LSP diagnostics and global npm root lookups each flashed a console window on Windows, which made a busy run disruptive to work alongside. POSIX-only probes are left untouched. Thanks to [@MarcusNeufeldt](https://github.com/MarcusNeufeldt) for #1274.
+- Stop Windows opening a console window for each helper process (Git, `gh`, PowerShell, `npm root -g`) spawned during a run, which made a busy run disruptive to work alongside. Thanks to [@MarcusNeufeldt](https://github.com/MarcusNeufeldt) for #1274.
 - Keep completed inspect RPC output available from the durable completion replay after result delivery consumes its one-shot payload, including per-child inline result tails (#1254).
-- After a workflow child detaches for supervisor coordination, clear attention once the reply is delivered, keep `subagent_wait` blocked until the child exits, and reconcile the paused workflow when that child completes. Keep the terminal result even after the paused payload was already delivered. Hosts should keep that parent session until reconcile writes `complete` or `failed`. Resume a timed-out workflow from its persisted child session even when the workflow dir has no recovery descriptor. Thanks to [@skystar567](https://github.com/skystar567) for #1263.
+- After a workflow child detaches for supervisor coordination, clear attention once the reply is delivered, keep `subagent_wait` blocked until the child exits, and reconcile the paused workflow when that child completes — even after the paused payload was already delivered. A timed-out workflow can also resume from its persisted child session when the workflow dir has no recovery descriptor. Thanks to [@skystar567](https://github.com/skystar567) for #1263.
 - Wake the idle parent when an async workflow child needs attention, and persist that control event on the enclosing workflow. Status already showed the stall; the parent notice did not. Thanks to [@Yibo-Zhang](https://github.com/Yibo-Zhang) for #1266.
 - Resolve Hugging Face-style `owner/name` model ids against the registry instead of treating every slash as `provider/id`. Fully qualified `huggingface/owner/name` still wins, and a first path segment that matches a registered provider still means `provider/id`. Thanks to [@mr-brobot](https://github.com/mr-brobot) for #1264.
-- Make Surf's `gpt-pro` agent an optional package integration instead of a pi-subagents builtin. Users who disabled the old builtin workaround should remove `agentOverrides.gpt-pro.disabled` before using Surf's package agent. Thanks to [@binhex](https://github.com/binhex) for #1256.
 - Keep public structured single-child calls synchronous when `asyncByDefault:false` and `async` is omitted. Thanks to [@Nofuture123](https://github.com/Nofuture123) for #1257.
 - Trust the running parent session model when no model is configured, so gateway and proxy parent models can launch children outside the host registry. Thanks to [@Nofuture123](https://github.com/Nofuture123) for #1258.
 - Isolate colliding inherited workflow child output defaults while preserving explicit output collision checks. Thanks to [@Reverier-Xu](https://github.com/Reverier-Xu) for #1253.
