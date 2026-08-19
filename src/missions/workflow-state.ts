@@ -69,7 +69,7 @@ function windowsProcessStartKey(pid: number): string | undefined {
 function processStartKey(pid: number): string | undefined {
 	if (process.platform === "linux") return linuxProcessStartKey(pid) ?? psProcessStartKey(pid);
 	if (process.platform === "win32") return windowsProcessStartKey(pid);
-	return psProcessStartKey(pid);
+	return undefined;
 }
 
 const CURRENT_PROCESS_KEY = processStartKey(process.pid);

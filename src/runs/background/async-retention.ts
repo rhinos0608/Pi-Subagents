@@ -334,9 +334,7 @@ function processStartIdentity(pid: number): string | undefined {
 		const started = result.status === 0 ? result.stdout.trim() : "";
 		return started ? `win:${started}` : undefined;
 	}
-	const result = spawnSync("/bin/ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf-8" });
-	const started = result.status === 0 ? result.stdout.trim() : "";
-	return started ? `${process.platform}:${started}` : undefined;
+	return undefined;
 }
 
 function processIsAlive(pid: number): boolean | undefined {
