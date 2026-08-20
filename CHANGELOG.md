@@ -2,14 +2,20 @@
 
 ## [Unreleased]
 
+## [0.53.0] - 2026-08-20
+
+### Highlights
+- Pi extensions can now register runtime agents without writing user or project config.
+- Async workflows are easier to resume because completed children now have durable keyed receipts.
+- Model fallback is less noisy and less wasteful when a model fails or the prompt is too large.
+- Fleet and `/council` now give clearer supervision cues while keeping control in the parent session.
+- Extension RPC hosts can safely inspect status, launch async work, steer children, and manage schedules.
+
 ### Added
-- Carry full model registry metadata, including tiered pricing, into normalized
-  model information. Thanks to [@srcKod](https://github.com/srcKod) for #1317.
-- Add runtime programmatic agent registration for Pi extensions, with fail-closed
-  name and alias collision checks. Thanks to [@fmoda3](https://github.com/fmoda3) for #1310.
-- Skip recently failed fallback models for a TTL-backed window during model
-  fallback selection. Thanks to [@srcKod](https://github.com/srcKod) for #1318.
-- Add a schedule-only `manage` method to extension RPC, advertising and accepting list/show/history/pause/resume/run/delete while rejecting arbitrary management actions. Thanks to [@aboubakrine](https://github.com/aboubakrine) for #1319.
+- Carry full model registry metadata, including tiered pricing, into normalized model information. Thanks to [@srcKod](https://github.com/srcKod) for #1317.
+- Add runtime agent registration for Pi extensions, with name and alias collision checks. Thanks to [@fmoda3](https://github.com/fmoda3) for #1310.
+- Skip recently failed fallback models for a TTL-backed window during model selection. Thanks to [@srcKod](https://github.com/srcKod) for #1318.
+- Add a schedule-only `manage` method to extension RPC for list/show/history/pause/resume/run/delete, while rejecting unrelated management actions. Thanks to [@aboubakrine](https://github.com/aboubakrine) for #1319.
 - Let agent definitions and `agentOverrides` set a default `outputMode`, while
   call-level output mode stays higher priority. Thanks to [@bbbRye007](https://github.com/bbbRye007) for #1305.
 - Add `context: "profile"` for workflow children that should use the selected
@@ -21,14 +27,6 @@
   supervisor-mediated advisor loop, plus documented model-based `council-*`
   profile examples (#1295).
 
-### Fixed
-- Add tolerant `subagent_wait({ stopOnAttention: false })` blocking waits and scale idle attention defaults for higher-thinking children. Thanks to [@elecnix](https://github.com/elecnix) for #1315 and #1316.
-- Add a separate classifier for model context-overflow errors. Thanks to [@srcKod](https://github.com/srcKod) for #1312.
-- Normalize child result metadata before workflow return persistence (#1307).
-- Quote only confidently identified leading Windows executable paths in acceptance verification commands. Thanks to [@srcKod](https://github.com/srcKod) for #1294.
-- Keep forked subagent sessions out of top-level `pi -c` discovery by storing them under the parent session root. Thanks to [@xz-dev](https://github.com/xz-dev) for #1297.
-- Preserve `/council` advisor context defaults during fallback and cross-exam runs (#1298).
-
 ### Changed
 - Show bounded workflow progress in Fleet detail views while keeping workflow
   parents as the only actionable async items (#1304).
@@ -37,6 +35,14 @@
 - Reuse validated workflow launch fingerprints during `runs.all` batch setup, reducing focused fingerprint bookkeeping time by 48.7% (#1287).
 - Speed up recent terminal run history reads when the marker history is large and the requested limit is small.
 - Reduce repeated serialization while applying async status snapshot byte caps (#1288).
+
+### Fixed
+- Add tolerant `subagent_wait({ stopOnAttention: false })` blocking waits and scale idle attention defaults for higher-thinking children. Thanks to [@elecnix](https://github.com/elecnix) for #1315 and #1316.
+- Add a separate classifier for model context-overflow errors. Thanks to [@srcKod](https://github.com/srcKod) for #1312.
+- Normalize child result metadata before workflow return persistence (#1307).
+- Quote only confidently identified leading Windows executable paths in acceptance verification commands. Thanks to [@srcKod](https://github.com/srcKod) for #1294.
+- Keep forked subagent sessions out of top-level `pi -c` discovery by storing them under the parent session root. Thanks to [@xz-dev](https://github.com/xz-dev) for #1297.
+- Preserve `/council` advisor context defaults during fallback and cross-exam runs (#1298).
 
 ## [0.52.1] - 2026-08-20
 
