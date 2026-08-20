@@ -2,12 +2,21 @@
 
 ## [Unreleased]
 
+## [0.52.1] - 2026-08-20
+
+### Highlights
+- Model setup errors now point to the right alternate provider when there is one clear match.
+- Surf's optional `gpt-pro` package agent has a smoother path to run ChatGPT Pro web jobs through the external-job bridge when the user is logged in.
+- External-job providers can add metadata or extra operations without breaking provider discovery.
+- The packaged skill now includes a concise guide for coordinating multiple tasks, worktrees, and repositories.
+- Pi extension worktrees now have clearer guidance to avoid duplicate auto-loaded tools and shortcuts.
+
 ### Fixed
 - Suggest the unique alternate provider model when an explicit qualified subagent model is unavailable, without resolving across providers. Thanks to [@lallenlowe](https://github.com/lallenlowe) for #1280.
-- Tolerate extra fields on registered external-job providers (for example `kind`, `wakeChannels`, or additional operations) so one evolving provider no longer breaks registry reads for every provider. Job payload validation stays strict.
+- Accept extra fields on registered external-job providers, such as `kind`, `wakeChannels`, or additional operations. This keeps integrations such as Surf's `gpt-pro` package agent from breaking provider discovery as they add browser-backed job metadata, while job payload validation stays strict.
 
 ### Changed
-- Add a pi-subagents reference for generic multi-lane orchestration across tasks, worktrees, and repositories.
+- Add a pi-subagents reference for coordinating multiple tasks, worktrees, and repositories, including guidance for keeping Pi extension worktrees outside auto-discovered extension directories.
 
 ## [0.52.0] - 2026-08-19
 
