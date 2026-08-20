@@ -5,10 +5,10 @@
 ## [0.53.0] - 2026-08-20
 
 ### Highlights
+- New `/council` mode helps with material decisions by running a small, bounded group of advisors and ending with a parent-written decision memo.
 - Pi extensions can now register runtime agents without writing user or project config.
 - Async workflows are easier to resume because completed children now have durable keyed receipts.
 - Model fallback is less noisy and less wasteful when a model fails or the prompt is too large.
-- Fleet and `/council` now give clearer supervision cues while keeping control in the parent session.
 - Extension RPC hosts can safely inspect status, launch async work, steer children, and manage schedules.
 
 ### Added
@@ -23,9 +23,7 @@
 - Add durable keyed async workflow receipts and resume-by-key selectors for
   retained workflow children (#1302).
 - Add the `resultScanLogging` config to control result scan logging. Thanks to [@apoapostolov](https://github.com/apoapostolov) for #1293.
-- Add packaged `/council` and `council-mode` resources for a bounded,
-  supervisor-mediated advisor loop, plus documented model-based `council-*`
-  profile examples (#1295).
+- Add `/council` and `council-mode` for bounded advisor councils. Use it for material decisions that need multiple perspectives: the parent picks 2–3 advisors, collects independent reports, optionally runs one cross-exam pass, and writes the final decision memo. The package also documents model-based `council-*` profile examples (#1295).
 
 ### Changed
 - Show bounded workflow progress in Fleet detail views while keeping workflow
