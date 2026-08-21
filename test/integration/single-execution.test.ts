@@ -434,11 +434,11 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 			],
 			keepAliveAfterFinalMessageMs: 400,
 		});
-		const executor = makeExecutor([makeAgent("code-reviewer")]);
+		const executor = makeExecutor([makeAgent("bash-worker")]);
 
 		const result = await executor.executePublic(
 			"structured-single-tool-backfill",
-			{ agent: "code-reviewer", task: "Run exactly one tool: bash with command echo PROBE_OK.", async: false, toolTimeoutMs: 100, timeoutMs: 1_000 },
+			{ agent: "bash-worker", task: "Run exactly one tool: bash with command echo PROBE_OK.", async: false, toolTimeoutMs: 100, timeoutMs: 1_000 },
 			new AbortController().signal,
 			undefined,
 			makeMinimalCtx(tempDir),
