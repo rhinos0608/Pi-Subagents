@@ -1,6 +1,6 @@
 ---
 name: council-mode
-description: Run a bounded supervisor-mediated advisor council. Use when the user asks to convene advisors, debate a decision, cross-examine recommendations, or run /council.
+description: Run a bounded supervisor-mediated advisor council. Use when the user asks for council mode, asks to convene advisors, debate a decision, cross-examine recommendations, or run /council.
 ---
 
 # Council Mode

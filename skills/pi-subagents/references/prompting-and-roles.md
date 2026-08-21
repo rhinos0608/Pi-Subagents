@@ -44,10 +44,17 @@ Packaged prompt shortcuts are also available for repeatable workflows. Treat the
 - `/parallel-research` — combine `researcher` and `scout` for external evidence plus local code context
 - `/gather-context-and-clarify` — scout/research first, then ask the user clarifying questions with `interview`
 - `/parallel-cleanup` — two fresh-context reviewers (deslop + verbosity passes) for an adversarial cleanup review of the current diff
+- `/council` — bounded advisor council for material decisions, plan critique, cross-exam, and parent-written decision memos
 
 ## Applying Prompt Techniques Without Slash Commands
 
 The prompt templates in `prompts/` encode workflows the parent agent can run on demand. If the user provides a URL, issue, PR, plan, local file, screenshot, or freeform target, treat that target as the primary scope: read or fetch it before launching children, then include it explicitly in every child task. For targets outside the parent cwd, include the exact repository, explicit `cwd`, authority boundary, and expected output path in each child task. Do not depend on the parent conversation history when the recipe calls for fresh context.
+
+### Council Mode technique
+
+Use Council Mode when the user asks to convene advisors, debate a material decision, cross-examine recommendations, or critique and improve a plan with several model perspectives. This includes requests such as “run a council on this architecture,” “have Sol, Fable, and Kimi critique this plan,” or “get multiple oracles to debate the tradeoffs.” Read `../council-mode/SKILL.md` and follow its bounded parent-supervised protocol instead of launching ad hoc parallel oracle calls.
+
+Council advisors are read-only. The parent assigns temporary roles such as architect, skeptic, operator, or product reviewer. User or project `council-*` profiles can pin models such as GPT 5.6 Sol, Fable, or Kimi while the `/council` request supplies the role for that run. The parent collects independent reports, optionally sends curated cross-exam packets, and writes the final memo. Do not treat the council as agent-to-agent chat, implementation authority, or a writer swarm.
 
 ### Parallel review technique
 

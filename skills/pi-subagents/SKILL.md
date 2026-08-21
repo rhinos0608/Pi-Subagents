@@ -21,6 +21,7 @@ Read the matching reference file before acting. Paths are relative to this `SKIL
 | Task | Read |
 | --- | --- |
 | Decide whether to delegate, choose agents, compare tool versus slash commands, apply prompt techniques, or understand builtin roles | `references/prompting-and-roles.md` |
+| Use council mode, convene several advisors, debate a decision, cross-examine recommendations, critique or improve a plan with multiple model perspectives, or run `/council` | `../council-mode/SKILL.md` |
 | Run one-child, scripted, async, scheduled, mission-backed, forked, watchdog, oracle, or intercom-coordinated workflows | `references/execution-controls.md` |
 | Coordinate several independent tasks, worktrees, repositories, or writer lanes | `references/multi-lane-orchestration.md` |
 | List/create/update/delete/eject/disable agents, inspect legacy chain records, edit agent files, use prompt-template integration, or expose extension RPC | `references/management-authoring-rpc.md` |
@@ -32,7 +33,8 @@ For broad or uncertain requests, read more than one reference. For complex work,
 
 - Keep the parent as orchestrator and final decision-maker.
 - Before multiple mutation-capable lanes, record a lane board and each lane's isolation path.
-- For plan, design, or architecture advice that asks to consult, discuss with, or come to agreement with `oracle`, use a short same-session consultation loop: read the first result, resume once with a targeted challenge when material tradeoffs remain, then synthesize the parent decision. Keep explicit one-shot, trivial, and fully settled consultations one-shot.
+- For plan, design, or architecture advice that asks for council mode, asks to convene several advisors, compare model perspectives, debate a decision, cross-examine recommendations, or critique and improve a plan, read `../council-mode/SKILL.md` and use Council Mode instead of ad hoc parallel oracle calls.
+- For plan, design, or architecture advice that asks to consult, discuss with, or come to agreement with one `oracle`, use a short same-session consultation loop: read the first result, resume once with a targeted challenge when material tradeoffs remain, then synthesize the parent decision. Keep explicit one-shot, trivial, and fully settled consultations one-shot.
 - Use one writer per cwd/worktree unless isolated worktrees are intentional.
 - For cross-codebase work, record the target repo, explicit `cwd`, authority boundary, and expected output before launch. Do not assume the parent session cwd is the child repo.
 - For parallel fanout, compare child prompts before launch. Do not send clone prompts with only issue numbers, titles, or broad file globs swapped; each child needs a lane-specific task, source seam, prior evidence, and decision that remains distinct without the item number. Launch that fanout as one async `workflowScript` with stable keys and aggregate output unless there is truly only one child.

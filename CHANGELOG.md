@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Changed
+- Document Council Mode routing in the main `pi-subagents` skill so natural-language requests for advisor councils, plan critique, cross-exam, or multiple model perspectives load the Council Mode protocol.
+
 ## [0.53.0] - 2026-08-20
 
 ### Highlights
