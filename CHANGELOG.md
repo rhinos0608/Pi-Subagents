@@ -2,12 +2,23 @@
 
 ## [Unreleased]
 
-### Changed
-- Make scripted-workflow helper support and stale-session recovery visible in `doctor` and the workflow guide (#1344).
-- Keep structured single-child execution receipts quiet by removing an internal conversion log from public workflow output.
+## [0.54.0] - 2026-08-21
+
+### Highlights
+- Subagent model selection is more precise with per-agent restrictions and an `inherit` shortcut for the current parent model.
+- Package agents are easier to discover because list and detail output now shows where they come from and whether their external provider is ready.
+- Workflow runs are less fragile: tool-result backfill, context-overflow handling, resumed children, and permission asks now behave more predictably.
+- Child launches are lighter and safer because subagent processes avoid loading the parent extension graph and avoid unnecessary permission bridge setup.
+- Council Mode is easier to use from natural language and no longer requires invented advisor role labels.
+
+### Added
 - Add per-agent model restrictions and a current-parent `inherit` allow-list alias. Thanks to [@hieudmg](https://github.com/hieudmg) for #1328.
+
+### Changed
 - Show package names, versions, and external-job provider status in subagent list and detail output so package agents such as Surf's `gpt-pro` are easier to find and use.
-- Document Council Mode routing in the main `pi-subagents` skill so natural-language requests for advisor councils, plan critique, cross-exam, or multiple model perspectives load the Council Mode protocol.
+- Make scripted workflow helper support and stale-session recovery easier to see in `doctor` and the workflow guide (#1344).
+- Keep structured single-child execution receipts quieter by removing an internal conversion log from public workflow output.
+- Route natural-language requests for advisor councils, plan critique, cross-exam, or multiple model perspectives to the Council Mode protocol.
 - Simplify Council Mode advisor selection so model-based profiles provide the perspective and the question supplies the decision frame.
 
 ### Fixed
