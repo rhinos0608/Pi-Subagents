@@ -9,6 +9,7 @@
 - Simplify Council Mode advisor selection so model-based profiles provide the perspective and the question supplies the decision frame.
 
 ### Fixed
+- Keep foreground workflow children from timing out after a tool result is backfilled without a separate execution-end event. Thanks to [@moekyo](https://github.com/moekyo) for #1339.
 - Mark completed foreground workflow children as resumable in keyed receipts when their persisted session file is available (#1335).
 - Avoid loading the parent extension graph in subagent child processes. Thanks to [@ccharname](https://github.com/ccharname) for #1330.
 - Stop model fallback on context-overflow failures and surface `contextOverflow`. Thanks to [@srcKod](https://github.com/srcKod) for #1323.
