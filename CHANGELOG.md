@@ -11,6 +11,7 @@
 - Simplify Council Mode advisor selection so model-based profiles provide the perspective and the question supplies the decision frame.
 
 ### Fixed
+- Layer custom-agent user and project overrides without dropping user-only fields, while preserving project precedence. Thanks to [@jagaliano](https://github.com/jagaliano) for #1348.
 - Avoid child tool-call hangs by loading the external permission-system bridge only for explicit native permission rules and by failing stalled ask decisions closed. Thanks to [@moekyo](https://github.com/moekyo) for #1339.
 - Keep foreground workflow children from timing out after a tool result is backfilled without a separate execution-end event. Thanks to [@moekyo](https://github.com/moekyo) for #1339.
 - Mark completed foreground workflow children as resumable in keyed receipts when their persisted session file is available (#1335).
