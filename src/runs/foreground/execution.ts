@@ -1052,6 +1052,20 @@ async function runSingleAttempt(
 			}
 
 			if (evt.type === "tool_result_end" && evt.message) {
+				const toolResultCompletion = {
+					toolCallId: (evt.message as { toolCallId?: unknown }).toolCallId ?? (evt as { toolCallId?: unknown }).toolCallId,
+					toolName: (evt.message as { toolName?: unknown }).toolName ?? (evt as { toolName?: unknown }).toolName,
+				};
+				clearActiveToolTimeout(toolResultCompletion);
+				const endedTool = removeActiveToolCall(toolResultCompletion);
+				if (endedTool) {
+					progress.recentTools.push({
+						tool: endedTool.tool,
+						args: endedTool.args,
+						endMs: now,
+					});
+					refreshCurrentTool();
+				}
 				result.messages!.push(evt.message);
 				const resultText = extractTextFromContent(evt.message.content);
 				if (options.toolBudget && pendingToolResult && resultText.includes("Tool budget hard limit reached")) {

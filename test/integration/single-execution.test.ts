@@ -423,6 +423,32 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		assert.match(JSON.stringify(result.details), /Converted structured single-child request/);
 	});
 
+	it("keeps public structured children alive when tool results backfill without execution_end", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		mockPi.onCall({
+			steps: [
+				{ jsonl: [{ type: "tool_execution_start", toolCallId: "bash-1", toolName: "bash", args: { command: "echo PROBE_OK" } }] },
+				{ delay: 25, jsonl: [
+					{ type: "tool_result_end", message: { role: "toolResult", toolCallId: "bash-1", toolName: "bash", isError: false, content: [{ type: "text", text: "PROBE_OK" }] } },
+					events.assistantMessage("PROBE_OK"),
+				] },
+			],
+			keepAliveAfterFinalMessageMs: 400,
+		});
+		const executor = makeExecutor([makeAgent("code-reviewer")]);
+
+		const result = await executor.executePublic(
+			"structured-single-tool-backfill",
+			{ agent: "code-reviewer", task: "Run exactly one tool: bash with command echo PROBE_OK.", async: false, toolTimeoutMs: 100, timeoutMs: 1_000 },
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+
+		assert.equal(result.isError, undefined, result.content[0]?.text ?? "workflow failed");
+		assert.match(result.content[0]?.text ?? "", /PROBE_OK/);
+		assert.equal(result.details.results[0]?.timedOut, undefined);
+	});
+
 	it("keeps public structured single-child calls foreground when async is disabled by default", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
 		mockPi.onCall({ output: "Structured child used the foreground default" });
 		const executor = makeExecutor([makeAgent("echo")], {}, false);
