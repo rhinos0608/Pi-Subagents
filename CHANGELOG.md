@@ -3,6 +3,9 @@
 ## [Unreleased]
 
 ### Added
+- Add `subagents.maxThinking` to enforce a thinking ceiling across native
+  subagent launches. Thanks to [@alex-real14](https://github.com/alex-real14)
+  for #1397.
 - Add bundled skill guidance for lightweight task profiles before subagent
   fanout. Thanks to [@srcKod](https://github.com/srcKod) for #1395.
 - Add `subagents.defaultProvider` and per-agent `defaultProvider` overrides so bare subagent model ids can prefer a configured provider. Thanks to [@swingtempo](https://github.com/swingtempo) for #1393.
@@ -27,6 +30,8 @@
   severity labels so first-pass reviews do not default to `blockers only`.
 
 ### Fixed
+- Tighten unreleased model verification, child stop request parsing, and
+  external-job follow-up diagnostics found during deslop.
 - Keep the async widget spinner and elapsed timer moving while the parent is
   idle by routing animation ticks through the live widget rebuild path. Thanks
   to [@0xFlo](https://github.com/0xFlo) for #1390.
