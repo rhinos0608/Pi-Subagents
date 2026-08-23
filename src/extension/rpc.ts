@@ -1,3 +1,4 @@
+import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -5,6 +6,8 @@ import { Compile } from "typebox/compile";
 import { resolveAsyncRunLocation } from "../runs/background/async-resume.ts";
 import { deliverStopRequest } from "../runs/background/control-channel.ts";
 import { reconcileAsyncRun } from "../runs/background/stale-run-reconciler.ts";
+import { resultPayloadPathForSessionRun } from "../runs/background/result-files.ts";
+import { readCompletionArchive, readCompletionReplay } from "../runs/background/completion-replay.ts";
 import type { SubagentParamsLike } from "../runs/foreground/subagent-executor.ts";
 import { resolveCurrentSessionId } from "../shared/session-identity.ts";
 import {
@@ -30,8 +33,12 @@ export const SUBAGENT_RPC_REQUEST_EVENT = "subagents:rpc:v1:request";
 export const SUBAGENT_RPC_READY_EVENT = "subagents:rpc:v1:ready";
 export const SUBAGENT_RPC_REPLY_EVENT_PREFIX = "subagents:rpc:v1:reply:";
 
-export const SUBAGENT_RPC_METHODS = ["ping", "status", "manage", "spawn", "steer", "interrupt", "stop", "resume"] as const;
+export const SUBAGENT_RPC_METHODS = ["ping", "status", "manage", "spawn", "steer", "interrupt", "stop", "resume", "result"] as const;
 export type SubagentRpcMethod = typeof SUBAGENT_RPC_METHODS[number];
+export type RpcTerminalState = "complete" | "failed" | "paused" | "stopped" | "rejected";
+export type RpcResult =
+	| { runId: string; ready: false; state: string }
+	| { runId: string; ready: true; state: RpcTerminalState; outcome: "success" | "failure" | "paused" | "stopped"; output: string; outputAvailable: boolean; outputTruncated: boolean };
 
 export interface SubagentRpcRequestEnvelope {
 	version: typeof SUBAGENT_RPC_PROTOCOL_VERSION;
@@ -300,6 +307,9 @@ interface RegisterSubagentRpcBridgeOptions {
 	now?: () => number;
 	/** Native live state, projected into the optional public fleet-status capability. */
 	state?: SubagentState;
+	maxResultCacheEntries?: number;
+	resultCacheTtlMs?: number;
+	resultOutputCapChars?: number;
 }
 
 class SubagentRpcError extends Error {
@@ -390,6 +400,7 @@ function pingData(ctx: ExtensionContext | null) {
 		methods: [...SUBAGENT_RPC_METHODS],
 		capabilities: {
 			status: true,
+			result: true,
 			managementActions: [...SUBAGENT_RPC_MANAGEMENT_ACTIONS],
 			fleetStatus: { version: 1 },
 			asyncStatusSnapshot: { kind: ASYNC_STATUS_SNAPSHOT_KIND, version: ASYNC_STATUS_SNAPSHOT_VERSION },
@@ -637,10 +648,24 @@ function stopAsyncRun(
 	};
 }
 
+const RESULT_RUN_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
+const DEFAULT_RESULT_CACHE_ENTRIES = 50;
+const DEFAULT_RESULT_CACHE_TTL_MS = 10 * 60 * 1000;
+const DEFAULT_RESULT_OUTPUT_CAP = 50_000;
+type ResultCacheEntry = { result: RpcResult; expiresAt: number };
+function resultReady(runId: string, state: RpcTerminalState, output: string, cap: number): RpcResult { const chars = Array.from(output); const safeCap = Math.max(1, cap); const truncated = chars.length > safeCap; return { runId, ready: true, state, outcome: state === "complete" ? "success" : state === "paused" ? "paused" : state === "stopped" ? "stopped" : "failure", output: truncated ? chars.slice(-safeCap).join("") : output, outputAvailable: output.length > 0, outputTruncated: truncated }; }
+function readBoundedFile(file: string, maxBytes: number): string { try { const fd = fs.openSync(file, "r"); try { const size = fs.fstatSync(fd).size; const buf = Buffer.allocUnsafe(Math.min(size, maxBytes)); fs.readSync(fd, buf, 0, buf.length, 0); return buf.toString("utf8"); } finally { fs.closeSync(fd); } } catch { return ""; } }
+function resultJson(file: string): Record<string, unknown> | undefined { try { const raw = readBoundedFile(file, 1_000_000); if (!raw) return undefined; const value = JSON.parse(raw); return isRecord(value) ? value : undefined; } catch { return undefined; } }
+function terminalState(value: unknown): RpcTerminalState | undefined { return typeof value === "string" && ["complete", "failed", "paused", "stopped", "rejected"].includes(value) ? value as RpcTerminalState : undefined; }
+function handleResult(params: unknown, options: RegisterSubagentRpcBridgeOptions, ctx: ExtensionContext, cache: Map<string, ResultCacheEntry>): RpcResult {
+ const input = assertRecordParams(params, "result"); const runId = input.runId; if (Object.keys(input).length !== 1 || typeof runId !== "string" || !RESULT_RUN_ID.test(runId)) throw new SubagentRpcError("invalid_params", "RPC result requires valid runId."); let sessionId: string; try { sessionId = resolveCurrentSessionId(ctx.sessionManager); } catch { throw new SubagentRpcError("no_active_session", "No active session for RPC result."); } const now = options.now?.() ?? Date.now(); const key = `${sessionId}:${runId}`; const hit = cache.get(key); if (hit && hit.expiresAt > now) return hit.result; cache.delete(key); const resultsDir = options.resultsDir ?? DIRS.results; const cap = options.resultOutputCapChars ?? DEFAULT_RESULT_OUTPUT_CAP; let result: RpcResult | undefined; const indexed = resultPayloadPathForSessionRun(resultsDir, sessionId, runId); const payload = indexed ? resultJson(indexed) : undefined; if (payload && payload.sessionId === sessionId && (payload.runId === runId || payload.id === runId)) { let output = typeof payload.output === "string" ? payload.output : ""; if (!output && Array.isArray(payload.results)) { output = payload.results.map((entry) => { if (!isRecord(entry)) return ""; if (typeof entry.output === "string" && entry.output) return entry.output; return typeof entry.error === "string" ? `Error: ${entry.error}` : ""; }).join(""); } if (!output && typeof payload.error === "string") output = `Error: ${payload.error}`; result = resultReady(runId, terminalState(payload.state) ?? "complete", output, cap); } const replay = !result ? readCompletionReplay(resultsDir, runId, { sessionId, now }) : undefined; if (replay) { let output = ""; for (const entry of readCompletionArchive(replay.archivePath)?.entries ?? []) { if (entry.text) output += entry.text; else if (entry.path) { try { output += readBoundedFile(entry.path, 2 * 1024 * 1024); } catch {} } } result = resultReady(runId, terminalState(replay.completion.state) ?? "complete", output, cap); } if (!result) { const dir = path.join(options.asyncDirRoot ?? DIRS.async, runId); const status = readStatus(dir); if (status?.sessionId === sessionId) { const state = terminalState(status.state); if (!state) result = { runId, ready: false, state: status.state }; else result = resultReady(runId, state, "", cap); } } if (!result) throw new SubagentRpcError("not_found", `Async result '${runId}' not found in active session.`); cache.set(key, { result, expiresAt: now + (options.resultCacheTtlMs ?? DEFAULT_RESULT_CACHE_TTL_MS) }); while (cache.size > (options.maxResultCacheEntries ?? DEFAULT_RESULT_CACHE_ENTRIES)) cache.delete(cache.keys().next().value!); return result;
+}
+
 async function handleRequest(
 	request: SubagentRpcRequestEnvelope,
 	options: RegisterSubagentRpcBridgeOptions,
 	fleetKeys: FleetKeyState,
+	resultCache: Map<string, ResultCacheEntry>,
 ): Promise<unknown> {
 	const ctx = options.getContext();
 	if (request.method === "ping") return pingData(ctx);
@@ -671,6 +696,7 @@ async function handleRequest(
 			asyncSnapshot: buildAsyncStatusSnapshotForState(options.state, sessionId),
 		};
 	}
+	if (request.method === "result") return handleResult(request.params, options, ctx, resultCache);
 	if (request.method === "steer") {
 		return executeChecked(options, ctx, request.requestId, request.method, steerParams(request.params));
 	}
@@ -737,11 +763,12 @@ export function registerSubagentRpcBridge(options: RegisterSubagentRpcBridgeOpti
 	dispose: () => void;
 } {
 	const fleetKeys: FleetKeyState = { sessionId: null, next: 0, keys: new Map() };
+	const resultCache = new Map<string, ResultCacheEntry>();
 	const unsubscribe = options.events.on(SUBAGENT_RPC_REQUEST_EVENT, async (raw) => {
 		let request: SubagentRpcRequestEnvelope | undefined;
 		try {
 			request = parseRequest(raw);
-			const data = await handleRequest(request, options, fleetKeys);
+			const data = await handleRequest(request, options, fleetKeys, resultCache);
 			options.events.emit(subagentRpcReplyEvent(request.requestId), {
 				version: SUBAGENT_RPC_PROTOCOL_VERSION,
 				requestId: request.requestId,
@@ -755,12 +782,23 @@ export function registerSubagentRpcBridge(options: RegisterSubagentRpcBridgeOpti
 		}
 	});
 
+	const unsubscribeComplete = options.events.on(SUBAGENT_ASYNC_COMPLETE_EVENT, (raw) => {
+		if (!isRecord(raw) || typeof raw.runId !== "string" || !RESULT_RUN_ID.test(raw.runId) || typeof raw.sessionId !== "string") return;
+		const state = terminalState(raw.state);
+		if (!state) return;
+		const result = resultReady(raw.runId, state, typeof raw.output === "string" ? raw.output : "", options.resultOutputCapChars ?? DEFAULT_RESULT_OUTPUT_CAP);
+		resultCache.set(`${raw.sessionId}:${raw.runId}`, { result, expiresAt: (options.now?.() ?? Date.now()) + (options.resultCacheTtlMs ?? DEFAULT_RESULT_CACHE_TTL_MS) });
+		while (resultCache.size > (options.maxResultCacheEntries ?? DEFAULT_RESULT_CACHE_ENTRIES)) resultCache.delete(resultCache.keys().next().value!);
+	});
+
 	return {
 		emitReady: (ctx) => {
 			options.events.emit(SUBAGENT_RPC_READY_EVENT, pingData(ctx ?? options.getContext()));
 		},
 		dispose: () => {
 			if (typeof unsubscribe === "function") unsubscribe();
+			if (typeof unsubscribeComplete === "function") unsubscribeComplete();
+			resultCache.clear();
 		},
 	};
 }

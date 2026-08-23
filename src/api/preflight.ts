@@ -12,7 +12,7 @@ import { injectOutputPathSystemPrompt, normalizeSingleOutputOverride, resolveSin
 import { getArtifactPaths, getArtifactsDir } from "../shared/artifacts.ts";
 import { resolveEffectiveThinking } from "../shared/model-info.ts";
 import { assertThinkingWithinCeiling, decodeThinkingCeiling, intersectThinkingCeilings, SUBAGENT_THINKING_CEILING_ENV, type ThinkingLevel } from "../shared/thinking-ceiling.ts";
-import { SUBAGENT_LIFECYCLE_ARTIFACT_VERSION, type ArtifactDirPreference, type ArtifactPaths, type JsonSchemaObject, type OutputMode } from "../shared/types.ts";
+import { SUBAGENT_LIFECYCLE_ARTIFACT_VERSION, type ArtifactDirPreference, type ArtifactPaths, type JsonSchemaObject } from "../shared/types.ts";
 import { capabilityCeilingAgentRestrictionMessage, intersectSubagentCapabilityCeilings, type ResolvedSubagentCapabilityCeiling, type SubagentCapabilityAudit } from "../runs/shared/capability-ceiling.ts";
 import { appendTurnBudgetSystemPrompt } from "../runs/shared/turn-budget.ts";
 import { resolvePermissionRules } from "../runs/shared/permissions.ts";
@@ -60,8 +60,6 @@ export interface SubagentLaunchContractInput {
 	availableModels?: ReadonlyArray<AvailableModelInfo | { provider: string; id: string; fullId?: string; reasoning?: boolean }>;
 	preferredProvider?: string;
 	skill?: string | string[] | boolean;
-	output?: string | boolean;
-	outputMode?: OutputMode;
 	outputSchema?: JsonSchemaObject;
 	turnBudget?: ResolvedTurnBudget;
 	artifacts?: boolean;
@@ -259,10 +257,9 @@ export async function resolveSubagentLaunchContract(input: SubagentLaunchContrac
 	if (restrictionMessage) return { ok: false, code: "restricted_agent", message: restrictionMessage, diagnostics };
 	const runId = input.runId ?? "preflight";
 	const skillInput = normalizeSkillInput(input.skill);
-	const outputOverride = normalizeSingleOutputOverride(input.output, agent.output);
+	const outputOverride = normalizeSingleOutputOverride(undefined, undefined);
 	const behavior = resolveStepBehavior(agent, {
 		...(outputOverride !== undefined ? { output: outputOverride } : {}),
-		...(input.outputMode !== undefined ? { outputMode: input.outputMode } : {}),
 		...(skillInput !== undefined ? { skills: skillInput } : {}),
 		...(input.model !== undefined ? { model: input.model } : {}),
 	});

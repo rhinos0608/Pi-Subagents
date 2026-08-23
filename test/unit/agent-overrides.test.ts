@@ -647,8 +647,6 @@ describe("builtin agent overrides", () => {
 			subagents: {
 				agentOverrides: {
 					implementer: {
-						output: "artifacts/implementer.md",
-						outputMode: "file-only",
 						defaultReads: ["CONTEXT.md", "docs/spec.md"],
 						model: "anthropic/claude-sonnet-4-6",
 						fallbackModels: ["openai/gpt-5-mini"],
@@ -671,8 +669,6 @@ describe("builtin agent overrides", () => {
 		const implementer = discoverAgents(tempProject, "both").agents.find((agent) => agent.name === "implementer");
 		assert.ok(implementer);
 		assert.equal(implementer.source, "project");
-		assert.equal(implementer.output, "artifacts/implementer.md");
-		assert.equal(implementer.outputMode, "file-only");
 		assert.deepEqual(implementer.defaultReads, ["CONTEXT.md", "docs/spec.md"]);
 		assert.equal(implementer.model, "anthropic/claude-sonnet-4-6");
 		assert.deepEqual(implementer.fallbackModels, ["openai/gpt-5-mini"]);
@@ -720,17 +716,16 @@ describe("builtin agent overrides", () => {
 	it("prefers project agentOverrides over user agentOverrides on a custom project agent", () => {
 		fs.mkdirSync(path.join(tempProject, ".pi"), { recursive: true });
 		writeJson(path.join(tempHome, ".pi", "agent", "settings.json"), {
-			subagents: { agentOverrides: { implementer: { model: "anthropic/claude-sonnet-4-6", output: "user.md", defaultReads: ["user.md"] } } },
+			subagents: { agentOverrides: { implementer: { model: "anthropic/claude-sonnet-4-6", defaultReads: ["user.md"] } } },
 		});
 		writeJson(path.join(tempProject, ".pi", "settings.json"), {
-			subagents: { agentOverrides: { implementer: { model: "openai/gpt-5.4", output: "project.md", defaultReads: ["project.md"] } } },
+			subagents: { agentOverrides: { implementer: { model: "openai/gpt-5.4", defaultReads: ["project.md"] } } },
 		});
 		writeProjectAgent(tempProject, "implementer", `---\nname: implementer\ndescription: TDD implementer\n---\n\nDrive the failing test first.\n`);
 
 		const implementer = discoverAgents(tempProject, "both").agents.find((agent) => agent.name === "implementer");
 		assert.ok(implementer);
 		assert.equal(implementer.model, "openai/gpt-5.4");
-		assert.equal(implementer.output, "project.md");
 		assert.deepEqual(implementer.defaultReads, ["project.md"]);
 		assert.equal(implementer.override?.scope, "project");
 	});
@@ -741,8 +736,6 @@ describe("builtin agent overrides", () => {
 			subagents: {
 				agentOverrides: {
 					implementer: {
-						output: "artifacts/override.md",
-						outputMode: "file-only",
 						defaultReads: ["override.md"],
 						model: "anthropic/claude-sonnet-4-6",
 						thinking: "high",
@@ -756,12 +749,10 @@ describe("builtin agent overrides", () => {
 				},
 			},
 		});
-		writeProjectAgent(tempProject, "implementer", `---\nname: implementer\ndescription: TDD implementer\noutput: artifacts/explicit.md\noutputMode: inline\ndefaultReads: explicit.md\nmodel: google/gemini-3-pro\nthinking: medium\ntools: read, mcp:local_tool\nskills: agent-skill\ninheritProjectContext: false\ndefaultContext: fresh\nacceptanceRole: read-only\ncompletionGuard: false\n---\n\nDrive the failing test first.\n`);
+		writeProjectAgent(tempProject, "implementer", `---\nname: implementer\ndescription: TDD implementer\ndefaultReads: explicit.md\nmodel: google/gemini-3-pro\nthinking: medium\ntools: read, mcp:local_tool\nskills: agent-skill\ninheritProjectContext: false\ndefaultContext: fresh\nacceptanceRole: read-only\ncompletionGuard: false\n---\n\nDrive the failing test first.\n`);
 
 		const implementer = discoverAgents(tempProject, "both").agents.find((agent) => agent.name === "implementer");
 		assert.ok(implementer);
-		assert.equal(implementer.output, "artifacts/explicit.md");
-		assert.equal(implementer.outputMode, "inline");
 		assert.deepEqual(implementer.defaultReads, ["explicit.md"]);
 		assert.equal(implementer.model, "google/gemini-3-pro");
 		assert.equal(implementer.thinking, "medium");
@@ -775,15 +766,14 @@ describe("builtin agent overrides", () => {
 		assert.equal(implementer.override, undefined);
 	});
 
-	it("keeps explicit output and defaultReads frontmatter when overrides clear them", () => {
+	it("keeps explicit defaultReads frontmatter when overrides clear it", () => {
 		fs.mkdirSync(path.join(tempProject, ".pi"), { recursive: true });
 		writeJson(path.join(tempProject, ".pi", "settings.json"), {
-			subagents: { agentOverrides: { implementer: { output: false, defaultReads: false } } },
+			subagents: { agentOverrides: { implementer: { defaultReads: false } } },
 		});
-		writeProjectAgent(tempProject, "implementer", `---\nname: implementer\ndescription: TDD implementer\noutput: explicit.md\ndefaultReads: explicit.md\n---\n\nDrive the failing test first.\n`);
+		writeProjectAgent(tempProject, "implementer", `---\nname: implementer\ndescription: TDD implementer\ndefaultReads: explicit.md\n---\n\nDrive the failing test first.\n`);
 
 		const implementer = discoverAgents(tempProject, "both").agents.find((agent) => agent.name === "implementer");
-		assert.equal(implementer?.output, "explicit.md");
 		assert.deepEqual(implementer?.defaultReads, ["explicit.md"]);
 	});
 
@@ -931,57 +921,33 @@ describe("builtin agent overrides", () => {
 		);
 	});
 
-	it("rejects unsupported outputMode override values", () => {
-		const settingsPath = path.join(tempHome, ".pi", "agent", "settings.json");
-		for (const outputMode of ["artifact-only", false]) {
-			writeJson(settingsPath, {
-				subagents: {
-					agentOverrides: {
-						reviewer: { outputMode },
-					},
-				},
-			});
-
-			assert.throws(
-				() => discoverAgents(tempProject, "both"),
-				(error: unknown) => error instanceof Error
-					&& error.message.includes(settingsPath)
-					&& error.message.includes("reviewer")
-					&& error.message.includes("outputMode"),
-			);
-		}
-	});
-
-	it("applies output and defaultReads overrides to bundled and package agents and supports false clears", () => {
+	it("applies defaultReads overrides to bundled and package agents and supports false clears", () => {
 		const packageRoot = path.join(tempProject, "package-agents");
 		fs.mkdirSync(path.join(packageRoot, "agents"), { recursive: true });
 		writeJson(path.join(packageRoot, "package.json"), { "pi-subagents": { agents: ["agents"] } });
 		fs.writeFileSync(path.join(packageRoot, "agents", "package-scout.md"), `---\nname: package-scout\ndescription: Package scout\n---\n\nScout the package.\n`, "utf-8");
 		writeJson(path.join(tempProject, ".pi", "settings.json"), {
 			packages: [packageRoot],
-			subagents: { agentOverrides: { "package-scout": { output: "package.md", defaultReads: ["PACKAGE.md"] } } },
+			subagents: { agentOverrides: { "package-scout": { defaultReads: ["PACKAGE.md"] } } },
 		});
 		writeJson(path.join(tempHome, ".pi", "agent", "settings.json"), {
 			subagents: {
 				agentOverrides: {
-					scout: { output: "research-scout-results.md", defaultReads: ["AGENTS.md"] },
-					reviewer: { output: false, defaultReads: false },
+					scout: { defaultReads: ["AGENTS.md"] },
+					reviewer: { defaultReads: false },
 				},
 			},
 		});
 
 		const agents = discoverAgents(tempProject, "both").agents;
-		assert.equal(agents.find((agent) => agent.name === "scout")?.output, "research-scout-results.md");
 		assert.deepEqual(agents.find((agent) => agent.name === "scout")?.defaultReads, ["AGENTS.md"]);
-		assert.equal(agents.find((agent) => agent.name === "reviewer")?.output, undefined);
 		assert.equal(agents.find((agent) => agent.name === "reviewer")?.defaultReads, undefined);
-		assert.equal(agents.find((agent) => agent.name === "package-scout")?.output, "package.md");
 		assert.deepEqual(agents.find((agent) => agent.name === "package-scout")?.defaultReads, ["PACKAGE.md"]);
 	});
 
-	it("surfaces malformed output and defaultReads override values", () => {
+	it("surfaces malformed defaultReads override values", () => {
 		const settingsPath = path.join(tempHome, ".pi", "agent", "settings.json");
-		for (const [field, value] of [["output", 42], ["output", ""], ["output", "  "], ["defaultReads", ["ok", 42]]] as const) {
+		for (const [field, value] of [["defaultReads", ["ok", 42]]] as const) {
 			writeJson(settingsPath, { subagents: { agentOverrides: { reviewer: { [field]: value } } } });
 			assert.throws(
 				() => discoverAgents(tempProject, "both"),
@@ -994,7 +960,6 @@ describe("builtin agent overrides", () => {
 		const override = buildBuiltinOverrideConfig(
 			{
 				description: "Base description",
-				output: "base-output.md",
 				defaultReads: ["base-read.md"],
 				model: "openai-codex/gpt-5.4-mini",
 				fallbackModels: ["openai/gpt-5-mini"],
@@ -1013,7 +978,6 @@ describe("builtin agent overrides", () => {
 			},
 			{
 				description: "Override description",
-				output: undefined,
 				defaultReads: undefined,
 				model: undefined,
 				fallbackModels: undefined,
@@ -1034,7 +998,6 @@ describe("builtin agent overrides", () => {
 
 		assert.deepEqual(override, {
 			description: "Override description",
-			output: false,
 			defaultReads: false,
 			model: false,
 			fallbackModels: false,
@@ -1052,13 +1015,11 @@ describe("builtin agent overrides", () => {
 		fs.mkdirSync(path.join(tempProject, ".pi"), { recursive: true });
 		saveBuiltinAgentOverride(tempProject, "reviewer", "project", override);
 		const savedOverride = JSON.parse(fs.readFileSync(path.join(tempProject, ".pi", "settings.json"), "utf-8"));
-		assert.equal(savedOverride.subagents.agentOverrides.reviewer.output, false);
 		assert.equal(savedOverride.subagents.agentOverrides.reviewer.defaultReads, false);
 		assert.equal(discoverAgents(tempProject, "both").agents.find((agent) => agent.name === "reviewer")?.description, "Override description");
 
-		saveBuiltinAgentOverride(tempProject, "scout", "project", { output: "research.md", defaultReads: ["CONTEXT.md"] });
+		saveBuiltinAgentOverride(tempProject, "scout", "project", { defaultReads: ["CONTEXT.md"] });
 		const scout = discoverAgents(tempProject, "both").agents.find((agent) => agent.name === "scout");
-		assert.equal(scout?.output, "research.md");
 		assert.deepEqual(scout?.defaultReads, ["CONTEXT.md"]);
 
 		const whitespaceDescription = buildBuiltinOverrideConfig(

@@ -6,7 +6,6 @@ thinking: medium
 systemPromptMode: replace
 inheritProjectContext: true
 inheritSkills: false
-output: research.md
 defaultProgress: true
 ---
 

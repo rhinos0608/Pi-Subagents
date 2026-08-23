@@ -501,7 +501,6 @@ Advise only.
 					timeoutMs: 120_000,
 					turnBudget: { maxTurns: 8, graceTurns: 2 },
 					acceptance: { level: "none", reason: "lightweight reviewer" },
-					outputMode: "file-only",
 				},
 			},
 			ctx,
@@ -514,7 +513,6 @@ Advise only.
 		assert.match(content, /^timeoutMs: 120000$/m);
 		assert.match(content, /^turnBudget: \{"maxTurns":8,"graceTurns":2\}$/m);
 		assert.match(content, /^acceptance: \{"level":"none","reason":"lightweight reviewer"\}$/m);
-		assert.match(content, /^outputMode: file-only$/m);
 
 		const got = handleManagementAction("get", { agent: "background-reviewer" }, ctx);
 		assert.equal(got.isError, false);
@@ -522,10 +520,9 @@ Advise only.
 		assert.match(readText(got), /Timeout: 120000ms/);
 		assert.match(readText(got), /Turn budget: \{"maxTurns":8,"graceTurns":2\}/);
 		assert.match(readText(got), /Acceptance: \{"level":"none","reason":"lightweight reviewer"\}/);
-		assert.match(readText(got), /Output mode: file-only/);
 
 		const updated = handleUpdate(
-			{ agent: "background-reviewer", config: { async: true, timeoutMs: false, turnBudget: false, acceptance: "", outputMode: "inline" } },
+			{ agent: "background-reviewer", config: { async: true, timeoutMs: false, turnBudget: false, acceptance: "" } },
 			ctx,
 		);
 		assert.equal(updated.isError, false);
@@ -534,7 +531,6 @@ Advise only.
 		assert.doesNotMatch(content, /^timeoutMs:/m);
 		assert.doesNotMatch(content, /^turnBudget:/m);
 		assert.doesNotMatch(content, /^acceptance:/m);
-		assert.match(content, /^outputMode: inline$/m);
 
 		const deprecatedFalse = handleUpdate(
 			{ agent: "background-reviewer", config: { acceptance: false } },
@@ -575,19 +571,6 @@ Advise only.
 		assert.equal(invalidAcceptance.isError, true);
 		assert.match(readText(invalidAcceptance), /config\.acceptance level "none" requires a reason/);
 
-		const invalidOutputMode = handleCreate(
-			{
-				config: {
-					name: "bad-output-mode",
-					description: "Bad output mode",
-					scope: "project",
-					outputMode: false,
-				},
-			},
-			{ cwd: tempDir, modelRegistry: { getAvailable: () => [] } },
-		);
-		assert.equal(invalidOutputMode.isError, true);
-		assert.match(readText(invalidOutputMode), /config\.outputMode must be 'inline' or 'file-only'/);
 	});
 
 	it("creates and updates agents with tool budgets", () => {
@@ -778,7 +761,6 @@ Advise only.
 			subagents: {
 				agentOverrides: {
 					implementer: {
-						output: "user.md",
 						defaultReads: ["user.md"],
 						model: "anthropic/claude-sonnet-4-6",
 					},
@@ -789,9 +771,7 @@ Advise only.
 			subagents: {
 				agentOverrides: {
 					implementer: {
-						output: "artifacts/implementer.md",
-						outputMode: "file-only",
-						defaultReads: ["CONTEXT.md"],
+								defaultReads: ["CONTEXT.md"],
 						model: "anthropic/claude-sonnet-4-6",
 						systemPromptMode: "append",
 						inheritProjectContext: true,
@@ -811,8 +791,6 @@ Drive the failing test first.
 		const got = handleManagementAction("get", { agent: "implementer" }, ctx);
 		assert.equal(got.isError, false);
 		const beforeText = readText(got);
-		assert.match(beforeText, /Output: artifacts\/implementer\.md/);
-		assert.match(beforeText, /Output mode: file-only/);
 		assert.match(beforeText, /Reads: CONTEXT\.md/);
 		assert.match(beforeText, /Model: anthropic\/claude-sonnet-4-6/);
 		assert.match(beforeText, /System prompt mode: append/);
@@ -828,7 +806,6 @@ Drive the failing test first.
 		const content = fs.readFileSync(agentPath, "utf-8");
 		assert.match(content, /^description: Updated implementer$/m);
 		assert.doesNotMatch(content, /^output:/m);
-		assert.doesNotMatch(content, /^outputMode:/m);
 		assert.doesNotMatch(content, /^defaultReads:/m);
 		assert.doesNotMatch(content, /^model:/m);
 		assert.doesNotMatch(content, /^systemPromptMode:/m);
@@ -838,8 +815,6 @@ Drive the failing test first.
 		const gotAfter = handleManagementAction("get", { agent: "implementer" }, ctx);
 		assert.equal(gotAfter.isError, false);
 		const afterText = readText(gotAfter);
-		assert.match(afterText, /Output: artifacts\/implementer\.md/);
-		assert.match(afterText, /Output mode: file-only/);
 		assert.match(afterText, /Reads: CONTEXT\.md/);
 		assert.match(afterText, /Model: anthropic\/claude-sonnet-4-6/);
 		assert.match(afterText, /System prompt mode: append/);
@@ -847,7 +822,7 @@ Drive the failing test first.
 		assert.match(afterText, /Inherit skills: true/);
 	});
 
-	it("preserves blank output and defaultReads frontmatter that blocks settings overrides during updates", () => {
+	it("preserves defaultReads frontmatter that blocks settings overrides during updates", () => {
 		const ctx = { cwd: tempDir, modelRegistry: { getAvailable: () => [] } };
 		const settingsPath = path.join(tempDir, ".pi", "settings.json");
 		const agentPath = path.join(tempDir, ".pi", "agents", "implementer.md");
@@ -858,7 +833,6 @@ Drive the failing test first.
 		fs.writeFileSync(agentPath, `---
 name: implementer
 description: TDD implementer
-output:
 defaultReads:
 ---
 
@@ -869,7 +843,6 @@ Drive the failing test first.
 		assert.equal(updated.isError, false);
 
 		const content = fs.readFileSync(agentPath, "utf-8");
-		assert.match(content, /^output: ?$/m);
 		assert.match(content, /^defaultReads: ?$/m);
 		const after = readText(handleManagementAction("get", { agent: "implementer" }, ctx));
 		assert.doesNotMatch(after, /Output: settings\.md/);

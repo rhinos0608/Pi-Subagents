@@ -53,7 +53,6 @@ export function projectAgentDefinition(agent: AgentConfig): Record<string, unkno
 		subagentOnlyExtensions: agent.subagentOnlyExtensions,
 		skills: agent.skills,
 		skillPath: agent.skillPath,
-		output: agent.output,
 		defaultReads: agent.defaultReads,
 		defaultProgress: agent.defaultProgress,
 		defaultContext: agent.defaultContext,

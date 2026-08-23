@@ -253,7 +253,7 @@ export function resolveStepBehavior(
 	const output =
 		stepOutput !== undefined
 			? stepOutput
-			: normalizeOutputOverride(agentConfig.output) ?? false;
+			: normalizeOutputOverride(undefined) ?? false;
 
 	// Reads: step override > frontmatter defaultReads > false (no reads)
 	const reads =
@@ -282,7 +282,7 @@ export function resolveStepBehavior(
 		}
 	}
 
-	const outputMode = stepOverrides.outputMode ?? agentConfig.outputMode ?? "inline";
+	const outputMode = stepOverrides.outputMode ?? "inline";
 	const model = stepOverrides.model ?? agentConfig.model;
 	return { output, outputMode, reads, progress, skills, model };
 }
@@ -425,7 +425,7 @@ export function resolveParallelBehaviors(
 		// Absolute paths pass through unchanged; relative paths get namespaced under subdir
 		let output: string | false = false;
 		const taskOutput = normalizeOutputOverride(task.output);
-		const configOutput = normalizeOutputOverride(config.output);
+		const configOutput = normalizeOutputOverride(undefined);
 		if (taskOutput !== undefined) {
 			if (taskOutput === false) {
 				output = false;
@@ -465,7 +465,7 @@ export function resolveParallelBehaviors(
 			}
 		}
 
-		const outputMode = task.outputMode ?? config.outputMode ?? "inline";
+		const outputMode = task.outputMode ?? "inline";
 		const model = task.model ?? config.model;
 		return { output, outputMode, reads, progress, skills, model };
 	});

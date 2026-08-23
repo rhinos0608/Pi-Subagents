@@ -14,7 +14,6 @@ export interface PublicSubagentExecutionParams {
 	isolation?: unknown;
 	worktree?: unknown;
 	async?: unknown;
-	output?: unknown;
 	resume?: unknown;
 	clarify?: unknown;
 	workflowParentRunId?: unknown;
@@ -38,6 +37,7 @@ export type PublicSubagentExecutionNormalization<T> =
  * Internal runs.run children and structured owned delegation bypass this boundary.
  */
 export function normalizePublicSubagentExecution<T extends PublicSubagentExecutionParams>(params: T, options: { asyncByDefault?: boolean } = {}): PublicSubagentExecutionNormalization<T> {
+	if (Object.prototype.hasOwnProperty.call(params, "output") || Object.prototype.hasOwnProperty.call(params, "outputMode")) return { ok: false, error: "Public execution does not accept output routing controls; output routing is tooling-managed.", mode: params.workflowScript !== undefined ? "workflow" : "management" };
 	if (params.isolation !== undefined) {
 		if (params.isolation !== "none" && params.isolation !== "worktree") {
 			return { ok: false, error: "isolation must be 'none' or 'worktree'.", mode: params.workflowScript !== undefined ? "workflow" : "management" };
@@ -125,7 +125,6 @@ export function normalizePublicSubagentExecution<T extends PublicSubagentExecuti
 			params: {
 				...params,
 				agent: params.agent.trim(),
-				output: params.output === undefined ? true : params.output,
 			} as T,
 		};
 	}

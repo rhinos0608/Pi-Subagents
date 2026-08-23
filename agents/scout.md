@@ -6,7 +6,6 @@ thinking: low
 systemPromptMode: replace
 inheritProjectContext: true
 inheritSkills: false
-output: context.md
 defaultProgress: true
 ---
 

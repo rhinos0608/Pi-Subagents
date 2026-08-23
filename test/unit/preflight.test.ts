@@ -127,7 +127,6 @@ Project prompt.
 			assert.equal(result.contract.tools.capabilityAudit?.removedExtensionCount, 1);
 			assert.equal(result.contract.tools.disableAmbientExtensions, true);
 			assert.equal(result.contract.roots.sessionFile, path.join(sessionRoot, "run-123", "run-0", "session.jsonl"));
-			assert.equal(result.contract.roots.outputPath, path.join(TEMP_ARTIFACTS_DIR, "outputs", "run-123", "report.md"));
 			assert.equal(result.contract.roots.lifecycle?.statusPath.endsWith(path.join("run-123", "status.json")), true);
 			assert.equal(result.contract.roots.lifecycle?.eventsPath.endsWith(path.join("run-123", "events.jsonl")), true);
 			assert.equal(result.contract.roots.lifecycle?.processTerminalPath.endsWith(path.join("run-123", "process-terminal.json")), true);
@@ -168,29 +167,6 @@ Project prompt.
 			assert.equal(rejected.code, "thinking_ceiling");
 			assert.match(rejected.message, /max.*xhigh.*worker/);
 		}
-	});
-
-	it("binds the resolved agent outputMode into the launch digest", async () => {
-		const cwd = path.join(tempDir, "repo-output-mode");
-		fs.mkdirSync(cwd, { recursive: true });
-		writeAgent(path.join(cwd, ".pi", "agents", "worker.md"), `---
-name: worker
-description: Project worker
-output: report.md
-outputMode: file-only
----
-Project prompt.
-`);
-
-		const defaultMode = await resolveSubagentLaunchContract({ agent: "worker", cwd });
-		const explicitDefault = await resolveSubagentLaunchContract({ agent: "worker", cwd, outputMode: "file-only" });
-		const override = await resolveSubagentLaunchContract({ agent: "worker", cwd, outputMode: "inline" });
-
-		assert.equal(defaultMode.ok, true);
-		assert.equal(explicitDefault.ok, true);
-		assert.equal(override.ok, true);
-		assert.equal(defaultMode.contract.launchContractDigest, explicitDefault.contract.launchContractDigest);
-		assert.notEqual(defaultMode.contract.launchContractDigest, override.contract.launchContractDigest);
 	});
 
 	it("rejects an unresolved configured model when the host registry is available", async () => {

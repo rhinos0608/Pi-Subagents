@@ -1459,10 +1459,10 @@ export function executeAsyncSingle(
 		};
 	}
 
-	const effectiveOutput = normalizeSingleOutputOverride(params.output, agentConfig.output);
+	const effectiveOutput = normalizeSingleOutputOverride(params.output, undefined);
 	const outputPath = resolveSingleOutputPath(effectiveOutput, ctx.cwd, instructionCwd, params.outputBaseDir ?? (artifactsDir ? path.join(artifactsDir, "outputs", id) : undefined));
 	systemPrompt = injectOutputPathSystemPrompt(systemPrompt, outputPath, agentConfig);
-	const outputMode = params.outputMode ?? agentConfig.outputMode ?? "inline";
+	const outputMode = params.outputMode ?? "inline";
 	const validationError = validateFileOnlyOutputMode(outputMode, outputPath, `Async single run (${agent})`);
 	if (validationError) return formatAsyncStartError("single", validationError);
 	const taskWithOutputInstruction = injectSingleOutputInstruction(task, outputPath, agentConfig);

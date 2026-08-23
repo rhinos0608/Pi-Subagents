@@ -221,8 +221,6 @@ export function editableAgentConfig(agent: AgentConfig): AgentConfig {
 	const base = agent.override?.base;
 	const {
 		override: _override,
-		output: _output,
-		outputMode: _outputMode,
 		defaultReads: _defaultReads,
 		model: _model,
 		fallbackModels: _fallbackModels,
@@ -251,8 +249,6 @@ export function editableAgentConfig(agent: AgentConfig): AgentConfig {
 
 	return withDeclaredExtensionPaths({
 		...editable,
-		...(base.output !== undefined ? { output: base.output } : {}),
-		...(base.outputMode !== undefined ? { outputMode: base.outputMode } : {}),
 		...(base.defaultReads !== undefined ? { defaultReads: [...base.defaultReads] } : {}),
 		...(base.model !== undefined ? { model: base.model } : {}),
 		...(base.fallbackModels !== undefined ? { fallbackModels: [...base.fallbackModels] } : {}),
@@ -324,15 +320,6 @@ export function preservedAgentFrontmatterFields(agent: AgentConfig, cfg: Record<
 	if (hasKey(cfg, "turnBudget")) changed("turnBudget");
 	if (hasKey(cfg, "acceptance")) changed("acceptance");
 	if (hasKey(cfg, "acceptanceRole")) changed("acceptanceRole");
-	if (hasKey(cfg, "output")) changed("output");
-	if (hasKey(cfg, "outputMode")) changed("outputMode");
-	if (hasKey(cfg, "reads")) changed("defaultReads");
-	if (hasKey(cfg, "progress")) changed("defaultProgress");
-	if (hasKey(cfg, "maxSubagentDepth")) changed("maxSubagentDepth");
-	if (hasKey(cfg, "completionGuard")) {
-		changed("completionGuard");
-		if (cfg.completionGuard === true) fields.add("completionGuard");
-	}
 	if (hasKey(cfg, "toolBudget")) changed("toolBudget");
 
 	return fields;
@@ -354,6 +341,7 @@ function parseTools(raw: string): { tools?: string[]; mcpDirectTools?: string[] 
 }
 
 function applyAgentConfig(target: AgentConfig, cfg: Record<string, unknown>): string | undefined {
+	if (hasKey(cfg, "output") || hasKey(cfg, "outputMode")) return "Unsupported config field: output/outputMode; output routing is tooling-managed.";
 	if (hasKey(cfg, "aliases")) {
 		if (cfg.aliases === false || cfg.aliases === "") delete target.aliases;
 		else if (typeof cfg.aliases === "string") {
@@ -510,15 +498,6 @@ function applyAgentConfig(target: AgentConfig, cfg: Record<string, unknown>): st
 		if (cfg.acceptanceRole === false || cfg.acceptanceRole === "") delete target.acceptanceRole;
 		else if (cfg.acceptanceRole === "read-only" || cfg.acceptanceRole === "writer") target.acceptanceRole = cfg.acceptanceRole;
 		else return "config.acceptanceRole must be 'read-only', 'writer', or false when provided.";
-	}
-	if (hasKey(cfg, "output")) {
-		if (cfg.output === false || cfg.output === "") delete target.output;
-		else if (typeof cfg.output === "string") target.output = cfg.output;
-		else return "config.output must be a string or false when provided.";
-	}
-	if (hasKey(cfg, "outputMode")) {
-		if (cfg.outputMode === "inline" || cfg.outputMode === "file-only") target.outputMode = cfg.outputMode;
-		else return "config.outputMode must be 'inline' or 'file-only' when provided.";
 	}
 	if (hasKey(cfg, "reads")) {
 		if (cfg.reads === false || cfg.reads === "") delete target.defaultReads;
@@ -707,8 +686,6 @@ function formatAgentDetail(agent: AgentConfig): string {
 	if (agent.extensions !== undefined) lines.push(`Extensions: ${agent.extensions.length ? agent.extensions.join(", ") : "(none)"}`);
 	if (agent.subagentOnlyExtensions !== undefined) lines.push(`Subagent-only extensions: ${agent.subagentOnlyExtensions.length ? agent.subagentOnlyExtensions.join(", ") : "(none)"}`);
 	if (agent.thinking) lines.push(`Thinking: ${agent.thinking}`);
-	if (agent.output) lines.push(`Output: ${agent.output}`);
-	if (agent.outputMode) lines.push(`Output mode: ${agent.outputMode}`);
 	if (agent.defaultReads?.length) lines.push(`Reads: ${agent.defaultReads.join(", ")}`);
 	if (agent.defaultProgress) lines.push("Progress: true");
 	if (agent.maxSubagentDepth !== undefined) lines.push(`Max subagent depth: ${agent.maxSubagentDepth}`);

@@ -27,8 +27,6 @@ export const KNOWN_FIELDS = new Set([
 	"skillPath",
 	"extensions",
 	"subagentOnlyExtensions",
-	"output",
-	"outputMode",
 	"defaultReads",
 	"defaultProgress",
 	"interactive",
@@ -39,6 +37,8 @@ export const KNOWN_FIELDS = new Set([
 	"permissions",
 	"memory",
 	"runner",
+	"output",
+	"outputMode",
 ]);
 
 function joinComma(values: string[] | undefined): string | undefined {
@@ -113,8 +113,6 @@ export function serializeAgent(config: AgentConfig, options: SerializeAgentOptio
 		lines.push(`subagentOnlyExtensions: ${subagentOnlyExtensionsValue ?? ""}`);
 	}
 
-	if (config.output || preserve("output")) lines.push(`output: ${config.output ?? ""}`);
-	if (config.outputMode || preserve("outputMode")) lines.push(`outputMode: ${config.outputMode ?? ""}`);
 
 	const readsValue = joinComma(config.defaultReads);
 	if (readsValue || preserve("defaultReads")) lines.push(`defaultReads: ${readsValue ?? ""}`);

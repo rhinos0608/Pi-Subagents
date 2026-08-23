@@ -598,7 +598,6 @@ export function applySteeringRecoveryAgentConfig(agentConfig: AgentConfig, descr
 		filePath: descriptor.agentFilePath as string,
 		completionGuard: descriptor.completionGuard,
 		memory: descriptor.memory ? { ...descriptor.memory } : undefined,
-		output: descriptor.outputPath,
 		toolBudget: descriptor.initialToolBudget,
 		maxSubagentDepth: descriptor.maxSubagentDepth,
 	};

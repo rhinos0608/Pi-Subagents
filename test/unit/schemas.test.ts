@@ -94,7 +94,6 @@ interface SubagentParamsSchema {
 			};
 		};
 		skill?: JsonSchemaNode;
-		output?: JsonSchemaNode;
 		config?: JsonSchemaNode;
 		chain?: {
 			items?: JsonSchemaNode & {
@@ -208,7 +207,6 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 		assert.match(String(properties?.task?.description ?? ""), /one-child/i);
 		assert.match(String((properties?.agent as JsonSchemaNode | undefined)?.description ?? ""), /one-child/i);
 		assert.equal(properties?.clarify, undefined, "clarify should not be model-facing");
-		assert.ok(properties?.output, "output remains a workflow child default");
 	});
 
 	it("omits removed legacy and workflow-child-only fields", () => {
@@ -485,12 +483,6 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 		assert.equal(hasAnyOfType(skillSchema, "boolean"), true);
 		assert.equal(hasAnyOfType(skillSchema, "string"), true);
 
-		const outputSchema = SubagentParams?.properties?.output;
-		assert.ok(outputSchema, "output schema should exist");
-		assert.equal(outputSchema.type, undefined);
-		assert.equal(hasAnyOfType(outputSchema, "string"), true);
-		assert.equal(hasAnyOfType(outputSchema, "boolean"), true);
-
 		const configSchema = SubagentParams?.properties?.config;
 		assert.ok(configSchema, "config schema should exist");
 		assert.equal(configSchema.type, undefined);
@@ -538,7 +530,6 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 			{ agent: "worker", task: "Fix", acceptance: "none" },
 			{ agent: "worker", task: "Fix", acceptance: "verified" },
 			{ skill: [123] },
-			{ output: 123 },
 			{ timeoutMs: 0 },
 			{ maxRuntimeMs: -1 },
 			{ agent: "worker", task: "Fix", acceptance: true },

@@ -38,19 +38,6 @@ const SkillOverride = Type.Unsafe({
 	description: "Skill name(s) to make available (comma-separated), array of strings, or boolean (false disables, true uses default)",
 });
 
-const OutputOverride = Type.Unsafe({
-	anyOf: [
-		{ type: "string" },
-		{ type: "boolean" },
-	],
-	description: "Output filename/path (string), or false to disable file output",
-});
-
-const OutputModeOverride = Type.String({
-	enum: ["inline", "file-only"],
-	description: "Return saved output inline (default) or only a concise file reference. file-only requires output to be a path.",
-});
-
 const ReadsOverride = Type.Unsafe({
 	anyOf: [
 		{ type: "array", items: { type: "string" } },
@@ -139,8 +126,6 @@ export const ParallelTaskSchema = Type.Object({
 	outputSchema: Type.Optional(JsonSchemaObject),
 	cwd: Type.Optional(Type.String()),
 	count: Type.Optional(Type.Integer({ minimum: 1, description: "Repeat this parallel task N times with the same settings." })),
-	output: Type.Optional(OutputOverride),
-	outputMode: Type.Optional(OutputModeOverride),
 	reads: Type.Optional(ReadsOverride),
 	progress: Type.Optional(Type.Boolean({ description: "Enable progress.md tracking in {chain_dir}" })),
 	skill: Type.Optional(SkillOverride),
@@ -169,8 +154,6 @@ export const DynamicParallelTemplateSchema = Type.Object({
 	label: Type.Optional(Type.String({ description: "Optional user-facing label; item templates are supported." })),
 	outputSchema: Type.Optional(JsonSchemaObject),
 	cwd: Type.Optional(Type.String()),
-	output: Type.Optional(OutputOverride),
-	outputMode: Type.Optional(OutputModeOverride),
 	reads: Type.Optional(ReadsOverride),
 	progress: Type.Optional(Type.Boolean({ description: "Enable progress.md tracking in {chain_dir}" })),
 	skill: Type.Optional(SkillOverride),
@@ -197,8 +180,6 @@ export const ChainItem = Type.Object({
 	as: Type.Optional(Type.String({ description: "Optional safe identifier used as {outputs.name} in later chain steps." })),
 	outputSchema: Type.Optional(JsonSchemaObject),
 	cwd: Type.Optional(Type.String()),
-	output: Type.Optional(OutputOverride),
-	outputMode: Type.Optional(OutputModeOverride),
 	reads: Type.Optional(ReadsOverride),
 	progress: Type.Optional(Type.Boolean({ description: "Enable progress.md tracking in {chain_dir}" })),
 	skill: Type.Optional(SkillOverride),
@@ -333,14 +314,6 @@ const SubagentParamProperties = {
 	),
 	control: Type.Optional(ControlOverrides),
 	// Workflow defaults forwarded to each runs.run/runs.all child unless overridden there.
-	output: Type.Optional(Type.Unsafe({
-		anyOf: [
-			{ type: "string" },
-			{ type: "boolean" },
-		],
-		description: "Default child output file (string), or false to disable. Relative paths resolve against cwd.",
-	})),
-	outputMode: Type.Optional(OutputModeOverride),
 	skill: Type.Optional(SkillOverride),
 	model: Type.Optional(Type.String({ description: "Default child model override. Full provider/id values are accepted; bare ids resolve from the active registry." })),
 	outputSchema: Type.Optional(JsonSchemaObject),

@@ -3110,9 +3110,9 @@ async function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 				details: { mode: "single" as const, results: [] },
 			};
 		}
-		const rawOutput = params.output !== undefined ? params.output : a.output;
-		const effectiveOutput = normalizeSingleOutputOverride(rawOutput, a.output);
-		const effectiveOutputMode = params.outputMode ?? a.outputMode ?? "inline";
+		const rawOutput = params.output;
+		const effectiveOutput = normalizeSingleOutputOverride(rawOutput, undefined);
+		const effectiveOutputMode = params.outputMode ?? "inline";
 		const normalizedSkills = normalizeSkillInput(params.skill);
 		const skills = normalizedSkills === false ? [] : normalizedSkills;
 		const maxSubagentDepth = resolveChildMaxSubagentDepth(currentMaxSubagentDepth, a.maxSubagentDepth);
@@ -3290,7 +3290,7 @@ function resolveWorkflowChildOutputPath(input: {
 	const agent = typeof input.params.agent === "string"
 		? resolveAgentName(input.params.agent, discoveredAgents).agent ?? resolveAgentName(input.params.agent, input.agents).agent
 		: undefined;
-	const agentOutput = typeof agent?.output === "string" ? agent.output : undefined;
+	const agentOutput = undefined;
 	const output = rawOutput === true || rawOutput === "true"
 		? agentOutput
 		: hasExplicitOutput
@@ -3490,9 +3490,9 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 	const modelOverrideFromParent = inheritsParentModel(params.model as string | undefined, agentConfig.model, parentModel);
 	let skillOverride: string[] | false | undefined = normalizeSkillInput(params.skill);
 	let readsOverride: string[] | false | undefined = params.reads;
-	const rawOutput = params.output !== undefined ? params.output : agentConfig.output;
-	let effectiveOutput = normalizeSingleOutputOverride(rawOutput, agentConfig.output);
-	const effectiveOutputMode = params.outputMode ?? agentConfig.outputMode ?? "inline";
+	const rawOutput = params.output !== undefined ? params.output : undefined;
+	let effectiveOutput = normalizeSingleOutputOverride(rawOutput, undefined);
+	const effectiveOutputMode = params.outputMode ?? "inline";
 	const currentMaxSubagentDepth = resolveCurrentMaxSubagentDepth(deps.config.maxSubagentDepth);
 	const maxSubagentDepth = resolveChildMaxSubagentDepth(currentMaxSubagentDepth, agentConfig.maxSubagentDepth);
 
