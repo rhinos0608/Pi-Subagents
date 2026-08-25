@@ -4,7 +4,7 @@ import { writeAtomicJson } from "../../shared/atomic-json.ts";
 import { resultFilePath, resultPayloadPathForSessionRun, writeAsyncResultFile } from "./result-files.ts";
 import { updateActiveRunIndex } from "./active-run-index.ts";
 import { readStatus } from "../../shared/utils.ts";
-import { DIRS, type AsyncParallelGroupStatus, type AsyncStatus, type NestedRunSummary, type SubagentRunMode } from "../../shared/types.ts";
+import { DIRS, type AsyncParallelGroupStatus, type AsyncStatus, type ModelResolutionMetadata, type NestedRunSummary, type SubagentRunMode } from "../../shared/types.ts";
 import { resolveEffectiveThinking } from "../../shared/model-info.ts";
 import { normalizeParallelGroups } from "./parallel-groups.ts";
 import { nestedSummaryFromAsyncStatus, projectNestedEvents, resolveNestedAsyncDir, writeNestedEvent, type NestedRoute } from "../shared/nested-events.ts";
@@ -94,6 +94,7 @@ interface ResultChildOutcome {
 	error?: string;
 	sessionFile?: string;
 	model?: string;
+	modelResolution?: ModelResolutionMetadata;
 	thinking?: string;
 	attemptedModels?: string[];
 	modelAttempts?: NonNullable<AsyncStatus["steps"]>[number]["modelAttempts"];
@@ -161,6 +162,7 @@ function terminalStatusFromResult(status: AsyncStatus, resultPath: string, now: 
 			stopped: state === "stopped" ? true : step.stopped,
 			sessionFile: step.sessionFile ?? child?.sessionFile,
 			model,
+			modelResolution: child?.modelResolution ?? step.modelResolution,
 			thinking,
 			attemptedModels: child?.attemptedModels ?? step.attemptedModels,
 			modelAttempts: child?.modelAttempts ?? step.modelAttempts,
@@ -258,6 +260,7 @@ function buildFailedRepair(status: AsyncStatus, asyncDir: string, now: number, r
 				error: step.status === "complete" || step.status === "completed" ? undefined : step.error ?? message,
 				success: step.status === "complete" || step.status === "completed",
 				model: step.model,
+				modelResolution: step.modelResolution,
 				attemptedModels: step.attemptedModels,
 				modelAttempts: step.modelAttempts,
 				contextOverflow: step.contextOverflow,

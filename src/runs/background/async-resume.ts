@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { DIRS, type AcceptanceInput, type AsyncStatus, type ResolvedTurnBudget, type SteeringRecoveryDescriptor, type SubagentRunMode } from "../../shared/types.ts";
+import { DIRS, type AcceptanceInput, type AsyncStatus, type ModelResolutionMetadata, type ResolvedTurnBudget, type SteeringRecoveryDescriptor, type SubagentRunMode } from "../../shared/types.ts";
 import type { AgentConfig } from "../../agents/agents.ts";
 import { validateAcceptanceInput } from "../shared/acceptance.ts";
 import { validateToolBudgetConfig } from "../shared/tool-budget.ts";
@@ -43,6 +43,7 @@ export type AsyncResumeTarget = {
 	cwd?: string;
 	sessionFile?: string;
 	model?: string;
+	modelResolution?: ModelResolutionMetadata;
 	thinking?: string;
 	thinkingCeiling?: ThinkingLevel;
 	recoveryDescriptor?: SteeringRecoveryDescriptor;
@@ -63,10 +64,11 @@ interface AsyncResultFile {
 	sessionId?: string;
 	sessionFile?: string;
 	model?: string;
+	modelResolution?: ModelResolutionMetadata;
 	thinking?: string;
 	launchContractDigest?: string;
 	capabilityCeiling?: ResolvedSubagentCapabilityCeiling;
-	results?: Array<{ agent?: string; success?: boolean; sessionFile?: string; intercomTarget?: string; model?: string; thinking?: string; launchContractDigest?: string; capabilityCeiling?: ResolvedSubagentCapabilityCeiling }>;
+	results?: Array<{ agent?: string; success?: boolean; sessionFile?: string; intercomTarget?: string; model?: string; modelResolution?: ModelResolutionMetadata; thinking?: string; launchContractDigest?: string; capabilityCeiling?: ResolvedSubagentCapabilityCeiling }>;
 }
 
 export interface AsyncRunLocation {
@@ -93,6 +95,23 @@ function validateOptionalString(value: Record<string, unknown>, field: string, s
 	return fieldValue;
 }
 
+function validateModelResolution(value: unknown, source: string, field: string): ModelResolutionMetadata | undefined {
+	if (value === undefined) return undefined;
+	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`Invalid async result file '${source}': ${field} must be an object.`);
+	const metadata = value as Record<string, unknown>;
+	const sourceValue = metadata.source;
+	if (sourceValue !== "explicit-child" && sourceValue !== "agent-config" && sourceValue !== "parent-session" && sourceValue !== "default") {
+		throw new Error(`Invalid async result file '${source}': ${field}.source is invalid.`);
+	}
+	const requested = metadata.requested;
+	const resolved = metadata.resolved;
+	const fallbackReason = metadata.fallbackReason;
+	if (requested !== undefined && typeof requested !== "string") throw new Error(`Invalid async result file '${source}': ${field}.requested must be a string.`);
+	if (resolved !== undefined && typeof resolved !== "string") throw new Error(`Invalid async result file '${source}': ${field}.resolved must be a string.`);
+	if (fallbackReason !== undefined && fallbackReason !== "retryable-model-failure") throw new Error(`Invalid async result file '${source}': ${field}.fallbackReason is invalid.`);
+	return { source: sourceValue, ...(requested !== undefined ? { requested } : {}), ...(resolved !== undefined ? { resolved } : {}), ...(fallbackReason !== undefined ? { fallbackReason } : {}) };
+}
+
 function validateResultFile(value: unknown, resultPath: string): AsyncResultFile {
 	const data = ensureObject(value, resultPath);
 	const resultsValue = data.results;
@@ -106,11 +125,12 @@ function validateResultFile(value: unknown, resultPath: string): AsyncResultFile
 			const intercomTarget = validateOptionalString(child, "intercomTarget", resultPath, `results[${index}].intercomTarget`);
 			const model = validateOptionalString(child, "model", resultPath, `results[${index}].model`);
 			const thinking = validateOptionalString(child, "thinking", resultPath, `results[${index}].thinking`);
+			const modelResolution = validateModelResolution(child.modelResolution, resultPath, `results[${index}].modelResolution`);
 			const launchContractDigest = validateOptionalString(child, "launchContractDigest", resultPath, `results[${index}].launchContractDigest`);
 			const capabilityCeiling = child.capabilityCeiling === undefined ? undefined : parseSubagentCapabilityCeiling(child.capabilityCeiling, `async result file '${resultPath}' results[${index}].capabilityCeiling`);
 			const success = child.success;
 			if (success !== undefined && typeof success !== "boolean") throw new Error(`Invalid async result file '${resultPath}': results[${index}].success must be a boolean.`);
-			return { agent, sessionFile, intercomTarget, model, thinking, launchContractDigest, ...(capabilityCeiling ? { capabilityCeiling } : {}), ...(typeof success === "boolean" ? { success } : {}) };
+			return { agent, sessionFile, intercomTarget, model, modelResolution, thinking, launchContractDigest, ...(capabilityCeiling ? { capabilityCeiling } : {}), ...(typeof success === "boolean" ? { success } : {}) };
 		});
 	}
 	const success = data.success;
@@ -125,6 +145,7 @@ function validateResultFile(value: unknown, resultPath: string): AsyncResultFile
 		sessionId: validateOptionalString(data, "sessionId", resultPath),
 		sessionFile: validateOptionalString(data, "sessionFile", resultPath),
 		model: validateOptionalString(data, "model", resultPath),
+		modelResolution: validateModelResolution(data.modelResolution, resultPath, "modelResolution"),
 		thinking: validateOptionalString(data, "thinking", resultPath),
 		launchContractDigest: validateOptionalString(data, "launchContractDigest", resultPath),
 		...(data.capabilityCeiling === undefined ? {} : { capabilityCeiling: parseSubagentCapabilityCeiling(data.capabilityCeiling, `async result file '${resultPath}' capabilityCeiling`) }),
@@ -548,6 +569,7 @@ export function resolveAsyncResumeTarget(params: AsyncResumeParams, deps: AsyncR
 	if (!sessionFile && requireSessionFile) throw new Error(`Async run '${runId}' child ${index} does not have a persisted session file to resume from.`);
 	const resolvedSessionFile = sessionFile ? validateResumeSessionFile(runId, sessionFile) : undefined;
 	const stepModel = statusSteps[index]?.model ?? resultSteps[index]?.model ?? (stepCount === 1 ? result?.model : undefined);
+	const stepModelResolution = statusSteps[index]?.modelResolution ?? resultSteps[index]?.modelResolution ?? (stepCount === 1 ? result?.modelResolution : undefined);
 	const stepThinking = statusSteps[index]?.thinking ?? resultSteps[index]?.thinking ?? (stepCount === 1 ? result?.thinking : undefined);
 	const thinkingCeiling = statusSteps[index]?.thinkingCeiling ?? (stepCount === 1 ? recoveryDescriptor?.thinkingCeiling : undefined);
 	const capabilityCeiling = intersectSubagentCapabilityCeilings(status?.capabilityCeiling, statusSteps[index]?.capabilityCeiling, result?.capabilityCeiling, resultSteps[index]?.capabilityCeiling);
@@ -567,6 +589,7 @@ export function resolveAsyncResumeTarget(params: AsyncResumeParams, deps: AsyncR
 		...(resumeCwd ? { cwd: resumeCwd } : {}),
 		...(resolvedSessionFile ? { sessionFile: resolvedSessionFile } : {}),
 		...(stepModel ? { model: stepModel } : {}),
+		...(stepModelResolution ? { modelResolution: stepModelResolution } : {}),
 		...(stepThinking ? { thinking: stepThinking } : {}),
 		launchContractDigest: statusSteps[index]?.launchContractDigest ?? resultSteps[index]?.launchContractDigest ?? result?.launchContractDigest ?? recoveryDescriptor?.launchContractDigest,
 		...(statusSteps[index]?.runner ? { runner: statusSteps[index]!.runner } : {}),

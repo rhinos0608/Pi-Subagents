@@ -52,6 +52,7 @@ function compactChild(child: ForegroundResumeChild): ForegroundResumeChild {
 		...(child.transcriptError ? { transcriptError: child.transcriptError } : {}),
 		...(child.acceptance ? { acceptance: child.acceptance } : {}),
 		...(child.launchContractDigest ? { launchContractDigest: child.launchContractDigest } : {}),
+		...(child.modelResolution ? { modelResolution: child.modelResolution } : {}),
 		...(child.capabilityCeiling ? { capabilityCeiling: child.capabilityCeiling } : {}),
 		...(child.updatedAt !== undefined ? { updatedAt: child.updatedAt } : {}),
 	};

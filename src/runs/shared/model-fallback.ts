@@ -1,9 +1,11 @@
 import type { ModelInfo as AvailableModelInfo } from "../../shared/model-info.ts";
-import type { Usage } from "../../shared/types.ts";
+import type { ModelResolutionMetadata, ModelResolutionSource, Usage } from "../../shared/types.ts";
 import { filterFallbackCandidates, parseModelKey, recordModelFailure } from "./model-exclusions.ts";
 import { checkModelScope, type ModelScopeCheckRule, type ModelScopeViolation, type ModelSource } from "./model-scope.ts";
 
 export type { AvailableModelInfo };
+
+export class ModelCandidatesExhaustedError extends Error {}
 
 interface ModelAttemptSummary {
 	model: string;
@@ -23,10 +25,12 @@ export function splitThinkingSuffix(model: string): { baseModel: string; thinkin
 }
 
 export function formatSubagentModelVerificationError(expectedModel: string, observedModel: string, availableModels: AvailableModelInfo[] | undefined): string | undefined {
-	if (!availableModels || availableModels.length === 0) return undefined;
 	const expectedBase = splitThinkingSuffix(expectedModel).baseModel;
 	const observedBase = splitThinkingSuffix(observedModel).baseModel;
 	if (expectedBase === observedBase) return undefined;
+	if (!availableModels || availableModels.length === 0) {
+		return `model_verification_failed: child reported a different model than the launch candidate. Expected '${expectedModel}' but observed '${observedModel}'.`;
+	}
 	const expectedEntry = availableModels.find((entry) => entry.fullId === expectedBase);
 	if (expectedEntry && expectedEntry.id === observedBase) return undefined;
 	return `model_verification_failed: child reported a different model than the launch candidate. Expected '${expectedModel}' but observed '${observedModel}'.`;
@@ -34,6 +38,27 @@ export function formatSubagentModelVerificationError(expectedModel: string, obse
 
 /** Sentinel model value requesting that a subagent inherit the parent session's model. */
 export const INHERIT_MODEL = "inherit";
+
+export function resolveModelResolutionSource(input: { explicit: boolean; fromParent: boolean; agentConfigured: boolean }): ModelResolutionSource {
+	if (input.fromParent) return "parent-session";
+	if (input.explicit) return "explicit-child";
+	if (input.agentConfigured) return "agent-config";
+	return "default";
+}
+
+export function buildModelResolutionMetadata(input: {
+	requested?: string;
+	resolved?: string;
+	source: ModelResolutionSource;
+	fallbackReason?: "retryable-model-failure";
+}): ModelResolutionMetadata {
+	return {
+		...(input.requested ? { requested: input.requested } : {}),
+		...(input.resolved ? { resolved: input.resolved } : {}),
+		source: input.source,
+		...(input.fallbackReason ? { fallbackReason: input.fallbackReason } : {}),
+	};
+}
 
 /** Minimal shape of the parent session's in-memory model (`ctx.model`). */
 export interface ParentModel {
@@ -399,7 +424,11 @@ export function buildModelCandidates(
 		seen.add(normalized);
 		candidates.push(normalized);
 	}
-	return filterFallbackCandidates(candidates);
+	const filteredCandidates = filterFallbackCandidates(candidates);
+	if (candidates.length > 0 && filteredCandidates.length === 0) {
+		throw new ModelCandidatesExhaustedError(`Model candidates resolved to empty after exclusions; refusing to launch without an explicit model.`);
+	}
+	return filteredCandidates;
 }
 
 const RETRYABLE_MODEL_FAILURE_PATTERNS = [

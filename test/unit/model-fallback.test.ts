@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import {
 	buildModelCandidates,
+	buildModelResolutionMetadata,
 	fuzzyResolveModel,
 	formatSubagentModelVerificationError,
 	isContextOverflow,
@@ -10,6 +11,7 @@ import {
 	recordRetryableModelFailure,
 	resolveEffectiveSubagentModel,
 	resolveModelCandidate,
+	resolveModelResolutionSource,
 	resolveSubagentModelOverride,
 } from "../../src/runs/shared/model-fallback.ts";
 import { clearExclusions } from "../../src/runs/shared/model-exclusions.ts";
@@ -23,6 +25,28 @@ describe("model fallback helpers", () => {
 		{ provider: "openai", id: "gpt-5-mini", fullId: "openai/gpt-5-mini" },
 		{ provider: "anthropic", id: "claude-sonnet-4", fullId: "anthropic/claude-sonnet-4" },
 	];
+
+	it("prioritizes parent provenance over effective model override", () => {
+		assert.equal(resolveModelResolutionSource({ explicit: true, fromParent: true, agentConfigured: false }), "parent-session");
+	});
+
+	it("records configured and explicit model resolution metadata", () => {
+		assert.deepEqual(buildModelResolutionMetadata({ requested: "openai/gpt-5-mini", resolved: "openai/gpt-5-mini", source: "agent-config" }), {
+			requested: "openai/gpt-5-mini",
+			resolved: "openai/gpt-5-mini",
+			source: "agent-config",
+		});
+		assert.deepEqual(buildModelResolutionMetadata({ requested: "anthropic/claude-sonnet-4", resolved: "anthropic/claude-sonnet-4", source: "explicit-child" }), {
+			requested: "anthropic/claude-sonnet-4",
+			resolved: "anthropic/claude-sonnet-4",
+			source: "explicit-child",
+		});
+	});
+
+	it("records fallback reason only when fallback occurs", () => {
+		assert.equal(buildModelResolutionMetadata({ requested: "openai/gpt-5-mini", resolved: "anthropic/claude-sonnet-4", source: "agent-config", fallbackReason: "retryable-model-failure" }).fallbackReason, "retryable-model-failure");
+		assert.equal(buildModelResolutionMetadata({ requested: "openai/gpt-5-mini", resolved: "openai/gpt-5-mini", source: "agent-config" }).fallbackReason, undefined);
+	});
 
 	it("keeps explicit provider/model ids unchanged", () => {
 		assert.equal(resolveModelCandidate("openai/gpt-5-mini", availableModels), "openai/gpt-5-mini");
@@ -39,6 +63,13 @@ describe("model fallback helpers", () => {
 		assert.equal(
 			formatSubagentModelVerificationError("openai/gpt-5-mini:high", "gpt-5-mini", availableModels),
 			undefined,
+		);
+	});
+
+	it("verifies provider-qualified models when registry is empty", () => {
+		assert.match(
+			formatSubagentModelVerificationError("openai/gpt-5-mini", "anthropic/claude-sonnet-4", []) ?? "",
+			/model_verification_failed/,
 		);
 	});
 
@@ -119,6 +150,14 @@ describe("model fallback helpers", () => {
 		assert.deepEqual(
 			buildModelCandidates("gpt-5-mini", ["anthropic/claude-sonnet-4"], availableModels),
 			["anthropic/claude-sonnet-4"],
+		);
+	});
+
+	it("fails closed when every configured model is excluded", () => {
+		recordRetryableModelFailure("openai/gpt-5-mini", "rate limit exceeded");
+		assert.throws(
+			() => buildModelCandidates("gpt-5-mini", undefined, availableModels),
+			/Model candidates resolved to empty/,
 		);
 	});
 

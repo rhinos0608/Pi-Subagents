@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import { resultFilePath } from "./result-files.ts";
-import type { AcceptanceLedger, AsyncStatus, CostSummary, ModelAttempt } from "../../shared/types.ts";
+import type { AcceptanceLedger, AsyncStatus, CostSummary, ModelAttempt, ModelResolutionMetadata } from "../../shared/types.ts"
 import { readStatus } from "../../shared/utils.ts";
 
 export interface ImportedAsyncRoot {
@@ -19,6 +19,7 @@ export interface ImportedAsyncRootResult {
 	sessionFile?: string;
 	intercomTarget?: string;
 	model?: string;
+	modelResolution?: ModelResolutionMetadata;
 	attemptedModels?: string[];
 	modelAttempts?: ModelAttempt[];
 	contextOverflow?: boolean;
@@ -48,6 +49,7 @@ interface AsyncResultFile {
 		sessionFile?: string;
 		intercomTarget?: string;
 		model?: string;
+		modelResolution?: ModelResolutionMetadata;
 		attemptedModels?: string[];
 		modelAttempts?: ModelAttempt[];
 		contextOverflow?: boolean;
@@ -110,6 +112,7 @@ function outputFromTerminalStatus(root: ImportedAsyncRoot, status: AsyncStatus, 
 		...(stopped ? { stopped: true } : {}),
 		...(step?.sessionFile ?? status.sessionFile ? { sessionFile: step?.sessionFile ?? status.sessionFile } : {}),
 		...(step?.model ? { model: step.model } : {}),
+		...(step?.modelResolution ? { modelResolution: step.modelResolution } : {}),
 		...(step?.attemptedModels ? { attemptedModels: step.attemptedModels } : {}),
 		...(step?.modelAttempts ? { modelAttempts: step.modelAttempts } : {}),
 		...(step?.contextOverflow ? { contextOverflow: true } : {}),
@@ -132,6 +135,7 @@ function outputFromTimeout(root: ImportedAsyncRoot, status: AsyncStatus | null, 
 		timedOut: true,
 		...(step?.sessionFile ?? status?.sessionFile ? { sessionFile: step?.sessionFile ?? status?.sessionFile } : {}),
 		...(step?.model ? { model: step.model } : {}),
+		...(step?.modelResolution ? { modelResolution: step.modelResolution } : {}),
 		...(step?.attemptedModels ? { attemptedModels: step.attemptedModels } : {}),
 		...(step?.modelAttempts ? { modelAttempts: step.modelAttempts } : {}),
 		...(step?.contextOverflow ? { contextOverflow: true } : {}),
@@ -160,6 +164,7 @@ function buildImportedResult(root: ImportedAsyncRoot, status: AsyncStatus | null
 		...(child?.sessionFile ?? step?.sessionFile ?? status?.sessionFile ? { sessionFile: child?.sessionFile ?? step?.sessionFile ?? status?.sessionFile } : {}),
 		...(child?.intercomTarget ? { intercomTarget: child.intercomTarget } : {}),
 		...(child?.model ?? step?.model ? { model: child?.model ?? step?.model } : {}),
+		...(child?.modelResolution ?? step?.modelResolution ? { modelResolution: child?.modelResolution ?? step?.modelResolution } : {}),
 		...(child?.attemptedModels ?? step?.attemptedModels ? { attemptedModels: child?.attemptedModels ?? step?.attemptedModels } : {}),
 		...(child?.modelAttempts ?? step?.modelAttempts ? { modelAttempts: child?.modelAttempts ?? step?.modelAttempts } : {}),
 		...(child?.contextOverflow || step?.contextOverflow ? { contextOverflow: true } : {}),

@@ -24,7 +24,7 @@ import { resolveNodeExecutable } from "../../shared/node-executable.ts";
 import { buildSkillInjection, normalizeSkillInput, resolveSkillsWithFallback } from "../../agents/skills.ts";
 import { buildAgentMemoryInjection } from "../../agents/agent-memory.ts";
 import { PI_CODING_AGENT_PACKAGE_ROOT_ENV, PROMPT_REDACTED, resolveChildCwd } from "../../shared/utils.ts";
-import { buildModelCandidates, inheritsParentModel, resolveEffectiveSubagentModel, resolveModelCandidate, resolveSubagentModelOverride, type AvailableModelInfo, type ParentModel } from "../shared/model-fallback.ts";
+import { buildModelCandidates, inheritsParentModel, ModelCandidatesExhaustedError, resolveEffectiveSubagentModel, resolveModelCandidate, resolveModelResolutionSource, resolveSubagentModelOverride, type AvailableModelInfo, type ParentModel } from "../shared/model-fallback.ts";
 import { resolveToolTimeoutMs, toolTimeoutFromEnv } from "../shared/tool-timeout.ts";
 import { resolveModelScopesForAgent, type ModelScopeConfig } from "../shared/model-scope.ts";
 import { resolveEffectiveThinking } from "../../shared/model-info.ts";
@@ -224,6 +224,8 @@ interface AsyncSingleParams {
 	structuredOutputSchema?: JsonSchemaObject;
 	modelOverride?: string;
 	modelOverrideFromParent?: boolean;
+	modelResolutionSource?: import("../../shared/types.ts").ModelResolutionSource;
+	modelResolutionRequested?: string;
 	thinkingOverride?: AgentConfig["thinking"];
 	availableModels?: AvailableModelInfo[];
 	maxSubagentDepth: number;
@@ -892,6 +894,11 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 			structured: Boolean(s.outputSchema),
 			cwd: stepCwd,
 			model,
+			modelResolution: {
+				...(primaryModelFromParent ? {} : s.model ?? a.model ? { requested: s.model ?? a.model } : {}),
+				...(model ? { resolved: model } : {}),
+				source: resolveModelResolutionSource({ explicit: s.model !== undefined, fromParent: primaryModelFromParent, agentConfigured: a.model !== undefined }),
+			},
 			thinking: resolveEffectiveThinking(model, effectiveThinking),
 			...(thinkingCeiling ? { thinkingCeiling } : {}),
 			launchResolvedExtensions,
@@ -1060,7 +1067,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 		}
 		return { steps: steps as RunnerStep[], runnerCwd, workflowGraph, eventChain: graphChain, ...(originalTask !== undefined ? { originalTask } : {}) };
 	} catch (error) {
-		if (error instanceof UnavailableSubagentSkillError || error instanceof AsyncStartValidationError) return { error: error.message };
+		if (error instanceof UnavailableSubagentSkillError || error instanceof AsyncStartValidationError || error instanceof ModelCandidatesExhaustedError) return { error: error.message };
 		throw error;
 	}
 }
@@ -1520,16 +1527,25 @@ export function executeAsyncSingle(
 	const structuredOutput = params.structuredOutputSchema
 		? createStructuredOutputRuntime(params.structuredOutputSchema, path.join(asyncDir, "structured-output"))
 		: undefined;
-	const modelCandidates = externalRunner
-		? []
-		: buildModelCandidates(primaryModel, agentConfig.fallbackModels, availableModels, agentConfig.modelProvider ?? ctx.currentModelProvider, {
-			scope: modelScopes,
-			primaryModelFromParent: params.modelOverrideFromParent,
-		})
-			.flatMap((candidate) => {
-				const resolved = applyThinkingSuffix(candidate, effectiveThinking, params.thinkingOverride !== undefined);
-				return resolved ? [resolved] : [];
-			});
+	let modelCandidates: string[];
+	try {
+		modelCandidates = externalRunner
+			? []
+			: buildModelCandidates(primaryModel, agentConfig.fallbackModels, availableModels, agentConfig.modelProvider ?? ctx.currentModelProvider, {
+				scope: modelScopes,
+				primaryModelFromParent: params.modelOverrideFromParent,
+			})
+				.flatMap((candidate) => {
+					const resolved = applyThinkingSuffix(candidate, effectiveThinking, params.thinkingOverride !== undefined);
+					return resolved ? [resolved] : [];
+				});
+	} catch (error) {
+		if (error instanceof ModelCandidatesExhaustedError) {
+			try { fs.rmSync(asyncDir, { recursive: true, force: true }); } catch { /* best-effort cleanup */ }
+			return formatAsyncStartError("single", error.message);
+		}
+		throw error;
+	}
 	if (!externalRunner) {
 		try {
 			for (const candidate of modelCandidates) assertThinkingWithinCeiling({ model: candidate, configThinking: effectiveThinking, ceiling: thinkingCeiling, agent: agentConfig.name, runId: id });
@@ -1666,6 +1682,11 @@ export function executeAsyncSingle(
 						...(params.context ? { context: params.context } : {}),
 						cwd: runnerCwd,
 						model,
+						modelResolution: {
+							...(params.modelResolutionRequested !== undefined ? { requested: params.modelResolutionRequested } : params.modelOverrideFromParent ? {} : params.modelOverride ?? agentConfig.model ? { requested: params.modelOverride ?? agentConfig.model } : {}),
+							...(model ? { resolved: model } : {}),
+							source: params.modelResolutionSource ?? resolveModelResolutionSource({ explicit: params.modelOverride !== undefined, fromParent: params.modelOverrideFromParent === true, agentConfigured: agentConfig.model !== undefined }),
+						},
 						thinking: resolveEffectiveThinking(model, effectiveThinking),
 						...(thinkingCeiling ? { thinkingCeiling } : {}),
 						modelCandidates,

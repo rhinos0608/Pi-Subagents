@@ -44,6 +44,9 @@ export function toWaitCompletion(data: Record<string, unknown>, runId: string): 
 			const childRunId = asNonEmptyString(child.runId);
 			const error = asNonEmptyString(child.error);
 			const model = asNonEmptyString(child.model);
+			const modelResolution = child.modelResolution && typeof child.modelResolution === "object" && !Array.isArray(child.modelResolution)
+				? child.modelResolution as WaitCompletionChild["modelResolution"]
+				: undefined;
 			const contextOverflow = child.contextOverflow === true;
 			return [{
 				...(agent ? { agent } : {}),
@@ -52,6 +55,7 @@ export function toWaitCompletion(data: Record<string, unknown>, runId: string): 
 				...(outputState ? { outputState } : {}),
 				...(error ? { error } : {}),
 				...(model ? { model } : {}),
+				...(modelResolution ? { modelResolution } : {}),
 				...(contextOverflow ? { contextOverflow: true } : {}),
 				...(artifactPaths ? { artifactPaths } : {}),
 			}];

@@ -29,6 +29,7 @@ export interface RunnerSubagentStep {
 	structured?: boolean;
 	cwd?: string;
 	model?: string;
+	modelResolution?: import("../../shared/types.ts").ModelResolutionMetadata;
 	thinking?: string;
 	thinkingCeiling?: import("../../shared/model-info.ts").ThinkingLevel;
 	modelCandidates?: string[];
@@ -225,6 +226,7 @@ export interface ParallelTaskResult {
 	error?: string;
 	timedOut?: boolean;
 	model?: string;
+	modelResolution?: import("../../shared/types.ts").ModelResolutionMetadata;
 	attemptedModels?: string[];
 	outputTargetPath?: string;
 	outputTargetExists?: boolean;

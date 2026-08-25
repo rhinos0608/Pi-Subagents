@@ -927,6 +927,15 @@ export interface UsageBudgetState {
 	reason?: "tokens" | "costUsd";
 }
 
+export type ModelResolutionSource = "explicit-child" | "agent-config" | "parent-session" | "default";
+
+export interface ModelResolutionMetadata {
+	requested?: string;
+	resolved?: string;
+	source: ModelResolutionSource;
+	fallbackReason?: "retryable-model-failure";
+}
+
 export interface SingleResult {
 	/**
 	 * Stable child identity within the foreground run. Pair with Details.runId for
@@ -954,6 +963,7 @@ export interface SingleResult {
 	messages?: Message[];
 	usage: Usage;
 	model?: string;
+	modelResolution?: ModelResolutionMetadata;
 	/** Effective thinking level used by this foreground child, when known. */
 	thinking?: string;
 	attemptedModels?: string[];
@@ -1032,6 +1042,7 @@ export interface WaitCompletionChild {
 	outputState?: SubagentOutputState;
 	error?: string;
 	model?: string;
+	modelResolution?: ModelResolutionMetadata;
 	contextOverflow?: boolean;
 	artifactPaths?: Partial<ArtifactPaths>;
 }
@@ -1514,6 +1525,7 @@ export interface AsyncStatus {
 		tokens?: TokenUsage;
 		skills?: string[];
 		model?: string;
+		modelResolution?: ModelResolutionMetadata;
 		thinking?: string;
 		thinkingCeiling?: ThinkingLevel;
 		attemptedModels?: string[];
@@ -1620,6 +1632,7 @@ export interface ForegroundResumeChild {
 	context?: "fresh" | "fork";
 	sessionFile?: string;
 	model?: string;
+	modelResolution?: ModelResolutionMetadata;
 	thinking?: string;
 	status: SubagentResultStatus;
 	activityState?: ActivityState;
@@ -1946,6 +1959,10 @@ export interface RunSyncOptions {
 	modelOverride?: string;
 	/** The override came from the running parent session, not configuration. */
 	modelOverrideFromParent?: boolean;
+	/** Original caller model provenance, retained after outer resolution. */
+	modelResolutionSource?: ModelResolutionSource;
+	/** Original caller-requested model before outer resolution. */
+	modelResolutionRequested?: string;
 	/** LLM intent arbiter for the completion mutation guard (rescues read-only review runs). */
 	llmIntentArbiter?: import("../runs/shared/llm-intent-arbiter.ts").TaskMutationArbiter;
 	/** Override the agent's default thinking level for this run */

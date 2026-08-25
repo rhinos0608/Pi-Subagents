@@ -237,6 +237,7 @@ interface StepResult {
 	sessionFile?: string;
 	intercomTarget?: string;
 	model?: string;
+	modelResolution?: import("../../shared/types.ts").ModelResolutionMetadata;
 	attemptedModels?: string[];
 	modelAttempts?: ModelAttempt[];
 	/** True when the dispatch failed because the input exceeded the model's context window. */
@@ -1269,6 +1270,7 @@ async function runSingleStepInner(
 				sessionFile: imported.sessionFile,
 				intercomTarget: imported.intercomTarget,
 				model: imported.model,
+				modelResolution: imported.modelResolution,
 				attemptedModels: imported.attemptedModels,
 				modelAttempts: imported.modelAttempts,
 				contextOverflow: imported.contextOverflow,
@@ -1957,6 +1959,9 @@ async function runSingleStepInner(
 				task: PROMPT_REDACTED,
 				exitCode: effectiveFinalExitCode,
 				model: finalResult?.model,
+				modelResolution: step.modelResolution
+					? { ...step.modelResolution, resolved: finalResult?.model ?? step.model, ...(attemptedModels.length > 1 ? { fallbackReason: "retryable-model-failure" as const } : {}) }
+					: undefined,
 				attemptedModels: attemptedModels.length > 0 ? attemptedModels : undefined,
 				modelAttempts,
 				error: effectiveFinalError,
@@ -1986,6 +1991,9 @@ async function runSingleStepInner(
 		sessionFile: step.sessionFile,
 		intercomTarget: ctx.childIntercomTarget,
 		model: finalResult?.model,
+		modelResolution: step.modelResolution
+			? { ...step.modelResolution, resolved: finalResult?.model ?? step.model, ...(attemptedModels.length > 1 ? { fallbackReason: "retryable-model-failure" as const } : {}) }
+			: undefined,
 		attemptedModels: attemptedModels.length > 0 ? attemptedModels : undefined,
 		modelAttempts,
 		contextOverflow: contextOverflow || undefined,
@@ -2345,6 +2353,7 @@ async function runSubagent(
 					...(transcriptPath ? { transcriptPath } : {}),
 					skills: task.skills,
 					model: task.model,
+					modelResolution: task.modelResolution,
 					thinking: task.thinking,
 					attemptedModels: task.modelCandidates && task.modelCandidates.length > 0 ? task.modelCandidates : task.model ? [task.model] : undefined,
 					recentTools: [],
@@ -2393,8 +2402,9 @@ async function runSubagent(
 				...(step.sessionFile ? { sessionFile: step.sessionFile } : {}),
 				...(transcriptPath ? { transcriptPath } : {}),
 				skills: step.skills,
-				model: step.model,
-				thinking: step.thinking,
+					model: step.model,
+					modelResolution: step.modelResolution,
+					thinking: step.thinking,
 				attemptedModels: step.modelCandidates && step.modelCandidates.length > 0 ? step.modelCandidates : step.model ? [step.model] : undefined,
 				recentTools: [],
 				recentOutput: [],
@@ -2603,7 +2613,8 @@ async function runSubagent(
 				success: statusResultSuccess(state, step),
 				sessionFile: step.sessionFile,
 				model: step.model,
-				attemptedModels: step.attemptedModels,
+					modelResolution: step.modelResolution,
+					attemptedModels: step.attemptedModels,
 				modelAttempts: step.modelAttempts,
 				contextOverflow: step.contextOverflow,
 			})),
@@ -3890,6 +3901,7 @@ async function runSubagent(
 					...(task.skills ? { skills: task.skills } : {}),
 					...(task.model ? { model: task.model } : {}),
 					...(task.thinking ? { thinking: task.thinking } : {}),
+					...(task.modelResolution ? { modelResolution: task.modelResolution } : {}),
 					...(task.thinkingCeiling ? { thinkingCeiling: task.thinkingCeiling } : {}),
 					...(task.modelCandidates && task.modelCandidates.length > 0 ? { attemptedModels: task.modelCandidates } : task.model ? { attemptedModels: [task.model] } : {}),
 					recentTools: [],
@@ -4047,6 +4059,7 @@ async function runSubagent(
 				setOptionalProperty(requiredStatusStep(statusPayload, fi), "model", singleResult.model);
 				setOptionalProperty(requiredStatusStep(statusPayload, fi), "thinking", resolveEffectiveThinking(singleResult.model, requiredStatusStep(statusPayload, fi).thinking));
 				setOptionalProperty(requiredStatusStep(statusPayload, fi), "attemptedModels", singleResult.attemptedModels);
+				setOptionalProperty(requiredStatusStep(statusPayload, fi), "modelResolution", singleResult.modelResolution);
 				setOptionalProperty(requiredStatusStep(statusPayload, fi), "modelAttempts", singleResult.modelAttempts);
 				setOptionalProperty(requiredStatusStep(statusPayload, fi), "contextOverflow", singleResult.contextOverflow);
 				setOptionalProperty(requiredStatusStep(statusPayload, fi), "totalCost", singleResult.totalCost);
@@ -4117,6 +4130,7 @@ async function runSubagent(
 					sessionFile: pr.sessionFile,
 					intercomTarget: pr.intercomTarget,
 					model: pr.model,
+					modelResolution: pr.modelResolution,
 					attemptedModels: pr.attemptedModels,
 					modelAttempts: pr.modelAttempts,
 					contextOverflow: pr.contextOverflow,
@@ -4550,6 +4564,7 @@ async function runSubagent(
 						sessionFile: pr.sessionFile,
 						intercomTarget: pr.intercomTarget,
 						model: pr.model,
+						modelResolution: pr.modelResolution,
 						attemptedModels: pr.attemptedModels,
 						modelAttempts: pr.modelAttempts,
 						contextOverflow: pr.contextOverflow,
@@ -4586,6 +4601,7 @@ async function runSubagent(
 						exitCode: r.exitCode,
 						error: r.error,
 						model: r.model,
+						modelResolution: r.modelResolution,
 						attemptedModels: r.attemptedModels,
 					})),
 				);
@@ -4789,7 +4805,8 @@ async function runSubagent(
 				sessionFile: singleResult.sessionFile,
 				intercomTarget: singleResult.intercomTarget,
 				model: singleResult.model,
-				attemptedModels: singleResult.attemptedModels,
+					modelResolution: singleResult.modelResolution,
+					attemptedModels: singleResult.attemptedModels,
 				modelAttempts: singleResult.modelAttempts,
 				contextOverflow: singleResult.contextOverflow,
 				totalCost: singleResult.totalCost,
@@ -4869,6 +4886,7 @@ async function runSubagent(
 			setOptionalProperty(requiredStatusStep(statusPayload, flatIndex), "model", singleResult.model);
 			setOptionalProperty(requiredStatusStep(statusPayload, flatIndex), "thinking", resolveEffectiveThinking(singleResult.model, requiredStatusStep(statusPayload, flatIndex).thinking));
 			setOptionalProperty(requiredStatusStep(statusPayload, flatIndex), "attemptedModels", singleResult.attemptedModels);
+			setOptionalProperty(requiredStatusStep(statusPayload, flatIndex), "modelResolution", singleResult.modelResolution);
 			setOptionalProperty(requiredStatusStep(statusPayload, flatIndex), "modelAttempts", singleResult.modelAttempts);
 			setOptionalProperty(requiredStatusStep(statusPayload, flatIndex), "contextOverflow", singleResult.contextOverflow);
 			setOptionalProperty(requiredStatusStep(statusPayload, flatIndex), "totalCost", singleResult.totalCost);
@@ -5144,6 +5162,7 @@ async function runSubagent(
 				sessionFile: r.sessionFile,
 				intercomTarget: r.intercomTarget,
 				model: r.model,
+				modelResolution: r.modelResolution,
 				attemptedModels: r.attemptedModels,
 				modelAttempts: r.modelAttempts,
 				contextOverflow: r.contextOverflow,
