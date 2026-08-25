@@ -17,3 +17,4 @@ tmp/
 /pr-*-gate*.json
 /pr-*-review*.md
 .pi-smartread/
+/Users/rhinesharar/pi-subagents/.pi-smartread.tags.cache/

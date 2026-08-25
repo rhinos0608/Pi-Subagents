@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
 import { SUBAGENT_RPC_PROTOCOL_VERSION, SUBAGENT_RPC_REQUEST_EVENT, registerSubagentRpcBridge, subagentRpcReplyEvent, type SubagentRpcReplyEnvelope } from "../../src/extension/rpc.ts";
+import { SUBAGENT_ASYNC_COMPLETE_EVENT } from "../../src/shared/types.ts";
 import { writeAsyncResultFile } from "../../src/runs/background/result-files.ts";
 
 class Events {
@@ -74,6 +75,49 @@ describe("RPC result", () => {
 		} finally { close(env); }
 	});
 
+	it("does not cache pending results before terminal output is created", async () => {
+		const env = setup();
+		try {
+			writeStatus(env.runs, "transitioning", "running");
+			assert.deepEqual(await result(env, "transitioning"), { runId: "transitioning", ready: false, state: "running" });
+			writeResult(env.results, "transitioning", "/sessions/session-a.jsonl", { output: "finished" });
+			assert.equal((await result(env, "transitioning")).ready, true);
+			assert.equal((await result(env, "transitioning")).output, "finished");
+		} finally { close(env); }
+	});
+
+	it("keeps terminal results cached after source disappears", async () => {
+		const env = setup();
+		try {
+			writeResult(env.results, "cached", "/sessions/session-a.jsonl", { output: "retained" });
+			assert.equal((await result(env, "cached")).output, "retained");
+			fs.rmSync(path.join(env.results, "cached.json"));
+			assert.deepEqual(await result(env, "cached"), { runId: "cached", ready: true, state: "complete", outcome: "success", output: "retained", outputAvailable: true, outputTruncated: false });
+		} finally { close(env); }
+	});
+
+	it("caches completion summary after result file disappears", async () => {
+		const env = setup({ resultOutputCapChars: 100 });
+		try {
+			env.events.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, {
+				runId: "event-cached",
+				sessionId: "/sessions/session-a.jsonl",
+				state: "complete",
+				summary: "terminal summary",
+				truncated: true,
+			});
+			assert.deepEqual(await result(env, "event-cached"), {
+				runId: "event-cached",
+				ready: true,
+				state: "complete",
+				outcome: "success",
+				output: "terminal summary",
+				outputAvailable: true,
+				outputTruncated: true,
+			});
+		} finally { close(env); }
+	});
+
 	it("reads indexed output and concatenates child outputs", async () => {
 		const env = setup();
 		try {
@@ -81,6 +125,14 @@ describe("RPC result", () => {
 			assert.deepEqual(await result(env, "indexed"), { runId: "indexed", ready: true, state: "complete", outcome: "success", output: "hello", outputAvailable: true, outputTruncated: false });
 			writeResult(env.results, "children", "/sessions/session-a.jsonl", { results: [{ output: "one" }, { output: "two" }] });
 			assert.equal((await result(env, "children")).output, "onetwo");
+		} finally { close(env); }
+	});
+
+	it("propagates indexed payload truncation metadata", async () => {
+		const env = setup();
+		try {
+			writeResult(env.results, "truncated-index", "/sessions/session-a.jsonl", { results: [{ output: "partial", truncated: true }] });
+			assert.equal((await result(env, "truncated-index")).outputTruncated, true);
 		} finally { close(env); }
 	});
 

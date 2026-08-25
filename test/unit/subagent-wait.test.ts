@@ -7,7 +7,7 @@ import { updateActiveRunIndex } from "../../src/runs/background/active-run-index
 import { writeAsyncResultFile } from "../../src/runs/background/result-files.ts";
 import { createRunFanoutBudget } from "../../src/runs/shared/run-fanout-budget.ts";
 import { WAIT_TOOL_ENABLED_ENV, resolveWaitToolConfig, waitForSubagents, type SubagentWaitDeps } from "../../src/runs/background/subagent-wait.ts";
-import { recordWaitCompletion } from "../../src/runs/background/wait-completions.ts";
+import { recordWaitCompletion, toWaitCompletion } from "../../src/runs/background/wait-completions.ts";
 import type { AsyncStatus, SubagentState } from "../../src/shared/types.ts";
 
 function writeStatus(asyncRoot: string, runId: string, state: AsyncStatus["state"], extra: object = {}): void {
@@ -84,6 +84,10 @@ function baseDeps(root: string, state: SubagentState, overrides: Partial<Subagen
 }
 
 describe("subagent_wait tool", () => {
+	it("preserves model resolution metadata in terminal completion projection", () => {
+		const completion = toWaitCompletion({ results: [{ agent: "worker", model: "openai/gpt-5-mini", modelResolution: { requested: "openai/gpt-5-mini", resolved: "openai/gpt-5-mini", source: "agent-config" } }] }, "run-model-meta");
+		assert.deepEqual(completion.results?.[0]?.modelResolution, { requested: "openai/gpt-5-mini", resolved: "openai/gpt-5-mini", source: "agent-config" });
+	});
 	it("resolves waitTool config and environment overrides strictly", () => {
 		assert.deepEqual(resolveWaitToolConfig(undefined, {}), { enabled: true });
 		assert.deepEqual(resolveWaitToolConfig(false, {}), { enabled: false });
