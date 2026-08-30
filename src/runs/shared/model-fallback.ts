@@ -1,6 +1,6 @@
 import type { ModelInfo as AvailableModelInfo } from "../../shared/model-info.ts";
 import type { ModelResolutionMetadata, ModelResolutionSource, Usage } from "../../shared/types.ts";
-import { filterFallbackCandidates, parseModelKey, recordModelFailure } from "./model-exclusions.ts";
+import { parseModelKey, recordModelFailure } from "./model-exclusions.ts";
 import { checkModelScope, type ModelScopeCheckRule, type ModelScopeViolation, type ModelSource } from "./model-scope.ts";
 
 export type { AvailableModelInfo };
@@ -424,11 +424,7 @@ export function buildModelCandidates(
 		seen.add(normalized);
 		candidates.push(normalized);
 	}
-	const filteredCandidates = filterFallbackCandidates(candidates);
-	if (candidates.length > 0 && filteredCandidates.length === 0) {
-		throw new ModelCandidatesExhaustedError(`Model candidates resolved to empty after exclusions; refusing to launch without an explicit model.`);
-	}
-	return filteredCandidates;
+	return candidates;
 }
 
 const RETRYABLE_MODEL_FAILURE_PATTERNS = [

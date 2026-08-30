@@ -1,11 +1,9 @@
 import assert from "node:assert/strict";
-import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, it, beforeEach, afterEach } from "node:test";
-import { buildAsyncRunnerSteps, DEFAULT_ASYNC_TIMEOUT_MS, executeAsyncSingle, formatAsyncStartedMessage, resolveAsyncRunnerLogPaths } from "../../src/runs/background/async-execution.ts";
+import { buildAsyncRunnerSteps, DEFAULT_ASYNC_TIMEOUT_MS, formatAsyncStartedMessage, resolveAsyncRunnerLogPaths } from "../../src/runs/background/async-execution.ts";
 import type { AgentConfig } from "../../src/agents/agents.ts";
 import { clearExclusions, recordModelFailure } from "../../src/runs/shared/model-exclusions.ts";
-import { DIRS } from "../../src/shared/types.ts";
 
 const agent = (name: string, toolBudget?: AgentConfig["toolBudget"]): AgentConfig => ({
 	name,
@@ -31,35 +29,22 @@ describe("async runner execution", () => {
 	beforeEach(() => clearExclusions());
 	afterEach(() => clearExclusions());
 
-	it("fails async launch and removes directory when every model candidate is excluded", () => {
-		const id = `excluded-model-launch-${Date.now().toString(36)}`;
-		recordModelFailure({ provider: "openai", modelId: "gpt-5-mini", reason: "rate limit exceeded" });
-		const result = executeAsyncSingle(id, {
-			agent: "worker",
-			task: "must not launch",
-			agentConfig: { ...agent("worker"), model: "openai/gpt-5-mini", tools: ["read", "write"], completionGuard: false },
-			ctx: { pi: { events: { emit() {} } }, cwd: process.cwd(), currentSessionId: "session-1" },
-			artifactConfig: { enabled: false, includeInput: false, includeOutput: false, includeJsonl: false, includeMetadata: false, cleanupDays: 7 },
-			shareEnabled: false,
-			availableModels: [{ provider: "openai", id: "gpt-5-mini", fullId: "openai/gpt-5-mini" }],
-			maxSubagentDepth: 2,
-		});
-		assert.equal(result.isError, true);
-		assert.match(result.content[0]?.text ?? "", /resolved to empty after exclusions/);
-		assert.equal(fs.existsSync(path.join(DIRS.async, id)), false);
-	});
-
-	it("fails async step build explicitly when every model candidate is excluded", () => {
-		recordModelFailure({ provider: "openai", modelId: "gpt-5-mini", reason: "rate limit exceeded" });
+	it("keeps excluded models in async fallback order", () => {
+		const models = [
+			{ provider: "openai", id: "gpt-5-mini", fullId: "openai/gpt-5-mini" },
+			{ provider: "anthropic", id: "claude-sonnet-4", fullId: "anthropic/claude-sonnet-4" },
+		];
+		for (const model of models) recordModelFailure({ provider: model.provider, modelId: model.id, reason: "rate limit exceeded" });
 		const result = buildAsyncRunnerSteps("excluded-model-run", {
-			chain: [{ agent: "worker", task: "must not launch" }],
-			agents: [{ ...agent("worker"), model: "openai/gpt-5-mini" }],
-			availableModels: [{ provider: "openai", id: "gpt-5-mini", fullId: "openai/gpt-5-mini" }],
+			chain: [{ agent: "worker", task: "must launch" }],
+			agents: [{ ...agent("worker"), model: models[0].fullId, fallbackModels: [models[1].fullId] }],
+			availableModels: models,
 			ctx,
 			asyncDir: path.join(process.cwd(), ".tmp-excluded-model-test"),
 			maxSubagentDepth: 2,
 		});
-		assert.deepEqual(result, { error: "Model candidates resolved to empty after exclusions; refusing to launch without an explicit model." });
+		assert.ok("steps" in result);
+		assert.deepEqual(result.steps[0]?.modelCandidates, models.map((model) => model.fullId));
 	});
 	it("formats interactive yield and headless auto-drain guidance separately", () => {
 		const interactive = formatAsyncStartedMessage("Async: worker [interactive]", true);

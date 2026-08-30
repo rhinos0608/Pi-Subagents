@@ -144,20 +144,18 @@ describe("model fallback helpers", () => {
 		);
 	});
 
-	it("excludes a candidate after a retryable model failure is recorded", () => {
-		recordRetryableModelFailure("openai/gpt-5-mini", "rate limit exceeded");
+	it("keeps configured candidates after retryable failures", () => {
+		const configuredModels = [
+			...availableModels,
+			{ provider: "opencode-go", id: "ox-alpha-free", fullId: "opencode-go/ox-alpha-free" },
+			{ provider: "openai-codex", id: "gpt-5.6-luna", fullId: "openai-codex/gpt-5.6-luna" },
+		];
+		const expected = configuredModels.map((model) => model.fullId);
+		for (const model of expected) recordRetryableModelFailure(model, "rate limit exceeded");
 
 		assert.deepEqual(
-			buildModelCandidates("gpt-5-mini", ["anthropic/claude-sonnet-4"], availableModels),
-			["anthropic/claude-sonnet-4"],
-		);
-	});
-
-	it("fails closed when every configured model is excluded", () => {
-		recordRetryableModelFailure("openai/gpt-5-mini", "rate limit exceeded");
-		assert.throws(
-			() => buildModelCandidates("gpt-5-mini", undefined, availableModels),
-			/Model candidates resolved to empty/,
+			buildModelCandidates(expected[0], expected.slice(1), configuredModels),
+			expected,
 		);
 	});
 
