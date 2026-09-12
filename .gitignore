@@ -1,5 +1,8 @@
 .pi/todos/
 .pi/subagents/
+.pi/artifacts/
+.pi-smartread/
+.pi-smartread.tags.cache/
 .pi-subagents/
 .DS_Store
 node_modules/
@@ -17,3 +20,4 @@ tmp/
 /perf-*.md
 /pr-*-gate*.json
 /pr-*-review*.md
+.smart-edit-undo/
