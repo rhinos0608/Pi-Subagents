@@ -280,6 +280,7 @@ interface StepResult {
 	sessionFile?: string;
 	intercomTarget?: string;
 	model?: string;
+	modelResolution?: import("../../shared/types.ts").ModelResolutionMetadata;
 	nativeMachine?: import("../../shared/types.ts").SingleResult["nativeMachine"];
 	thinking?: string;
 	attemptedModels?: string[];

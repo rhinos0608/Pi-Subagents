@@ -74,6 +74,7 @@ export function toWaitCompletion(data: Record<string, unknown>, runId: string): 
 			const sessionFile = asNonEmptyString(child.sessionFile);
 			const error = asNonEmptyString(child.error);
 			const model = asNonEmptyString(child.model);
+			const modelResolution = child.modelResolution && typeof child.modelResolution === "object" && !Array.isArray(child.modelResolution) ? child.modelResolution as WaitCompletionChild["modelResolution"] : undefined;
 			const structuredOutput = projectStructuredOutput(child.structuredOutput);
 			const structuredOutputPath = asNonEmptyString(child.structuredOutputPath);
 			const contextOverflow = child.contextOverflow === true;
@@ -89,6 +90,7 @@ export function toWaitCompletion(data: Record<string, unknown>, runId: string): 
 				...(structuredOutputPath ? { structuredOutputPath } : {}),
 				...(error ? { error } : {}),
 				...(model ? { model } : {}),
+				...(modelResolution ? { modelResolution } : {}),
 				...(contextOverflow ? { contextOverflow: true } : {}),
 				...(artifactPaths ? { artifactPaths } : {}),
 				...(timeoutRecovery ? { timeoutRecovery } : {}),

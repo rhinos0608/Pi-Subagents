@@ -175,6 +175,7 @@ function statusStepForTask(task: RunnerSubagentStep): StatusStep {
 		...(task.sessionFile ? { sessionFile: task.sessionFile } : {}),
 		skills: task.skills,
 		model: task.model,
+		modelResolution: task.modelResolution,
 		...(task.contextLimit !== undefined ? { contextLimit: task.contextLimit } : {}),
 		thinking: task.thinking,
 		attemptedModels: task.modelCandidates && task.modelCandidates.length > 0 ? task.modelCandidates : task.model ? [task.model] : undefined,

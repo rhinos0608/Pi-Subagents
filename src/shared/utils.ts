@@ -281,7 +281,7 @@ export function getFinalOutput(messages: Message[]): string {
 }
 
 export function getSingleResultOutput(result: Pick<SingleResult, "finalOutput" | "messages">): string {
-	return result.finalOutput ?? getFinalOutput(result.messages ?? []);
+	return result.finalOutput || getFinalOutput(result.messages ?? []);
 }
 
 /**

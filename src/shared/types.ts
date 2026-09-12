@@ -954,6 +954,7 @@ export interface AgentProgress {
 	tokens: number;
 	/** Resolved launch model/effort and split usage for public live projections. */
 	model?: string;
+	modelResolution?: ModelResolutionMetadata;
 	thinking?: string;
 	inputTokens?: number;
 	outputTokens?: number;
@@ -987,6 +988,7 @@ interface ProgressSummary {
 	toolCount: number;
 	tokens: number;
 	model?: string;
+	modelResolution?: ModelResolutionMetadata;
 	thinking?: string;
 	durationMs: number;
 }
@@ -1233,6 +1235,15 @@ export interface UsageBudgetState {
 	reason?: "tokens" | "costUsd";
 }
 
+export type ModelResolutionSource = "explicit-child" | "agent-config" | "parent-session" | "default";
+
+export interface ModelResolutionMetadata {
+	requested?: string;
+	resolved?: string;
+	source: ModelResolutionSource;
+	fallbackReason?: "retryable-model-failure";
+}
+
 export interface SingleResult {
 	/**
 	 * Stable child identity within the foreground run. Pair with Details.runId for
@@ -1266,6 +1277,7 @@ export interface SingleResult {
 	messages?: Message[];
 	usage: Usage;
 	model?: string;
+	modelResolution?: ModelResolutionMetadata;
 	/** Authoritative before/after Git evidence captured by a pane-native remote machine. */
 	nativeMachine?: { provider: "herdr"; machineId: string; initialGit?: HerdrRemoteGitStatus; finalGit?: HerdrRemoteGitStatus };
 	/** Effective thinking level used by this foreground child, when known. */
@@ -1353,6 +1365,7 @@ export interface WaitCompletionChild {
 	structuredOutputPath?: string;
 	error?: string;
 	model?: string;
+	modelResolution?: ModelResolutionMetadata;
 	contextOverflow?: boolean;
 	artifactPaths?: Partial<ArtifactPaths>;
 	timeoutRecovery?: TimeoutRecoveryProjection;
@@ -1570,6 +1583,7 @@ export interface NestedStepSummary {
 	sessionName?: string;
 	status: "pending" | "running" | "complete" | "completed" | "failed" | "partial" | "paused" | "stopped" | "rejected";
 	model?: string;
+	modelResolution?: ModelResolutionMetadata;
 	thinking?: string;
 	sessionFile?: string;
 	transcriptPath?: string;
@@ -1623,6 +1637,7 @@ export interface NestedRunSummary extends NestedRunAddress {
 	sessionName?: string;
 	agents?: string[];
 	model?: string;
+	modelResolution?: ModelResolutionMetadata;
 	thinking?: string;
 	currentStep?: number;
 	chainStepCount?: number;
@@ -1955,6 +1970,7 @@ export interface AsyncStatus {
 		tokens?: TokenUsage;
 		skills?: string[];
 		model?: string;
+		modelResolution?: ModelResolutionMetadata;
 		thinking?: string;
 		contextLimit?: number;
 		thinkingCeiling?: ThinkingLevel;
@@ -2072,6 +2088,7 @@ export interface ForegroundResumeChild {
 	context?: "fresh" | "fork";
 	sessionFile?: string;
 	model?: string;
+	modelResolution?: ModelResolutionMetadata;
 	thinking?: string;
 	status: SubagentResultStatus;
 	activityState?: ActivityState;
@@ -2150,6 +2167,7 @@ export interface ForegroundChildControl {
 	window?: number;
 	windowPeak?: number;
 	model?: string;
+	modelResolution?: ModelResolutionMetadata;
 	thinking?: string;
 	toolCount?: number;
 	interrupt?: () => boolean;
@@ -2199,6 +2217,7 @@ export interface ForegroundRunControl {
 	window?: number;
 	windowPeak?: number;
 	model?: string;
+	modelResolution?: ModelResolutionMetadata;
 	thinking?: string;
 	toolCount?: number;
 	/** Independently tracked children for foreground parallel work and fleet inspection. */
@@ -2459,6 +2478,10 @@ export interface RunSyncOptions {
 	fast?: boolean;
 	/** The override came from the running parent session, not configuration. */
 	modelOverrideFromParent?: boolean;
+	/** Original caller model provenance, retained after outer resolution. */
+	modelResolutionSource?: ModelResolutionSource;
+	/** Original caller-requested model before outer resolution. */
+	modelResolutionRequested?: string;
 	/** How the launch model was selected: explicit per-call, configured agent primary, or inherited parent. */
 	modelOrigin?: "explicit" | "inherited" | "configured";
 	/** LLM intent arbiter for the completion mutation guard (rescues read-only review runs). */

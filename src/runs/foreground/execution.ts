@@ -77,7 +77,9 @@ import { buildTimeoutRecoverySummary, collectTrackedMutationEvidence, snapshotTr
 import { captureSingleOutputSnapshot, extractChildWrittenOutput, finalizeSingleOutput, formatSavedOutputReference, hasSingleOutputChangedSinceSnapshot, resolveSingleOutput, validateFileOnlyOutputMode, type SingleOutputSnapshot } from "../shared/single-output.ts";
 import {
 	buildModelCandidates,
+	buildModelResolutionMetadata,
 	formatSubagentModelVerificationError,
+	resolveModelResolutionSource,
 	formatModelAttemptNote,
 	isContextOverflow,
 	isRetryableModelFailureAttempt,
@@ -160,6 +162,7 @@ function persistSingleResultMetadata(input: {
 		processSignal: target.processSignal,
 		usage: target.usage,
 		model: target.model,
+		modelResolution: target.modelResolution,
 		attemptedModels: target.attemptedModels,
 		modelAttempts: target.modelAttempts,
 		durationMs: target.progressSummary?.durationMs,
@@ -2088,6 +2091,7 @@ async function runSyncCompletionInner(
 
 	result.usage = aggregateUsage;
 	result.attemptedModels = attemptedModels.length > 0 ? attemptedModels : undefined;
+	result.modelResolution = buildModelResolutionMetadata({ requested: options.modelResolutionRequested ?? (options.modelOverrideFromParent ? undefined : options.modelOverride ?? agent.model), resolved: result.model, source: options.modelResolutionSource ?? resolveModelResolutionSource({ explicit: options.modelOverride !== undefined, fromParent: options.modelOverrideFromParent === true, agentConfigured: agent.model !== undefined }), ...(attemptedModels.length > 1 ? { fallbackReason: "retryable-model-failure" as const } : {}) });
 	result.modelAttempts = modelAttempts.length > 0 ? modelAttempts : undefined;
 	result.progressSummary = {
 		...(childSessionName ? { sessionName: childSessionName } : {}),

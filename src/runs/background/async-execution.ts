@@ -28,7 +28,7 @@ import { resolveNodeExecutable } from "../../shared/node-executable.ts";
 import { backgroundProcessOptions } from "../shared/background-process-options.ts";
 import { normalizeSkillInput, resolveSkillsWithFallback } from "../../agents/skills.ts";
 import { PI_CODING_AGENT_PACKAGE_ROOT_ENV, PROMPT_REDACTED, resolveChildCwd } from "../../shared/utils.ts";
-import { buildModelCandidates, resolveEffectiveSubagentModel, resolveModelOrigin, resolveSubagentModelOverride, type AvailableModelInfo, type ModelOrigin, type ParentModel } from "../shared/model-fallback.ts";
+import { buildModelCandidates, buildModelResolutionMetadata, resolveEffectiveSubagentModel, resolveModelOrigin, resolveModelResolutionSource, resolveSubagentModelOverride, type AvailableModelInfo, type ModelOrigin, type ParentModel } from "../shared/model-fallback.ts";
 import { resolveToolTimeoutMs, toolTimeoutFromEnv } from "../shared/tool-timeout.ts";
 import { resolveModelScopesForAgent, type ModelScopeConfig } from "../shared/model-scope.ts";
 import { findModelInfo, resolveEffectiveThinking } from "../../shared/model-info.ts";
@@ -256,6 +256,8 @@ interface AsyncSingleParams {
 	modelOverride?: string;
 	modelOverrideFromParent?: boolean;
 	modelOrigin?: ModelOrigin;
+	modelResolutionSource?: import("../../shared/types.ts").ModelResolutionSource;
+	modelResolutionRequested?: string;
 	fast?: boolean;
 	thinkingOverride?: AgentConfig["thinking"];
 	availableModels?: AvailableModelInfo[];
@@ -1061,6 +1063,11 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 			cwd: stepCwd,
 			requestedCwd: machine ? machine.cwd : s.cwd ?? stepCwd,
 			model,
+			modelResolution: buildModelResolutionMetadata({
+				...(primaryModelFromParent ? {} : (s.model ?? a.model ? { requested: s.model ?? a.model } : {})),
+				...(model ? { resolved: model } : {}),
+				source: resolveModelResolutionSource({ explicit: s.model !== undefined, fromParent: primaryModelFromParent, agentConfigured: a.model !== undefined }),
+			}),
 			...(contextLimit !== undefined ? { contextLimit } : {}),
 			...(fast !== undefined ? { fast } : {}),
 			thinking: resolveEffectiveThinking(model, effectiveThinking),
@@ -1723,10 +1730,10 @@ export function executeAsyncSingle(
 		};
 	}
 
-	const effectiveOutput = normalizeSingleOutputOverride(params.output, agentConfig.output);
+	const effectiveOutput = normalizeSingleOutputOverride(params.output, undefined);
 	const outputPath = resolveSingleOutputPath(effectiveOutput, ctx.cwd, instructionCwd, params.outputBaseDir ?? (artifactsDir ? path.join(artifactsDir, "outputs", id) : undefined));
 	const systemPrompt = buildEffectiveSystemPrompt({ agent: agentConfig, resolvedSkills, cwd: runnerCwd, ...(outputPath ? { outputPath } : {}) });
-	const outputMode = params.outputMode ?? agentConfig.outputMode ?? "inline";
+	const outputMode = params.outputMode ?? "inline";
 	const validationError = validateFileOnlyOutputMode(outputMode, outputPath, `Async single run (${agent})`);
 	if (validationError) return formatAsyncStartError("single", validationError);
 	const taskWithOutputInstruction = injectSingleOutputInstruction(task, outputPath, agentConfig);
@@ -1971,6 +1978,11 @@ export function executeAsyncSingle(
 						cwd: machine?.cwd ?? runnerCwd,
 						requestedCwd: machine?.cwd ?? params.requestedCwd ?? runnerCwd,
 						model,
+						modelResolution: buildModelResolutionMetadata({
+							...(params.modelResolutionRequested !== undefined ? { requested: params.modelResolutionRequested } : params.modelOverrideFromParent ? {} : (params.modelOverride ?? agentConfig.model ? { requested: params.modelOverride ?? agentConfig.model } : {})),
+							...(model ? { resolved: model } : {}),
+							source: params.modelResolutionSource ?? resolveModelResolutionSource({ explicit: params.modelOverride !== undefined, fromParent: params.modelOverrideFromParent === true, agentConfigured: agentConfig.model !== undefined }),
+						}),
 						...(contextLimit !== undefined ? { contextLimit } : {}),
 						...(params.fast ?? agentConfig.fast ? { fast: params.fast ?? agentConfig.fast } : {}),
 						thinking: resolveEffectiveThinking(model, effectiveThinking),

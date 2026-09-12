@@ -37,6 +37,7 @@ export interface RunnerSubagentStep {
 	/** Original cwd input retained for launch diagnostics. */
 	requestedCwd?: string;
 	model?: string;
+	modelResolution?: import("../../shared/types.ts").ModelResolutionMetadata;
 	contextLimit?: number;
 	fast?: boolean;
 	thinking?: string;
@@ -243,6 +244,7 @@ export interface ParallelTaskResult {
 	error?: string;
 	timedOut?: boolean;
 	model?: string;
+	modelResolution?: import("../../shared/types.ts").ModelResolutionMetadata;
 	attemptedModels?: string[];
 	outputTargetPath?: string;
 	outputTargetExists?: boolean;

@@ -247,7 +247,7 @@ describe("chain append requests", () => {
 			},
 		};
 		const appended: RunnerStep[] = [
-			runnerStep("worker"),
+			{ ...runnerStep("worker"), modelResolution: { requested: "openai/gpt-5-mini", resolved: "openai/gpt-5-mini", source: "agent-config" } },
 			{
 				parallel: [
 					runnerStep("reviewer"),
@@ -263,6 +263,7 @@ describe("chain append requests", () => {
 		assert.equal(status.chainStepCount, 3);
 		assert.equal(status.pendingAppends, 0);
 		assert.equal(status.lastUpdate, 300);
+		assert.deepEqual(status.steps?.[1]?.modelResolution, { requested: "openai/gpt-5-mini", resolved: "openai/gpt-5-mini", source: "agent-config" });
 		assert.deepEqual(status.steps?.map((step) => `${step.agent}:${step.status}`), [
 			"scout:complete",
 			"worker:pending",

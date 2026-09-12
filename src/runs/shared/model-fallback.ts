@@ -1,10 +1,23 @@
 import { splitKnownThinkingSuffix as splitThinkingSuffix, type ModelInfo as AvailableModelInfo } from "../../shared/model-info.ts";
-import type { Usage } from "../../shared/types.ts";
+import type { ModelResolutionMetadata, ModelResolutionSource, Usage } from "../../shared/types.ts";
 import { filterFallbackCandidates, findModelExclusion, parseModelKey, recordModelFailure } from "./model-exclusions.ts";
 import { checkModelScope, type ModelScopeCheckRule, type ModelScopeViolation, type ModelSource } from "./model-scope.ts";
 import { redactSecretValues } from "./permissions.ts";
 
 export type { AvailableModelInfo };
+
+export class ModelCandidatesExhaustedError extends Error {}
+
+export function resolveModelResolutionSource(input: { explicit: boolean; fromParent: boolean; agentConfigured: boolean }): ModelResolutionSource {
+	if (input.fromParent) return "parent-session";
+	if (input.explicit) return "explicit-child";
+	if (input.agentConfigured) return "agent-config";
+	return "default";
+}
+
+export function buildModelResolutionMetadata(input: { requested?: string; resolved?: string; source: ModelResolutionSource; fallbackReason?: "retryable-model-failure" }): ModelResolutionMetadata {
+	return { ...(input.requested ? { requested: input.requested } : {}), ...(input.resolved ? { resolved: input.resolved } : {}), source: input.source, ...(input.fallbackReason ? { fallbackReason: input.fallbackReason } : {}) };
+}
 
 interface ModelAttemptSummary {
 	model: string;
@@ -323,9 +336,18 @@ function ignoreStaleModelUnavailableExclusion(candidate: string, exclusion: NonN
 	return MODEL_UNAVAILABLE_PATTERN.test(reason) && availableModels?.some((entry) => entry.fullId === baseModel) === true;
 }
 
+// Transient transport failures must not fail-closed an explicitly requested
+// model: the caller chose it, so attempt anyway and let the call itself fail.
+const TRANSIENT_EXCLUSION_PATTERN = /fetch failed|request timed out|\btimed?\s?out\b|econnreset|etimedout|socket hang up|network(?:work)? (?:error|failure)|econnrefused|enotfound|eai_again|empty response|cold-start|\b429\b|rate\s*limit|too many requests|usage\s*limit/i;
+
+export function isTransientExclusionReason(reason: string | undefined): boolean {
+	return TRANSIENT_EXCLUSION_PATTERN.test(reason ?? "");
+}
+
 function throwForExplicitModelExclusion(model: string, availableModels: AvailableModelInfo[] | undefined): void {
 	const exclusion = findModelExclusion(model, {
-		ignoreExclusion: (candidate, exclusion) => ignoreStaleModelUnavailableExclusion(candidate, exclusion, availableModels),
+		ignoreExclusion: (candidate, exclusion) => ignoreStaleModelUnavailableExclusion(candidate, exclusion, availableModels)
+			|| isTransientExclusionReason(exclusion.reason),
 	});
 	if (!exclusion) return;
 	const reason = redactSecretValues((exclusion.reason ?? "runtime-failure").replace(/[\u0000-\u001f\u007f]+/g, " ")).slice(0, 240);
@@ -503,9 +525,14 @@ export function buildModelCandidates(
 		seen.add(normalized);
 		candidates.push(normalized);
 	}
+	// Directly requested models always run: transient transport exclusions
+	// must not drain an explicit candidate list. Other origins keep
+	// exclusion filtering so fallback rotation still skips bad models fast.
+	const ignoreTransient = origin === "explicit";
 	const resolved = filterFallbackCandidates(candidates, {
 		onExcluded: warnCachedExclusion,
-		ignoreExclusion: (candidate, exclusion) => ignoreStaleModelUnavailableExclusion(candidate, exclusion, availableModels),
+		ignoreExclusion: (candidate, exclusion) => ignoreStaleModelUnavailableExclusion(candidate, exclusion, availableModels)
+			|| (ignoreTransient && isTransientExclusionReason(exclusion.reason)),
 	});
 	if (resolved.length === 0) {
 		if (skippedPrimary) resolveRequiredSubagentModelCandidate(skippedPrimary, availableModels, preferredProvider);

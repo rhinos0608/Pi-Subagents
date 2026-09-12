@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import {
 	buildModelCandidates,
+	buildModelResolutionMetadata,
 	fuzzyResolveModel,
 	formatSubagentModelVerificationError,
 	isContextOverflow,
@@ -11,6 +12,7 @@ import {
 	recordRetryableModelFailure,
 	resolveEffectiveSubagentModel,
 	resolveModelCandidate,
+	resolveModelResolutionSource,
 	resolveSubagentModelOverride,
 } from "../../src/runs/shared/model-fallback.ts";
 import { clearExclusions, findModelExclusion, getExcludedCount, recordModelFailure } from "../../src/runs/shared/model-exclusions.ts";
@@ -20,6 +22,14 @@ beforeEach(() => clearExclusions());
 afterEach(() => clearExclusions());
 
 describe("model fallback helpers", () => {
+	it("resolves model provenance with parent priority", () => {
+		assert.equal(resolveModelResolutionSource({ explicit: true, fromParent: true, agentConfigured: false }), "parent-session");
+		assert.equal(resolveModelResolutionSource({ explicit: true, fromParent: false, agentConfigured: true }), "explicit-child");
+	});
+	it("builds model metadata and only records fallback reason when supplied", () => {
+		assert.deepEqual(buildModelResolutionMetadata({ requested: "openai/gpt-5-mini", resolved: "openai/gpt-5-mini", source: "agent-config" }), { requested: "openai/gpt-5-mini", resolved: "openai/gpt-5-mini", source: "agent-config" });
+		assert.equal(buildModelResolutionMetadata({ requested: "openai/gpt-5-mini", resolved: "anthropic/claude-sonnet-4", source: "agent-config", fallbackReason: "retryable-model-failure" }).fallbackReason, "retryable-model-failure");
+	});
 	const availableModels = [
 		{ provider: "openai", id: "gpt-5-mini", fullId: "openai/gpt-5-mini" },
 		{ provider: "anthropic", id: "claude-sonnet-4", fullId: "anthropic/claude-sonnet-4" },
@@ -407,6 +417,24 @@ describe("model fallback helpers", () => {
 		);
 	});
 
+	it("attempts an explicit primary despite transient transport exclusions", () => {
+		recordModelFailure({ modelId: "gpt-5-mini", provider: "openai", reason: "fetch failed" });
+		recordModelFailure({ modelId: "claude-sonnet-4", provider: "anthropic", reason: "Request timed out." });
+		assert.deepEqual(
+			buildModelCandidates("openai/gpt-5-mini", ["anthropic/claude-sonnet-4"], availableModels, undefined, { origin: "explicit" }),
+			["openai/gpt-5-mini", "anthropic/claude-sonnet-4"],
+		);
+	});
+
+	it("attempts an explicit primary despite rate-limit exclusions", () => {
+		recordModelFailure({ modelId: "gpt-5-mini", provider: "openai", reason: "HTTP 429 Too Many Requests" });
+		recordModelFailure({ modelId: "claude-sonnet-4", provider: "anthropic", reason: "usage limit reached" });
+		assert.deepEqual(
+			buildModelCandidates("openai/gpt-5-mini", ["anthropic/claude-sonnet-4"], availableModels, undefined, { origin: "explicit" }),
+			["openai/gpt-5-mini", "anthropic/claude-sonnet-4"],
+		);
+	});
+
 	it("rejects an explicit non-strict out-of-scope primary before fallbacks", () => {
 		assert.throws(
 			() => buildModelCandidates("anthropic/claude-sonnet-4", ["openai/gpt-5-mini"], availableModels, undefined, {
@@ -611,13 +639,21 @@ describe("resolveSubagentModelOverride (cross-session inherit, issue #266)", () 
 	});
 
 	it("fails visibly when an explicit model is excluded instead of falling back", () => {
-		recordModelFailure({ modelId: "gpt-5-mini", provider: "openai", reason: "rate limit" });
+		recordModelFailure({ modelId: "gpt-5-mini", provider: "openai", reason: "invalid api key" });
 		assert.throws(
 			() => resolveEffectiveSubagentModel("openai/gpt-5-mini", undefined, parentModel, availableModels),
 			(error: unknown) => {
 				const message = String(error);
-				return message.includes("openai/gpt-5-mini") && message.includes("rate limit") && message.includes("expires:");
+				return message.includes("openai/gpt-5-mini") && message.includes("invalid api key") && message.includes("expires:");
 			},
+		);
+	});
+
+	it("resolves an explicit 429-excluded primary instead of failing", () => {
+		recordModelFailure({ modelId: "gpt-5-mini", provider: "openai", reason: "HTTP 429 Too Many Requests" });
+		assert.equal(
+			resolveEffectiveSubagentModel("openai/gpt-5-mini", undefined, parentModel, availableModels),
+			"openai/gpt-5-mini",
 		);
 	});
 
