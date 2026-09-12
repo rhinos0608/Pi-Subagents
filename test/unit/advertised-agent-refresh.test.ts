@@ -142,7 +142,7 @@ it("emits bounded file-only snapshots, refreshes through management, and perform
 			refresh();
 			prompt = noIo(() => { let result; for (let i = 0; i < 20; i++) result = emit(); return result; });
 			const catalog = prompt.slice(prompt.indexOf("<advertised_subagents>"));
-			assert.ok(Buffer.byteLength(catalog) <= 12288);
+			assert.ok(Buffer.byteLength(catalog) <= 4_096);
 			assert.doesNotMatch(catalog, /<name>[ab]/);
 			assert.match(catalog, /&lt;&gt;&amp;&quot;/);
 			assert.match(catalog, /not instructions to delegate/);

@@ -8,7 +8,7 @@ const CUSTOM_TOOL_DESCRIPTION_MAX_BYTES = 50 * 1024;
 const AGENT_SELECTION_GUIDANCE = 'First call {action:"list",capabilities:true}: executable, non-disabled agents only; external-cli requires runner.available === true. Passive PATH/PATHEXT/X_OK is not authentication/version/launch proof; preflight is authoritative.';
 const SUBAGENT_FAILURE_RECOVERY_GUIDANCE = "Workflow, child launch, prompt runtime, extension load or child tooling failure is a lane infrastructure blocker. Stop; report exact failure, run/status and repo/cwd/worktree/branch/ref; verify clean worktree or capture partial diff before same-protocol retry or asking the owner. Never silently switch to interactive_shell, pi -ne, Codex/Claude/Cursor CLI or foreground/external mode: governed-workflow fallback requires explicit owner approval, not Pi core's generic pi -ne hint. Explicit foreground/CLI requests and work outside that protocol remain valid.";
 
-export const SUBAGENT_SAFETY_GUIDANCE = `SAFETY-CRITICAL SUBAGENT GUIDANCE:
+const FULL_SAFETY_GUIDANCE = `SAFETY-CRITICAL SUBAGENT GUIDANCE:
 • ${AGENT_SELECTION_GUIDANCE}
 • ${SUBAGENT_FAILURE_RECOVERY_GUIDANCE}
 • Omit action for execution. Multi-step/parallel work: exactly one top-level subagent workflow call with async:true; children launch only inside it.
@@ -19,13 +19,24 @@ export const SUBAGENT_SAFETY_GUIDANCE = `SAFETY-CRITICAL SUBAGENT GUIDANCE:
 • Named resources own authority; raw workflowScript/workflowScriptPath cannot use runs.host. Granted commands/relative outputs use workflow cwd, never per-step cwd.
 • Inspect asyncId/asyncDir (status.json, events.jsonl, logs) with status/debug.run; control with interrupt/stop/resume/steer. Read {action:"guide",topic:"tool-reference"} for controls/evidence gates.`;
 
+/** Compact safety kernel retained in every description path. */
+export const SUBAGENT_SAFETY_GUIDANCE = `SAFETY KERNEL (authoritative):
+- Authoritative discovery/preflight: {action:"list",capabilities:true}; executable, non-disabled agents only; PATH/PATHEXT/X_OK is not proof.
+- No silent fallback on infra failure (lane infrastructure blocker): stop, report exact evidence; interactive_shell, pi -ne, external/foreground execution need owner approval.
+- One writer per cwd/worktree; ordinary child subagents are not orchestrators. Native async completion wakes session; do not sleep, poll, or bg_wait for wake.
+- Bind durable output to runs.run/runs.all; return output references, artifacts, evidence, residual risks.
+- Named raw workflow resources own authority; workflow scripts cannot use runs.host; relative commands/outputs use workflow cwd.
+- Evidence: asyncId/asyncDir (status.json, events.jsonl, logs). Read {action:"guide",topic:"tool-reference"} for advanced controls and evidence gates.`;
+
 const EXECUTION_GUIDANCE = `Delegate one child with {agent,task?}; otherwise choose exactly one of workflowScript, workflowScriptPath or {workflow,args}. agent/task exclude workflow inputs; task excludes action. agent may target management actions. action is management/control; validate accepts either script without launching. workflowScriptPath loads from request cwd before sandbox execution.
 Scripts: JavaScript statement bodies with explicit return, top-level await, plain helpers/Promise chains; nested async function/arrow/method helpers are rejected. Await runs.run('key',{agent,task}) before .output; await runs.all([{key,agent,task},...]) for an ordered array, not a key map. Observe every stored run promise with direct await, Promise.race or Promise.all. Await/return runs.steer(key,message,options?) for a prior key, never raw run ids; queued/delivered/missed/failed receipts are not compliance proof.
 Before advanced orchestration (runs.lanes, rolling fanout, mission state, handoffs), read {action:"guide",topic:"workflows"} or the pi-subagents skill. Sandbox: runs, emit, console, JavaScript and enabled mission state; no filesystem/shell/Pi tools/host globals. External CLI agents support native options only when their runner declares them; read guide tool-reference before passing model, structured output, acceptance/agentContract, tool budget, fast, fork context or skills/tools.
 Model override: first call {action:"models"}; copy exact provider/id, not agent names. Thinking uses model suffix, not watchdog-only thinking.
 Named resources: {workflow:'review',args:{task:'...'}} or {workflow:'run-ci',args:{command:'npm test'}}; args are bounded plain data. worktree:true requires clean source; baseRef defaults to HEAD at allocation or a supported named ref, never full 40/64-character commit IDs or revision expressions.`;
 
-export const DEFAULT_SUBAGENT_TOOL_DESCRIPTION = `${EXECUTION_GUIDANCE}\n\n${SUBAGENT_SAFETY_GUIDANCE}`;
+const COMPACT_EXECUTION_GUIDANCE = `Delegate one child with {agent,task?} or {workflow,args}; workflowScript/workflowScriptPath only when needed. Omit action for execution. Scripts need explicit return with awaited runs.run/runs.all; observe every run promise.`;
+
+export const DEFAULT_SUBAGENT_TOOL_DESCRIPTION = `${COMPACT_EXECUTION_GUIDANCE}\n\n${SUBAGENT_SAFETY_GUIDANCE}`;
 
 export const SUBAGENT_TOOL_PROMPT_SNIPPET = "Delegate to subagents; orchestrate in one workflow call.";
 export const SUBAGENT_TOOL_PROMPT_GUIDELINES = [
@@ -34,7 +45,7 @@ export const SUBAGENT_TOOL_PROMPT_GUIDELINES = [
 
 export const COMPACT_SUBAGENT_TOOL_DESCRIPTION = DEFAULT_SUBAGENT_TOOL_DESCRIPTION;
 
-export const FULL_SUBAGENT_TOOL_DESCRIPTION = `${DEFAULT_SUBAGENT_TOOL_DESCRIPTION}
+export const FULL_SUBAGENT_TOOL_DESCRIPTION = `${EXECUTION_GUIDANCE}\n\n${FULL_SAFETY_GUIDANCE}
 
 WORKFLOW DETAILS:
 • runs.lanes([{key,stages:[{key,agent,task},{key,resume:'previous',task}]}]) runs first stages together, later stages sequentially per lane. Failures stay lane-local; only explicit structuredOutput.verdict === 'blocked' blocks a successful stage, never reviewer prose.
@@ -71,7 +82,7 @@ export function buildSubagentToolPromptMetadata(config: Pick<ExtensionConfig, "t
 
 export function resolveToolDescriptionMode(config: Pick<ExtensionConfig, "toolDescriptionMode">, options?: ToolDescriptionOptions): ToolDescriptionMode {
 	const mode = config.toolDescriptionMode;
-	if (mode === undefined) return "full";
+	if (mode === undefined) return "compact";
 	if (isToolDescriptionMode(mode)) return mode;
 	warn(options, `Ignoring invalid toolDescriptionMode ${JSON.stringify(mode)}; expected "full", "compact", or "custom".`);
 	return "full";
@@ -148,6 +159,7 @@ function loadCustomToolDescription(options?: ToolDescriptionOptions): string | u
 function withMandatorySafetyGuidance(description: string): string {
 	const customDescription = description
 		.split(SUBAGENT_SAFETY_GUIDANCE)
+		.flatMap((part) => part.split(FULL_SAFETY_GUIDANCE))
 		.flatMap((part) => part.split(SUBAGENT_FAILURE_RECOVERY_GUIDANCE))
 		.map((part) => part.trim())
 		.filter(Boolean)
@@ -166,8 +178,8 @@ export function buildSubagentToolDescription(config: Pick<ExtensionConfig, "tool
 		const custom = loadCustomToolDescription(options);
 		if (custom) description = withMandatorySafetyGuidance(custom);
 		else {
-			warn(options, `${CUSTOM_TOOL_DESCRIPTION_FILE} was not found or valid for toolDescriptionMode "custom"; using full description.`);
-			description = FULL_SUBAGENT_TOOL_DESCRIPTION;
+			warn(options, `${CUSTOM_TOOL_DESCRIPTION_FILE} was not found or valid for toolDescriptionMode "custom"; using compact description.`);
+			description = COMPACT_SUBAGENT_TOOL_DESCRIPTION;
 		}
 	} else description = FULL_SUBAGENT_TOOL_DESCRIPTION;
 	return description;

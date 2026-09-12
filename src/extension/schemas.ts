@@ -1,6 +1,6 @@
 /**
- * TypeBox schemas for subagent tool parameters
- */
+* TypeBox schemas for subagent tool parameters
+*/
 
 import { Type } from "typebox";
 
@@ -36,19 +36,6 @@ const SkillOverride = Type.Unsafe({
 		{ type: "string" },
 	],
 	description: "Skills: names/CSV/array; false disables, true uses default.",
-});
-
-const OutputOverride = Type.Unsafe({
-	anyOf: [
-		{ type: "string" },
-		{ type: "boolean" },
-	],
-	description: "Output filename/path (string), or false to disable file output",
-});
-
-const OutputModeOverride = Type.String({
-	enum: ["inline", "file-only"],
-	description: "Default inline; file-only requires output path.",
 });
 
 const ReadsOverride = Type.Unsafe({
@@ -158,8 +145,6 @@ export const ParallelTaskSchema = Type.Object({
 	cwd: Type.Optional(Type.String()),
 	machine: Type.Optional(Type.String({ minLength: 1, maxLength: 128, description: "Herdr saved machine id or label." })),
 	count: Type.Optional(Type.Integer({ minimum: 1, description: "Repeat this parallel task N times with the same settings." })),
-	output: Type.Optional(OutputOverride),
-	outputMode: Type.Optional(OutputModeOverride),
 	reads: Type.Optional(ReadsOverride),
 	progress: Type.Optional(Type.Boolean({ description: "Enable progress.md tracking in {chain_dir}" })),
 	skill: Type.Optional(SkillOverride),
@@ -190,8 +175,6 @@ export const DynamicParallelTemplateSchema = Type.Object({
 	outputSchema: Type.Optional(OutputSchemaOverride),
 	cwd: Type.Optional(Type.String()),
 	machine: Type.Optional(Type.String({ minLength: 1, maxLength: 128, description: "Herdr saved machine id or label." })),
-	output: Type.Optional(OutputOverride),
-	outputMode: Type.Optional(OutputModeOverride),
 	reads: Type.Optional(ReadsOverride),
 	progress: Type.Optional(Type.Boolean({ description: "Enable progress.md tracking in {chain_dir}" })),
 	skill: Type.Optional(SkillOverride),
@@ -220,8 +203,6 @@ export const ChainItem = Type.Object({
 	outputSchema: Type.Optional(OutputSchemaOverride),
 	cwd: Type.Optional(Type.String()),
 	machine: Type.Optional(Type.String({ minLength: 1, maxLength: 128, description: "Herdr saved machine id or label." })),
-	output: Type.Optional(OutputOverride),
-	outputMode: Type.Optional(OutputModeOverride),
 	reads: Type.Optional(ReadsOverride),
 	progress: Type.Optional(Type.Boolean({ description: "Enable progress.md tracking in {chain_dir}" })),
 	skill: Type.Optional(SkillOverride),
@@ -374,15 +355,7 @@ const SubagentParamProperties = {
 		Type.String({ description: "Session log directory; default temp, independent of share." }),
 	),
 	control: Type.Optional(ControlOverrides),
-	// Workflow defaults forwarded to each runs.run/runs.all child unless overridden there.
-	output: Type.Optional(Type.Unsafe({
-		anyOf: [
-			{ type: "string" },
-			{ type: "boolean" },
-		],
-		description: "Child output path or false; relative workflow paths use managed artifact routing. Bind durable output here, not task prose; return outputReference/outputPathMapping/artifactPaths.",
-	})),
-	outputMode: Type.Optional(OutputModeOverride),
+	// Output routing is tooling-managed; child output fields stay internal.
 	skill: Type.Optional(SkillOverride),
 	model: Type.Optional(Type.String({ description: "Child model provider/id; bare id only if unique. Suffix :off/minimal/low/medium/high/xhigh/max overrides agent thinking default." })),
 	fast: Type.Optional(Type.Boolean({ description: "Native OpenAI-Codex priority tier; default false, may cost more/quota." })),
@@ -396,8 +369,82 @@ const SubagentParamsSchema = Type.Object(SubagentParamProperties);
 
 export const SubagentParams = keepTopLevelParameterDescriptions(SubagentParamsSchema);
 
-export function createSubagentParamsSchema(): typeof SubagentParams {
-	return SubagentParams;
+export type SubagentParamsProfile = "full" | "compact";
+
+// Compact schema keeps only load-bearing presentation annotations. Everything else
+// (self-explanatory IDs, UI hints, repeated overrides) is stripped to fit the
+// 8,600-char compact budget. Kept descriptions disambiguate validation or
+// surprising semantics:
+// - discriminators: action, context, mode (execution vs management routing)
+// - dangerous/mutating: additional (grant-spawn-budget), gate (host command),
+//   workflowScript/workflowScriptPath (raw provenance, no runs.host)
+// - opaque formats: acceptance, mission, outputSchema (false-disables/true-invalid
+//   triples), at/every (schedule shapes), timeoutMs/maxRuntimeMs (deadline defaults)
+// - surprising semantics: async (asyncByDefault default), usageBudget (root-only),
+//   toolBudget (block-to-finalize), preflight (display-only), thinking (dispatch ignores)
+const COMPACT_TOP_LEVEL_DESCRIPTION_KEYS = [
+	"action",
+	"context",
+	"mode",
+	"at",
+	"every",
+	"additional",
+	"gate",
+	"workflowScript",
+	"workflowScriptPath",
+	"acceptance",
+	"mission",
+	"outputSchema",
+	"timeoutMs",
+	"maxRuntimeMs",
+	"async",
+	"usageBudget",
+	"toolBudget",
+	"preflight",
+	"thinking",
+] as const;
+
+// Shortened where the full text exceeds what the compact budget allows. Meaning
+// is preserved; only examples and restated defaults are trimmed.
+const COMPACT_TOP_LEVEL_DESCRIPTION_OVERRIDES: Record<string, string> = {
+	context: "fresh/fork overrides every child; profile requires the agent's declared defaultContext. Omitted: defaultSubagentContext wins; implicit fork needs persisted parent + leaf, else fresh.",
+	thinking: "watchdog.configure only; true invalid. Dispatch ignores this; use model suffix.",
+	timeoutMs: "Foreground and single async runs default to config timeoutMs, else 30m; async composites have no parent deadline.",
+};
+
+function shallowCloneSchema<T>(value: T): T {
+	if (!value || typeof value !== "object") return value;
+	const clone = Object.create(Object.getPrototypeOf(value));
+	for (const key of Reflect.ownKeys(value)) {
+		const descriptor = Object.getOwnPropertyDescriptor(value, key);
+		if (descriptor) Object.defineProperty(clone, key, descriptor);
+	}
+	return clone as T;
+}
+
+function toCompactSubagentParamsSchema<T extends { properties?: Record<string, unknown> }>(full: T): T {
+	const root = shallowCloneSchema(full);
+	const properties: Record<string, unknown> = { ...(full.properties ?? {}) };
+	for (const name of Object.keys(properties)) {
+		const prop = properties[name];
+		if (!prop || typeof prop !== "object") continue;
+		const next = shallowCloneSchema(prop as Record<string, unknown>);
+		if ((COMPACT_TOP_LEVEL_DESCRIPTION_KEYS as readonly string[]).includes(name)) {
+		(next as Record<string, unknown>).description =
+			COMPACT_TOP_LEVEL_DESCRIPTION_OVERRIDES[name] ?? (next as Record<string, unknown>).description;
+		} else {
+		delete (next as Record<string, unknown>).description;
+	}
+		properties[name] = next;
+	}
+	(root as { properties?: unknown }).properties = properties;
+	return root;
+}
+
+export const CompactSubagentParams = toCompactSubagentParamsSchema(SubagentParams);
+
+export function createSubagentParamsSchema(profile: SubagentParamsProfile = "full"): typeof SubagentParams {
+	return profile === "compact" ? CompactSubagentParams : SubagentParams;
 }
 
 const SubagentWaitParamsSchema = Type.Object({

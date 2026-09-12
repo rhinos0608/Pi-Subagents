@@ -122,7 +122,6 @@ interface SubagentParamsSchema {
 			};
 		};
 		skill?: JsonSchemaNode;
-		output?: JsonSchemaNode;
 		config?: JsonSchemaNode;
 		chain?: {
 			items?: JsonSchemaNode & {
@@ -273,10 +272,6 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 		assert.match(String(properties?.task?.description ?? ""), /one-child/i);
 		assert.match(String((properties?.agent as JsonSchemaNode | undefined)?.description ?? ""), /one-child/i);
 		assert.equal(properties?.clarify, undefined, "clarify should not be model-facing");
-		assert.ok(properties?.output, "output remains a workflow child default");
-		assert.match(String(properties?.output?.description ?? ""), /relative workflow paths use managed artifact routing/i);
-		assert.match(String(properties?.output?.description ?? ""), /Bind durable output here, not task prose/i);
-		assert.match(String(properties?.output?.description ?? ""), /outputReference.*outputPathMapping.*artifactPaths/i);
 	});
 
 	it("omits removed legacy and workflow-child-only fields", () => {
@@ -576,12 +571,6 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 		assert.equal(hasAnyOfType(skillSchema, "boolean"), true);
 		assert.equal(hasAnyOfType(skillSchema, "string"), true);
 
-		const outputSchema = SubagentParams?.properties?.output;
-		assert.ok(outputSchema, "output schema should exist");
-		assert.equal(outputSchema.type, undefined);
-		assert.equal(hasAnyOfType(outputSchema, "string"), true);
-		assert.equal(hasAnyOfType(outputSchema, "boolean"), true);
-
 		const configSchema = SubagentParams?.properties?.config;
 		assert.ok(configSchema, "config schema should exist");
 		assert.equal(configSchema.type, undefined);
@@ -646,7 +635,6 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 		const invalidValues = [
 			{ skill: 123 },
 			{ skill: [123] },
-			{ output: 123 },
 			{ timeoutMs: 0 },
 			{ maxRuntimeMs: -1 },
 			{ config: [] },
@@ -668,6 +656,88 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 		}
 		for (const value of invalidValues) {
 			assert.equal(validator.Check(value), false, `${JSON.stringify(value)} should not validate`);
+		}
+	});
+});
+
+describe("CompactSubagentParams schema profile", { skip: !schemasAvailable ? "typebox not available" : undefined }, () => {
+	function withoutDescriptions(value: unknown): unknown {
+		if (Array.isArray(value)) return value.map(withoutDescriptions);
+		if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).filter(([key]) => key !== "description").map(([key, child]) => [key, withoutDescriptions(child)]));
+		return value;
+	}
+
+	it("stays description-stripped deep equal to the full schema", () => {
+		const compact = schemas.CompactSubagentParams as JsonSchemaNode | undefined;
+		assert.ok(compact, "CompactSubagentParams schema should exist");
+		assert.deepEqual(withoutDescriptions(compact), withoutDescriptions(SubagentParams));
+		assert.deepEqual(Object.keys(compact.properties as Record<string, unknown>), Object.keys(SubagentParams?.properties ?? {}));
+	});
+
+	it("keeps the compact payload at or under the 8,600-char ceiling", () => {
+		const compact = schemas.CompactSubagentParams as JsonSchemaNode | undefined;
+		assert.ok(compact, "CompactSubagentParams schema should exist");
+		const serialized = JSON.stringify(compact);
+		assert.ok(serialized.length <= 8_600, `expected compact schema at or under 8600 chars, got ${serialized.length}`);
+	});
+
+	it("keeps load-bearing annotations for validation and disambiguation", () => {
+		const properties = (schemas.CompactSubagentParams as SubagentParamsSchema | undefined)?.properties as Record<string, JsonSchemaNode> | undefined;
+		assert.ok(properties, "compact properties should exist");
+		assert.match(String(properties.action?.description ?? ""), /Management\/control only/);
+		assert.match(String(properties.acceptance?.description ?? ""), /Evidence policy/);
+		assert.match(String(properties.context?.description ?? ""), /fresh\/fork/);
+		assert.match(String(properties.additional?.description ?? ""), /grant-spawn-budget/);
+		assert.match(String(properties.gate?.description ?? ""), /cannot be combined with acceptance/i);
+		assert.match(String(properties.workflowScript?.description ?? ""), /no runs\.host/);
+		assert.equal(properties.agent?.description, undefined);
+		assert.equal(properties.task?.description, undefined);
+		assert.equal(properties.id?.description, undefined);
+	});
+
+	it("selects the full schema by default and the compact schema on request", () => {
+		const create = schemas.createSubagentParamsSchema as ((profile?: string) => unknown) | undefined;
+		assert.ok(create, "createSubagentParamsSchema should exist");
+		assert.equal(create(), SubagentParams);
+		assert.equal(create("full"), SubagentParams);
+		assert.equal(create("compact"), schemas.CompactSubagentParams);
+	});
+
+	it("validates representative fixtures identically under both profiles", { skip: !CompileSchema ? "typebox compiler not available" : undefined }, () => {
+		assert.ok(SubagentParams, "SubagentParams schema should exist");
+		assert.ok(CompileSchema, "TypeBox compiler should exist");
+		const compact = schemas.CompactSubagentParams as JsonSchemaNode | undefined;
+		assert.ok(compact, "CompactSubagentParams schema should exist");
+		const fullValidator = CompileSchema(SubagentParams);
+		const compactValidator = CompileSchema(compact);
+		const validValues = [
+			{},
+			{ agent: "worker", task: "Fix" },
+			{ agent: "worker", task: "Fix", acceptance: "auto" },
+			{ agent: "worker", task: "Fix", acceptance: false },
+			{ agent: "worker", task: "Fix", acceptance: '{"level":"checked"}' },
+			{ skill: "review" },
+			{ skill: false },
+			{ action: "list", capabilities: true },
+			{ agent: "worker", task: "Fix", toolBudget: { hard: 3 } },
+			{ agent: "worker", task: "Fix", timeoutMs: 1000 },
+			{ config: { name: "reviewer" } },
+		];
+		const invalidValues = [
+			{ skill: 123 },
+			{ timeoutMs: 0 },
+			{ agent: "worker", task: "Fix", acceptance: "cheked" },
+			{ agent: "worker", task: "Fix", toolBudget: { hard: 0 } },
+			{ agent: "worker", task: "Fix", toolBudget: { hard: 3, block: [] } },
+			{ config: null },
+		];
+		for (const value of validValues) {
+			assert.equal(fullValidator.Check(value), true, `${JSON.stringify(value)} should validate`);
+			assert.equal(compactValidator.Check(value), true, `${JSON.stringify(value)} should validate under the compact profile`);
+		}
+		for (const value of invalidValues) {
+			assert.equal(fullValidator.Check(value), false, `${JSON.stringify(value)} should not validate`);
+			assert.equal(compactValidator.Check(value), false, `${JSON.stringify(value)} should not validate under the compact profile`);
 		}
 	});
 });

@@ -757,7 +757,10 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	});
 
 
-	const parameters = createSubagentParamsSchema();
+	// Schema profile follows the description mode: default/compact gets the compact
+	// schema; full/custom/invalid gets the full schema (matching the description
+	// fallback, and custom prose may reference full contracts).
+	const parameters = createSubagentParamsSchema(config.toolDescriptionMode === "compact" || config.toolDescriptionMode === undefined ? "compact" : "full");
 	const tool: ToolDefinition<typeof parameters, Details> = {
 		name: "subagent",
 		label: "Subagent",

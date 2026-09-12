@@ -48,7 +48,8 @@ describe("advertised agent prompt", () => {
 		assert.ok(prompt);
 		assert.match(prompt, /&lt;route&gt;&amp;/);
 		assert.doesNotMatch(prompt, /<route>/);
-		assert.match(prompt, /…<\/description>/);
+		assert.match(prompt, /&lt;route&gt;&amp;x{149}…<\/description>/);
+		assert.ok(Buffer.byteLength(prompt) <= 4_096);
 		assert.match(prompt, /<omitted count="2" \/>/);
 	});
 
@@ -71,11 +72,12 @@ describe("advertised agent prompt", () => {
 
 	it("admits an exact-budget canonical name and omits it one byte over", () => {
 		const emptyName = buildAdvertisedAgentPrompt([agent("", { advertise: true, description: "small" })])!;
-		const name = "x".repeat(12_288 - Buffer.byteLength(emptyName));
+		const name = "x".repeat(4_096 - Buffer.byteLength(emptyName));
 		const exact = buildAdvertisedAgentPrompt([agent(name, { advertise: true, description: "small" })])!;
-		assert.equal(Buffer.byteLength(exact), 12_288);
+		assert.equal(Buffer.byteLength(exact), 4_096);
 		assert.ok(exact.includes(`<name>${name}</name>`));
 		const over = buildAdvertisedAgentPrompt([agent(`${name}x`, { advertise: true, description: "small" })])!;
+		assert.ok(Buffer.byteLength(over) < 4_096);
 		assert.doesNotMatch(over, /<name>/);
 		assert.match(over, /<omitted count="1"/);
 	});
