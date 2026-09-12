@@ -88,7 +88,11 @@ test("owned process tree does not claim observed while a detached descendant rem
 	} finally {
 		for (const pid of [grandchildPid, writer.pid]) {
 			try { process.kill(-pid, "SIGKILL"); } catch (error) {
-				if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+				// The terminated writer may still be an unreaped zombie (state Z,
+				// already treated as inactive above); group-kill then throws EPERM,
+				// not ESRCH, on POSIX. Either code means nothing left to kill.
+				const code = (error as NodeJS.ErrnoException).code;
+				if (code !== "ESRCH" && code !== "EPERM") throw error;
 			}
 		}
 	}
