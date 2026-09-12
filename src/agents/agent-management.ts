@@ -264,8 +264,6 @@ export function editableAgentConfig(agent: AgentConfig): AgentConfig {
 	const {
 		override: _override,
 		description: _description,
-		output: _output,
-		outputMode: _outputMode,
 		defaultReads: _defaultReads,
 		model: _model,
 		fallbackModels: _fallbackModels,
@@ -301,8 +299,6 @@ export function editableAgentConfig(agent: AgentConfig): AgentConfig {
 	return withDeclaredExtensionPaths({
 		...editable,
 		description,
-		...(base.output !== undefined ? { output: base.output } : {}),
-		...(base.outputMode !== undefined ? { outputMode: base.outputMode } : {}),
 		...(base.defaultReads !== undefined ? { defaultReads: [...base.defaultReads] } : {}),
 		...(base.model !== undefined && hasDeclaredField("model") ? { model: base.model } : {}),
 		...(base.fallbackModels !== undefined ? { fallbackModels: [...base.fallbackModels] } : {}),
@@ -386,8 +382,6 @@ export function preservedAgentFrontmatterFields(agent: AgentConfig, cfg: Record<
 	if (hasKey(cfg, "timeoutMs")) changed("timeoutMs");
 	if (hasKey(cfg, "acceptance")) changed("acceptance");
 	if (hasKey(cfg, "acceptanceRole")) changed("acceptanceRole");
-	if (hasKey(cfg, "output")) changed("output");
-	if (hasKey(cfg, "outputMode")) changed("outputMode");
 	if (hasKey(cfg, "reads")) changed("defaultReads");
 	if (hasKey(cfg, "progress")) changed("defaultProgress");
 	if (hasKey(cfg, "maxSubagentDepth")) changed("maxSubagentDepth");
@@ -593,15 +587,7 @@ function applyAgentConfig(target: AgentConfig, cfg: Record<string, unknown>): st
 		else if (cfg.acceptanceRole === "read-only" || cfg.acceptanceRole === "writer") target.acceptanceRole = cfg.acceptanceRole;
 		else return "config.acceptanceRole must be 'read-only', 'writer', or false when provided.";
 	}
-	if (hasKey(cfg, "output")) {
-		if (cfg.output === false || cfg.output === "") delete target.output;
-		else if (typeof cfg.output === "string") target.output = cfg.output;
-		else return "config.output must be a string or false when provided.";
-	}
-	if (hasKey(cfg, "outputMode")) {
-		if (cfg.outputMode === "inline" || cfg.outputMode === "file-only") target.outputMode = cfg.outputMode;
-		else return "config.outputMode must be 'inline' or 'file-only' when provided.";
-	}
+	if (hasKey(cfg, "output") || hasKey(cfg, "outputMode")) return "Unsupported config field: output/outputMode; output routing is tooling-managed.";
 	if (hasKey(cfg, "reads")) {
 		if (cfg.reads === false || cfg.reads === "") delete target.defaultReads;
 		else if (typeof cfg.reads === "string") {
@@ -825,7 +811,6 @@ function agentCapabilityRow(agent: AgentConfig, options: { executable: boolean; 
 		tools: agentCapabilityTools(agent),
 		model: presentDetails({ value: agent.model, fallbackModels: agent.fallbackModels, thinking: agent.thinking }),
 		execution: presentDetails({ defaultAsync: agent.defaultAsync, timeoutMs: agent.defaultTimeoutMs }),
-		output: presentDetails({ path: agent.output, mode: agent.outputMode }),
 		extensions: presentDetails({ names: agent.extensions, subagentOnly: agent.subagentOnlyExtensions, skills: agent.skills }),
 	};
 }
@@ -950,8 +935,6 @@ function formatAgentDetail(agent: AgentConfig): string {
 	if (agent.subagentOnlyExtensions !== undefined) lines.push(`Subagent-only extensions: ${agent.subagentOnlyExtensions.length ? agent.subagentOnlyExtensions.join(", ") : "(none)"}`);
 	if (agent.mutationTools !== undefined) lines.push(`Mutation tools: ${agent.mutationTools.length ? agent.mutationTools.join(", ") : "(none)"}`);
 	if (agent.thinking) lines.push(`Thinking: ${agent.thinking}`);
-	if (agent.output) lines.push(`Output: ${agent.output}`);
-	if (agent.outputMode) lines.push(`Output mode: ${agent.outputMode}`);
 	if (agent.defaultReads?.length) lines.push(`Reads: ${agent.defaultReads.join(", ")}`);
 	if (agent.defaultProgress) lines.push("Progress: true");
 	if (agent.maxSubagentDepth !== undefined) lines.push(`Max subagent depth: ${agent.maxSubagentDepth}`);

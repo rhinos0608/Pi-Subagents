@@ -54,8 +54,6 @@ export function defaultInheritSkills(): boolean {
 export interface BuiltinAgentOverrideBase {
 	description?: string;
 	machine?: string;
-	output?: string;
-	outputMode?: OutputMode;
 	defaultReads?: string[];
 	model?: string;
 	modelProvider?: string;
@@ -86,8 +84,6 @@ export interface BuiltinAgentOverrideBase {
 interface BuiltinAgentOverrideConfig {
 	description?: string;
 	machine?: string | false;
-	output?: string | false;
-	outputMode?: OutputMode;
 	defaultReads?: string[] | false;
 	model?: string | false;
 	defaultProvider?: string | false;
@@ -169,9 +165,10 @@ export interface AgentConfig {
 	extensionsFromDefault?: boolean;
 	subagentOnlyExtensions?: string[];
 	mutationTools?: string[];
+	outputSchema?: JsonSchemaObject;
+	/** Internal output routing only; public agent config omits these fields. */
 	output?: string;
 	outputMode?: OutputMode;
-	outputSchema?: JsonSchemaObject;
 	defaultReads?: string[];
 	defaultProgress?: boolean;
 	interactive?: boolean;
@@ -222,6 +219,7 @@ export interface ChainStepConfig {
 	as?: string;
 	outputSchema?: string | Record<string, unknown>;
 	machine?: string;
+	/** Internal chain routing; public schemas omit these fields. */
 	output?: string | false;
 	outputMode?: OutputMode;
 	reads?: string[] | false;
@@ -763,8 +761,6 @@ function cloneOverrideBase(agent: AgentConfig): BuiltinAgentOverrideBase {
 	return {
 		description: agent.description,
 		...(agent.machine !== undefined ? { machine: agent.machine } : {}),
-		...(agent.output !== undefined ? { output: agent.output } : {}),
-		...(agent.outputMode !== undefined ? { outputMode: agent.outputMode } : {}),
 		...(agent.defaultReads !== undefined ? { defaultReads: [...agent.defaultReads] } : {}),
 		...(agent.model !== undefined ? { model: agent.model } : {}),
 		...(agent.modelProvider !== undefined ? { modelProvider: agent.modelProvider } : {}),
@@ -797,8 +793,6 @@ function cloneOverrideValue(override: BuiltinAgentOverrideConfig): BuiltinAgentO
 	return {
 		...(override.description !== undefined ? { description: override.description } : {}),
 		...(override.machine !== undefined ? { machine: override.machine } : {}),
-		...(override.output !== undefined ? { output: override.output } : {}),
-		...(override.outputMode !== undefined ? { outputMode: override.outputMode } : {}),
 		...(override.defaultReads !== undefined ? { defaultReads: override.defaultReads === false ? false : [...override.defaultReads] } : {}),
 		...(override.model !== undefined ? { model: override.model } : {}),
 		...(override.defaultProvider !== undefined ? { defaultProvider: override.defaultProvider } : {}),
@@ -992,19 +986,6 @@ function parseBuiltinOverrideEntry(
 			override.description = input.description.trim();
 		} else {
 			throw new Error(`Builtin override '${name}' in '${filePath}' has invalid 'description'; expected a non-empty string.`);
-		}
-	}
-
-	if ("output" in input) {
-		if ((typeof input.output === "string" && input.output.trim()) || input.output === false) override.output = input.output;
-		else throw new Error(`Builtin override '${name}' in '${filePath}' has invalid 'output'; expected a non-empty string or false.`);
-	}
-
-	if ("outputMode" in input) {
-		if (input.outputMode === "inline" || input.outputMode === "file-only") {
-			override.outputMode = input.outputMode;
-		} else {
-			throw new Error(`Builtin override '${name}' in '${filePath}' has invalid 'outputMode'; expected 'inline' or 'file-only'.`);
 		}
 	}
 
@@ -1418,8 +1399,6 @@ function applyBuiltinOverride(
 
 	if (override.description !== undefined) next.description = override.description;
 	if (override.machine !== undefined) { if (override.machine === false) delete next.machine; else next.machine = override.machine; }
-	if (override.output !== undefined) { if (override.output === false) delete next.output; else next.output = override.output; }
-	if (override.outputMode !== undefined) next.outputMode = override.outputMode;
 	if (override.defaultReads !== undefined) { if (override.defaultReads === false) delete next.defaultReads; else next.defaultReads = [...override.defaultReads]; }
 	if (override.model !== undefined) {
 		if (override.model === false) delete next.model; else next.model = override.model;
@@ -1550,7 +1529,7 @@ function applyCustomAgentOverrides(
 
 export function buildBuiltinOverrideConfig(
 	base: BuiltinAgentOverrideBase,
-	draft: Pick<AgentConfig, "model" | "modelProvider" | "fallbackModels" | "fast" | "thinking" | "systemPromptMode" | "inheritProjectContext" | "inheritGlobalContext" | "inheritSkills" | "defaultContext" | "acceptanceRole" | "disabled" | "systemPrompt" | "skills" | "tools" | "allowNestedSubagents" | "mcpDirectTools" | "extensions" | "subagentOnlyExtensions" | "mutationTools" | "completionGuard" | "toolBudget"> & Partial<Pick<AgentConfig, "description" | "machine" | "output" | "outputMode" | "defaultReads" | "excludeTools">>,
+	draft: Pick<AgentConfig, "model" | "modelProvider" | "fallbackModels" | "fast" | "thinking" | "systemPromptMode" | "inheritProjectContext" | "inheritGlobalContext" | "inheritSkills" | "defaultContext" | "acceptanceRole" | "disabled" | "systemPrompt" | "skills" | "tools" | "allowNestedSubagents" | "mcpDirectTools" | "extensions" | "subagentOnlyExtensions" | "mutationTools" | "completionGuard" | "toolBudget"> & Partial<Pick<AgentConfig, "description" | "machine" | "defaultReads" | "excludeTools">>,
 ): BuiltinAgentOverrideConfig | undefined {
 	const override: BuiltinAgentOverrideConfig = {};
 	if (draft.machine !== base.machine) override.machine = draft.machine ?? false;
@@ -1559,8 +1538,6 @@ export function buildBuiltinOverrideConfig(
 		const description = draft.description.trim();
 		if (description && description !== base.description) override.description = description;
 	}
-	if (draft.output !== base.output) override.output = draft.output ?? false;
-	if (draft.outputMode !== undefined && draft.outputMode !== base.outputMode) override.outputMode = draft.outputMode;
 	if (!arraysEqual(draft.defaultReads, base.defaultReads)) override.defaultReads = draft.defaultReads ? [...draft.defaultReads] : false;
 	if (draft.model !== base.model) override.model = draft.model ?? false;
 	if (draft.modelProvider !== base.modelProvider) override.defaultProvider = draft.modelProvider ?? false;
@@ -2092,11 +2069,6 @@ function loadAgentsFromDefinitionFiles(files: AgentDefinitionFile[], source: Age
 			defaultToolTimeoutMs = parsed;
 		}
 		const defaultAcceptance = parseAgentAcceptanceFrontmatter(frontmatter.acceptance, localName);
-		let outputMode: OutputMode | undefined;
-		if (frontmatter.outputMode !== undefined) {
-			if (frontmatter.outputMode === "inline" || frontmatter.outputMode === "file-only") outputMode = frontmatter.outputMode;
-			else throw new Error(`Agent '${localName}' has invalid outputMode frontmatter; expected 'inline' or 'file-only'.`);
-		}
 		let acceptanceRole: AcceptanceRole | undefined;
 		if (frontmatter.acceptanceRole !== undefined && frontmatter.acceptanceRole.trim()) {
 			if (frontmatter.acceptanceRole === "read-only" || frontmatter.acceptanceRole === "writer") acceptanceRole = frontmatter.acceptanceRole;
@@ -2196,8 +2168,6 @@ function loadAgentsFromDefinitionFiles(files: AgentDefinitionFile[], source: Age
 			...(subagentOnlyExtensions !== undefined ? { subagentOnlyExtensions } : {}),
 			...(mutationTools?.length ? { mutationTools } : {}),
 			...(machine !== undefined ? { machine } : {}),
-			...(frontmatter.output !== undefined ? { output: frontmatter.output } : {}),
-			...(outputMode !== undefined ? { outputMode } : {}),
 			...(outputSchema !== undefined ? { outputSchema } : {}),
 			...(defaultReads?.length ? { defaultReads } : {}),
 			defaultProgress: frontmatter.defaultProgress === "true",

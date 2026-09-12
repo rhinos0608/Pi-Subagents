@@ -4,8 +4,8 @@ import { isAgentAllowedByCapabilityCeiling } from "../runs/shared/capability-cei
 import type { AgentConfig } from "./agents.ts";
 
 const MAX_ADVERTISED_AGENTS = 16;
-const MAX_CATALOG_BYTES = 12_288;
-const MAX_DESCRIPTION_BYTES = 512;
+const MAX_CATALOG_BYTES = 4_096;
+const MAX_DESCRIPTION_BYTES = 160;
 const ADVERTISED_AGENTS_BLOCK = /\n*<advertised_subagents>\n[\s\S]*?\n<\/advertised_subagents>/gu;
 
 function escapeXml(value: string): string {

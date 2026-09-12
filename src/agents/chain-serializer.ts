@@ -26,11 +26,6 @@ function parseStepBody(agent: string, sectionBody: string): ChainStepConfig {
 			if (rawValue) step.machine = rawValue;
 			continue;
 		}
-		if (key === "output") {
-			if (rawValue === "false") step.output = false;
-			else if (rawValue) step.output = rawValue;
-			continue;
-		}
 		if (key === "phase") {
 			if (rawValue) step.phase = rawValue;
 			continue;
@@ -48,10 +43,6 @@ function parseStepBody(agent: string, sectionBody: string): ChainStepConfig {
 				throw new Error("Inline outputSchema values are not supported in .chain.md files; use a schema file path.");
 			}
 			if (rawValue) step.outputSchema = rawValue;
-			continue;
-		}
-		if (key === "outputmode") {
-			if (rawValue === "inline" || rawValue === "file-only") step.outputMode = rawValue;
 			continue;
 		}
 		if (key === "reads") {
@@ -262,13 +253,10 @@ export function serializeChain(config: ChainConfig): string {
 		const step = config.steps[i]!;
 		lines.push(`## ${step.agent}`);
 		if (step.machine) lines.push(`machine: ${step.machine}`);
-		if (step.output === false) lines.push("output: false");
-		else if (step.output) lines.push(`output: ${step.output}`);
 		if (step.phase) lines.push(`phase: ${step.phase}`);
 		if (step.label) lines.push(`label: ${step.label}`);
 		if (step.as) lines.push(`as: ${step.as}`);
 		if (step.outputSchema) lines.push(`outputSchema: ${step.outputSchema}`);
-		if (step.outputMode) lines.push(`outputMode: ${step.outputMode}`);
 		if (step.reads === false) lines.push("reads: false");
 		else if (Array.isArray(step.reads) && step.reads.length > 0) lines.push(`reads: ${step.reads.join(", ")}`);
 		if (step.model) lines.push(`model: ${step.model}`);

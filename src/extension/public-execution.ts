@@ -33,7 +33,6 @@ export interface PublicSubagentExecutionParams {
 	baseRef?: unknown;
 	lane?: unknown;
 	async?: unknown;
-	output?: unknown;
 	resume?: unknown;
 	clarify?: unknown;
 	workflowParentRunId?: unknown;
@@ -67,6 +66,7 @@ export function validateWorkflowCapacityOverrides(params: PublicSubagentExecutio
  * Internal runs.run children and structured owned delegation bypass this boundary.
  */
 export function normalizePublicSubagentExecution<T extends PublicSubagentExecutionParams>(params: T): PublicSubagentExecutionNormalization<T> {
+	if (Object.hasOwn(params as object, "output") || Object.hasOwn(params as object, "outputMode")) return { ok: false, error: "Public execution does not accept output routing controls; output routing is tooling-managed.", mode: params.action === undefined ? "workflow" : "management" };
 	for (const field of ["resource", "resourceProvenance", "workflowResource", "workflowResourceProvenance", "workflowResourcePermit", "resourcePermit", "permit"] as const) {
 		if (Object.hasOwn(params, field) && (params as Record<string, unknown>)[field] !== undefined) {
 			return { ok: false, error: "Public execution does not accept workflow resource provenance or permit fields.", mode: params.action === undefined ? "workflow" : "management" };
@@ -214,7 +214,6 @@ export function normalizePublicSubagentExecution<T extends PublicSubagentExecuti
 			params: {
 				...params,
 				agent: params.agent.trim(),
-				output: params.output === undefined ? true : params.output,
 			} as T,
 		};
 	}

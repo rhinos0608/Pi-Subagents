@@ -62,7 +62,6 @@ export function projectAgentDefinition(agent: AgentConfig): Record<string, unkno
 		mutationTools: agent.mutationTools,
 		skills: agent.skills,
 		skillPath: agent.skillPath,
-		output: agent.output,
 		outputSchema: agent.outputSchema,
 		defaultReads: agent.defaultReads,
 		defaultProgress: agent.defaultProgress,

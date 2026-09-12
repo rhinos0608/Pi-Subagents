@@ -16,14 +16,12 @@ describe("public subagent execution normalization", () => {
 				task,
 				context: "fresh",
 				async: false,
-				output: true,
 			},
 		});
 		assert.deepEqual(normalizePublicSubagentExecution({ agent: "worker" }), {
 			ok: true,
 			params: {
 				agent: "worker",
-				output: true,
 			},
 		});
 		assert.deepEqual(normalizePublicSubagentExecution({ agent: "worker", async: true, baseRef: "@/foo" }), {
@@ -32,14 +30,6 @@ describe("public subagent execution normalization", () => {
 				agent: "worker",
 				async: true,
 				baseRef: "@/foo",
-				output: true,
-			},
-		});
-		assert.deepEqual(normalizePublicSubagentExecution({ agent: "worker", output: false }), {
-			ok: true,
-			params: {
-				agent: "worker",
-				output: false,
 			},
 		});
 		assert.deepEqual(normalizePublicSubagentExecution({ agent: "worker", isolation: "none" }), {
@@ -47,7 +37,6 @@ describe("public subagent execution normalization", () => {
 			params: {
 				agent: "worker",
 				worktree: false,
-				output: true,
 			},
 		});
 		assert.deepEqual(normalizePublicSubagentExecution({ action: " list " }), { ok: true, params: { action: "list" } });

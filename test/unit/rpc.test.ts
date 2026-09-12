@@ -647,7 +647,6 @@ describe("subagent extension RPC bridge", () => {
 		assert.equal(executedParams.agent, "worker");
 		assert.equal(executedParams.task, "Do work");
 		assert.equal(executedParams.async, true);
-		assert.equal(executedParams.output, true);
 		assert.equal(executedParams.workflowScript, undefined);
 		bridge.dispose();
 	});

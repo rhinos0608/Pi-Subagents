@@ -343,11 +343,10 @@ export function resolveParallelBehaviors(
 		// Build subdirectory path for this parallel task
 		const subdir = path.join(`parallel-${stepIndex}`, `${taskIndex}-${task.agent}`);
 
-		// Output: task override > agent default (namespaced) > false
+		// Output: task override, then false fallback.
 		// Absolute paths pass through unchanged; relative paths get namespaced under subdir
 		let output: string | false = false;
 		const taskOutput = normalizeOutputOverride(task.output);
-		const configOutput = normalizeOutputOverride(config.output);
 		if (taskOutput !== undefined) {
 			if (taskOutput === false) {
 				output = false;
@@ -356,9 +355,6 @@ export function resolveParallelBehaviors(
 			} else {
 				output = path.join(subdir, taskOutput); // Relative: namespace under subdir
 			}
-		} else if (configOutput) {
-			// Agent defaults are always relative, so namespace them
-			output = path.join(subdir, configOutput);
 		}
 
 		// Reads: task override > agent default > false
@@ -387,7 +383,7 @@ export function resolveParallelBehaviors(
 			}
 		}
 
-		const outputMode = task.outputMode ?? config.outputMode ?? "inline";
+		const outputMode = task.outputMode ?? "inline";
 		const model = task.model ?? config.model;
 		return { output, outputMode, reads, progress, skills, model };
 	});

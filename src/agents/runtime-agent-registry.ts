@@ -1,5 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import type { AcceptanceInput, AcceptanceRole, AgentRunnerConfig, OutputMode, ToolBudgetConfig } from "../shared/types.ts";
+import type { AcceptanceInput, AcceptanceRole, AgentRunnerConfig, ToolBudgetConfig } from "../shared/types.ts";
 import { CODE_OWNED_EXTERNAL_CLI_ADAPTER_LABEL, isCodeOwnedExternalCliAdapterId, parseExternalCliCapabilityNarrowing, validateCodeOwnedProfileRunner } from "../runs/shared/external-cli-contract.ts";
 import { validateAcceptanceInput } from "../runs/shared/acceptance.ts";
 import { validatePermissionRules, type PermissionRules } from "../runs/shared/permissions.ts";
@@ -43,8 +43,6 @@ export interface RuntimeAgentDefinition {
 	extensions?: readonly string[];
 	subagentOnlyExtensions?: readonly string[];
 	mutationTools?: readonly string[];
-	output?: string;
-	outputMode?: OutputMode;
 	defaultReads?: readonly string[];
 	defaultProgress?: boolean;
 	interactive?: boolean;
@@ -203,7 +201,7 @@ function validateDefinition(value: unknown): RuntimeAgentDefinition {
 		"description", "systemPrompt", "aliases", "tools", "excludeTools", "allowNestedSubagents", "mcpDirectTools", "model", "fallbackModels", "thinking",
 		"systemPromptMode", "inheritProjectContext", "inheritGlobalContext", "inheritSkills", "defaultContext", "defaultAsync", "defaultTimeoutMs",
 		"defaultToolTimeoutMs", "defaultAcceptance", "acceptanceRole", "runner", "machine", "skills", "skillPath",
-		"extensions", "subagentOnlyExtensions", "mutationTools", "output", "outputMode", "defaultReads", "defaultProgress", "interactive",
+		"extensions", "subagentOnlyExtensions", "mutationTools", "defaultReads", "defaultProgress", "interactive",
 		"maxSubagentDepth", "completionGuard", "toolBudget", "permissions",
 	]);
 	const unknown = Object.keys(definition).filter((key) => !supported.has(key));
@@ -216,8 +214,6 @@ function validateDefinition(value: unknown): RuntimeAgentDefinition {
 	if (thinking !== undefined && thinking !== false && typeof thinking !== "string") throw new Error("Runtime agent definition thinking must be a string or false when provided.");
 	const acceptanceRole = definition.acceptanceRole;
 	if (acceptanceRole !== undefined && acceptanceRole !== "read-only" && acceptanceRole !== "writer") throw new Error("Runtime agent definition acceptanceRole must be 'read-only' or 'writer'.");
-	const outputMode = definition.outputMode;
-	if (outputMode !== undefined && outputMode !== "inline" && outputMode !== "file-only") throw new Error("Runtime agent definition outputMode must be 'inline' or 'file-only'.");
 	const aliases = validateStringList(definition.aliases, "Runtime agent definition aliases");
 	const tools = validateStringList(definition.tools, "Runtime agent definition tools");
 	const excludeTools = validateStringList(definition.excludeTools, "Runtime agent definition excludeTools");
@@ -239,7 +235,6 @@ function validateDefinition(value: unknown): RuntimeAgentDefinition {
 	const subagentOnlyExtensions = validateStringList(definition.subagentOnlyExtensions, "Runtime agent definition subagentOnlyExtensions");
 	const mutationTools = validateStringList(definition.mutationTools, "Runtime agent definition mutationTools");
 	const machine = validateOptionalString(definition.machine, "Runtime agent definition machine");
-	const output = validateOptionalString(definition.output, "Runtime agent definition output");
 	const defaultReads = validateStringList(definition.defaultReads, "Runtime agent definition defaultReads");
 	const defaultProgress = validateBoolean(definition.defaultProgress, "Runtime agent definition defaultProgress");
 	const interactive = validateBoolean(definition.interactive, "Runtime agent definition interactive");
@@ -275,8 +270,6 @@ function validateDefinition(value: unknown): RuntimeAgentDefinition {
 		...(subagentOnlyExtensions ? { subagentOnlyExtensions } : {}),
 		...(mutationTools ? { mutationTools } : {}),
 		...(machine ? { machine } : {}),
-		...(output ? { output } : {}),
-		...(outputMode !== undefined ? { outputMode: outputMode as OutputMode } : {}),
 		...(defaultReads ? { defaultReads } : {}),
 		...(defaultProgress !== undefined ? { defaultProgress } : {}),
 		...(interactive !== undefined ? { interactive } : {}),
@@ -358,8 +351,6 @@ function toAgentConfig(name: string, definition: RuntimeAgentDefinition): AgentC
 		...(definition.subagentOnlyExtensions !== undefined ? { subagentOnlyExtensions: [...definition.subagentOnlyExtensions] } : {}),
 		...(definition.mutationTools !== undefined ? { mutationTools: [...definition.mutationTools] } : {}),
 		...(definition.machine !== undefined ? { machine: definition.machine } : {}),
-		...(definition.output !== undefined ? { output: definition.output } : {}),
-		...(definition.outputMode !== undefined ? { outputMode: definition.outputMode } : {}),
 		...(definition.defaultReads !== undefined ? { defaultReads: [...definition.defaultReads] } : {}),
 		...(definition.defaultProgress !== undefined ? { defaultProgress: definition.defaultProgress } : {}),
 		...(definition.interactive !== undefined ? { interactive: definition.interactive } : {}),

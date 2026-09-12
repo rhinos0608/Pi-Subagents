@@ -343,10 +343,9 @@ export async function resolveSubagentLaunchContract(input: SubagentLaunchContrac
 	if (restrictionMessage) return { ok: false, code: "restricted_agent", message: restrictionMessage, diagnostics };
 	const runId = input.runId ?? "preflight";
 	const skillInput = normalizeSkillInput(input.skill);
-	const outputOverride = normalizeSingleOutputOverride(input.output, agent.output);
+	const outputOverride = normalizeSingleOutputOverride(undefined, undefined);
 	const behavior = resolveStepBehavior(agent, {
 		...(outputOverride !== undefined ? { output: outputOverride } : {}),
-		...(input.outputMode !== undefined ? { outputMode: input.outputMode } : {}),
 		...(skillInput !== undefined ? { skills: skillInput } : {}),
 		...(input.model !== undefined ? { model: input.model } : {}),
 		...(input.outputSchema !== undefined ? { outputSchema: input.outputSchema } : {}),
