@@ -21,6 +21,8 @@
 
 ### Added
 
+- Register a compact parameter schema alongside the compact `subagent` tool description: same properties as the full schema with trimmed descriptions (8,460 chars serialized). Default and explicit `compact` modes use the compact description (1,120 chars, safety kernel included) with the compact schema for a 9,580-char combined payload; `full` keeps full detail on both. The advertised file-defined subagent catalog is capped separately (16 agents, 4,096 bytes, 160-byte summaries). Configure via `toolDescriptionMode`.
+
 - Allow agents to declare an inline JSON Schema `outputSchema` default, with launch objects overriding it and explicit `false` opting out. Thanks to [@peedrr](https://github.com/peedrr) for #2180.
 - Add a session-scoped public host API for required native-child extension module paths. Required extensions survive agent overrides and detached/nested launches, appear by safe host ID in launch evidence, and fail closed when denied or unable to load before model resolution. Thanks to [@gkoreli](https://github.com/gkoreli) for #2153.
 - Run Pi, Claude Code, Codex, and Cursor subagents on another computer by setting `machine` to a saved Herdr machine.

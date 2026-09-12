@@ -279,7 +279,7 @@ subagent({ action: "schedule.run-due" })
 subagent({ action: "schedule.delete", id: "backlog" })
 ```
 
-`schedule.create` accepts exactly one target, `workflowScript`, and exactly one trigger (`at`, or a fixed `every` interval using `m`, `h`, `d`, or `w`). Runs always launch async with fresh context and no automatic mission; mission attachment is deferred from this first slice. `overlap` is currently `skip`; `catchUp` supports `latest` and `none`. `schedule.run-due` is the headless external-launcher seam. Calendar recurrence, cron, and the schedule inspector are deferred from this first safe slice. Definitions, bounded history, append-only events, and per-run receipts remain project-scoped across Pi sessions.
+`schedule.create` accepts exactly one target, `workflowScript`, and exactly one trigger (`at`, or a fixed `every` interval using `m`, `h`, `d`, or `w`). `sessionOnly: true` binds schedule to current persisted session and rejects cross-project `cwd`; without persisted session it fails. `quiet: true` is recurring-only at creation; successful automatic fires stay visible without waking parent, while failures/stops/pauses still notify. One-shot schedules and manual `schedule.run` stay noisy unless that launch passes `quiet`. Runs always launch async with fresh context and no automatic mission; mission attachment is deferred from this first slice. `overlap` is currently `skip`; `catchUp` supports `latest` and `none`. Optional `baseRef` selects and persists safe Git ref for managed worktrees (default `HEAD`); source checkout must be clean. `schedule.run-due` is headless external-launcher seam. Calendar recurrence, cron, and schedule inspector are deferred. Definitions, bounded history, append-only events, and per-run receipts remain project-scoped across Pi sessions.
 
 Humans can use `/subagents-doctor` for the same read-only report. It checks runtime paths, discovery counts, async support, current session context, and intercom bridge state.
 
@@ -342,6 +342,18 @@ subagent({ action: "steer", id: "abc123", mode: "auto", message: "Switch to the 
 
 For async runs, `delivered` records that the child consumed the correlated user input; foreground `delivered` records in-process transport acceptance. Neither is proof of model compliance. A live foreground follow-up acknowledgment reports `queued`, meaning Pi accepted it into its follow-up queue, not that it was delivered. The foreground transport does not provide a later correlated queued-to-delivered receipt.
 
+## Output, acceptance, and workflow resources
+
+Single-agent and workflow launches support `outputSchema` (JSON Schema object) for structured output; the runtime validates structured output and exposes it as `structuredOutput`. `acceptance` configures evidence gates; `gate` is shorthand for one host verification command and cannot combine with another acceptance policy. Agent frontmatter may provide `acceptance`, `acceptanceRole`, and JSON `outputSchema` defaults; explicit launch values win.
+
+Workflow requests support `baseRef` (`HEAD` or supported named ref) for managed worktrees. Inline `workflowScript` and `workflowScriptPath` are raw inputs and cannot call `runs.host`. Named workflow resources use `workflow` plus bounded JSON `args`; the host-resolved resource may grant `runs.host` commands and records resource provenance. Workflow status/receipts expose host steps and named resource metadata.
+
+Foreground `async:false` children run in-process and do not load the parent's ambient extensions. MCP tools (`mcpDirectTools` or ambient adapters such as pi-mcp-adapter) and provider-extension models therefore require background children, which load extensions in the detached runner.
+
+## Worktree cleanup and lane evidence
+
+Management actions include plan-only `worktree.cleanup` and attested lane evidence actions `lane.status`, `lane.recordMerge`, and `lane.recordSupersession`. Cleanup accepts `repo`, optional `handoffPath`, and `mode: "plan"`; `apply`/removal and `planId` are rejected. Lane actions use exact `laneId` from the handoff manifest; merge evidence requires PR number, reviewed/merge SHAs, tree-equivalence and post-merge-check statuses, attestor, and timestamp. Supersession evidence requires a different replacement lane id, attestor, and timestamp.
+
 ## Watchdog
 
 The subagent watchdog is an **opt-in** adversarial change reviewer. It is not the
@@ -380,8 +392,7 @@ subagent({ action: "watchdog.check" })
 ```
 
 `session` scope is temporary. Persistent `user`/`project` scopes write settings only
-when the user asked. Use ordinary fresh-context `reviewer` fanout for planned review
-waves; enable the watchdog when you want an automatic second pass on real edits.
+when the user asked. Launch rules under `subagents.watchdog.rules.roleModels` allow or deny models per role before child start; `action: "block"` rejects denied launches, otherwise emits a warning. Watchdog read-only review includes `watchdog_diff`, which shows diff since session-start baseline and untracked paths, with optional relative `path` and `stat: true`. Use ordinary fresh-context `reviewer` fanout for planned review waves; enable watchdog when you want automatic second pass on real edits.
 
 ## Missions and cross-project routing
 

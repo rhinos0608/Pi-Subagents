@@ -83,7 +83,7 @@ that runner explicitly supports the option.
 
 ## Read the reference for the branch
 
-For exact API fields and worked examples, call `subagent({action:"guide",topic:"tool-reference"})` or `topic:"workflows"`. The compact tool definition is not the recipe catalog; use `topic:"missions"` for mission updates and schedules.
+For exact API fields and worked examples, call `subagent({action:"guide",topic:"tool-reference"})` or `topic:"workflows"`. The compact tool definition is not the recipe catalog; use `topic:"missions"` for mission updates and schedules. Default and explicit compact modes share the compact description and schema; `"full"` restores full detail (see `toolDescriptionMode` in docs/configuration.md).
 
 | Branch | Read |
 | --- | --- |
