@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { DEFAULT_FILE_SYSTEM_RETRY_DELAYS_MS, runFileSystemOperationWithRetry, waitForFileSystemRetry } from "./file-system-retry.ts";
 
-type AtomicJsonFs = Pick<typeof fs, "mkdirSync" | "writeFileSync" | "renameSync" | "rmSync">;
+type AtomicJsonFs = Pick<typeof fs, "mkdirSync" | "writeFileSync" | "renameSync" | "rmSync" | "lstatSync" | "openSync" | "writeSync" | "closeSync">;
 
 const MAX_PATH_COMPONENT_BYTES = 255;
 
@@ -53,19 +53,39 @@ export function createAtomicJsonWriter(options: AtomicJsonWriterOptions = {}): (
 	const directoryRetryDelaysMs = retryDirectoryErrors ? retryDelaysMs : [];
 	const wait = options.wait ?? waitForFileSystemRetry;
 	return (filePath: string, payload: object): void => {
+	const parentDir = path.dirname(filePath);
 		runFileSystemOperationWithRetry(() => {
-			fsImpl.mkdirSync(path.dirname(filePath), { recursive: true });
+			fsImpl.mkdirSync(parentDir, { recursive: true });
 		}, { retryDelaysMs: directoryRetryDelaysMs, wait });
+		// Fail closed when the parent directory itself is a symlink or was replaced.
+		// Ancestors above the parent stay caller-owned: trust roots (channel, route,
+		// temp roots) assert their own components, which keeps shared prefixes like
+		// a symlinked /tmp or /var usable.
+		const parentStat = fsImpl.lstatSync(parentDir);
+		if (!parentStat.isDirectory() || parentStat.isSymbolicLink()) throw new Error(`Atomic JSON parent directory is unsafe: ${parentDir}`);
 		const tempPath = path.join(
 			path.dirname(filePath),
 			tempBaseName(filePath, pid, now(), random().toString(36).slice(2)),
 		);
 		let writeError: unknown;
+		let descriptor: number | undefined;
 		try {
-			fsImpl.writeFileSync(tempPath, JSON.stringify(payload, null, 2), mode === undefined ? "utf-8" : { encoding: "utf-8", mode });
+			// O_NOFOLLOW|O_EXCL|O_CREAT: a planted symlink at the temp path fails
+			// instead of redirecting the write.
+			descriptor = fsImpl.openSync(tempPath, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW ?? 0), mode ?? 0o666);
+			const buffer = Buffer.from(JSON.stringify(payload, null, 2), "utf-8");
+			let offset = 0;
+			while (offset < buffer.length) {
+				const written: number = fsImpl.writeSync(descriptor, buffer, offset, buffer.length - offset);
+				if (!Number.isSafeInteger(written) || written <= 0) throw new Error(`Atomic JSON write made no progress: ${tempPath}`);
+				offset += written;
+			}
+			fsImpl.closeSync(descriptor);
+		descriptor = undefined;
 			renameWithRetry(fsImpl, tempPath, filePath, renameRetryDelaysMs, wait);
 		} catch (error) {
 			writeError = error;
+			if (descriptor !== undefined) { try { fsImpl.closeSync(descriptor); } catch {} descriptor = undefined; }
 			throw error;
 		} finally {
 			try {

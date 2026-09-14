@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { constants as fsConstants } from "node:fs";
 import * as path from "node:path";
 import { describe, it } from "node:test";
 import { createAtomicJsonWriter } from "../../src/shared/atomic-json.ts";
@@ -10,7 +11,11 @@ class FakeFs {
 	failMkdirCodes: string[] = [];
 	failRenameCodes: string[] = [];
 	writeOptions = new Map<string, unknown>();
+	openOptions = new Map<string, { flags: number; mode: number }>();
 	failCleanup = false;
+	symlinkDirs = new Set<string>();
+	nextFd = 100;
+	openFiles = new Map<number, string>();
 
 	mkdirSync(dirPath: string): void {
 		this.madeDirs.push(dirPath);
@@ -25,6 +30,38 @@ class FakeFs {
 	writeFileSync(filePath: string, contents: string, options?: unknown): void {
 		this.files.set(filePath, contents);
 		this.writeOptions.set(filePath, options);
+	}
+
+	lstatSync(dirPath: string): { isDirectory(): boolean; isSymbolicLink(): boolean } {
+		return { isDirectory: () => true, isSymbolicLink: () => this.symlinkDirs.has(dirPath) };
+	}
+
+	openSync(filePath: string, flags: number, mode: number): number {
+		this.openOptions.set(filePath, { flags, mode });
+		if (this.files.has(filePath)) {
+			const error = new Error(`open failed with EEXIST`) as NodeJS.ErrnoException;
+			error.code = "EEXIST";
+			throw error;
+		}
+		const fd = this.nextFd++;
+		this.openFiles.set(fd, filePath);
+		this.files.set(filePath, "");
+		return fd;
+	}
+
+	writeSync(fd: number, data: string | Buffer, offset?: number, length?: number): number {
+		const filePath = this.openFiles.get(fd);
+		if (filePath === undefined) throw new Error(`bad file descriptor: ${fd}`);
+		const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data, "utf-8");
+		const start = offset ?? 0;
+		const end = length === undefined ? buffer.length : start + length;
+		const chunk = buffer.subarray(start, end).toString("utf-8");
+		this.files.set(filePath, `${this.files.get(filePath) ?? ""}${chunk}`);
+		return end - start;
+	}
+
+	closeSync(fd: number): void {
+		this.openFiles.delete(fd);
 	}
 
 	renameSync(sourcePath: string, targetPath: string): void {
@@ -104,7 +141,7 @@ describe("writeAtomicJson", () => {
 
 		writeAtomicJson(targetPath, { sourceRunId: "run" });
 
-		assert.deepEqual([...fakeFs.writeOptions.values()], [{ encoding: "utf-8", mode: 0o600 }]);
+		assert.deepEqual([...fakeFs.openOptions.values()], [{ flags: fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | (fsConstants.O_NOFOLLOW ?? 0), mode: 0o600 }]);
 	});
 
 	it("keeps temporary names below the component limit for long target names", () => {
@@ -115,7 +152,7 @@ describe("writeAtomicJson", () => {
 
 		writeAtomicJson(targetPath, { state: "running" });
 
-		const [tempPath] = fakeFs.writeOptions.keys();
+		const [tempPath] = fakeFs.openOptions.keys();
 		assert.ok(tempPath);
 		assert.ok(Buffer.byteLength(path.basename(tempPath), "utf-8") <= 255);
 		assert.equal(fakeFs.files.get(targetPath), JSON.stringify({ state: "running" }, null, 2));
@@ -187,6 +224,14 @@ describe("writeAtomicJson", () => {
 		assert.equal(fakeFs.renameCalls, 4);
 		assert.deepEqual(waits, [1, 2, 3]);
 		assert.equal(fakeFs.files.has(targetPath), false);
+		assert.equal(fakeFs.files.size, 0);
+	});
+
+	it("refuses a symlinked parent directory instead of following it", () => {
+		const fakeFs = new FakeFs();
+		fakeFs.symlinkDirs.add(path.dirname(path.join("/tmp", "status.json")));
+		const writeAtomicJson = createWriter(fakeFs, []);
+		assert.throws(() => writeAtomicJson(path.join("/tmp", "status.json"), { state: "running" }), /unsafe/);
 		assert.equal(fakeFs.files.size, 0);
 	});
 });

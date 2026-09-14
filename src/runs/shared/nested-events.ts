@@ -86,6 +86,34 @@ function assertSafeId(label: string, value: string): void {
 	assertSafeNestedId(label, value);
 }
 
+function assertTrustedDir(dir: string, label: string): void {
+	let stat: fs.Stats;
+	try { stat = fs.lstatSync(dir); }
+	catch { throw new Error(`Nested ${label} is missing or unreadable.`); }
+	if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error(`Nested ${label} is unsafe.`);
+	if (typeof process.getuid === "function" && stat.uid !== process.getuid()) throw new Error(`Nested ${label} is not owned by the current user.`);
+	if ((stat.mode & 0o777) !== 0o700) throw new Error(`Nested ${label} is not a mode-0700 agent-private directory.`);
+}
+
+function assertRouteDirSafe(dir: string, label: string): void {
+	const resolved = path.resolve(dir);
+	if (!containedPath(NESTED_EVENTS_DIR, resolved)) throw new Error(`Nested ${label} is outside the subagent nested event root.`);
+	const root = path.resolve(NESTED_EVENTS_DIR);
+	assertTrustedDir(root, "event root");
+	let current = root;
+	for (const part of path.relative(root, resolved).split(path.sep).filter(Boolean)) {
+		if (part === "." || part === "..") throw new Error(`Nested ${label} is unsafe.`);
+		current = path.join(current, part);
+		assertTrustedDir(current, label);
+	}
+}
+
+function assertRouteDirsSafe(route: Pick<NestedRoute, "eventSink" | "controlInbox">): void {
+	assertRouteDirSafe(commonRouteRoot(route), "route root");
+	assertRouteDirSafe(path.resolve(route.eventSink), "event sink");
+	assertRouteDirSafe(path.resolve(route.controlInbox), "control inbox");
+}
+
 function containedPath(base: string, candidate: string): boolean {
 	const resolvedBase = path.resolve(base);
 	const resolvedCandidate = path.resolve(candidate);
@@ -128,13 +156,16 @@ export function createNestedRoute(rootRunId: string): NestedRoute {
 	fs.mkdirSync(routeIndexDir(rootRunId), { recursive: true, mode: 0o700 });
 	writeAtomicJson(routeIndexPath(rootRunId, capabilityToken), { rootRunId, capabilityToken, routeRoot: path.basename(routeRoot), createdAt });
 	writeAtomicJson(path.join(routeRoot, ROUTE_FILE), { rootRunId, capabilityToken, createdAt });
-	return { rootRunId, eventSink, controlInbox, capabilityToken };
+	const route = { rootRunId, eventSink, controlInbox, capabilityToken };
+	assertRouteDirsSafe(route);
+	return route;
 }
 
 /** Validate a route handed to an in-process child against its on-disk metadata. */
 export function resolveNestedRoute(route: NestedRoute): NestedRoute {
 	const { rootRunId, capabilityToken } = route;
 	validateRouteShape(route);
+	assertRouteDirsSafe(route);
 	const routeFile = path.join(commonRouteRoot(route), ROUTE_FILE);
 	const metadata = JSON.parse(fs.readFileSync(routeFile, "utf-8")) as { rootRunId?: unknown; capabilityToken?: unknown };
 	if (metadata.rootRunId !== rootRunId || metadata.capabilityToken !== capabilityToken) {
@@ -773,11 +804,29 @@ export function projectNestedEvents(route: NestedRoute): NestedRegistry {
 function writeRouteRecord(dir: string, ts: number, payload: object): string {
 	const content = `${JSON.stringify(payload)}\n`;
 	if (Buffer.byteLength(content, "utf-8") > MAX_EVENT_BYTES) throw new Error("Nested route record exceeds the maximum size.");
+	if (!containedPath(NESTED_EVENTS_DIR, path.resolve(dir))) throw new Error("Nested route record directory is outside the subagent nested event root.");
 	fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+	assertRouteDirSafe(path.resolve(dir), "route record directory");
 	const name = `${String(ts).padStart(13, "0")}-${randomUUID()}.json`;
 	const tmp = path.join(dir, `.${name}.tmp`);
 	const finalPath = path.join(dir, name);
-	fs.writeFileSync(tmp, content, { mode: 0o600 });
+	// O_NOFOLLOW|O_EXCL: a planted symlink at the temp path fails instead of redirecting the write.
+	let descriptor: number | undefined;
+	try {
+		descriptor = fs.openSync(tmp, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW ?? 0), 0o600);
+		const buffer = Buffer.from(content, "utf-8");
+		let offset = 0;
+		while (offset < buffer.length) {
+			const written = fs.writeSync(descriptor, buffer, offset, buffer.length - offset);
+			if (!Number.isSafeInteger(written) || written <= 0) throw new Error("Nested route record write made no progress.");
+			offset += written;
+		}
+		fs.closeSync(descriptor);
+		descriptor = undefined;
+	} catch (error) {
+		if (descriptor !== undefined) { try { fs.closeSync(descriptor); } catch {} }
+		throw error;
+	}
 	fs.renameSync(tmp, finalPath);
 	return finalPath;
 }
