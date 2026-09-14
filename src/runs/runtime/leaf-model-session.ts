@@ -3,11 +3,18 @@
  * `provider/id` lookup, no normalization, no thinking suffix, no fallback
  * helper calls, no parent history/tools/delegation inheritance.
  *
- * The installable host here is a test shim, so the real-host binding stays
- * fail-closed (`probeRealLeafHost()` returns null). Unit tests inject a fake
- * `LeafHost` to prove exact selection, payload-cap assertion, isolation spec,
- * and usage proof without network or credentials.
+ * The real-host binding (`probeRealLeafHost()`) resolves the installed
+ * `@earendil-works/pi-coding-agent` SDK, derives its version from the
+ * installed package manifest, and returns a working `LeafHost` only when
+ * that version is allowlisted. Shim, absent, or unverified installs stay
+ * fail-closed (null). Unit tests inject a fake `LeafHost` to prove exact
+ * selection, payload-cap assertion, isolation spec, and usage proof without
+ * network or credentials.
  */
+import { existsSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
 	RUNTIME_RPC_AUDITED_APIS,
 	RUNTIME_RPC_BOUNDS,
@@ -15,6 +22,8 @@ import {
 	VERIFIED_RUNTIME_HOST_VERSIONS,
 } from "../../api/runtime-rpc.ts";
 import type { ModelInfo } from "../../shared/model-info.ts";
+import { createNativeLeafHost, type NativeSdkModules } from "./leaf-host-native.ts";
+import { resolveFromParent } from "./resolve-from-parent.ts";
 
 export const LEAF_SYSTEM_PROMPT = "Execute the user task. Return plain text only. Use no tools.";
 
@@ -259,24 +268,235 @@ export async function executeLeafRun(host: LeafHost, input: LeafRunInput): Promi
 	return { output: result.text, outputTokens: result.outputTokens };
 }
 
+/** Package specifier of the real leaf host SDK. */
+export const NATIVE_HOST_SPECIFIER = "@earendil-works/pi-coding-agent";
+
+/** pi-ai registry entry points, preferred first. Resolved against the SDK install. */
+const NATIVE_HOST_PI_AI_SPECIFIERS = ["@earendil-works/pi-ai/compat", "@earendil-works/pi-ai"];
+
+export interface RealHostProbeOptions {
+	/** File path used as the module-resolution base. Defaults to this module
+	 * (the installed dependency tree). Tests point it at a real SDK install. */
+	resolutionBase?: string;
+	/** Module loader seam. Defaults to dynamic import. */
+	load?: (url: string) => Promise<unknown>;
+	/**
+	 * Specifier resolver seam. Defaults to manifest-aware resolution.
+	 * `require.resolve` rejects import-only exports maps on this Node
+	 * (`ERR_PACKAGE_PATH_NOT_EXPORTED`), so resolution goes through the
+	 * manifest exports map with dist fallbacks.
+	 */
+	resolve?: (specifier: string, base: string) => string | null;
+}
+
 /**
- * Real-host probe. Returns null under the test shim or any host lacking the
- * proven in-memory/agent-session surface — readiness stays disabled there.
+ * Resolve a package specifier to an entry file using manifests only.
+ * Prefers `createRequire.resolve` (handles nested/shimmed layouts), then
+ * falls back to a manifest walk: the exports map here is import-only
+ * (`ERR_PACKAGE_PATH_NOT_EXPORTED` under `require.resolve` on this Node),
+ * so ESM dynamic import needs the mapped dist file directly.
  */
-export async function probeRealLeafHost(): Promise<LeafHost | null> {
-	let codingAgent: Record<string, unknown>;
+function resolveFromBase(specifier: string, base: string): string | null {
 	try {
-		codingAgent = (await import("@earendil-works/pi-coding-agent")) as unknown as Record<string, unknown>;
+		return createRequire(base).resolve(specifier);
 	} catch {
-		return null;
+		return resolveEntryFromManifest(specifier, base);
 	}
-	if ((codingAgent as { __piSubagentsTestShim?: boolean }).__piSubagentsTestShim === true) return null;
-	const sessionManager = codingAgent.SessionManager as
-		| { inMemory?: (cwd?: string) => unknown }
-		| undefined;
-	if (typeof sessionManager?.inMemory !== "function" || typeof codingAgent.createAgentSession !== "function") {
-		return null;
+}
+
+function manifestEntry(pkgDir: string): string | null {
+	try {
+		const manifest = JSON.parse(readFileSync(join(pkgDir, "package.json"), "utf8")) as {
+			main?: unknown;
+			exports?: unknown;
+		};
+		const dot = (manifest.exports as Record<string, unknown> | undefined)?.["."];
+		const dotImport = typeof dot === "string" ? dot : (dot as { import?: unknown } | undefined)?.import;
+		for (const candidate of [dotImport, manifest.main, "./dist/index.js"]) {
+			if (typeof candidate !== "string" || candidate.length === 0) continue;
+			const entry = join(pkgDir, candidate);
+			if (existsSync(entry)) return entry;
+		}
+	} catch {
+		// Unreadable manifests never resolve; caller tries the next scope.
 	}
-	// No verified versions yet; native suite must prove each host/API first.
 	return null;
+}
+
+/**
+ * Manifest-only specifier resolution. Splits `pkg/subpath`, walks up from
+ * the base looking for the package dir (including nested `node_modules`
+ * scopes), then maps the subpath through the manifest exports map with a
+ * `dist/<subpath>.js` fallback. Handles import-only exports maps and bare
+ * package names (mapped through `.` -> `main` -> `dist/index.js`).
+ */
+function resolveEntryFromManifest(specifier: string, base: string): string | null {
+	const slash = specifier.indexOf("/");
+	const pkgName = specifier.startsWith("@") ? specifier.split("/").slice(0, 2).join("/") : specifier.slice(0, slash);
+	const subpath = specifier.slice(pkgName.length);
+	let dir = dirname(base);
+	for (let depth = 0; depth < 12; depth += 1) {
+		const scoped = join(dir, "node_modules", pkgName);
+		for (const pkgDir of [dir, scoped]) {
+			let manifest: { name?: unknown; exports?: Record<string, unknown> };
+			try {
+				if (!existsSync(join(pkgDir, "package.json"))) continue;
+				manifest = JSON.parse(readFileSync(join(pkgDir, "package.json"), "utf8"));
+			} catch {
+				continue;
+			}
+			if (manifest.name !== pkgName) continue;
+			if (!subpath) return manifestEntry(pkgDir);
+			const target = manifest.exports?.[`.${subpath}`];
+			const targetImport = typeof target === "string" ? target : (target as { import?: unknown } | undefined)?.import;
+			if (typeof targetImport === "string") {
+				const entry = join(pkgDir, targetImport);
+				if (existsSync(entry)) return entry;
+			}
+			const distFallback = join(pkgDir, "dist", `${subpath.replace(/^\//, "")}.js`);
+			if (existsSync(distFallback)) return distFallback;
+			return null;
+		}
+		const parent = dirname(dir);
+		if (parent === dir) break;
+		dir = parent;
+	}
+	return null;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+	// SDK exports surface as classes/namespaces (functions), not plain
+	// objects — accept both so structural checks see static members.
+	if (typeof value !== "object" && typeof value !== "function") return null;
+	if (value === null) return null;
+	return value as Record<string, unknown>;
+}
+
+/**
+ * Derive the installed SDK version from its package manifest. Walks up from
+ * the resolved entry point to the nearest package.json carrying the SDK
+ * package name. Never reads version overrides from the environment.
+ */
+function readInstalledHostVersion(entryPath: string, packageName: string): string | null {
+	let dir = dirname(entryPath);
+	for (let depth = 0; depth < 8; depth += 1) {
+		const candidate = join(dir, "package.json");
+		try {
+			if (existsSync(candidate)) {
+				const manifest = JSON.parse(readFileSync(candidate, "utf8")) as { name?: unknown; version?: unknown };
+				if (manifest.name === packageName && typeof manifest.version === "string" && manifest.version.length > 0) {
+					return manifest.version;
+				}
+		}
+	} catch {
+		// Unreadable manifests never verify; keep walking up.
+	}
+		const parent = dirname(dir);
+		if (parent === dir) break;
+		dir = parent;
+	}
+	return null;
+}
+
+/**
+ * Real-host probe. Returns a working `LeafHost` when the installed SDK
+ * qualifies: no test shim, `SessionManager.inMemory` plus
+ * `createAgentSession` present, pi-ai registry resolvable, and the
+ * manifest-derived host version allowlisted. Every other install
+ * (shim, absent, structurally incomplete, unverified version) returns null
+ * and readiness stays disabled there.
+ */
+export async function probeRealLeafHost(options: RealHostProbeOptions = {}): Promise<LeafHost | null> {
+	const base = options.resolutionBase ?? fileURLToPath(import.meta.url);
+	const load = options.load ?? ((url: string) => import(url));
+	const sdkPath = resolveFromBase(NATIVE_HOST_SPECIFIER, base);
+	if (!sdkPath) return null;
+	const sdk = asRecord(await load(pathToFileURL(sdkPath).href).catch(() => null));
+	if (!sdk || sdk.__piSubagentsTestShim === true) return null;
+	const sessionManager = asRecord(sdk.SessionManager);
+	if (typeof sessionManager?.inMemory !== "function" || typeof sdk.createAgentSession !== "function") {
+		return null;
+	}
+	if (typeof sdk.DefaultResourceLoader !== "function") return null;
+	const hostVersion = readInstalledHostVersion(sdkPath, NATIVE_HOST_SPECIFIER);
+	if (!hostVersion || !isVerifiedHostVersion(hostVersion)) return null;
+	// Resolve pi-ai against the SDK install itself: the SDK may carry a
+	// nested pi-ai whose version differs from any top-level install, and
+	// the catalog the host actually reads must come from the SDK's tree.
+	// `import.meta.resolve` from the SDK entry handles nested scopes;
+	// manifest resolution is the fallback.
+	const resolve = options.resolve ?? resolveFromBase;
+	const sdkUrl = pathToFileURL(sdkPath).href;
+	// Direct path candidates first: nested pi-ai under the SDK install wins
+	// over any top-level copy, and `import.meta.resolve` from a foreign tree
+	// is unreliable across installs. Manifest resolution stays as fallback.
+	const sdkDir = dirname(sdkPath);
+	const piAiCandidates: Array<{ specifier: string; path: string }> = [];
+	for (const specifier of NATIVE_HOST_PI_AI_SPECIFIERS) {
+		const leaf = specifier.endsWith("/compat") ? "compat.js" : "index.js";
+		piAiCandidates.push({
+			specifier,
+			path: join(sdkDir, "..", "node_modules", "@earendil-works", "pi-ai", "dist", leaf),
+		});
+		let dir = sdkDir;
+		for (let depth = 0; depth < 8; depth += 1) {
+			piAiCandidates.push({
+				specifier,
+				path: join(dir, "node_modules", "@earendil-works", "pi-ai", "dist", leaf),
+			});
+			const parent = dirname(dir);
+			if (parent === dir) break;
+			dir = parent;
+		}
+	}
+	let piAiPath: string | null = null;
+	for (const candidate of piAiCandidates) {
+		try {
+			if (existsSync(candidate.path)) {
+				piAiPath = candidate.path;
+				break;
+			}
+		} catch {
+			// Unreadable candidate; keep scanning.
+		}
+	}
+	if (!piAiPath) {
+		try {
+			const url = resolveFromParent(NATIVE_HOST_PI_AI_SPECIFIERS[0]!, sdkUrl);
+			if (url.startsWith("file://")) piAiPath = fileURLToPath(url);
+		} catch {
+			// Unresolvable from the SDK scope; try manifest resolution.
+		}
+	}
+	for (const specifier of NATIVE_HOST_PI_AI_SPECIFIERS) {
+		if (piAiPath) break;
+		piAiPath = resolve(specifier, sdkPath);
+	}
+	if (!piAiPath) return null;
+	const piAi = asRecord(await load(pathToFileURL(piAiPath).href).catch(() => null));
+	const getBuiltinProviders = piAi?.getBuiltinProviders ?? piAi?.getProviders;
+	const getBuiltinModels = piAi?.getBuiltinModels ?? piAi?.getModels;
+	const getBuiltinModel = piAi?.getBuiltinModel ?? piAi?.getModel;
+	if (typeof getBuiltinProviders !== "function" || typeof getBuiltinModels !== "function" || typeof getBuiltinModel !== "function") {
+		return null;
+	}
+	const settingsManager = asRecord(sdk.SettingsManager);
+	const getAgentDir = typeof sdk.getAgentDir === "function" ? (sdk.getAgentDir as () => string) : undefined;
+	return createNativeLeafHost(
+		{
+			SessionManager: sessionManager as unknown as NativeSdkModules["SessionManager"],
+			createAgentSession: sdk.createAgentSession as unknown as NativeSdkModules["createAgentSession"],
+			DefaultResourceLoader: sdk.DefaultResourceLoader as unknown as NativeSdkModules["DefaultResourceLoader"],
+			...(
+				settingsManager && typeof settingsManager.create === "function"
+					? { SettingsManager: settingsManager as unknown as NativeSdkModules["SettingsManager"] }
+					: {}
+			),
+			...(getAgentDir ? { getAgentDir } : {}),
+			getBuiltinProviders: getBuiltinProviders as NativeSdkModules["getBuiltinProviders"],
+			getBuiltinModels: getBuiltinModels as NativeSdkModules["getBuiltinModels"],
+			getBuiltinModel: getBuiltinModel as NativeSdkModules["getBuiltinModel"],
+		},
+		hostVersion,
+	);
 }

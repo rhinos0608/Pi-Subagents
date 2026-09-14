@@ -1,10 +1,10 @@
 /**
  * Native compatibility spike. Under the installed test shim these red checks
  * must HOLD (fail-closed): no ready, no exact-model proof, no token-cap
- * proof. Green production readiness requires a real host root via
- * PI_SUBAGENTS_NATIVE_SDK plus synthetic-provider payload capture; until
- * then VERIFIED_RUNTIME_HOST_VERSIONS stays empty and this file documents
- * the unproven surface.
+ * proof. Host 0.85.1 is proven by the unit native suite
+ * (`test/unit/runtime-rpc-native-host.test.ts`: one real prompt end-to-end
+ * with a synthetic provider, exact cap enforced); this file keeps the
+ * shim fail-closed checks.
  */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
@@ -19,8 +19,8 @@ describe("runtime native compatibility spike", () => {
 		assert.equal(await probeRealLeafHost(), null);
 	});
 
-	it("no production version allowlisted yet", () => {
-		assert.deepEqual([...VERIFIED_RUNTIME_HOST_VERSIONS], []);
+	it("proven host version allowlisted", () => {
+		assert.ok([...VERIFIED_RUNTIME_HOST_VERSIONS].includes("0.85.1"));
 	});
 
 	it("gate closed for shim and current dev versions", () => {

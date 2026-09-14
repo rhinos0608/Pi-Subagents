@@ -759,21 +759,19 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		state,
 	});
 	// Portable leaf-model runtime: separate versioned namespace. The host probe
-	// stays fail-closed (null under the test shim or unverified hosts), so no
-	// runtime ready event fires and every request answers runtime_unavailable
-	// until a natively proven host version is allowlisted.
-	// Host version is an explicit override only (never a package.json subpath
-	// probe, which export-map safety forbids). Default unknown keeps the gate
-	// closed; the allowlist stays empty until the native suite proves a host.
-	const runtimeHostVersion = typeof process.env.PI_SUBAGENTS_HOST_VERSION === "string" && process.env.PI_SUBAGENTS_HOST_VERSION.length > 0
-		? process.env.PI_SUBAGENTS_HOST_VERSION
-		: "unknown";
+	// derives the host version from the installed SDK package manifest (never
+	// an environment override) and stays fail-closed (null under the test
+	// shim, absent, or unverified hosts), so no runtime ready event fires and
+	// every request answers runtime_unavailable until a natively proven host
+	// version is allowlisted.
 	const leafRuntime = new LeafModelRuntime({ host: null, cwd: state.baseCwd || process.cwd() });
 	// Default-on (opt-out via PI_SUBAGENTS_RUNTIME_RPC_DISABLED=1): skip the host
 	// probe when disabled so no provider surface is touched. The verified probe
 	// result binds the runtime host and the bridge readiness version together so
-	// negotiate/start and the ready gate observe the same host.
-	const runtimeBridgeOptions = { events: pi.events, runtime: leafRuntime, hostVersion: runtimeHostVersion };
+	// negotiate/start and the ready gate observe the same host. Until the probe
+	// succeeds the bridge carries a never-allowlisted version, so the gate
+	// stays closed and runtime.start fails closed as runtime_unavailable.
+	const runtimeBridgeOptions = { events: pi.events, runtime: leafRuntime, hostVersion: "unknown" };
 	const runtimeBridge = registerRuntimeRpcBridge(runtimeBridgeOptions);
 	if (!isRuntimeRpcDisabled()) {
 		void (async () => {

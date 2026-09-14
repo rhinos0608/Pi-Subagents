@@ -53,8 +53,14 @@ export const RUNTIME_RPC_BOUNDS = {
 	idempotencyTtlMs: 10 * 60 * 1000,
 } as const;
 
-/** Exact host versions proven by the native suite. Empty until proven. */
-export const VERIFIED_RUNTIME_HOST_VERSIONS: readonly string[] = [];
+/**
+ * Exact host versions proven by the native suite
+ * (`test/unit/runtime-rpc-native-host.test.ts` runs one real prompt
+ * end-to-end against each listed install). Unlisted versions stay
+ * fail-closed. Each entry rides proof: the native suite fails when the
+ * real SDK version it finds is not listed here.
+ */
+export const VERIFIED_RUNTIME_HOST_VERSIONS: readonly string[] = ["0.85.1"];
 
 /** Audited provider APIs. Names alone never imply support. */
 export const RUNTIME_RPC_AUDITED_APIS = ["openai-completions", "openai-responses", "anthropic-messages"] as const;
