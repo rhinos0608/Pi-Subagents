@@ -12,6 +12,7 @@ import { buildSkillInjection, resolveSkills } from "../agents/skills.ts";
 import { buildAgentMemoryInjection } from "../agents/agent-memory.ts";
 import { appendAgentRefinementOverlay } from "../agents/agent-refinements.ts";
 import { rewriteSubagentPrompt } from "../runs/shared/subagent-prompt-runtime.ts";
+import { canonicalizeChildToolEntry, getHostAvailableTools, type HostToolIdentity } from "../runs/shared/child-tool-plan.ts";
 import { resolveExistingReadPaths } from "../shared/settings.ts";
 
 interface PendingRequest { operation: "prompt" | "steer" | "follow-up" | "abort" | "supervisor-reply"; text?: string; supervisorId?: string }
@@ -31,7 +32,7 @@ function gitEvidence(cwd: string): Record<string, unknown> | undefined {
 	return { ...(head.status === 0 ? { head: head.stdout.trim() } : {}), ...(branch.status === 0 ? { branch: branch.stdout.trim() } : {}), dirty: Boolean(dirty.stdout.trim()) };
 }
 
-export function resolveRemoteHerdrResources(cwd: string, resources: { agent: string; skills?: string[]; toolCeiling?: string[]; reads?: string[] | false }, remoteDefaultTools: string[] = []): { agent: string; skills: string[]; tools: string[]; systemPrompt: string; inheritProjectContext: boolean; inheritGlobalContext: boolean; inheritSkills: boolean } {
+export function resolveRemoteHerdrResources(cwd: string, resources: { agent: string; skills?: string[]; toolCeiling?: string[]; reads?: string[] | false }, remoteDefaultTools: string[] = [], hostTools: readonly HostToolIdentity[] = []): { agent: string; skills: string[]; tools: string[]; systemPrompt: string; inheritProjectContext: boolean; inheritGlobalContext: boolean; inheritSkills: boolean } {
 	if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(resources.agent) || resources.skills?.some((name) => !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(name)) || resources.toolCeiling?.some((name) => !/^[A-Za-z0-9_-]{1,64}$/u.test(name)) || (resources.reads !== undefined && resources.reads !== false && (!Array.isArray(resources.reads) || resources.reads.some((name) => typeof name !== "string")))) throw new Error("Remote logical resource names are invalid.");
 	const discovered = discoverAgents(cwd, "both").agents.filter((agent) => agent.name === resources.agent || agent.aliases?.includes(resources.agent));
 	if (discovered.length !== 1) throw new Error(`Remote agent '${resources.agent}' was not found unambiguously in ${cwd}.`);
@@ -40,7 +41,13 @@ export function resolveRemoteHerdrResources(cwd: string, resources: { agent: str
 	const skillPrompt = buildSkillInjection(skills.resolved);
 	const reads = resources.reads === undefined ? agent.defaultReads ?? false : resources.reads; const readPaths = Array.isArray(reads) ? resolveExistingReadPaths(reads, cwd) : [];
 	const systemPrompt = appendAgentRefinementOverlay(`${agent.systemPrompt}${buildAgentMemoryInjection(agent, cwd)}${skillPrompt ? `\n\n${skillPrompt}` : ""}${readPaths.length ? `\n\n[Read from: ${readPaths.join(", ")}]` : ""}`, { cwd, agentName: agent.name });
-	const denied = new Set(agent.excludeTools ?? []); const tools = (agent.tools === undefined ? remoteDefaultTools : agent.tools).filter((tool) => !denied.has(tool) && (!resources.toolCeiling || resources.toolCeiling.includes(tool))); if (agent.tools === undefined && !tools.length) throw new Error(`Remote agent '${agent.name}' resolved no default active tools within the inherited ceiling.`);
+	const canonicalizeRemoteTool = (tool: string): string => {
+		if (tool.includes("/") || tool.endsWith(".ts") || tool.endsWith(".js")) return tool;
+		const resolved = canonicalizeChildToolEntry(tool, hostTools);
+		if (resolved !== tool) return resolved;
+		return resources.toolCeiling?.find((name) => name.toLowerCase() === tool.toLowerCase()) ?? tool;
+	};
+	const denied = new Set((agent.excludeTools ?? []).map((tool) => canonicalizeRemoteTool(tool).toLowerCase())); const ceilingLowered = resources.toolCeiling ? new Set(resources.toolCeiling.map((tool) => tool.toLowerCase())) : undefined; const seenTools = new Set<string>(); const tools = (agent.tools === undefined ? remoteDefaultTools : agent.tools.map(canonicalizeRemoteTool)).filter((tool) => { const key = tool.toLowerCase(); if (seenTools.has(key)) return false; seenTools.add(key); return !denied.has(key) && (!ceilingLowered || ceilingLowered.has(key)); }); if (agent.tools === undefined && !tools.length) throw new Error(`Remote agent '${agent.name}' resolved no default active tools within the inherited ceiling.`);
 	return { agent: agent.name, skills: names, tools, systemPrompt, inheritProjectContext: agent.inheritProjectContext, inheritGlobalContext: agent.inheritGlobalContext, inheritSkills: agent.inheritSkills };
 }
 
@@ -140,7 +147,7 @@ export default function registerHerdrPiBridge(pi: ExtensionAPI): void {
 						const invalidSkills = resources.skills !== undefined && (!Array.isArray(resources.skills) || resources.skills.some((name) => typeof name !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(name)));
 						const invalidReads = resources.reads !== undefined && resources.reads !== false && (!Array.isArray(resources.reads) || resources.reads.some((name) => typeof name !== "string"));
 						if (typeof resources.agent !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(resources.agent) || invalidSkills || invalidReads) throw new Error("Remote logical resource names are invalid.");
-						const resolved = resolveRemoteHerdrResources(process.cwd(), { agent: resources.agent, ...(resources.skills ? { skills: resources.skills as string[] } : {}), ...(resources.toolCeiling ? { toolCeiling: resources.toolCeiling as string[] } : {}), ...(resources.reads !== undefined ? { reads: resources.reads as string[] | false } : {}) }, context ? activeTools(context) : []); resolvedSystemPrompt = resolved.systemPrompt; resolvedContextPolicy = resolved;
+						const resolved = resolveRemoteHerdrResources(process.cwd(), { agent: resources.agent, ...(resources.skills ? { skills: resources.skills as string[] } : {}), ...(resources.toolCeiling ? { toolCeiling: resources.toolCeiling as string[] } : {}), ...(resources.reads !== undefined ? { reads: resources.reads as string[] | false } : {}) }, context ? activeTools(context) : [], getHostAvailableTools(pi)); resolvedSystemPrompt = resolved.systemPrompt; resolvedContextPolicy = resolved;
 						(pi as unknown as { setActiveTools?(tools: string[]): void }).setActiveTools?.(resolved.tools); const acknowledged = context ? activeTools(context) : []; if (acknowledged.some((tool) => !resolved.tools.includes(tool)) || resolved.tools.some((tool) => !acknowledged.includes(tool))) throw new Error("Remote Pi did not apply the resolved active-tool set exactly.");
 						configured = true; send({ type: "configured", requestId: frame.requestId, nativeSessionId, agent: resolved.agent, skills: resolved.skills, model: context?.model?.provider && context.model.id ? `${context.model.provider}/${context.model.id}` : undefined, tools: acknowledged }); continue;
 					}

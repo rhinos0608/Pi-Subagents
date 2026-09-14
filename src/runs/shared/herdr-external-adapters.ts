@@ -16,7 +16,8 @@ export interface HerdrExternalResult {
 }
 export interface HerdrExternalEvidenceInput { runId: string; requestId: string; task: string; cwd: string; nativeSessionId: string; requestedModel?: string; initialGit?: unknown; finalGit?: unknown }
 export interface HerdrExternalCommandEvidence { binary: string; args: readonly string[]; status: number; stdout: string; stderr: string }
-export interface HerdrExternalPreflightEvidence { version: HerdrExternalCommandEvidence; help: HerdrExternalCommandEvidence }
+export interface HerdrExternalExecutableIdentity { realpath: string; device: number; inode: number }
+export interface HerdrExternalPreflightEvidence { version: HerdrExternalCommandEvidence; help: HerdrExternalCommandEvidence; executable: HerdrExternalExecutableIdentity }
 export interface HerdrExternalAdapter {
 	readonly id: HerdrExternalAdapterId; readonly kind: HerdrExternalKind;
 	preflight(evidence: HerdrExternalPreflightEvidence): void;
@@ -55,9 +56,21 @@ function canonicalPreflightBinary(adapter: HerdrExternalAdapterId, evidence: Her
 function matchesExternalProcess(entry: Record<string, unknown>, cwd: string, canonicalArgv0: string): boolean { const name = entry.name; return typeof entry.pid === "number" && typeof name === "string" && Boolean(name.trim()) && Buffer.byteLength(name) <= 128 && !/[\x00-\x1f\x7f]/u.test(name) && entry.argv0 === canonicalArgv0 && entry.cwd === cwd; }
 export function reconcileHerdrExternalRun(identity: HerdrRunIdentity, candidate: HerdrReconnectCandidate) { const check = reconcileHerdrPlacedRun(identity, candidate, () => ({ ok: true, cursor: 0 })); if (!check.ok) return check; if (check.paneId !== identity.paneId) return { ok: false as const, reason: "External reconnect refused pane identity drift." }; return check; }
 
+export function validateHerdrExternalExecutable(actual: unknown, expected: HerdrExternalExecutableIdentity, label: string): HerdrExternalExecutableIdentity {
+	const data = actual as Partial<HerdrExternalExecutableIdentity> | undefined;
+	if (typeof data?.realpath !== "string" || typeof data?.device !== "number" || typeof data?.inode !== "number") throw new Error(`${label} native executable identity is malformed.`);
+	if (data.realpath !== expected.realpath || data.device !== expected.device || data.inode !== expected.inode) throw new Error(`${label} native executable identity changed.`);
+	return { realpath: data.realpath, device: data.device, inode: data.inode };
+}
+
 export function validateHerdrExternalPreflight(adapter: HerdrExternalAdapterId, evidence: HerdrExternalPreflightEvidence): void {
 	const kind = adapterKind(adapter), binary = adapterBinary(adapter); validateCommand(evidence.version, binary, ["--version"], binary); validateCommand(evidence.help, binary, ["--help"], binary);
 	canonicalPreflightBinary(adapter, evidence);
+	if (evidence.executable === undefined) throw new Error("External preflight executable identity is missing.");
+	{
+		const identity = evidence.executable;
+		if (!path.posix.isAbsolute(identity.realpath) || !Number.isSafeInteger(identity.device) || !Number.isSafeInteger(identity.inode)) throw new Error("External preflight executable identity is malformed.");
+	}
 	const version = evidence.version.stdout.trim(), match = kind === "claude" ? version.match(/^(\d+)\.(\d+)\.(\d+) \(Claude Code\)$/u) : kind === "codex" ? version.match(/^codex-cli (\d+)\.(\d+)\.(\d+)$/u) : version.match(/^(\d{4})\.(\d{2})\.(\d{2})-[0-9a-f]+$/u); if (!match) throw new Error(`Unsupported ${binary} version response: ${JSON.stringify(version)}.`);
 	const parsed: [number, number, number] = [Number(match[1]), Number(match[2]), Number(match[3])]; const floor: [number, number, number] = kind === "claude" ? [2, 1, 269] : kind === "codex" ? [0, 154, 0] : [2026, 9, 10]; if (!atLeast(parsed, floor)) throw new Error(`Remote ${binary} is below the tested pane-native capability floor.`);
 	requireHelp(evidence.help.stdout, kind === "claude" ? ["--session-id", "--restricted", "--permission-mode", "--tools", "--strict-mcp-config", "--mcp-config", "--disable-slash-commands", "--no-chrome"] : kind === "cursor" ? ["--mode", "--sandbox", "--workspace", "--trust"] : ["--sandbox", "--ask-for-approval", "--no-alt-screen"], binary);
@@ -65,7 +78,19 @@ export function validateHerdrExternalPreflight(adapter: HerdrExternalAdapterId, 
 function commandEvidence(binary: string, args: readonly string[], result: ReturnType<HerdrPlacedRunOwner["runRemote"]>): HerdrExternalCommandEvidence { return { binary, args, status: result.status ?? -1, stdout: String(result.stdout), stderr: String(result.stderr) }; }
 export function runHerdrExternalPreflight(owner: HerdrPlacedRunOwner, adapter: HerdrExternalAdapterId): HerdrExternalPreflightEvidence {
 	const name = adapterBinary(adapter), located = owner.runRemote(remoteShellCommand(`command -v ${name}`), { timeout: 10_000, maxBuffer: 4096 }), binary = String(located.stdout).trim(); if (located.status !== 0 || !path.posix.isAbsolute(binary) || path.posix.basename(binary) !== name || binary.includes("\n")) throw new Error(`Remote canonical ${name} binary could not be resolved.`);
-	const invoke = (args: readonly string[]) => commandEvidence(binary, args, owner.runRemote(remoteShellCommand(adapterKind(adapter) === "cursor" ? `exec /usr/bin/env AGENT_CLI_CREDENTIAL_STORE=file ${shellQuoteRemote(binary)} "$@"` : `exec ${shellQuoteRemote(binary)} "$@"`, [...args]), { timeout: 10_000, maxBuffer: MAX_PREFLIGHT_BYTES })); const evidence = { version: invoke(["--version"]), help: invoke(["--help"]) }; validateHerdrExternalPreflight(adapter, evidence); return evidence;
+	// Capture the canonical executable identity (realpath + device + inode) so the
+	// started PID's /proc exe entry must match the binary validated here.
+	const identityScript = `const fs=require("node:fs"),p=process.argv[1],r=fs.realpathSync(p),s=fs.statSync(r);process.stdout.write(JSON.stringify({realpath:r,device:s.dev,inode:s.ino}))`;
+	const identityRaw = owner.runRemote(remoteShellCommand(`exec node -e ${shellQuoteRemote(identityScript)} "$@"`, [binary]), { timeout: 10_000, maxBuffer: 4096 });
+	if (identityRaw.status !== 0 || identityRaw.stderr) throw new Error(`Remote canonical ${name} executable identity could not be captured.`);
+	let executable: HerdrExternalExecutableIdentity;
+	try {
+		const data = JSON.parse(String(identityRaw.stdout)) as Partial<HerdrExternalExecutableIdentity>;
+		const realpath = data?.realpath, device = data?.device, inode = data?.inode;
+		if (typeof realpath !== "string" || !path.posix.isAbsolute(realpath) || typeof device !== "number" || !Number.isSafeInteger(device) || typeof inode !== "number" || !Number.isSafeInteger(inode)) throw new Error("malformed");
+		executable = { realpath, device, inode };
+	} catch { throw new Error(`Remote canonical ${name} executable identity is malformed.`); }
+	const invoke = (args: readonly string[]) => commandEvidence(binary, args, owner.runRemote(remoteShellCommand(adapterKind(adapter) === "cursor" ? `exec /usr/bin/env AGENT_CLI_CREDENTIAL_STORE=file ${shellQuoteRemote(binary)} "$@"` : `exec ${shellQuoteRemote(binary)} "$@"`, [...args]), { timeout: 10_000, maxBuffer: MAX_PREFLIGHT_BYTES })); const evidence = { version: invoke(["--version"]), help: invoke(["--help"]), executable }; validateHerdrExternalPreflight(adapter, evidence); return evidence;
 }
 export function createHerdrExternalAdapterLaunch(input: { adapter: HerdrExternalAdapterId; remoteRuntimeDir: string; cwd?: string; nativeSessionId?: string; model?: string; environment?: Readonly<Record<string, string>>; resources?: Readonly<Record<string, unknown>> }): HerdrExternalLaunch {
 	if (!path.posix.isAbsolute(input.remoteRuntimeDir) || path.posix.basename(input.remoteRuntimeDir).length < 8) throw new Error("External adapter requires the accepted run-private remote runtime root."); if (input.environment && Object.keys(input.environment).length) throw new Error("Pane-native external adapters reject caller environment bindings; credentials remain machine-owned."); if (input.resources && Object.keys(input.resources).length) throw new Error("Pane-native external adapters do not accept expanded prompts, local paths, callbacks, tools, skills, or MCP bindings."); if (input.model !== undefined) throw new Error("Pane-native M2b adapters use the remote managed model registry and reject model override.");
@@ -118,18 +143,34 @@ export class HerdrExternalSession {
 	#reconnectCandidatesRemaining = 3; #reconnectDeadline?: number; #reconnectFailure?: Error;
 	constructor(owner: HerdrPlacedRunOwner, launch: HerdrExternalLaunch, preflight: HerdrExternalPreflightEvidence, connect: typeof connectHerdrMachine = connectHerdrMachine) { this.owner = owner; this.launch = launch; this.preflight = preflight; this.#adapter = createHerdrExternalAdapter(launch.adapter); this.#connect = connect; }
 	settle(input: HerdrExternalEvidenceInput, evidence: Buffer | string): HerdrExternalResult { if (this.#settled || this.#disposePromise) throw new Error("Pane-native external run evidence already settled or disposed."); if (input.nativeSessionId !== this.launch.nativeSessionId) throw new Error("Pane-native external evidence session identity changed."); const result = this.#adapter.normalize(input, evidence); this.#settled = true; return result; }
+	#proveNativeExecutable(pid: number): void {
+		const expected = this.preflight.executable;
+		if (!expected) throw new Error(`Herdr ${this.launch.kind} native executable proof is missing; refusing an unverifiable external binary.`);
+		const kind = this.launch.kind;
+		const script = 'const fs=require("node:fs"),os=require("node:os"),pid=Number(process.argv[1]);if(os.platform()!=="linux")process.exit(66);let link;try{link=fs.readlinkSync("/proc/"+pid+"/exe")}catch(e){process.exit(65)}const s=fs.statSync("/proc/"+pid+"/exe");process.stdout.write(JSON.stringify({realpath:link,device:s.dev,inode:s.ino}))';
+		const result = this.owner.runRemote(remoteShellCommand(`exec node -e ${shellQuoteRemote(script)} "$@"`, [String(pid)]), { timeout: 10_000, maxBuffer: 4096 });
+		if (result.status === 66) throw new Error(`Herdr ${kind} native executable proof is unavailable on this platform; refusing an unverifiable external binary.`);
+		if (result.status !== 0 || result.stderr) throw new Error(`Herdr ${kind} native executable proof failed.`);
+		let actual: unknown;
+		try { actual = JSON.parse(String(result.stdout)) as unknown; }
+		catch { throw new Error(`Herdr ${kind} native executable proof is malformed.`); }
+		validateHerdrExternalExecutable(actual, expected, `Herdr ${kind}`);
+	}
+
 	async promptAndSettle(input: HerdrExternalEvidenceInput, options: { timeoutMs?: number; clock?: HerdrCodexMonitorClock; snapshot?: () => Promise<HerdrCodexSnapshot> } = {}): Promise<HerdrExternalResult> {
 		if (this.#prompted || this.#settled || this.#disposePromise) throw new Error("Pane-native external task was already submitted, settled, or disposed."); this.#prompted = true; if (!this.owner.agentName || !this.owner.owned || !this.owner.terminalId) throw new Error("Pane-native external owner identity is incomplete.");
 		let preSubmitText = "";
 		if (this.launch.kind === "cursor") { try { this.#cursorWorkspace = this.#proveCursorWorkspace(); } catch (error) { throw this.#needsAttention(`Placed Cursor requires attention before input: ${error instanceof Error ? error.message : String(error)}; truthful pane retained for inspection.`); } }
 		if (this.launch.kind === "cursor" || this.launch.kind === "codex") { const ready = await this.#waitForStartup(options.clock); preSubmitText = ready.text; this.#nativePid = ready.pid; }
 		else this.#nativePid = (await this.#exactProcess()).pid;
+		this.#proveNativeExecutable(this.#nativePid);
 		const waitTimeout = Math.min(Math.max(1, options.timeoutMs ?? 90_000), CODEX_DEFAULT_TIMEOUT_MS), params: Record<string, unknown> = { target: this.owner.agentName, text: input.task };
 		if (this.launch.kind !== "codex") params.wait = { until: ["idle", "done", "blocked"], timeout_ms: waitTimeout };
 		let response: unknown, recovered = false; try { response = await this.owner.connection.client.call("agent.prompt", params, waitTimeout + 5_000); } catch (error) { if (error instanceof HerdrRpcError || !(error instanceof HerdrTransportError)) throw error; if (this.owner.snapshot.connection !== "unknown") throw this.#needsAttention(`Placed external prompt settlement is unresolved: ${error.message}; truthful pane retained for inspection.`); await this.reconnect(); response = await this.owner.connection.client.call("agent.get", { target: this.owner.agentName }); recovered = true; }
 		const prompted = parseHerdrAgent(response, recovered ? "agent_info" : "agent_prompted"); if (!ownsHerdrPane(prompted, this.owner.terminalId, this.owner.owned.paneId)) throw new Error("Herdr prompt settlement identity changed.");
 		if (this.launch.kind !== "codex" && prompted.agent_status !== "idle" && prompted.agent_status !== "done") throw this.#needsAttention(`Herdr external prompt did not settle safely (status ${String(prompted.agent_status)}); truthful pane retained for inspection.`);
 		await this.#exactProcessAfterReconnect(this.#nativePid);
+		this.#proveNativeExecutable(this.#nativePid);
 		if (this.launch.kind === "cursor") this.#assertSameCursorWorkspace();
 		if (this.launch.kind !== "codex") {
 			const terminal = await this.#readSettledPane();
@@ -155,7 +196,7 @@ export class HerdrExternalSession {
 	reconnect(): Promise<void> { if (this.#reconnectFailure) return Promise.reject(this.#reconnectFailure); return this.#reconnectPromise ??= this.#performReconnect().catch((error) => { const failure = error instanceof Error ? error : new Error(String(error)); if (/reconnect remains unknown/u.test(failure.message)) this.#reconnectFailure = failure; throw failure; }).finally(() => { this.#reconnectPromise = undefined; }); }
 	async #performReconnect(): Promise<void> { if (this.#disposePromise) throw new Error("External reconnect is blocked because disposal or retention has begun."); if (!this.owner.identity) throw new Error("External reconnect has no persisted owner identity."); this.#reconnectDeadline ??= Date.now() + 15_000; let last: unknown; while (this.#reconnectCandidatesRemaining > 0 && Date.now() < this.#reconnectDeadline) { this.#reconnectCandidatesRemaining--; let connection: HerdrForwardedConnection | undefined, unsubscribe = () => {}, adopted = false, candidateLost: Error | undefined; try { if (this.#disposePromise) throw new Error("External reconnect is blocked because disposal or retention has begun."); connection = await this.#connect(this.owner.machine); const value = await connection.client.call<Record<string, unknown>>("session.snapshot"), envelope = unwrap<Record<string, unknown>>(value, "session_snapshot", "snapshot"), raw = Array.isArray(envelope.agents) ? envelope.agents as Record<string, unknown>[] : [], agents = raw.map((agent) => ({ terminal_id: typeof agent.terminal_id === "string" ? agent.terminal_id : undefined, pane_id: typeof agent.pane_id === "string" ? agent.pane_id : undefined, agent_status: typeof agent.agent_status === "string" ? agent.agent_status : undefined }));
 			const check = reconcileHerdrExternalRun(this.owner.identity, { endpoint: connection.endpoint, agents, bridge: {} }); if (!check.ok) throw new Error(check.reason);
-			if (this.#nativePid !== undefined) { validateStartedArgv(this.launch, this.owner.startedArgv); const canonicalArgv0 = path.posix.basename(canonicalPreflightBinary(this.launch.adapter, this.preflight)), process = unwrap<Record<string, unknown>>(await connection.client.call("pane.process_info", { pane_id: this.owner.identity.paneId }), "pane_process_info", "process_info"), rows = Array.isArray(process.foreground_processes) ? process.foreground_processes as Record<string, unknown>[] : [], canonical = rows.filter((row) => matchesExternalProcess(row, this.owner.identity!.cwd, canonicalArgv0)); if (process.pane_id !== this.owner.identity.paneId || canonical.length !== 1 || canonical[0]!.pid !== this.#nativePid) throw new Error("External canonical native PID, cwd, or argv0 changed during reconnect."); }
+			if (this.#nativePid !== undefined) { validateStartedArgv(this.launch, this.owner.startedArgv); const canonicalArgv0 = path.posix.basename(canonicalPreflightBinary(this.launch.adapter, this.preflight)), process = unwrap<Record<string, unknown>>(await connection.client.call("pane.process_info", { pane_id: this.owner.identity.paneId }), "pane_process_info", "process_info"), rows = Array.isArray(process.foreground_processes) ? process.foreground_processes as Record<string, unknown>[] : [], canonical = rows.filter((row) => matchesExternalProcess(row, this.owner.identity!.cwd, canonicalArgv0)); if (process.pane_id !== this.owner.identity.paneId || canonical.length !== 1 || canonical[0]!.pid !== this.#nativePid) throw new Error("External canonical native PID, cwd, or argv0 changed during reconnect."); this.#proveNativeExecutable(this.#nativePid); }
 			const observed = connection; unsubscribe = await connection.client.subscribe([{ type: "pane.agent_status_changed", pane_id: check.paneId }, { type: "pane.closed" }, { type: "pane.moved" }], (event) => this.owner.observeEvent?.(event), (error) => { if (!adopted) { candidateLost ??= error; return; } this.handleDisconnect(observed); }); if (candidateLost) throw candidateLost; if (this.#disposePromise) throw new Error("External reconnect is blocked because disposal or retention has begun."); adopted = true; await this.owner.replaceConnection({ connection, unsubscribe, paneId: check.paneId, state: check.state }); return;
 		} catch (error) { last = error; unsubscribe(); await connection?.close(); }
 	} if (this.#disposePromise) throw new Error("External reconnect is blocked because disposal or retention has begun."); throw new Error(`Pane-native external reconnect remains unknown: ${last instanceof Error ? last.message : String(last)}`); }
