@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Add opt-in internal leaf-model runtime RPC namespace `subagents:runtime:v1` (`negotiate`, `start`, `status`, `result`, `cancelAndSettle`) with exact model selection, bounded leaf execution, and bounded cancellation settlement. Legacy `subagents:rpc:v1` behavior is unchanged. Readiness stays disabled until native host/API versions are proven; until then every request answers `runtime_unavailable`.
+
 ### Fixed
 
 - Include retention-managed async, output-artifact, and structured-output retrieval paths in native completion notices. Thanks to [@peedrr](https://github.com/peedrr) for #2181.

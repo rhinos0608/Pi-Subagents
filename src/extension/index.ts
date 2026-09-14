@@ -60,6 +60,9 @@ import { hasLiveSubagentWork, registerPiWebSessionLiveness } from "../integratio
 import { createRetainedNestedRouteTracker } from "../runs/background/retained-nested-route-tracker.ts";
 import { listHerdrProjectPaneRoots, restoreHerdrProjectPaneSnapshots } from "../inspectors/herdr/project-panes.ts";
 import { registerSubagentRpcBridge } from "./rpc.ts";
+import { isRuntimeRpcDisabled, registerRuntimeRpcBridge } from "./runtime-rpc.ts";
+import { LeafModelRuntime } from "../runs/runtime/leaf-model-runtime.ts";
+import { probeRealLeafHost } from "../runs/runtime/leaf-model-session.ts";
 import { clearSlashSnapshots, getSlashRenderableSnapshot, resolveSlashMessageDetails, restoreSlashFinalSnapshots, type SlashMessageDetails } from "../slash/slash-live-state.ts";
 import { resolveWaitToolConfig } from "../runs/background/subagent-wait.ts";
 import { registerWaitTool } from "../runs/background/wait-tool.ts";
@@ -755,6 +758,32 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		execute: (id, params, signal, onUpdate, ctx) => executor.executePublic(id, params, signal, onUpdate, ctx),
 		state,
 	});
+	// Portable leaf-model runtime: separate versioned namespace. The host probe
+	// stays fail-closed (null under the test shim or unverified hosts), so no
+	// runtime ready event fires and every request answers runtime_unavailable
+	// until a natively proven host version is allowlisted.
+	// Host version is an explicit override only (never a package.json subpath
+	// probe, which export-map safety forbids). Default unknown keeps the gate
+	// closed; the allowlist stays empty until the native suite proves a host.
+	const runtimeHostVersion = typeof process.env.PI_SUBAGENTS_HOST_VERSION === "string" && process.env.PI_SUBAGENTS_HOST_VERSION.length > 0
+		? process.env.PI_SUBAGENTS_HOST_VERSION
+		: "unknown";
+	const leafRuntime = new LeafModelRuntime({ host: null, cwd: state.baseCwd || process.cwd() });
+	// Default-on (opt-out via PI_SUBAGENTS_RUNTIME_RPC_DISABLED=1): skip the host
+	// probe when disabled so no provider surface is touched. The verified probe
+	// result binds the runtime host and the bridge readiness version together so
+	// negotiate/start and the ready gate observe the same host.
+	const runtimeBridgeOptions = { events: pi.events, runtime: leafRuntime, hostVersion: runtimeHostVersion };
+	const runtimeBridge = registerRuntimeRpcBridge(runtimeBridgeOptions);
+	if (!isRuntimeRpcDisabled()) {
+		void (async () => {
+			const probed = await probeRealLeafHost().catch(() => null);
+			if (probed) {
+				leafRuntime.setHost(probed);
+				runtimeBridgeOptions.hostVersion = probed.hostVersion;
+			}
+		})();
+	}
 
 
 	// Schema profile follows the description mode: default/compact gets the compact
@@ -898,6 +927,9 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		pi.events.on(SUBAGENT_STEERING_NOTICE_EVENT, steeringNoticeHandler),
 		herdrStatusBridge.dispose,
 		rpcBridge.dispose,
+		() => {
+			void runtimeBridge.dispose();
+		},
 	];
 
 	pi.on("tool_result", (event, ctx) => {
@@ -1177,11 +1209,15 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 			runs: activeHerdrRuns(),
 		});
 		rpcBridge.emitReady(ctx);
+		runtimeBridge.emitReady();
 		supervisorChannel.start();
 		supervisorChannel.activateTransport();
 	});
 
 	pi.on("session_shutdown", async () => {
+		// Unsubscribe first, abort leaf runs, then await bounded settlement.
+		// The module-global settling barrier blocks new readiness until done.
+		await runtimeBridge.dispose().catch(() => {});
 		runtimeEntry.cleanup();
 		try {
 			await disposeChildSessions();

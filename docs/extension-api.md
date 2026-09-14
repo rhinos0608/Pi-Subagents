@@ -532,6 +532,20 @@ If your host reclaims idle sessions, keep a session alive while it still has liv
 
 The symptom when this is missed is quiet and easy to misattribute: subagents appear never to report back, which looks like a fault in this extension rather than in the host that disposed the listener.
 
+## Leaf-model runtime RPC (`subagents:runtime:v1`)
+
+A separate default-on namespace for bounded leaf-model execution by external owners (e.g. Northstar). Legacy `subagents:rpc:v1` is unchanged. Listen for `subagents:runtime:v1:ready`, send requests on `subagents:runtime:v1:request`, read replies from `subagents:runtime:v1:reply:<requestId>`. Public contract: `pi-subagents/runtime-rpc`. The bridge registers unless explicitly opted out with `PI_SUBAGENTS_RUNTIME_RPC_DISABLED=1` (exact value; absent/empty keeps it enabled). When disabled, no ready event fires and no request handler is registered.
+
+Methods: `negotiate`, `start`, `status`, `result`, `cancelAndSettle`. `ready` carries only protocol availability (`{ version: 1, protocol: "subagents:runtime:v1", methods: [...] }`); capability claims (`boundedCancellationSettlement`, `leafOnlyExecution`, `exactModelSelection`, `maxOutputTokensEnforced`, `backgroundExecution`, `maxParallelRuns`, `maxResultBytes`, output modes) appear only in model-specific `negotiate` replies after exact lookup and API verification. V1 output is text-only: `start` accepts an `outputSchema` syntactically but rejects it semantically with `unsupported_capability`.
+
+`start` takes an exact `provider/model` ID (no fuzzy resolution, thinking suffix, or fallback), `prompt`, `maxOutputTokens`, `timeoutMs`, and closed content-free correlation metadata `{ owner: "northstar", correlationId, queryIndex, role: "coverage_planner" | "researcher" | "synthesizer", stage, attempt }`. No tools, history, cwd overrides, recursive delegation, secrets, public job IDs, or arbitrary metadata — unknown fields fail closed. `status`/`result` expose only opaque `runtime_*` IDs and safe timestamps; prompts, outputs, and correlation data never appear there. `cancelAndSettle` takes 1–64 run IDs plus a 1–10,000ms shared settlement window and accounts every run as `completed`/`failed`/`cancelled` or fails with `contract_breach`, which permanently marks the runtime unhealthy (no new starts; existing status/result/cancel stay readable).
+
+Bounds: 4 parallel runs, 262,144-byte prompt/result limits, 1–600,000ms timeouts, 10-minute result retention under a 32 MiB ceiling, bounded ASCII IDs. Runs are fresh in-memory zero-tool single-turn sessions with a fixed system prompt; model/provider identity stays internal RPC data and never enters model-visible messages. Native structured output is not claimed.
+
+Readiness is gated per exact host version (`VERIFIED_RUNTIME_HOST_VERSIONS`, currently empty): under the test shim or any unverified host no ready event fires and every request answers `runtime_unavailable`. Host upgrades fail closed until the native suite proves them.
+
+Trust boundary: the event bus is callable by trusted co-installed extension code; `owner: "northstar"` is correlation, not authentication. Northstar public jobs, budgets, and citations remain outside this runtime. Error codes are fixed safe strings; provider exception bodies never surface.
+
 ## Runtime files
 
 The main runtime files in this repository:
