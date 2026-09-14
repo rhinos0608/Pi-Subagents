@@ -63,11 +63,82 @@ const FAST_MODE_ALLOWED_MODELS = new Set([
 ]);
 const OPENAI_PROMPT_CACHE_KEY_MAX_LENGTH = 64;
 const PI_BUILTIN_TOOL_NAMES = new Set(["read", "bash", "powershell", "edit", "write", "grep", "find", "ls"]);
+/** Native coordination tools the plan recognizes regardless of host availability. */
+const NATIVE_CHILD_TOOL_NAMES = new Set(["subagent", "contact_supervisor", "intercom", "subagent_supervisor", "bg_wait", "structured_output"]);
 const REPOSITORY_INSPECTION_TOOLS = new Set(["read", "grep", "find", "ls", "bash", "powershell"]);
 const REVIEW_OR_SCOUT_AGENT_PATTERN = /\b(?:reviewer|scout)\b/i;
 
 export function isReviewOrScoutLaneAgent(agentName: string | undefined): boolean {
 	return typeof agentName === "string" && REVIEW_OR_SCOUT_AGENT_PATTERN.test(agentName);
+}
+
+/** Internal tool name plus its human-readable display label (Pi `registerTool({ name, label })`). */
+export interface HostToolIdentity {
+	name: string;
+	label?: string;
+}
+
+/** Extract `{ name, label }` identities from a Pi host for label-aware allowlists. */
+export function getHostAvailableTools(pi: Pick<ExtensionAPI, "getAllTools">): HostToolIdentity[] {
+	try {
+		const tools = pi.getAllTools();
+		if (!Array.isArray(tools)) return [];
+		const identities: HostToolIdentity[] = [];
+		for (const tool of tools) {
+			const name = (tool as { name?: unknown }).name;
+			if (typeof name !== "string" || !name) continue;
+			const label = (tool as { label?: unknown }).label;
+		identities.push(label !== undefined && typeof label === "string" && label ? { name, label } : { name });
+		}
+		return identities;
+	} catch {
+		return [];
+	}
+}
+
+function lowered(value: string): string {
+	return value.toLowerCase();
+}
+
+/**
+ * Resolve one allowlist entry to its internal tool name. Exact names win,
+ * then an unambiguous exact display label, then an unambiguous
+ * case-insensitive name/label match (covers `Browser` for `browser`).
+ * Ambiguous or unknown entries pass through unchanged for child-startup
+ * validation — never silently select one of several matches.
+ */
+export function canonicalizeChildToolEntry(entry: string, known: readonly HostToolIdentity[]): string {
+	for (const identity of known) if (identity.name === entry) return identity.name;
+	const labelMatches = known.filter((identity) => identity.label === entry);
+	if (labelMatches.length === 1) return (labelMatches[0] as HostToolIdentity).name;
+	if (labelMatches.length > 1) return entry;
+	const want = lowered(entry);
+	let match: string | undefined;
+	for (const identity of known) {
+		if (lowered(identity.name) !== want && (identity.label === undefined || lowered(identity.label) !== want)) continue;
+		if (match !== undefined && match !== identity.name) return entry;
+		match = identity.name;
+	}
+	return match ?? entry;
+}
+
+/** Case-insensitive tool-name equality for allowlist comparisons. */
+export function childToolNamesEqual(a: string, b: string): boolean {
+	return a === b || lowered(a) === lowered(b);
+}
+
+/** An entry plus its lowercase variant so Pi's name-strict allowlist activates either spelling. */
+export function withChildToolCaseVariants(entries: readonly string[]): string[] {
+	const expanded: string[] = [];
+	const seen = new Set<string>();
+	for (const entry of entries) {
+		for (const variant of entry.toLowerCase() === entry ? [entry] : [entry, entry.toLowerCase()]) {
+			if (seen.has(variant)) continue;
+			seen.add(variant);
+			expanded.push(variant);
+		}
+	}
+	return expanded;
 }
 
 export function missingPermittedRepositoryInspectionTools(
@@ -197,6 +268,13 @@ export interface ResolvePiLaunchToolPlanInput {
 	 * Non-core names remain allowed and are validated in the child's registry.
 	 */
 	hostAvailableBuiltins?: readonly string[];
+	/**
+	 * `{ name, label }` identities from the host registry. Display labels in
+	 * `tools`/`excludeTools` resolve to their internal name; without it only
+	 * exact and case-insensitive name matches resolve and other entries pass
+	 * through for child-startup validation.
+	 */
+	hostAvailableTools?: readonly HostToolIdentity[];
 }
 
 export interface PiLaunchToolPlan {
@@ -382,15 +460,27 @@ export function resolvePiLaunchToolPlan(
 		capabilityCeiling?.allowedTools === undefined
 			? undefined
 			: new Set(capabilityCeiling.allowedTools);
+	const allowedToolLowered = allowedToolSet ? new Set([...allowedToolSet].map((tool) => tool.toLowerCase())) : undefined;
 	const hostAvailableSet =
 		input.hostAvailableBuiltins === undefined
 			? undefined
 			: new Set(input.hostAvailableBuiltins);
-	const requestedBuiltinTools =
-		input.tools?.filter(
-			(tool) =>
-				!(tool.includes("/") || tool.endsWith(".ts") || tool.endsWith(".js")),
-		) ?? [];
+	const hostAvailableLowered = hostAvailableSet ? new Set([...hostAvailableSet].map((tool) => tool.toLowerCase())) : undefined;
+	const isPathLikeEntry = (tool: string): boolean => tool.includes("/") || tool.endsWith(".ts") || tool.endsWith(".js");
+	const knownToolIdentities: HostToolIdentity[] = [
+		...[...PI_BUILTIN_TOOL_NAMES, ...NATIVE_CHILD_TOOL_NAMES].map((name) => ({ name })),
+		...(input.hostAvailableBuiltins ?? []).map((name) => ({ name })),
+		...(input.hostAvailableTools ?? []),
+		...(capabilityCeiling?.allowedTools ?? []).map((name) => ({ name })),
+	];
+	const canonicalizeEntry = (tool: string): string =>
+		isPathLikeEntry(tool) ? tool : canonicalizeChildToolEntry(tool, knownToolIdentities);
+	const rawRequestedBuiltinTools =
+		input.tools?.filter((tool) => !isPathLikeEntry(tool)) ?? [];
+	const requestedBuiltinTools = rawRequestedBuiltinTools.map(canonicalizeEntry);
+	const toolLabelAliases = rawRequestedBuiltinTools
+		.map((from, index) => ({ from, to: requestedBuiltinTools[index] as string }))
+		.filter((pair) => pair.from !== pair.to);
 	if (input.requireReadTool && hostAvailableSet && !hostAvailableSet.has("read")) {
 		const agentLabel = input.agentName ? ` for agent '${input.agentName}'` : "";
 		throw new Error(
@@ -409,26 +499,28 @@ export function resolvePiLaunchToolPlan(
 				: []
 			: (input.requireReadTool &&
 				requestedBuiltinTools.length > 0 &&
-				!requestedBuiltinTools.includes("read") &&
+				!requestedBuiltinTools.some((tool) => childToolNamesEqual(tool, "read")) &&
 				!allowedToolSet
 					? ["read", ...requestedBuiltinTools]
 					: requestedBuiltinTools
-				).filter((tool) => !allowedToolSet || allowedToolSet.has(tool));
+				).filter((tool) => !allowedToolLowered || allowedToolLowered.has(tool.toLowerCase()));
 	const declaredBuiltinTools = hostAvailableSet
-		? ceilingFilteredBuiltinTools.filter((tool) => !PI_BUILTIN_TOOL_NAMES.has(tool) || hostAvailableSet.has(tool))
+		? ceilingFilteredBuiltinTools.filter((tool) => !PI_BUILTIN_TOOL_NAMES.has(tool.toLowerCase()) || hostAvailableSet.has(tool) || hostAvailableLowered?.has(tool.toLowerCase()))
 		: ceilingFilteredBuiltinTools;
 	const unavailableHostBuiltins = hostAvailableSet
-		? ceilingFilteredBuiltinTools.filter((tool) => PI_BUILTIN_TOOL_NAMES.has(tool) && !hostAvailableSet.has(tool))
+		? ceilingFilteredBuiltinTools.filter((tool) => PI_BUILTIN_TOOL_NAMES.has(tool.toLowerCase()) && !hostAvailableSet.has(tool) && !hostAvailableLowered?.has(tool.toLowerCase()))
 		: [];
-	const excludeTools = [...new Set((input.excludeTools ?? []).map((tool) => tool.trim()).filter(Boolean))];
-	const excludedToolSet = new Set(excludeTools);
-	const effectiveDeclaredBuiltinTools = declaredBuiltinTools.filter((tool) => !excludedToolSet.has(tool));
-	const fanoutAuthorized = effectiveDeclaredBuiltinTools.includes("subagent") || (
+	const excludeTools = [...new Set((input.excludeTools ?? []).map((tool) => canonicalizeEntry(tool.trim())).filter(Boolean))];
+	const excludedToolLowered = new Set(excludeTools.map((tool) => tool.toLowerCase()));
+	const isExcluded = (tool: string): boolean => excludedToolLowered.has(tool.toLowerCase());
+	const effectiveDeclaredBuiltinTools = declaredBuiltinTools.filter((tool) => !isExcluded(tool));
+	const declaresTool = (tools: readonly string[], name: string): boolean => tools.some((tool) => childToolNamesEqual(tool, name));
+	const fanoutAuthorized = declaresTool(effectiveDeclaredBuiltinTools, "subagent") || (
 		input.allowNestedSubagents === true &&
-		!excludedToolSet.has("subagent") &&
-		(!allowedToolSet || allowedToolSet.has("subagent"))
+		!isExcluded("subagent") &&
+		(!allowedToolLowered || allowedToolLowered.has("subagent"))
 	);
-	if (effectiveDeclaredBuiltinTools.includes("subagent_supervisor") && !fanoutAuthorized) {
+	if (declaresTool(effectiveDeclaredBuiltinTools, "subagent_supervisor") && !fanoutAuthorized) {
 		throw new Error("Tool 'subagent_supervisor' requires fanout authorization: include 'subagent' in the effective tools allowlist or enable allowNestedSubagents.");
 	}
 	const toolExtensionPaths: string[] = capabilityCeiling?.denyExtensions
@@ -454,8 +546,9 @@ export function resolvePiLaunchToolPlan(
 		(selection) =>
 			!allowedToolSet ||
 			allowedToolSet.has(selection.name) ||
+			allowedToolLowered?.has(selection.name.toLowerCase()) ||
 			isLegacyUnderscoreMcpToolAllowed(selection, allowedToolSet, resolvedMcpNames, legacyMcpNameCounts),
-	).filter((selection) => !excludedToolSet.has(selection.name));
+	).filter((selection) => !isExcluded(selection.name));
 	const effectiveMcpTools = effectiveMcpSelections.map(
 		(selection) => selection.name,
 	);
@@ -463,21 +556,19 @@ export function resolvePiLaunchToolPlan(
 		input.tools !== undefined ||
 		(input.mcpDirectTools?.length ?? 0) > 0 ||
 		allowedToolSet !== undefined;
-	const internalTools = (input.structuredOutput ? ["structured_output"] : []).filter((tool) => !excludedToolSet.has(tool));
-	const effectiveToolAllowlist = [
-		...new Set([
-			...effectiveDeclaredBuiltinTools,
-			...effectiveMcpTools,
-			...internalTools,
-		]),
-	];
+	const internalTools = (input.structuredOutput ? ["structured_output"] : []).filter((tool) => !isExcluded(tool));
+	const effectiveToolAllowlist = withChildToolCaseVariants([
+		...effectiveDeclaredBuiltinTools,
+		...effectiveMcpTools,
+		...internalTools,
+	]);
 	// Upward contact stays in the --tools allowlist but is not a strict
 	// requirement: children register contact_supervisor at runtime through
 	// the native supervisor channel (or pi-intercom). The pre-0.50 bridge always
 	// appended intercom alongside contact_supervisor, so that exact pairing is
 	// legacy plumbing, not a user demand for an external intercom provider;
 	// a lone intercom entry stays strictly required (#1207).
-	const legacySupervisorPairing = effectiveDeclaredBuiltinTools.includes("contact_supervisor");
+	const legacySupervisorPairing = declaresTool(effectiveDeclaredBuiltinTools, "contact_supervisor");
 	const requiredChildTools = explicitToolAllowlist
 		? [
 				...new Set([
@@ -504,6 +595,10 @@ export function resolvePiLaunchToolPlan(
 		capabilityCeiling?.denyExtensions === true ||
 		input.extensions !== undefined;
 	const warnings: string[] = [];
+	for (const alias of toolLabelAliases) {
+		const subject = input.agentName ? `Agent '${input.agentName}'` : "Subagent";
+		warnings.push(`${subject}: tools entry '${alias.from}' resolved to internal tool '${alias.to}'.`);
+	}
 	// An explicit empty list disables ambient extensions, including model providers.
 	if (capabilityCeiling?.denyExtensions !== true && Array.isArray(input.extensions) && input.extensions.length === 0) {
 		const agentLabel = input.agentName ? ` for agent '${input.agentName}'` : "";

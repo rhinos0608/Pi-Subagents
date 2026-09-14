@@ -163,7 +163,7 @@ describe("skills filesystem fallback", () => {
 		assert.match(resolved[0]?.content ?? "", /Use direct markdown skill\./);
 	});
 
-	it("keeps nested skills from higher-priority explicit settings roots after parent recursion", () => {
+	it("prefers package roots over explicit settings roots after parent recursion", () => {
 		writeSkillFile(
 			path.join(tempDir, "skills", "group", "issue-262-settings-nested"),
 			"Use settings nested skill.",
@@ -183,11 +183,11 @@ describe("skills filesystem fallback", () => {
 		const { resolved, missing } = resolveSkills(["issue-262-settings-nested"], tempDir);
 		assert.deepEqual(missing, []);
 		assert.equal(resolved.length, 1);
-		assert.equal(resolved[0]?.source, "project-settings");
+		assert.equal(resolved[0]?.source, "project-package");
 		assert.match(resolved[0]?.content ?? "", /Use settings nested skill\./);
 	});
 
-	it("keeps nested skills from higher-priority explicit settings roots when the root path is duplicated", () => {
+	it("prefers package roots over explicit settings roots when the root path is duplicated", () => {
 		writeSkillFile(
 			path.join(tempDir, "skills", "group", "issue-262-settings-same-root"),
 			"Use settings same root skill.",
@@ -207,7 +207,7 @@ describe("skills filesystem fallback", () => {
 		const { resolved, missing } = resolveSkills(["issue-262-settings-same-root"], tempDir);
 		assert.deepEqual(missing, []);
 		assert.equal(resolved.length, 1);
-		assert.equal(resolved[0]?.source, "project-settings");
+		assert.equal(resolved[0]?.source, "project-package");
 		assert.match(resolved[0]?.content ?? "", /Use settings same root skill\./);
 	});
 

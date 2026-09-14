@@ -47,6 +47,8 @@ describe("tool-budget module", () => {
 		assert.equal(shouldBlockToolForBudget(budget, "read", 4), true);
 		assert.equal(shouldBlockToolForBudget(budget, "write", 4), false);
 		assert.equal(shouldBlockToolForBudget({ hard: 0, block: "*" }, "read", 1), true);
+		assert.equal(shouldBlockToolForBudget({ hard: 3, block: ["dangerous"] }, "Dangerous", 4), true);
+		assert.equal(shouldBlockToolForBudget({ hard: 3, block: ["Browser"] }, "browser", 4), true);
 	});
 
 	it("formats user-facing budget messages", () => {

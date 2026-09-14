@@ -615,6 +615,29 @@ Project prompt.
 		assert.notEqual(after.contract.digest, before.contract.digest);
 	});
 
+	it("binds resolved permission rules into the launch digest", async () => {
+		const cwd = path.join(tempDir, "repo");
+		fs.mkdirSync(cwd, { recursive: true });
+		writeAgent(path.join(cwd, ".pi", "agents", "perm-worker.md"), `---
+name: perm-worker
+description: Permission worker
+tools:
+  - read
+---
+Prompt.
+`);
+		const before = await resolveSubagentLaunchContract({ agent: "perm-worker", cwd, runId: "perm-digest-test" });
+		assert.equal(before.ok, true);
+		writeJson(path.join(process.env.PI_CODING_AGENT_DIR!, "extensions", "subagent", "config.json"), {
+			permissions: { rules: { write: "ask" } },
+		});
+		const after = await resolveSubagentLaunchContract({ agent: "perm-worker", cwd, runId: "perm-digest-test" });
+		assert.equal(after.ok, true);
+		assert.equal(after.contract.agent.definitionDigest, before.contract.agent.definitionDigest);
+		assert.notEqual(after.contract.launchContractDigest, before.contract.launchContractDigest);
+		assert.notEqual(after.contract.digest, before.contract.digest);
+	});
+
 	it("returns closed failures for missing agents and missing skills", async () => {
 		const cwd = path.join(tempDir, "repo");
 		fs.mkdirSync(cwd, { recursive: true });

@@ -3,11 +3,12 @@ import * as fs from "node:fs";
 import type { AgentConfig } from "../agents/agents.ts";
 import type { PiLaunchToolPlan } from "../runs/shared/child-tool-plan.ts";
 import type { ExtensionBindings } from "../runs/shared/extension-bindings.ts";
+import type { PermissionRules } from "../runs/shared/permissions.ts";
 
-export const AGENT_DEFINITION_PROJECTION_VERSION = 2 as const;
+export const AGENT_DEFINITION_PROJECTION_VERSION = 3 as const;
 // v2: the Intercom bridge prompt and tools are part of the binding on every
 // path, and the bridge text no longer names the parent session.
-export const LAUNCH_BINDING_PROJECTION_VERSION = 2 as const;
+export const LAUNCH_BINDING_PROJECTION_VERSION = 3 as const;
 
 function stableJson(value: unknown): string {
 	if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
@@ -74,6 +75,7 @@ export function projectAgentDefinition(agent: AgentConfig): Record<string, unkno
 		maxSubagentDepth: agent.maxSubagentDepth,
 		completionGuard: agent.completionGuard,
 		toolBudget: agent.toolBudget,
+		permissions: agent.permissions,
 		memory: agent.memory,
 	};
 }
@@ -106,6 +108,8 @@ export interface LaunchBindingInput {
 	outputMode?: string;
 	structuredOutputSchema?: unknown;
 	extensionBindings?: ExtensionBindings;
+	/** Resolved child permission rules; the runtime enforces them, so they are part of the binding. */
+	permissionRules?: PermissionRules;
 }
 
 /** Canonical projection of the resolved inputs handed to the child. */
@@ -134,6 +138,7 @@ export function projectLaunchBinding(input: LaunchBindingInput): Record<string, 
 		outputMode: input.outputMode,
 		structuredOutputSchema: input.structuredOutputSchema,
 		extensionBindings: input.extensionBindings,
+		permissionRules: input.permissionRules,
 	};
 }
 
@@ -152,7 +157,7 @@ export type LaunchBindingIdentity =
 	| ({ definitionDigest: string } & LaunchBindingPromptMode);
 
 export type LaunchBindingSource = LaunchBindingIdentity
-	& Pick<LaunchBindingInput, "fast" | "thinking" | "skills" | "outputPath" | "outputMode" | "structuredOutputSchema" | "extensionBindings">
+	& Pick<LaunchBindingInput, "fast" | "thinking" | "skills" | "outputPath" | "outputMode" | "structuredOutputSchema" | "extensionBindings" | "permissionRules">
 	& {
 		task: string;
 		modelCandidates: string[];
@@ -196,6 +201,7 @@ export function resolveLaunchBinding(source: LaunchBindingSource): LaunchBinding
 			outputMode: source.outputMode,
 			structuredOutputSchema: source.structuredOutputSchema,
 			extensionBindings: source.extensionBindings || undefined,
+			permissionRules: source.permissionRules,
 		}),
 	};
 }

@@ -52,9 +52,12 @@ export function toolBudgetState(budget: ResolvedToolBudget, toolCount: number, b
 	};
 }
 
+/** Block-list matching is case-insensitive so label- or case-variant spellings cannot evade the hard budget (blocking more is fail-closed). */
 export function shouldBlockToolForBudget(budget: ResolvedToolBudget, toolName: string, nextToolCount: number): boolean {
 	if (nextToolCount <= budget.hard) return false;
-	return budget.block === "*" || budget.block.includes(toolName);
+	if (budget.block === "*") return true;
+	const lowered = toolName.toLowerCase();
+	return budget.block.some((blocked) => blocked === toolName || blocked.toLowerCase() === lowered);
 }
 
 export function toolBudgetSoftNudge(budget: ResolvedToolBudget, toolCount: number): string {

@@ -92,6 +92,8 @@ export interface SubagentLaunchContractInput {
 	inheritedCapabilityCeiling?: ResolvedSubagentCapabilityCeiling;
 	/** Builtin tool names the host runtime provides; used to intersect agent-declared tools. */
 	hostAvailableBuiltins?: readonly string[];
+	/** `{ name, label }` identities from the host registry; display labels in tool allowlists resolve to internal names. */
+	hostAvailableTools?: Array<{ name: string; label?: string }>;
 	/** Per-launch bridge config; replaces the global `intercomBridge` config exactly as the tool and delegation overrides do. */
 	intercomBridge?: IntercomBridgeConfig;
 	/**
@@ -425,6 +427,7 @@ export async function resolveSubagentLaunchContract(input: SubagentLaunchContrac
 			agentName: agent.name,
 			permissionRules,
 			hostAvailableBuiltins: input.hostAvailableBuiltins,
+			hostAvailableTools: input.hostAvailableTools,
 		});
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
@@ -467,6 +470,7 @@ export async function resolveSubagentLaunchContract(input: SubagentLaunchContrac
 		outputMode: behavior.outputMode,
 		...(behavior.outputSchema ? { structuredOutputSchema: behavior.outputSchema } : {}),
 		...(extensionBindings ? { extensionBindings } : {}),
+		...(permissionRules ? { permissionRules } : {}),
 	});
 	const candidates = candidateList(input.agent, agent, discovery.all);
 	const shadowedCandidates = candidates.filter((candidate) => !candidate.selected);

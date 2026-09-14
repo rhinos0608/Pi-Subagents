@@ -72,7 +72,7 @@ import { resolveEffectiveThinking } from "../../shared/model-info.ts";
 import { assertThinkingWithinCeiling, intersectThinkingCeilings } from "../../shared/thinking-ceiling.ts";
 import { MISSING_STRUCTURED_ACCEPTANCE_REPORT_ERROR, MISSING_STRUCTURED_OUTPUT_CALL_ERROR } from "../shared/structured-output.ts";
 import { formatMidToolExitError, isOrdinaryToolForMidToolExit } from "../shared/process-signal.ts";
-import { formatChildToolDiagnostic } from "../shared/tool-availability.ts";
+import { formatChildToolDiagnostic, formatChildToolDisabledWarning, hasFatalMissingTools } from "../shared/tool-availability.ts";
 import { buildTimeoutRecoverySummary, collectTrackedMutationEvidence, snapshotTrackedMutations } from "../shared/mutation-evidence.ts";
 import { captureSingleOutputSnapshot, extractChildWrittenOutput, finalizeSingleOutput, formatSavedOutputReference, hasSingleOutputChangedSinceSnapshot, resolveSingleOutput, validateFileOnlyOutputMode, type SingleOutputSnapshot } from "../shared/single-output.ts";
 import {
@@ -450,6 +450,7 @@ async function runSingleAttempt(
 		maxSubagentDepth: options.maxSubagentDepth,
 		runtimeSnapshotHost: options.runtimeSnapshotHost,
 		hostAvailableBuiltins: options.hostAvailableBuiltins,
+		hostAvailableTools: options.hostAvailableTools,
 		inherited: options.childRuntime,
 		host: "parent",
 	});
@@ -504,6 +505,7 @@ async function runSingleAttempt(
 		outputMode: options.outputMode ?? "inline",
 		...(options.structuredOutput ? { structuredOutputSchema: options.structuredOutput.schema } : {}),
 		...(options.extensionBindings ? { extensionBindings: options.extensionBindings } : {}),
+		...(permissionRules ? { permissionRules } : {}),
 	});
 	const result: SingleResult = withRunContext({
 		index: options.index ?? 0,
@@ -1018,7 +1020,9 @@ async function runSingleAttempt(
 			}
 			if (evt.type === "agent_start") {
 				const diagnostic = capture.toolDiagnostic();
-				if (diagnostic) {
+				// Disabled (non-internal) tools warn at settlement and the run
+				// continues; only fatally missing tools abort the child here.
+				if (diagnostic && hasFatalMissingTools(diagnostic)) {
 					const message = formatChildToolDiagnostic(diagnostic, { host: "parent" });
 					toolAvailabilityError = message;
 					result.error = message;
@@ -1312,8 +1316,14 @@ async function runSingleAttempt(
 			sessionSettled = true;
 			clearFinalDrainTimers();
 			const diagnostic = capture.toolDiagnostic();
-			const toolDiagnosticError = diagnostic ? formatChildToolDiagnostic(diagnostic, { host: "parent" }) : undefined;
+			// Disabled tools warn and the run keeps its own result; only fatal
+			// misses become settlement errors.
+			const toolDiagnosticError = diagnostic && hasFatalMissingTools(diagnostic)
+				? formatChildToolDiagnostic(diagnostic, { host: "parent" })
+				: undefined;
 			toolAvailabilityError = toolDiagnosticError;
+			const disabledWarning = diagnostic && !toolDiagnosticError ? formatChildToolDisabledWarning(diagnostic) : undefined;
+			if (disabledWarning) console.warn(`[pi-subagents] ${disabledWarning}`);
 			result.runtimeAcknowledgedExtensions = capture.runtimeAcknowledgedExtensions();
 			if (session?.machineEvidence) result.nativeMachine = { provider: "herdr", machineId: session.machineEvidence.machineId, ...(session.machineEvidence.initial ? { initialGit: session.machineEvidence.initial } : {}), ...(session.machineEvidence.final ? { finalGit: session.machineEvidence.final } : {}) };
 			let closeError = result.error ?? toolDiagnosticError ?? assistantError;

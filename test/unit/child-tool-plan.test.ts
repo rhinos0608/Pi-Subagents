@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
-import { getHostBuiltinToolNames, resolvePiLaunchToolPlan } from "../../src/runs/shared/child-tool-plan.ts";
+import { canonicalizeChildToolEntry, getHostAvailableTools, getHostBuiltinToolNames, resolvePiLaunchToolPlan } from "../../src/runs/shared/child-tool-plan.ts";
 import { buildInProcessChildLaunch } from "../../src/runs/shared/child-launch.ts";
 import { MCP_RUNTIME_SNAPSHOT_EVENT, MCP_RUNTIME_SNAPSHOT_VERSION, type McpRuntimeSnapshotHost } from "../../src/runs/shared/mcp-direct-tool-allowlist.ts";
 
@@ -261,6 +261,50 @@ describe("production launch path supplies hostAvailableBuiltins", () => {
 		};
 		const builtins = getHostBuiltinToolNames(mockPi);
 		assert.deepEqual(builtins, ["read", "bash"]);
+	});
+
+	it("resolves display labels to internal tool names", () => {
+		const plan = resolvePiLaunchToolPlan({
+			tools: ["Browser"],
+			hostAvailableTools: [{ name: "browser", label: "Browser" }],
+			agentName: "worker",
+		});
+		assert.deepEqual(plan.requestedBuiltinTools, ["browser"]);
+		assert.deepEqual(plan.requiredChildTools, ["browser"]);
+		assert.deepEqual(plan.effectiveToolAllowlist, ["browser"]);
+		assert.ok(plan.warnings.some((warning) => warning.includes("'Browser' resolved to internal tool 'browser'")));
+	});
+
+	it("admits case variants without a host registry so Pi activates either spelling", () => {
+		const plan = resolvePiLaunchToolPlan({ tools: ["Browser"] });
+		assert.deepEqual(plan.requestedBuiltinTools, ["Browser"]);
+		assert.deepEqual(plan.effectiveToolAllowlist, ["Browser", "browser"]);
+		assert.deepEqual(plan.requiredChildTools, ["Browser"]);
+		assert.deepEqual(plan.warnings, []);
+	});
+
+	it("resolves display labels in excludeTools", () => {
+		const plan = resolvePiLaunchToolPlan({
+			tools: ["read", "browser"],
+			excludeTools: ["Browser"],
+			hostAvailableTools: [{ name: "browser", label: "Browser" }],
+		});
+		assert.deepEqual(plan.effectiveToolAllowlist, ["read"]);
+	});
+
+	it("canonicalizeChildToolEntry prefers exact names, then labels, then case-insensitive matches", () => {
+		const known = [{ name: "browser", label: "Browser" }, { name: "read" }];
+		assert.equal(canonicalizeChildToolEntry("browser", known), "browser");
+		assert.equal(canonicalizeChildToolEntry("Browser", known), "browser");
+		assert.equal(canonicalizeChildToolEntry("BROWSER", known), "browser");
+		assert.equal(canonicalizeChildToolEntry("READ", known), "read");
+		assert.equal(canonicalizeChildToolEntry("unknown_tool", known), "unknown_tool");
+	});
+
+	it("getHostAvailableTools extracts name and label identities", () => {
+		const host = { getAllTools: () => [{ name: "browser", label: "Browser" }, { name: "read" }] };
+		assert.deepEqual(getHostAvailableTools(host as never), [{ name: "browser", label: "Browser" }, { name: "read" }]);
+		assert.deepEqual(getHostAvailableTools({ getAllTools: () => { throw new Error("Not available"); } } as never), []);
 	});
 
 	it("getHostBuiltinToolNames returns undefined on failure or empty results", () => {

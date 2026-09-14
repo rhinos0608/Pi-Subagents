@@ -9,8 +9,8 @@ const INTERNAL_TOOLS = new Set(["contact_supervisor", "intercom", "bg_wait", "st
 const DECISIONS = new Set<PermissionDecision>(["allow", "ask", "deny"]);
 const MAX_POLICY_BYTES = 16 * 1024;
 const MAX_PREVIEW_BYTES = 2048;
-const SECRET_KEY = /(?:authorization|cookie|credential|password|secret|token|api[-_]?key)/i;
-const SECRET_VALUE = /\b(?:Bearer\s+\S+|(?:sk|ghp|github_pat|xox[baprs])[-_A-Za-z0-9]{8,})\b/gi;
+const SECRET_KEY = /(?:authorization|cookie|credential|password|secret|token|api[-_]?key|access[-_]?key|private[-_]?key|client[-_]?secret|session[-_]?key)/i;
+const SECRET_VALUE = /\b(?:Bearer\s+\S+|(?:sk|ghp|github_pat|xox[baprs])[-_A-Za-z0-9]{8,}|AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16})\b|-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/gi;
 
 export function redactSecretValues(value: string): string {
 	return value.replace(SECRET_VALUE, "[redacted]");
@@ -22,8 +22,8 @@ export function validatePermissionRules(value: unknown, label: string): Permissi
 	const result: PermissionRules = {};
 	for (const [tool, decision] of Object.entries(value)) {
 		if (!tool.trim()) throw new Error(`${label} contains an empty tool name.`);
-		if (tool === "bash") throw new Error(`${label}.bash is unsupported; pi-subagents leaves bash policy to pi-guard.`);
-		if (INTERNAL_TOOLS.has(tool)) throw new Error(`${label}.${tool} is reserved for child coordination and cannot be gated.`);
+		if (tool.toLowerCase() === "bash") throw new Error(`${label}.bash is unsupported; pi-subagents leaves bash policy to pi-guard.`);
+		if ([...INTERNAL_TOOLS].some((internal) => internal.toLowerCase() === tool.toLowerCase())) throw new Error(`${label}.${tool} is reserved for child coordination and cannot be gated.`);
 		if (!DECISIONS.has(decision as PermissionDecision)) throw new Error(`${label}.${tool} must be allow, ask, or deny.`);
 		result[tool] = decision as PermissionDecision;
 	}
@@ -45,9 +45,22 @@ export function resolvePermissionRules(globalConfig?: PermissionConfig, agentRul
 	return Object.keys(merged).length ? merged : undefined;
 }
 
+/**
+ * Look up the decision for a runtime (internal-name) tool call. Rule keys are
+ * user-written, so matching is case-insensitive: a `deny`/`ask` rule must
+ * catch label- or case-variant spellings of the same tool. Remaining rules
+ * only ever restrict (merged `allow` entries are removed), so the leniency
+ * is fail-closed.
+ */
 export function permissionDecision(rules: PermissionRules | undefined, toolName: string): PermissionDecision {
 	if (toolName === "bash" || INTERNAL_TOOLS.has(toolName)) return "allow";
-	return rules?.[toolName] ?? "allow";
+	if (!rules) return "allow";
+	if (Object.hasOwn(rules, toolName)) return rules[toolName] as PermissionDecision;
+	const lowered = toolName.toLowerCase();
+	for (const [key, decision] of Object.entries(rules)) {
+		if (key.toLowerCase() === lowered) return decision as PermissionDecision;
+	}
+	return "allow";
 }
 
 

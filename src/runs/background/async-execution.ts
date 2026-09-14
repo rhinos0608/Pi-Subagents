@@ -15,7 +15,7 @@ import { buildEffectiveSystemPrompt } from "../shared/effective-system-prompt.ts
 import { currentCompletionOwnerId } from "../../shared/completion-owner.ts";
 import { planChildLaunch, resolveEffectiveOutputSchema, resolveStepBehavior, suppressProgressForReadOnlyTask, type ResolvedStepBehavior } from "../shared/child-launch-plan.ts";
 import { formatHerdrMachineRunnerUnsupported, resolveHerdrMachinePlacement } from "../shared/herdr-machine.ts";
-import { applyThinkingSuffix, getHostBuiltinToolNames, projectLaunchResolvedChildExtensions, resolvePiLaunchToolPlan } from "../shared/child-tool-plan.ts";
+import { applyThinkingSuffix, getHostAvailableTools, getHostBuiltinToolNames, projectLaunchResolvedChildExtensions, resolvePiLaunchToolPlan } from "../shared/child-tool-plan.ts";
 import { injectSingleOutputInstruction, normalizeSingleOutputOverride, resolveSingleOutputPath, validateFileOnlyOutputMode } from "../shared/single-output.ts";
 import { applyWatchdogLaunchRules, sendRuleViolationWarning } from "../../watchdog/rules.ts";
 import { buildChainInstructions, isDynamicParallelStep, isParallelStep, resolveExistingReadInstructionPaths, resolveExistingReadPaths, writeInitialProgressFile, type ChainStep, type SequentialStep, type StepOverrides } from "../../shared/settings.ts";
@@ -64,6 +64,7 @@ import {
 	SUBAGENT_ASYNC_STARTED_EVENT,
 	SUBAGENT_LIFECYCLE_ARTIFACT_VERSION,
 	TEMP_ROOT_DIR,
+	ensureTempRootDir,
 	getAsyncConfigPath,
 	resolveChildMaxSubagentDepth,
 } from "../../shared/types.ts";
@@ -573,7 +574,7 @@ function spawnRunner(cfg: object, suffix: string, cwd: string, initialStatus: Om
 		return { error: `Background children require the host npm package (${PI_CODING_AGENT_PACKAGE}) with its dependencies; ${piPackageRoot} does not provide ${hostPeerAliases.missing.join(", ")}.` };
 	}
 
-	fs.mkdirSync(TEMP_ROOT_DIR, { recursive: true });
+	ensureTempRootDir();
 	const cfgPath = getAsyncConfigPath(suffix);
 	const runnerProcessInstanceId = randomUUID();
 	const hasRevivalLease = typeof (cfg as { revivalLease?: unknown }).revivalLease === "object";
@@ -1004,6 +1005,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 		if (launchRuleError) throw new AsyncStartValidationError(launchRuleError);
 		const fast = s.fast ?? params.fast ?? a.fast;
 		const hostAvailableBuiltins = getHostBuiltinToolNames(ctx.pi);
+		const hostAvailableTools = getHostAvailableTools(ctx.pi);
 		const requiredExtensions = externalRunner ? [] : ctx.childRuntime?.requiredExtensions ?? resolveRequiredChildExtensions(ctx.parentSessionId ?? ctx.currentSessionId ?? undefined);
 		const toolPlan = resolvePiLaunchToolPlan({
 			tools: a.tools,
@@ -1025,6 +1027,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 			permissionRules,
 			runtimeSnapshotHost: ctx.pi,
 			hostAvailableBuiltins,
+			hostAvailableTools,
 		});
 		const launchResolvedExtensions = externalRunner ? undefined : projectLaunchResolvedChildExtensions(toolPlan);
 		if (externalRunner && permissionRules) {
@@ -1437,6 +1440,7 @@ export function executeAsyncChain(
 				globalConcurrencyLimit: params.globalConcurrencyLimit,
 				runFanoutBudget,
 				hostAvailableBuiltins: getHostBuiltinToolNames(ctx.pi),
+				hostAvailableTools: getHostAvailableTools(ctx.pi),
 				workflowGraph,
 				...(params.parentWorkflowRunId ? { parentWorkflowRunId: params.parentWorkflowRunId } : {}),
 				...(params.workflowKey ? { workflowKey: params.workflowKey } : {}),
@@ -1827,7 +1831,8 @@ export function executeAsyncSingle(
 			return formatAsyncStartError("single", error instanceof Error ? error.message : String(error));
 		}
 	}
-	const hostAvailableBuiltins = getHostBuiltinToolNames(ctx.pi);
+		const hostAvailableBuiltins = getHostBuiltinToolNames(ctx.pi);
+	const hostAvailableTools = getHostAvailableTools(ctx.pi);
 	const requiredExtensions = externalRunner ? [] : params.requiredExtensions ?? ctx.childRuntime?.requiredExtensions ?? resolveRequiredChildExtensions(ctx.parentSessionId ?? ctx.currentSessionId ?? undefined);
 	const toolPlan = resolvePiLaunchToolPlan({
 		tools: agentConfig.tools,
@@ -1849,6 +1854,7 @@ export function executeAsyncSingle(
 		permissionRules: resolvePermissionRules(ctx.permissions, agentConfig.permissions),
 		runtimeSnapshotHost: ctx.pi,
 		hostAvailableBuiltins,
+		hostAvailableTools,
 	});
 	const launchResolvedExtensions = externalRunner ? undefined : projectLaunchResolvedChildExtensions(toolPlan);
 	if (!externalRunner) {
@@ -1880,6 +1886,7 @@ export function executeAsyncSingle(
 		outputMode,
 		...(params.structuredOutputSchema ? { structuredOutputSchema: params.structuredOutputSchema } : {}),
 		...(extensionBindings ? { extensionBindings } : {}),
+		...(permissionRules ? { permissionRules } : {}),
 	});
 	const resolvedAcceptance = resolveEffectiveAcceptance({
 		explicit: params.acceptance,
@@ -2065,6 +2072,7 @@ export function executeAsyncSingle(
 				launchResolvedExtensions,
 				runFanoutBudget,
 				hostAvailableBuiltins,
+				hostAvailableTools,
 				...(params.parentWorkflowRunId ? { parentWorkflowRunId: params.parentWorkflowRunId } : {}),
 				...(params.workflowKey ? { workflowKey: params.workflowKey } : {}),
 				...(lane ? { lane } : {}),
