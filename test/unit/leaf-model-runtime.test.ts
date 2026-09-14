@@ -1,11 +1,15 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { RUNTIME_RPC_BOUNDS } from "../../src/api/runtime-rpc.ts";
+import { RUNTIME_RPC_BOUNDS, VERIFIED_RUNTIME_HOST_VERSIONS } from "../../src/api/runtime-rpc.ts";
 import { LeafModelRuntime, RuntimeError } from "../../src/runs/runtime/leaf-model-runtime.ts";
 import type { LeafHost } from "../../src/runs/runtime/leaf-model-session.ts";
 
+// Defense-in-depth (requireAvailable) rejects unverified hosts, so fixtures use
+// a genuinely allowlisted version; the unverified-host case has its own test.
+const VERIFIED_HOST_VERSION = VERIFIED_RUNTIME_HOST_VERSIONS[0] as string;
+
 const FAKE_MODELS = [{ provider: "openai", id: "gpt-5-mini", fullId: "openai/gpt-5-mini", api: "openai-responses", maxTokens: 8192 }];
-const HOST = { hostVersion: "test", listModels: () => FAKE_MODELS, createLeafSession: async () => { throw new Error("unused"); } } as unknown as LeafHost;
+const HOST = { hostVersion: VERIFIED_HOST_VERSION, listModels: () => FAKE_MODELS, createLeafSession: async () => { throw new Error("unused"); } } as unknown as LeafHost;
 
 function startParams(overrides: Record<string, unknown> = {}) {
 	return {
@@ -87,7 +91,7 @@ describe("leaf runtime manager", () => {
 		let aborted = 0;
 		const runtime = new LeafModelRuntime({
 			host: {
-				hostVersion: "t",
+				hostVersion: VERIFIED_HOST_VERSION,
 				listModels: () => FAKE_MODELS,
 				createLeafSession: async () => ({
 					prompt: () => gate.promise,
@@ -108,7 +112,7 @@ describe("leaf runtime manager", () => {
 		const settling = runtime.cancelAndSettle([running.runId], 5_000);
 		await new Promise((resolve) => setTimeout(resolve, 25));
 		assert.ok(aborted >= 1);
-		gate.resolve({ output: "late", outputTokens: 2, toolCalls: 0, providerInvocations: 1 });
+		gate.resolve({ output: "late", text: "late", outputTokens: 2, toolCalls: 0, providerInvocations: 1 });
 		const settled = await settling;
 		assert.deepEqual(settled.settlements.map((entry) => entry.state), ["completed"]);
 		const settledDone = await done.cancelAndSettle([finished.runId], 5_000);
@@ -127,7 +131,7 @@ describe("leaf runtime manager", () => {
 	it("hung abort produces bounded contract_breach and trips the breaker", async () => {
 		const runtime = new LeafModelRuntime({
 			host: {
-				hostVersion: "t",
+				hostVersion: VERIFIED_HOST_VERSION,
 				listModels: () => FAKE_MODELS,
 				createLeafSession: async () => ({
 					prompt: () => new Promise(() => {}),
@@ -153,7 +157,7 @@ describe("leaf runtime manager", () => {
 		let timeoutAborted = 0;
 		const timeoutRuntime = new LeafModelRuntime({
 			host: {
-				hostVersion: "t",
+				hostVersion: VERIFIED_HOST_VERSION,
 				listModels: () => FAKE_MODELS,
 				createLeafSession: async () => ({
 					prompt: () => new Promise<never>((_, reject) => {
@@ -177,10 +181,10 @@ describe("leaf runtime manager", () => {
 		await timeoutRuntime.shutdown(5);
 	});
 
-	it("timeout with abort-ignoring provider keeps the slot reserved", async () => {
+	it("timeout with hung provider forfeits the slot after a bounded grace", async () => {
 		const runtime = new LeafModelRuntime({
 			host: {
-				hostVersion: "t",
+				hostVersion: VERIFIED_HOST_VERSION,
 				listModels: () => FAKE_MODELS,
 				createLeafSession: async () => ({
 					prompt: () => new Promise(() => {}),
@@ -192,12 +196,83 @@ describe("leaf runtime manager", () => {
 			cwd: "/repo",
 		});
 		const run = runtime.start({ ...startParams(), timeoutMs: 15 });
-		await new Promise((resolve) => setTimeout(resolve, 60));
-		// Orphan provider work: run stays running, slot reserved, no false cancel.
-		assert.equal(runtime.status(run.runId).state, "running");
-		assert.equal(runtime.activeRuns, 1);
-		await assert.rejects(runtime.cancelAndSettle([run.runId], 15), (error: unknown) => error instanceof RuntimeError && error.code === "contract_breach");
-		assert.equal(runtime.isUnhealthy, true);
+		const settled = (runtime as unknown as { runs: Map<string, { settled: Promise<void> }> }).runs.get(run.runId)!.settled;
+		let settledResolved = false;
+		void settled.then(() => { settledResolved = true; });
+		// Hung orphan: run force-finishes cancelled, slot freed, breaker untripped.
+		await new Promise((resolve) => setTimeout(resolve, 500));
+		assert.equal(runtime.status(run.runId).state, "cancelled");
+		assert.equal(settledResolved, true);
+		assert.equal(runtime.activeRuns, 0);
+		assert.equal(runtime.isUnhealthy, false);
+		// Slots reusable: fill to capacity, 5th start still capacity_exceeded.
+		const gates: Array<(value: { output: string; outputTokens: number }) => void> = [];
+		const gatedHost = {
+			hostVersion: VERIFIED_HOST_VERSION,
+			listModels: () => FAKE_MODELS,
+			createLeafSession: async () => ({
+				prompt: () => new Promise<{ output: string; outputTokens: number }>((resolve) => { gates.push(resolve); }),
+				abort: async () => {},
+				waitForIdle: async () => {},
+				dispose: async () => {},
+			}),
+		} as unknown as LeafHost;
+		runtime.setHost(gatedHost);
+		for (let i = 0; i < RUNTIME_RPC_BOUNDS.maxParallelRuns; i += 1) runtime.start(startParams());
+		assert.equal(runtime.activeRuns, RUNTIME_RPC_BOUNDS.maxParallelRuns);
+		assert.throws(() => runtime.start(startParams()), (error: unknown) => error instanceof RuntimeError && error.code === "capacity_exceeded");
+		for (const release of gates) release({ output: "ok", outputTokens: 2 });
+		await new Promise((resolve) => setTimeout(resolve, 50));
 		await runtime.shutdown(5);
+	});
+
+	it("shutdown with hung abort resolves bounded and force-finishes cancelled", async () => {
+		const runtime = new LeafModelRuntime({
+			host: {
+				hostVersion: VERIFIED_HOST_VERSION,
+				listModels: () => FAKE_MODELS,
+				createLeafSession: async () => ({
+					prompt: () => new Promise(() => {}),
+					abort: () => new Promise<void>(() => {}),
+					waitForIdle: async () => {},
+					dispose: async () => {},
+				}),
+			} as unknown as LeafHost,
+			cwd: "/repo",
+		});
+		const run = runtime.start({ ...startParams(), timeoutMs: 600_000 });
+		const settled = (runtime as unknown as { runs: Map<string, { settled: Promise<void> }> }).runs.get(run.runId)!.settled;
+		let settledResolved = false;
+		void settled.then(() => { settledResolved = true; });
+		const startedAt = Date.now();
+		await runtime.shutdown(20);
+		const elapsed = Date.now() - startedAt;
+		assert.ok(elapsed < 2_000, `shutdown stuck: ${elapsed}ms`);
+		assert.equal(settledResolved, true);
+		// shutdown nulls the host, so status() fails closed; assert terminal state via the record.
+		const records = (runtime as unknown as { runs: Map<string, { state: string }> }).runs;
+		assert.equal(records.get(run.runId)!.state, "cancelled");
+		assert.equal(runtime.activeRuns, 0);
+		assert.equal(runtime.isUnhealthy, false);
+		// Dead runtime fails closed: no re-arm, no new starts.
+		assert.throws(() => runtime.start(startParams()), (error: unknown) => error instanceof RuntimeError && error.code === "runtime_unavailable");
+	});
+
+	it("setHost after shutdown cannot re-arm the runtime", async () => {
+		const runtime = new LeafModelRuntime({ host: HOST, cwd: "/repo" });
+		await runtime.shutdown(5);
+		runtime.setHost(HOST);
+		assert.throws(() => runtime.start(startParams()), (error: unknown) => error instanceof RuntimeError && error.code === "runtime_unavailable");
+	});
+
+	it("directly-constructed runtime with an unverified host fails closed", () => {
+		const runtime = new LeafModelRuntime({
+			host: { hostVersion: "evil-unverified", listModels: () => FAKE_MODELS } as unknown as LeafHost,
+			cwd: "/repo",
+		});
+		assert.throws(() => runtime.start(startParams()), (error: unknown) => error instanceof RuntimeError && error.code === "runtime_unavailable");
+		const gated = new LeafModelRuntime({ host: HOST, cwd: "/repo" });
+		gated.setHost({ hostVersion: "0.0.0-pi-subagents-test-shim", listModels: () => FAKE_MODELS } as unknown as LeafHost);
+		assert.throws(() => gated.start(startParams()), (error: unknown) => error instanceof RuntimeError && error.code === "runtime_unavailable");
 	});
 });

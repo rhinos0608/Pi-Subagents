@@ -779,6 +779,9 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 			if (probed) {
 				leafRuntime.setHost(probed);
 				runtimeBridgeOptions.hostVersion = probed.hostVersion;
+				// The gate opens only after a verified probe: emit ready now that
+				// the host and readiness version are bound together.
+				await runtimeBridge.emitReady();
 			}
 		})();
 	}

@@ -14,7 +14,7 @@ import {
 	type RuntimeRunState,
 	type RuntimeStartV1,
 } from "../../api/runtime-rpc.ts";
-import { executeLeafRun, LeafFailure, type LeafHost } from "./leaf-model-session.ts";
+import { executeLeafRun, isVerifiedHostVersion, LeafFailure, type LeafHost } from "./leaf-model-session.ts";
 
 export type RuntimeErrorCode =
 	| "runtime_unavailable"
@@ -51,6 +51,7 @@ interface RunRecord {
 	retainedBytes?: number;
 	abort: () => Promise<void>;
 	settled: Promise<void>;
+	resolveSettled: () => void;
 	expiredTimer?: ReturnType<typeof setTimeout>;
 }
 
@@ -64,6 +65,25 @@ export interface LeafRuntimeOptions {
 		outputTokens: number;
 	}>;
 	onStateChange?: (runId: string, state: RuntimeRunState) => void;
+}
+
+/** Bounded grace for aborted provider work to settle after a timeout before
+ * the slot is forfeited (see timeout path). Small: abort propagation is
+ * in-process promise resolution; hung work must not hold slots. */
+const TIMEOUT_ORPHAN_GRACE_MS = 100;
+
+/** Race work against a setTimeout deadline; timer never outlives race. */
+async function raceWithDeadline<T>(work: Promise<T>, ms: number): Promise<T | undefined> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	try {
+		const deadline = new Promise<undefined>((resolve) => {
+			timer = setTimeout(() => resolve(undefined), ms);
+			timer.unref?.();
+		});
+		return await Promise.race([work, deadline]);
+	} finally {
+		if (timer) clearTimeout(timer);
+	}
 }
 
 function leafCodeToRuntime(code: string): RuntimeErrorCode {
@@ -89,6 +109,7 @@ export class LeafModelRuntime {
 	private runningCount = 0;
 	private retainedBytes = 0;
 	private unhealthy = false;
+	private disposed = false;
 	private readonly now: () => number;
 
 	constructor(options: LeafRuntimeOptions) {
@@ -104,13 +125,17 @@ export class LeafModelRuntime {
 		return this.runningCount;
 	}
 
-	/** Binds the probed host after async verification; fail-closed until set. */
+	/** Binds the probed host after async verification; fail-closed until set. Late
+	 * probes resolving during/after shutdown are ignored so a dead runtime is
+	 * never re-armed (shutdown also nulls the host). */
 	setHost(host: LeafHost | null): void {
+		if (this.disposed) return;
 		this.options.host = host;
 	}
 
 	private requireAvailable(): void {
-		if (this.options.host === null) throw new RuntimeError("runtime_unavailable");
+		const host = this.options.host;
+		if (host === null || !isVerifiedHostVersion(host.hostVersion)) throw new RuntimeError("runtime_unavailable");
 		if (this.unhealthy) throw new RuntimeError("contract_breach");
 	}
 
@@ -155,6 +180,7 @@ export class LeafModelRuntime {
 			updatedAt: this.now(),
 			abort: () => abortFn(),
 			settled,
+			resolveSettled: () => resolveSettled(),
 		};
 		this.runs.set(runId, record);
 		this.runningCount += 1;
@@ -184,6 +210,12 @@ export class LeafModelRuntime {
 		});
 		const finish = (next: Exclude<RuntimeRunState, "running">, extra?: Partial<RunRecord>) => {
 			if (timeout) clearTimeout(timeout);
+			// A concurrent bounded shutdown may have force-finished this record;
+			// never double-transition (that would spuriously trip the breaker).
+			if (record.state !== "running") {
+				hooks.done();
+				return;
+			}
 			Object.assign(record, extra);
 			try {
 				this.transition(record, next);
@@ -235,12 +267,13 @@ export class LeafModelRuntime {
 			finish(timedOut ? "cancelled" : "completed", { output: outcome.output, outputTokens: outcome.outputTokens });
 		} catch (error) {
 			if (timedOut || (error instanceof RuntimeError && error.code === "timeout")) {
-				// Slot stays reserved until provider work actually settles: await
-				// the aborted work so orphan execution never frees concurrency.
-				// Hung work keeps the run `running`; cancelAndSettle then trips
-				// the breaker with contract_breach instead of false settlement.
+				// Slot-forfeit vs breaker tradeoff: the slot must not leak on hung
+				// provider work, so the aborted work is awaited only for a bounded
+				// grace period. A truly-hung provider frees the slot here while its
+				// orphan may still run; the run is force-finished as cancelled either
+				// way and the breaker stays untripped (no false settlement claim).
 				try {
-					await work!;
+					await raceWithDeadline(work!, TIMEOUT_ORPHAN_GRACE_MS);
 				} catch { /* aborted work rejection is expected */ }
 				finish("cancelled", { errorCode: "timeout" });
 				return;
@@ -345,21 +378,40 @@ export class LeafModelRuntime {
 		return { settlements };
 	}
 
-	/** Bounded async shutdown for lifecycle barriers. */
+	/** Force-finishes a still-running record as cancelled: transitions (freeing
+	 * its slot) and resolves its settled promise so waiters never stick. */
+	private forceFinishCancelled(record: RunRecord): void {
+		if (record.state !== "running") return;
+		try {
+			this.transition(record, "cancelled");
+		} catch {
+			// Already terminal; settled resolution below still applies.
+		}
+		record.resolveSettled();
+	}
+
+	/** Bounded async shutdown for lifecycle barriers. ALWAYS resolves within
+	 * ~settlementWindowMs: the abort-all phase is raced against the deadline
+	 * (mirroring cancelAndSettle), and any record still running at the deadline
+	 * is force-finished as cancelled with its settled promise resolved — never
+	 * leaving waiters or the readiness barrier stuck. Nulls the host so late
+	 * probes cannot re-arm the dead runtime. */
 	async shutdown(settlementWindowMs = RUNTIME_RPC_BOUNDS.maxSettlementWindowMs): Promise<void> {
+		this.disposed = true;
+		this.options.host = null;
 		const running = [...this.runs.values()].filter((record) => record.state === "running");
-		await Promise.allSettled(running.map((record) => record.abort().catch(() => {})));
 		const deadline = this.now() + settlementWindowMs;
+		const abortPhase = Promise.allSettled(running.map((record) => record.abort().catch(() => {})));
+		await raceWithDeadline(abortPhase, Math.max(0, deadline - this.now()));
 		for (const record of running) {
+			if (record.state !== "running") continue;
 			const remaining = deadline - this.now();
-			if (remaining <= 0) break;
-			await Promise.race([
-				record.settled.catch(() => {}),
-				new Promise((resolve) => {
-					const timer = setTimeout(resolve, remaining);
-					timer.unref?.();
-				}),
-			]);
+			if (remaining <= 0) {
+				this.forceFinishCancelled(record);
+				continue;
+			}
+			await raceWithDeadline(record.settled.catch(() => {}), remaining);
+			if (record.state === "running") this.forceFinishCancelled(record);
 		}
 		for (const record of this.runs.values()) {
 			if (record.expiredTimer) clearTimeout(record.expiredTimer);
