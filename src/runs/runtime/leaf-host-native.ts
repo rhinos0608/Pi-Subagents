@@ -8,21 +8,39 @@
  *
  * Isolation contract per session:
  * - storage: `SessionManager.inMemory(spec.cwd)` (no session file persists)
- * - tools: `noTools: "all"` plus empty `excludeTools` (zero tools)
+ * - tools: `noTools: "all"` plus explicit `excludeTools` of the known
+ *   builtins (`LEAF_EXCLUDE_TOOLS`); creation-time and pre-prompt
+ *   `getActiveToolNames()` readbacks must be empty (fail closed)
  * - system prompt: `LEAF_SYSTEM_PROMPT` via the resource-loader seam
  *   (`systemPrompt` option; ambient discovery off via `noExtensions`,
- *   `noSkills`, `noPromptTemplates`, `noThemes`, `noContextFiles`)
+ *   `noSkills`, `noPromptTemplates`, `noThemes`, `noContextFiles`); the
+ *   live `session.systemPrompt` must start with `LEAF_SYSTEM_PROMPT`
  * - model: exact pi-ai registry lookup, then the requested cap enforced on
  *   the pi-ai `Model` object itself (`maxTokens` replaced, never widened)
- * - retries/compaction: disabled on the settings manager and the session
- * - turns: single `prompt()` then dispose; `executeLeafRun` enforces exactly
- *   one provider invocation with zero tool calls (maxTurns 1 semantics)
+ * - retries/compaction: disabled on the settings manager (best-effort) and
+ *   on the session with set-then-readback verification (fail closed)
+ * - turns: the SDK exposes no turn-budget seam (`maxTurns` lives on the
+ *   spec only, never passed to `createAgentSession`), so prevention is
+ *   best-effort by construction: the adapter aborts the session after the
+ *   first assistant `message_end`, and `executeLeafRun` rejects
+ *   `providerInvocations !== 1` as post-hoc detection
  *
  * Every provider/SDK failure surfaces as `LeafFailure("provider_error")`
  * with a fixed message. Provider exception text never propagates.
+ *
+ * Residuals (documented, not silent):
+ * - outbound payload: the SDK hides the transmitted provider payload, so
+ *   no pre-transmission cap proof is possible here; the spec-cap check runs
+ *   before any provider call and over-cap usage fails post-hoc.
+ * - system prompt: the SDK appends a `Current working directory:` line to
+ *   the effective prompt (`core/system-prompt.js`), so verification is a
+ *   head/prefix check, not exact equality.
+ * - tool seams: verified via `getActiveToolNames()`, falling back to
+ *   `getAllTools()`; a session exposing neither fails closed.
  */
 import { toModelInfo, type ModelInfo } from "../../shared/model-info.ts";
 import {
+	LEAF_EXCLUDE_TOOLS,
 	LEAF_SYSTEM_PROMPT,
 	LeafFailure,
 	type LeafHost,
@@ -59,6 +77,7 @@ export interface NativeSessionLike {
 	dispose(): void | Promise<void>;
 	subscribe(listener: (event: NativeSessionEvent) => void): () => void;
 	getActiveToolNames?(): string[];
+	getAllTools?(): Array<{ name?: unknown } | string>;
 	setActiveToolsByName?(toolNames: string[]): void;
 	setAutoRetryEnabled?(enabled: boolean): void;
 	setAutoCompactionEnabled?(enabled: boolean): void;
@@ -116,6 +135,26 @@ export function buildNativeResourceLoaderOptions(
 	};
 }
 
+/** Fail closed unless the session reports zero active tools. */
+function assertZeroTools(session: NativeSessionLike): void {
+	const names = session.getActiveToolNames?.();
+	if (names !== undefined && names !== null) {
+		if (!Array.isArray(names)) {
+			throw new LeafFailure("output_contract_breach", "Leaf tool state unverifiable.");
+		}
+		if (names.length !== 0) {
+			throw new LeafFailure("output_contract_breach", "Leaf run used tools.");
+		}
+		return;
+	}
+	const all = session.getAllTools?.();
+	if (Array.isArray(all)) {
+		if (all.length !== 0) throw new LeafFailure("output_contract_breach", "Leaf run used tools.");
+		return;
+	}
+	throw new LeafFailure("output_contract_breach", "Leaf tool state unverifiable.");
+}
+
 /** Native `LeafHost` over real-SDK modules. All failures stay `LeafFailure`. */
 export function createNativeLeafHost(
 	modules: NativeSdkModules,
@@ -125,21 +164,25 @@ export function createNativeLeafHost(
 	return {
 		hostVersion,
 		listModels(): ModelInfo[] {
-			const infos: ModelInfo[] = [];
-			for (const provider of modules.getBuiltinProviders()) {
-				for (const model of modules.getBuiltinModels(provider)) {
-					infos.push(
-						toModelInfo({
-							provider: model.provider,
-							id: model.id,
-							api: model.api,
-							contextWindow: model.contextWindow,
-							maxTokens: model.maxTokens,
-						}),
-					);
+			try {
+				const infos: ModelInfo[] = [];
+				for (const provider of modules.getBuiltinProviders()) {
+					for (const model of modules.getBuiltinModels(provider)) {
+						infos.push(
+							toModelInfo({
+								provider: model.provider,
+								id: model.id,
+								api: model.api,
+								contextWindow: model.contextWindow,
+								maxTokens: model.maxTokens,
+							}),
+						);
+					}
 				}
+				return infos;
+			} catch {
+				throw new LeafFailure("provider_error", "Leaf model catalog unavailable.");
 			}
-			return infos;
 		},
 		async createLeafSession(spec: LeafSessionSpec): Promise<LeafSessionHandle> {
 			// Exact registry lookup: no normalization, no aliases, no fallback.
@@ -201,30 +244,67 @@ export function createNativeLeafHost(
 					resourceLoader: loader,
 					model: cappedModel,
 					noTools: "all",
-					excludeTools: [],
+					excludeTools: [...LEAF_EXCLUDE_TOOLS],
 					...(overrides.modelRuntime !== undefined ? { modelRuntime: overrides.modelRuntime } : {}),
 				});
 				session = result.session;
 			} catch {
 				throw new LeafFailure("provider_error", "Leaf session creation failed.");
 			}
+			// Guard verification: every failure fails closed, and the session
+			// is disposed before throwing so a rejected session never leaks.
+			const failGuard = async (error: unknown): Promise<never> => {
+				try {
+					await session.dispose();
+				} catch {
+					// Dispose is best-effort; the guard error below is authoritative.
+				}
+				if (error instanceof LeafFailure) throw error;
+				throw new LeafFailure("output_contract_breach", "Leaf session guard unverifiable.");
+			};
 			try {
-				session.setAutoRetryEnabled?.(false);
-			} catch {
-				// Settings-manager flags above already disable retries.
+				assertZeroTools(session);
+			} catch (error) {
+				await failGuard(error);
 			}
 			try {
-				session.setAutoCompactionEnabled?.(false);
-			} catch {
-				// Settings-manager flags above already disable compaction.
+				const effective = session.systemPrompt;
+				if (typeof effective !== "string" || !effective.startsWith(LEAF_SYSTEM_PROMPT)) {
+					throw new LeafFailure("output_contract_breach", "Leaf system prompt altered.");
+				}
+			} catch (error) {
+				await failGuard(error);
+			}
+			try {
+				try {
+					session.setAutoRetryEnabled?.(false);
+				} catch {
+					throw new LeafFailure("output_contract_breach", "Leaf retry guard unverifiable.");
+				}
+				if (session.autoRetryEnabled !== false) {
+					throw new LeafFailure("output_contract_breach", "Leaf retry guard unverifiable.");
+				}
+				try {
+					session.setAutoCompactionEnabled?.(false);
+				} catch {
+					throw new LeafFailure("output_contract_breach", "Leaf compaction guard unverifiable.");
+				}
+				if (session.autoCompactionEnabled !== false) {
+					throw new LeafFailure("output_contract_breach", "Leaf compaction guard unverifiable.");
+				}
+			} catch (error) {
+				await failGuard(error);
 			}
 			try {
 				overrides.onSession?.(session);
 			} catch {
 				// Observer failures never break session creation.
 			}
+			let aborted = false;
 			return {
 				async prompt(text: string): Promise<LeafPromptResult> {
+					// Extensions could activate tools between creation and prompt.
+					assertZeroTools(session);
 					let toolCalls = 0;
 					const assistantEnds: NonNullable<NativeSessionEvent["message"]>[] = [];
 					let unsubscribe: (() => void) | undefined;
@@ -234,6 +314,17 @@ export function createNativeLeafHost(
 							if (event.type === "tool_execution_start") toolCalls += 1;
 							if (event.type === "message_end" && event.message?.role === "assistant") {
 								assistantEnds.push(event.message);
+								if (assistantEnds.length === 1) {
+									// Best-effort single-turn prevention: abort before
+									// a second LLM call can start. Detection stays
+									// post-hoc via providerInvocations in
+									// executeLeafRun.
+									try {
+										void session.abort().catch(() => {});
+									} catch {
+										// Abort races never fail the run; detection decides.
+									}
+								}
 							}
 						});
 					} catch {
@@ -251,6 +342,7 @@ export function createNativeLeafHost(
 							// Listener teardown never fails the run.
 						}
 					}
+					if (aborted) throw new LeafFailure("provider_error", "Leaf prompt failed.");
 					const last = assistantEnds.at(-1);
 					if (!last) throw new LeafFailure("provider_error", "Leaf prompt failed.");
 					const outputText = Array.isArray(last.content)
@@ -268,6 +360,7 @@ export function createNativeLeafHost(
 					};
 				},
 				async abort(): Promise<void> {
+					aborted = true;
 					try {
 						await session.abort();
 					} catch {
@@ -282,7 +375,12 @@ export function createNativeLeafHost(
 					}
 				},
 				async dispose(): Promise<void> {
-					await session.dispose();
+					// Best-effort: dispose failures never leak raw text or fail the run.
+					try {
+						await session.dispose();
+					} catch {
+						// Swallowed intentionally.
+					}
 				},
 			};
 		},

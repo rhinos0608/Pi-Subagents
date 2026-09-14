@@ -27,6 +27,14 @@ import { resolveFromParent } from "./resolve-from-parent.ts";
 
 export const LEAF_SYSTEM_PROMPT = "Execute the user task. Return plain text only. Use no tools.";
 
+/**
+ * Known SDK default builtins (the SDK's `defaultActiveToolNames` in
+ * `core/sdk.js`): explicit `excludeTools` belt and braces behind
+ * `noTools: "all"`. That list is exactly these four; extension/custom
+ * tools are off separately via `noExtensions` + `noTools: "all"`.
+ */
+export const LEAF_EXCLUDE_TOOLS: readonly string[] = ["read", "bash", "edit", "write"];
+
 export interface AuditedLeafModel {
 	provider: string;
 	id: string;
@@ -41,7 +49,7 @@ export interface LeafSessionSpec {
 	model: AuditedLeafModel;
 	systemPrompt: string;
 	tools: [];
-	excludeTools: [];
+	excludeTools: string[];
 	ambientExtensions: false;
 	extensionPaths: [];
 	noSkills: true;
@@ -158,9 +166,13 @@ export function resolveEffectiveCap(model: AuditedLeafModel, requested: number):
 }
 
 /**
- * Assert the outbound provider payload carries the requested cap exactly,
- * before transmission. Throws before any network call on absence, widening,
- * or ambiguous duplication.
+ * Assert an observable outbound provider payload carries the requested cap
+ * exactly. Throws on absence, widening, or ambiguous duplication.
+ *
+ * Residual: the native adapter cannot observe the SDK's internal provider
+ * payload, so this validator is NOT wired into the live path — there the
+ * pre-call spec-cap check runs before any provider call and over-cap
+ * usage fails post-hoc. This covers payloads the caller can observe.
  */
 export function assertOutboundTokenCap(api: string, payload: unknown, expected: number): void {
 	if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
@@ -206,7 +218,7 @@ export function buildLeafSessionSpec(cwd: string, model: AuditedLeafModel, cap: 
 		model: cloneModelWithCap(model, cap),
 		systemPrompt: LEAF_SYSTEM_PROMPT,
 		tools: [],
-		excludeTools: [],
+		excludeTools: [...LEAF_EXCLUDE_TOOLS],
 		ambientExtensions: false,
 		extensionPaths: [],
 		noSkills: true,
@@ -234,15 +246,18 @@ export interface LeafRunSuccess {
 
 /**
  * One-turn leaf execution against an injected host. Verifies usage proof:
- * positive integer output usage required; over-cap usage fails; tool calls
- * or extra provider invocations fail; missing usage fails.
+ * finite positive integer output usage required; over-cap usage fails; tool
+ * calls, extra provider invocations, or empty/whitespace-only text fail;
+ * missing usage fails.
  */
 export async function executeLeafRun(host: LeafHost, input: LeafRunInput): Promise<LeafRunSuccess> {
 	const model = resolveExactModel(input.modelId, host.listModels());
 	const cap = resolveEffectiveCap(model, input.maxOutputTokens);
 	const spec = buildLeafSessionSpec(input.cwd, model, cap);
-	// Production outbound-cap proof: the audited session spec must carry the
-	// requested cap exactly. Rejects widening/clamping before any provider call.
+	// Pre-call spec-cap check: the audited session spec must carry the
+	// requested cap exactly. This rejects widening/clamping before any
+	// provider call but is NOT a pre-transmission payload proof — the SDK
+	// hides the transmitted payload (see assertOutboundTokenCap residual).
 	if (spec.model.maxTokens !== cap) throw new LeafFailure("output_contract_breach", "Leaf spec cap absent or altered.");
 	const session = await host.createLeafSession(spec).catch((error) => {
 		if (error instanceof LeafFailure) throw error;
@@ -260,11 +275,21 @@ export async function executeLeafRun(host: LeafHost, input: LeafRunInput): Promi
 	if (result.toolCalls !== 0) throw new LeafFailure("output_contract_breach", "Leaf run used tools.");
 	if (result.providerInvocations !== 1) throw new LeafFailure("output_contract_breach", "Leaf run left single-turn contract.");
 	// pi-ai initializes zero usage when the provider omits it; zero is not
-	// proof. Require positive reported usage.
-	if (typeof result.outputTokens !== "number" || !Number.isInteger(result.outputTokens) || result.outputTokens <= 0) {
+	// proof. Require finite positive integer reported usage (NaN/Infinity
+	// explicitly rejected).
+	if (
+		typeof result.outputTokens !== "number"
+		|| !Number.isFinite(result.outputTokens)
+		|| !Number.isInteger(result.outputTokens)
+		|| result.outputTokens <= 0
+	) {
 		throw new LeafFailure("output_contract_breach", "Output token usage unverifiable.");
 	}
 	if (result.outputTokens > cap) throw new LeafFailure("output_token_limit_exceeded", "Output exceeded requested cap.");
+	// A leaf run producing no text is not a success.
+	if (typeof result.text !== "string" || result.text.trim().length === 0) {
+		throw new LeafFailure("output_contract_breach", "Leaf run produced no text.");
+	}
 	return { output: result.text, outputTokens: result.outputTokens };
 }
 
@@ -373,9 +398,19 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 }
 
 /**
+ * Strict semver for host version stamping: digits.digits.digits with an
+ * optional prerelease suffix. No leading/trailing whitespace, no control
+ * characters, no `v` prefix, no missing components. Malformed versions stay
+ * fail-closed (probe returns null, never stamps hostVersion).
+ */
+export const STRICT_HOST_SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
+
+/**
  * Derive the installed SDK version from its package manifest. Walks up from
  * the resolved entry point to the nearest package.json carrying the SDK
  * package name. Never reads version overrides from the environment.
+ * The manifest version must match STRICT_HOST_SEMVER before stamping;
+ * malformed values return null (fail closed).
  */
 function readInstalledHostVersion(entryPath: string, packageName: string): string | null {
 	let dir = dirname(entryPath);
@@ -384,7 +419,11 @@ function readInstalledHostVersion(entryPath: string, packageName: string): strin
 		try {
 			if (existsSync(candidate)) {
 				const manifest = JSON.parse(readFileSync(candidate, "utf8")) as { name?: unknown; version?: unknown };
-				if (manifest.name === packageName && typeof manifest.version === "string" && manifest.version.length > 0) {
+				if (
+					manifest.name === packageName
+					&& typeof manifest.version === "string"
+					&& STRICT_HOST_SEMVER.test(manifest.version)
+				) {
 					return manifest.version;
 				}
 		}
@@ -412,7 +451,7 @@ export async function probeRealLeafHost(options: RealHostProbeOptions = {}): Pro
 	const sdkPath = resolveFromBase(NATIVE_HOST_SPECIFIER, base);
 	if (!sdkPath) return null;
 	const sdk = asRecord(await load(pathToFileURL(sdkPath).href).catch(() => null));
-	if (!sdk || sdk.__piSubagentsTestShim === true) return null;
+	if (!sdk || sdk.__piSubagentsTestShim) return null;
 	const sessionManager = asRecord(sdk.SessionManager);
 	if (typeof sessionManager?.inMemory !== "function" || typeof sdk.createAgentSession !== "function") {
 		return null;

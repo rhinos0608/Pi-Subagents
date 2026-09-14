@@ -6,6 +6,7 @@ import {
 	cloneModelWithCap,
 	executeLeafRun,
 	isVerifiedHostVersion,
+	LEAF_EXCLUDE_TOOLS,
 	LEAF_SYSTEM_PROMPT,
 	resolveEffectiveCap,
 	resolveExactModel,
@@ -127,6 +128,26 @@ describe("leaf model adapter", () => {
 		await assert.rejects(executeLeafRun(multi, { modelId: "openai/gpt-5-mini", prompt: "hi", maxOutputTokens: 256, cwd: "/r" }), /single-turn/);
 		const over = fakeHost(MODELS, async () => ({ text: "x", outputTokens: 257, toolCalls: 0, providerInvocations: 1 }));
 		await assert.rejects(executeLeafRun(over, { modelId: "openai/gpt-5-mini", prompt: "hi", maxOutputTokens: 256, cwd: "/r" }), /exceed/);
+	});
+
+	it("carries explicit builtin excludeTools, not an empty denylist", () => {
+		const model: AuditedLeafModel = { provider: "openai", id: "m", api: "openai-responses", maxTokens: 8192 };
+		const spec = buildLeafSessionSpec("/repo", model, 256);
+		assert.deepEqual(spec.excludeTools, ["read", "bash", "edit", "write"]);
+		assert.deepEqual([...LEAF_EXCLUDE_TOOLS], ["read", "bash", "edit", "write"]);
+	});
+
+	it("rejects empty text and non-finite usage", async () => {
+		const params = { modelId: "openai/gpt-5-mini", prompt: "hi", maxOutputTokens: 256, cwd: "/r" };
+		const empty = fakeHost(MODELS, async () => ({ text: "   ", outputTokens: 5, toolCalls: 0, providerInvocations: 1 }));
+		await assert.rejects(executeLeafRun(empty, params), /no text/);
+		for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, 1.5, -3]) {
+			const host = fakeHost(
+				MODELS,
+				async () => ({ text: "x", outputTokens: bad, toolCalls: 0, providerInvocations: 1 }),
+			);
+			await assert.rejects(executeLeafRun(host, params), /unverifiable/);
+		}
 	});
 
 	it("never verifies shim or unlisted hosts", () => {
