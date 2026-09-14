@@ -32,7 +32,7 @@ import { createCapacityResilientJsonWriter } from "../../shared/capacity-resilie
 import { isStorageCapacityError } from "../../shared/file-system-retry.ts";
 import { updateActiveRunIndex } from "./active-run-index.ts";
 import { createChildTranscriptWriter, type ChildTranscriptWriter } from "../../shared/child-transcript.ts";
-import { closeSteerInbox, consumeInterruptRequest, consumeSteerRequests, consumeStopRequestPayloads, deliverInterruptRequest, deliverStopRequest, deliverTimeoutRequest, watchAsyncControlInbox, type SteerRequest, type StopRequest } from "./control-channel.ts";
+import { closeSteerInbox, consumeInterruptRequest, consumeSteerRequests, consumeStopRequestPayloads, deliverInterruptRequest, deliverStopRequest, deliverTimeoutRequest, drainTerminalControlInbox, watchAsyncControlInbox, type SteerRequest, type StopRequest } from "./control-channel.ts";
 import { deadlineCheckpointDelayMs } from "./deadline-checkpoint.ts";
 import { appendJsonl as appendRawJsonl, formatOutputArtifactContent, getArtifactPaths, writeArtifact, writeMetadata } from "../../shared/artifacts.ts";
 import { PI_CODING_AGENT_PACKAGE, resolveInstalledPiPackageRoot } from "../shared/pi-spawn.ts";
@@ -111,7 +111,7 @@ import { alignForkedSessionCwd } from "../../shared/fork-session-cwd.ts";
 import { outputEntryFromAsyncResult, resolveOutputReferences } from "../shared/chain-outputs.ts";
 import { clearStructuredOutputCaptures, createStructuredOutputFileCapture, createStructuredOutputRuntime, MISSING_STRUCTURED_OUTPUT_CALL_ERROR, readStructuredOutput, readStructuredOutputAcceptanceReport } from "../shared/structured-output.ts";
 import { formatMidToolExitError, isOrdinaryToolForMidToolExit, isUnexplainedProcessSignal } from "../shared/process-signal.ts";
-import { formatChildToolDiagnostic } from "../shared/tool-availability.ts";
+import { formatChildToolDiagnostic, formatChildToolDisabledWarning, hasFatalMissingTools } from "../shared/tool-availability.ts";
 import { buildTimeoutRecoverySummary, collectTrackedMutationEvidence, snapshotTrackedMutations } from "../shared/mutation-evidence.ts";
 import { collectDynamicResults, DynamicFanoutError, materializeDynamicParallelStep, validateDynamicCollection } from "../shared/dynamic-fanout.ts";
 import { claimRunFanoutBatch, getRunFanoutBudgetSnapshot } from "../shared/run-fanout-budget.ts";
@@ -242,6 +242,8 @@ export interface SubagentRunConfig {
 	runFanoutBudget?: RunFanoutBudgetDescriptor;
 	/** Builtin tool names the host runtime provides; used to intersect agent-declared tools. */
 	hostAvailableBuiltins?: readonly string[];
+	/** `{ name, label }` identities from the host registry; display labels in tool allowlists resolve to internal names. */
+	hostAvailableTools?: Array<{ name: string; label?: string }>;
 	launchContractDigest?: string;
 	launchResolvedExtensions?: LaunchResolvedChildExtensions;
 	runtimeAcknowledgedExtensions?: RuntimeAcknowledgedChildExtensions;
@@ -734,6 +736,7 @@ interface SingleStepContext {
 	capabilityCeiling?: ResolvedSubagentCapabilityCeiling;
 	runFanoutBudget?: RunFanoutBudgetDescriptor;
 	hostAvailableBuiltins?: readonly string[];
+	hostAvailableTools?: Array<{ name: string; label?: string }>;
 	onAttemptStart?: (attempt: { model?: string; thinking?: string; contextLimit?: number }) => void;
 	onChildEvent?: (event: ChildEvent) => void;
 	onExternalProcess?: (process: ExternalProcessStatus) => void;
@@ -873,6 +876,7 @@ export async function runSingleStepInner(
 			requiredExtensions: step.requiredExtensions ?? ctx.inheritedChildRuntime?.requiredExtensions,
 			permissionRules: step.permissionRules,
 			hostAvailableBuiltins: ctx.hostAvailableBuiltins,
+			hostAvailableTools: ctx.hostAvailableTools,
 		}));
 		const contractTools = resolvedTaskToolPlan.explicitToolAllowlist ? resolvedTaskToolPlan.effectiveToolAllowlist : undefined;
 		const contractError = validateImplementationToolContract({
@@ -1269,6 +1273,7 @@ export async function runSingleStepInner(
 				requiredExtensions: step.requiredExtensions ?? ctx.inheritedChildRuntime?.requiredExtensions,
 				permissionRules: step.permissionRules,
 				hostAvailableBuiltins: ctx.hostAvailableBuiltins,
+				hostAvailableTools: ctx.hostAvailableTools,
 			}));
 			launchResolvedExtensions = projectLaunchResolvedChildExtensions(toolPlan);
 			actualLaunchContractDigest = resolveLaunchBinding({
@@ -1288,6 +1293,7 @@ export async function runSingleStepInner(
 				outputMode: step.outputMode,
 				structuredOutputSchema: step.structuredOutputSchema,
 				extensionBindings,
+				...(step.permissionRules ? { permissionRules: step.permissionRules } : {}),
 			}).launchContractDigest;
 		}
 		capabilityAudit = attemptCapabilityAudit;
@@ -1333,7 +1339,11 @@ export async function runSingleStepInner(
 		// Stopped/timedOut runs already have terminal failures; checking completion evidence there is meaningless.
 		const completionDiagnosticsEligible = !run.interrupted && !run.stopped && !run.timedOut;
 		const toolDiagnostic = run.exitCode === 0 && !run.error ? launch.capture.toolDiagnostic() : undefined;
-		const toolAvailabilityError = toolDiagnostic ? formatChildToolDiagnostic(toolDiagnostic) : undefined;
+		const toolAvailabilityError = toolDiagnostic && hasFatalMissingTools(toolDiagnostic)
+			? formatChildToolDiagnostic(toolDiagnostic)
+			: undefined;
+		const disabledWarning = toolDiagnostic && !toolAvailabilityError ? formatChildToolDisabledWarning(toolDiagnostic) : undefined;
+		if (disabledWarning) console.warn(`[pi-subagents] ${disabledWarning}`);
 		const runtimeAcknowledgedExtensions = launch.capture.runtimeAcknowledgedExtensions();
 		const midToolExitError = run.currentTool
 			&& isOrdinaryToolForMidToolExit(run.currentTool)
@@ -3903,7 +3913,8 @@ export async function runSubagent(
 					nestedRoute: config.nestedRoute,
 					capabilityCeiling: config.capabilityCeiling,
 					runFanoutBudget: config.runFanoutBudget,
-					hostAvailableBuiltins: config.hostAvailableBuiltins,
+										hostAvailableBuiltins: config.hostAvailableBuiltins,
+					hostAvailableTools: config.hostAvailableTools,
 					registerInterrupt: (interrupt) => registerStepInterrupt(fi, interrupt),
 					registerTimeout: (interrupt) => registerStepTimeout(fi, interrupt),
 					registerStop: (stop) => registerStepStop(fi, stop),
@@ -4319,7 +4330,8 @@ export async function runSubagent(
 							nestedRoute: config.nestedRoute,
 							capabilityCeiling: config.capabilityCeiling,
 							runFanoutBudget: config.runFanoutBudget,
-							hostAvailableBuiltins: config.hostAvailableBuiltins,
+														hostAvailableBuiltins: config.hostAvailableBuiltins,
+							hostAvailableTools: config.hostAvailableTools,
 							registerInterrupt: (interrupt) => registerStepInterrupt(fi, interrupt),
 							registerTimeout: (interrupt) => registerStepTimeout(fi, interrupt),
 							registerStop: (stop) => registerStepStop(fi, stop),
@@ -4725,7 +4737,8 @@ export async function runSubagent(
 				nestedRoute: config.nestedRoute,
 				capabilityCeiling: config.capabilityCeiling,
 				runFanoutBudget: config.runFanoutBudget,
-				hostAvailableBuiltins: config.hostAvailableBuiltins,
+								hostAvailableBuiltins: config.hostAvailableBuiltins,
+				hostAvailableTools: config.hostAvailableTools,
 				registerInterrupt: (interrupt) => registerStepInterrupt(flatIndex, interrupt),
 				registerTimeout: (interrupt) => registerStepTimeout(flatIndex, interrupt),
 				registerStop: (stop) => registerStepStop(flatIndex, stop),
@@ -5049,7 +5062,13 @@ export async function runSubagent(
 		timedOut = true;
 	}
 	disposeControlInbox();
-	for (const request of consumeStopRequestPayloads(asyncDir)) stopChildStep(request);
+	// Pre-terminal drain: the live watcher is dead, so route every pending control
+	// kind through the handlers while the status is still nonterminal.
+	const preTerminalDrain = drainTerminalControlInbox(asyncDir);
+	for (const request of preTerminalDrain.stops) stopChildStep(request);
+	if (preTerminalDrain.timeout) timeoutRunner();
+	if (preTerminalDrain.interrupt) interruptRunner();
+	for (const request of preTerminalDrain.steers) deliverSteerRequest(request);
 	const signalTerminated = !stopped && !timedOut && !interrupted && results.some((result) => result.exitCode !== 0 && isUnexplainedProcessSignal(omitUndefinedProperties({
 		processSignal: result.processSignal,
 		interrupted: result.interrupted,
@@ -5229,7 +5248,275 @@ export async function runSubagent(
 	} finally {
 		finalResultPublication = undefined;
 	}
+	// Final synchronized drain: control requests landing between the pre-terminal
+	// drain and terminal persistence must not strand while status still reads
+	// running. Consume everything; a late whole-run stop or timeout reopens the
+	// terminal outcome (and the already-written result file) before it persists.
+	const lateDrain = drainTerminalControlInbox(asyncDir);
+	for (const request of lateDrain.stops) {
+		if (request.targetIndex !== undefined) {
+			appendJsonl(eventsPath, JSON.stringify({
+				type: "subagent.stop.late",
+				ts: Date.now(),
+				runId: id,
+				targetIndex: request.targetIndex,
+				childId: request.childId,
+				source: request.source,
+				detail: "Stop arrived after terminal result; target step already terminal.",
+			}));
+		}
+	}
+	for (const request of lateDrain.steers) {
+		appendJsonl(eventsPath, JSON.stringify({
+			type: "subagent.steer.failed",
+			ts: Date.now(),
+			runId: id,
+			steerId: request.id,
+			detail: "Steer arrived after the control inbox closed; run already terminal.",
+		}));
+	}
+	if (lateDrain.interrupt && !stopped && !timedOut && !interrupted) {
+		appendJsonl(eventsPath, JSON.stringify({
+			type: "subagent.interrupt.late",
+			ts: Date.now(),
+			runId: id,
+			source: "interrupt-action",
+			detail: "Interrupt arrived after terminal result; run already terminal.",
+		}));
+	}
+	const lateWholeRunStop = lateDrain.stops.some((request) => request.targetIndex === undefined);
+	if (lateWholeRunStop || lateDrain.timeout) {
+		const lateError = lateWholeRunStop ? stopMessage : (timeoutMessage ?? "Subagent timed out.");
+		const now = Date.now();
+		stopped = lateWholeRunStop ? true : stopped;
+		timedOut = lateWholeRunStop ? timedOut : true;
+		statusPayload.state = lateWholeRunStop ? "stopped" : "failed";
+		if (lateWholeRunStop) statusPayload.stopped = true;
+		else statusPayload.timedOut = true;
+		statusPayload.error = lateError;
+		statusPayload.lastUpdate = now;
+		statusPayload.endedAt = statusPayload.endedAt ?? now;
+		for (const step of statusPayload.steps ?? []) {
+			if (step.status !== "pending" && step.status !== "running" && step.status !== "paused") continue;
+			step.status = lateWholeRunStop ? "stopped" : "failed";
+			step.error = lateError;
+			step.exitCode = 1;
+			if (lateWholeRunStop) step.stopped = true;
+			else step.timedOut = true;
+			step.endedAt = now;
+			step.lastActivityAt = now;
+		}
+		for (const [index, result] of results.entries()) {
+			const stepState = statusPayload.steps?.[index]?.status;
+			if (stepState !== "stopped" && stepState !== "failed") continue;
+			result.output = lateError;
+			result.error = lateError;
+			result.success = false;
+			result.exitCode = 1;
+			result.stopped = lateWholeRunStop ? true : result.stopped;
+			result.timedOut = lateWholeRunStop ? result.timedOut : true;
+		}
+		appendJsonl(eventsPath, JSON.stringify({
+			type: lateWholeRunStop ? "subagent.stopped" : "subagent.timeout",
+			ts: now,
+			runId: id,
+			source: "terminal-drain",
+			detail: "Late control request settled the terminal outcome before persistence.",
+		}));
+		try {
+			const patchResultFile = (filePath: string): void => {
+				const parsed: unknown = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+				if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return;
+				const record = parsed as Record<string, unknown>;
+				record.success = false;
+				record.state = statusPayload.state;
+				record.summary = lateError;
+				record.error = lateError;
+				record.exitCode = 1;
+				record.timestamp = now;
+				if (lateWholeRunStop) record.stopped = true;
+				else record.timedOut = true;
+				record.results = results.map((r) => omitUndefinedProperties({
+					agent: r.agent,
+					...(r.sessionName ? { sessionName: r.sessionName } : {}),
+					context: r.context,
+					output: r.output,
+					outputState: r.outputState,
+					error: r.error,
+					success: r.success,
+					skipped: r.skipped || undefined,
+					interrupted: r.interrupted || undefined,
+					timedOut: r.timedOut || undefined,
+					stopped: r.stopped || undefined,
+					processSignal: r.processSignal || undefined,
+					toolBudget: r.toolBudget,
+					toolBudgetBlocked: r.toolBudgetBlocked || undefined,
+					sessionFile: r.sessionFile,
+					intercomTarget: r.intercomTarget,
+					model: r.model,
+					thinking: r.thinking,
+					attemptedModels: r.attemptedModels,
+					modelAttempts: r.modelAttempts,
+					contextOverflow: r.contextOverflow,
+					totalCost: r.totalCost,
+					usage: r.usage,
+					artifactPaths: r.artifactPaths,
+					savedOutputPath: r.savedOutputPath,
+					outputSaveError: r.outputSaveError,
+					artifactOutputSaveFailed: r.artifactOutputSaveFailed,
+					metadataSaveError: r.metadataSaveError,
+					truncated: r.truncated,
+					transcriptPath: r.transcriptPath,
+					transcriptError: r.transcriptError,
+					agentContract: r.agentContract,
+					launchContractDigest: r.launchContractDigest,
+					launchResolvedExtensions: r.launchResolvedExtensions,
+					runtimeAcknowledgedExtensions: r.runtimeAcknowledgedExtensions,
+					runner: r.runner,
+					externalProcess: r.externalProcess,
+					externalJob: r.externalJob,
+					execution: r.execution,
+					review: r.review,
+					effects: r.effects,
+					structuredOutput: r.structuredOutput,
+					structuredOutputPath: r.structuredOutputPath,
+					structuredOutputSchemaPath: r.structuredOutputSchemaPath,
+					acceptance: r.acceptance,
+					watchdog: r.watchdog,
+					timeoutRecovery: r.timeoutRecovery,
+					capabilityCeiling: r.capabilityCeiling,
+					capabilityAudit: r.capabilityAudit,
+				}));
+				writeAsyncResultFile(filePath, record);
+			};
+			patchResultFile(resultPath);
+			if (effectiveSessionFile && effectiveSessionFile !== resultPath) patchResultFile(effectiveSessionFile);
+		} catch {
+			// The corrected status below is authoritative; a result-patch failure
+			// surfaces through reconciliation against the persisted status.
+		}
+	}
 	writeStatusPayload();
+	// Bounded re-drain (one extra pass only): closes the late window between the
+	// terminal drain above and status persistence — a stop/timeout landing in
+	// that gap would otherwise strand while status reads terminal. Residual
+	// theoretical window remains (persist + re-drain are not atomic), narrowed
+	// to whatever lands after this single pass; stragglers surface via
+	// reconciliation against persisted status.
+	const postPersistDrain = drainTerminalControlInbox(asyncDir);
+	const postPersistWholeRunStop = postPersistDrain.stops.some((request) => request.targetIndex === undefined);
+	if (postPersistWholeRunStop || postPersistDrain.timeout) {
+		const postPersistError = postPersistWholeRunStop ? stopMessage : (timeoutMessage ?? "Subagent timed out.");
+		const now = Date.now();
+		stopped = postPersistWholeRunStop ? true : stopped;
+		timedOut = postPersistWholeRunStop ? timedOut : true;
+		statusPayload.state = postPersistWholeRunStop ? "stopped" : "failed";
+		if (postPersistWholeRunStop) statusPayload.stopped = true;
+		else statusPayload.timedOut = true;
+		statusPayload.error = postPersistError;
+		statusPayload.lastUpdate = now;
+		statusPayload.endedAt = statusPayload.endedAt ?? now;
+		for (const step of statusPayload.steps ?? []) {
+			if (step.status !== "pending" && step.status !== "running" && step.status !== "paused") continue;
+			step.status = postPersistWholeRunStop ? "stopped" : "failed";
+			step.error = postPersistError;
+			step.exitCode = 1;
+			if (postPersistWholeRunStop) step.stopped = true;
+			else step.timedOut = true;
+			step.endedAt = now;
+			step.lastActivityAt = now;
+		}
+		for (const [index, result] of results.entries()) {
+			const stepState = statusPayload.steps?.[index]?.status;
+			if (stepState !== "stopped" && stepState !== "failed") continue;
+			result.output = postPersistError;
+			result.error = postPersistError;
+			result.success = false;
+			result.exitCode = 1;
+			result.stopped = postPersistWholeRunStop ? true : result.stopped;
+			result.timedOut = postPersistWholeRunStop ? result.timedOut : true;
+		}
+		appendJsonl(eventsPath, JSON.stringify({
+			type: postPersistWholeRunStop ? "subagent.stopped" : "subagent.timeout",
+			ts: now,
+			runId: id,
+			source: "post-persist-drain",
+			detail: "Late control request settled the terminal outcome after persistence; status rewritten once more.",
+		}));
+		try {
+			const patchResultFile = (filePath: string): void => {
+				const parsed: unknown = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+				if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return;
+				const record = parsed as Record<string, unknown>;
+				record.success = false;
+				record.state = statusPayload.state;
+				record.summary = postPersistError;
+				record.error = postPersistError;
+				record.exitCode = 1;
+				record.timestamp = now;
+				if (postPersistWholeRunStop) record.stopped = true;
+				else record.timedOut = true;
+				record.results = results.map((r) => omitUndefinedProperties({
+					agent: r.agent,
+					...(r.sessionName ? { sessionName: r.sessionName } : {}),
+					context: r.context,
+					output: r.output,
+					outputState: r.outputState,
+					error: r.error,
+					success: r.success,
+					skipped: r.skipped || undefined,
+					interrupted: r.interrupted || undefined,
+					timedOut: r.timedOut || undefined,
+					stopped: r.stopped || undefined,
+					processSignal: r.processSignal || undefined,
+					toolBudget: r.toolBudget,
+					toolBudgetBlocked: r.toolBudgetBlocked || undefined,
+					sessionFile: r.sessionFile,
+					intercomTarget: r.intercomTarget,
+					model: r.model,
+					thinking: r.thinking,
+					attemptedModels: r.attemptedModels,
+					modelAttempts: r.modelAttempts,
+					contextOverflow: r.contextOverflow,
+					totalCost: r.totalCost,
+					usage: r.usage,
+					artifactPaths: r.artifactPaths,
+					savedOutputPath: r.savedOutputPath,
+					outputSaveError: r.outputSaveError,
+					artifactOutputSaveFailed: r.artifactOutputSaveFailed,
+					metadataSaveError: r.metadataSaveError,
+					truncated: r.truncated,
+					transcriptPath: r.transcriptPath,
+					transcriptError: r.transcriptError,
+					agentContract: r.agentContract,
+					launchContractDigest: r.launchContractDigest,
+					launchResolvedExtensions: r.launchResolvedExtensions,
+					runtimeAcknowledgedExtensions: r.runtimeAcknowledgedExtensions,
+					runner: r.runner,
+					externalProcess: r.externalProcess,
+					externalJob: r.externalJob,
+					execution: r.execution,
+					review: r.review,
+					effects: r.effects,
+					structuredOutput: r.structuredOutput,
+					structuredOutputPath: r.structuredOutputPath,
+					structuredOutputSchemaPath: r.structuredOutputSchemaPath,
+					acceptance: r.acceptance,
+					watchdog: r.watchdog,
+					timeoutRecovery: r.timeoutRecovery,
+					capabilityCeiling: r.capabilityCeiling,
+					capabilityAudit: r.capabilityAudit,
+				}));
+				writeAsyncResultFile(filePath, record);
+			};
+			patchResultFile(resultPath);
+			if (effectiveSessionFile && effectiveSessionFile !== resultPath) patchResultFile(effectiveSessionFile);
+		} catch {
+			// The rewritten status below stays authoritative; a result-patch failure
+			// surfaces through reconciliation against the persisted status.
+		}
+		writeStatusPayload();
+	}
 	await orcaProgressTab?.finish(statusPayload.state === "complete" ? "completed" : statusPayload.state === "stopped" ? "stopped" : "failed", effectiveSessionFile);
 	appendJsonl(
 		eventsPath,

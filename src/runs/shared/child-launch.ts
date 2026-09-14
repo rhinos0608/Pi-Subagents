@@ -29,6 +29,7 @@ import {
 	projectLaunchResolvedChildExtensions,
 	resolvePiLaunchToolPlan,
 	supervisorChannelDir,
+	type HostToolIdentity,
 	type PiLaunchToolPlan,
 } from "./child-tool-plan.ts";
 import type { ChildRuntimeConfig } from "./child-runtime-config.ts";
@@ -127,6 +128,8 @@ export interface BuildInProcessChildLaunchInput {
 	 * still-permitted repository inspection tool is missing from that set.
 	 */
 	hostAvailableBuiltins?: readonly string[];
+	/** `{ name, label }` identities from the host registry for display-label allowlist entries. */
+	hostAvailableTools?: readonly HostToolIdentity[];
 }
 
 export interface InProcessChildCapture {
@@ -211,6 +214,7 @@ export function buildInProcessChildLaunch(input: BuildInProcessChildLaunchInput)
 		permissionRules: input.permissionRules,
 		runtimeSnapshotHost: input.runtimeSnapshotHost,
 		hostAvailableBuiltins: input.hostAvailableBuiltins,
+		hostAvailableTools: input.hostAvailableTools,
 	});
 
 	const inherited = input.inherited;

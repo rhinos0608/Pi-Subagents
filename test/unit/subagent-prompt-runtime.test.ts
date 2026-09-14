@@ -712,12 +712,13 @@ describe("subagent prompt runtime", () => {
 
 			handlers.get("session_start")?.({});
 			assert.deepEqual(registered, ["bg_wait", "contact_supervisor"]);
-			assert.throws(() => handlers.get("agent_start")?.({}), /requested unavailable child tools: read, grep, find, ls, bash, edit, write, intercom/);
+			handlers.get("agent_start")?.({});
 			assert.deepEqual(diagnostics, [{
 				agent: "scout",
 				required: ["read", "grep", "find", "ls", "bash", "edit", "write", "intercom"],
 				available: ["bg_wait", "contact_supervisor"],
-				missing: ["read", "grep", "find", "ls", "bash", "edit", "write", "intercom"],
+				missing: [],
+				disabled: ["read", "grep", "find", "ls", "bash", "edit", "write", "intercom"],
 			}]);
 		}
 	});
@@ -739,13 +740,14 @@ describe("subagent prompt runtime", () => {
 				toolDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
 			}));
 
-			assert.throws(() => handlers.get("agent_start")?.({}), /requested unavailable child tools: bash, edit, write/);
-			assert.deepEqual(diagnostics, [{
-				agent: "worker",
-				required: ["read", "grep", "find", "ls", "bash", "edit", "write"],
-				available: ["read", "grep", "find", "ls", "contact_supervisor"],
-				missing: ["bash", "edit", "write"],
-			}]);
+			handlers.get("agent_start")?.({});
+		assert.deepEqual(diagnostics, [{
+			agent: "worker",
+			required: ["read", "grep", "find", "ls", "bash", "edit", "write"],
+			available: ["read", "grep", "find", "ls", "contact_supervisor"],
+			missing: [],
+			disabled: ["bash", "edit", "write"],
+		}]);
 		}
 	});
 
@@ -814,12 +816,13 @@ describe("subagent prompt runtime", () => {
 			assert.deepEqual(diagnostics, []);
 			assert.doesNotMatch(promptRewrite?.systemPrompt ?? "", /requested unavailable child tools/);
 
-			assert.throws(() => handlers.get("agent_start")?.({}), /requested unavailable child tools: fixture_search/);
+			handlers.get("agent_start")?.({});
 			assert.deepEqual(diagnostics, [{
 				agent: "extension-worker",
 				required: ["read", "fixture_search"],
 				available: ["read"],
-				missing: ["fixture_search"],
+				missing: [],
+				disabled: ["fixture_search"],
 			}]);
 
 			available.push("fixture_search");
@@ -828,7 +831,7 @@ describe("subagent prompt runtime", () => {
 		}
 	});
 
-	it("classifies missing resolved MCP direct tools without softening strict diagnostics", () => {
+	it("classifies disabled resolved MCP direct tools while continuing the run", () => {
 		{
 			const diagnostics: Array<ChildToolDiagnostic | undefined> = [];
 			const handlers = new Map<string, (payload?: unknown) => unknown>();
@@ -846,17 +849,26 @@ describe("subagent prompt runtime", () => {
 				toolDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
 			}));
 
-			assert.throws(() => handlers.get("agent_start")?.({}), /requested unavailable child tools: rust_symbols_workspace_symbols, fixture_search/);
+			handlers.get("agent_start")?.({});
 			const diagnostic = diagnostics[0];
 			assert.deepEqual(diagnostic, {
 				agent: "worker",
 				required: ["read", "rust_symbols_workspace_symbols", "fixture_search"],
 				available: ["read"],
-				missing: ["rust_symbols_workspace_symbols", "fixture_search"],
+				missing: [],
+				disabled: ["rust_symbols_workspace_symbols", "fixture_search"],
 				missingMcpDirectTools: ["rust_symbols_workspace_symbols"],
 			});
 			assert.match(formatChildToolDiagnostic(diagnostic!), /host\/pi-mcp-adapter registration problem/);
 			assert.match(formatChildToolDiagnostic(diagnostic!), /fixture_search/);
+			assert.match(
+				formatChildToolDiagnostic({ required: ["bg_wait"], available: [], missing: ["bg_wait"] }),
+				/registered by the child runtime itself/,
+			);
+			assert.doesNotMatch(
+				formatChildToolDiagnostic({ required: ["read"], available: [], missing: [], disabled: ["read"] }),
+				/registered by the child runtime itself/,
+			);
 		}
 	});
 

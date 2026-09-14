@@ -8,7 +8,7 @@ import type { SteerRequest } from "../background/control-channel.ts";
 import { RUNTIME_EXTENSION_ACK_EVENT, isRuntimeAcknowledgedExtensionId } from "./runtime-acknowledged-extensions.ts";
 import { createStructuredOutputToolParameters, MISSING_STRUCTURED_ACCEPTANCE_REPORT_ERROR, validateStructuredOutputValue } from "./structured-output.ts";
 import { validateAcceptanceReport } from "./acceptance.ts";
-import { formatChildToolDiagnostic } from "./tool-availability.ts";
+import { formatChildToolDiagnostic, formatChildToolDisabledWarning } from "./tool-availability.ts";
 import { shouldBlockToolForBudget, toolBudgetBlockedMessage, toolBudgetSoftNudge } from "./tool-budget.ts";
 import type { ResolvedToolBudget, SubagentState } from "../../shared/types.ts";
 import { resolveCurrentSessionId } from "../../shared/session-identity.ts";
@@ -482,9 +482,17 @@ export default function registerSubagentPromptRuntime(pi: ExtensionAPI, config?:
 	});
 	onRuntimeEvent("agent_start", () => {
 		if (!config.requiredTools) return;
-		const diagnostic = evaluateChildToolDiagnostic(config, pi.getAllTools().map((tool) => tool.name));
+		const identities = pi.getAllTools().map((tool) => {
+			const label = (tool as { label?: unknown }).label;
+			return typeof label === "string" && label ? { name: tool.name, label } : { name: tool.name };
+		});
+		const diagnostic = evaluateChildToolDiagnostic(config, identities);
 		config.toolDiagnostic?.(diagnostic);
-		if (diagnostic) throw new Error(formatChildToolDiagnostic(diagnostic));
+		// Absent external tools are disabled with a warning and the run
+		// continues; only missing internal coordination tools fail the child.
+		if (diagnostic && diagnostic.missing.length > 0) throw new Error(formatChildToolDiagnostic(diagnostic));
+		const disabledWarning = diagnostic ? formatChildToolDisabledWarning(diagnostic) : undefined;
+		if (disabledWarning) console.warn(`[pi-subagents] ${disabledWarning}`);
 	});
 	onRuntimeEvent("agent_end", async (_event: unknown, ctx: unknown) => {
 		if ((ctx as { hasUI?: boolean } | undefined)?.hasUI === true) drainObservation?.deny();

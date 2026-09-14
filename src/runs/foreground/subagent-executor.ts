@@ -29,7 +29,7 @@ import { handleWatchdogToolAction, WATCHDOG_TOOL_ACTIONS } from "../../watchdog/
 import type { MainWatchdogRuntime } from "../../watchdog/runtime.ts";
 import { applyWatchdogLaunchRules } from "../../watchdog/rules.ts";
 import { buildModelCandidates, normalizeParentModel, resolveEffectiveSubagentModel, resolveModelOrigin, type ModelOrigin, type ParentModel } from "../shared/model-fallback.ts";
-import { getHostBuiltinToolNames } from "../shared/child-tool-plan.ts";
+import { getHostAvailableTools, getHostBuiltinToolNames } from "../shared/child-tool-plan.ts";
 import { resolveEffectiveOutputSchema } from "../shared/child-launch-plan.ts";
 import { formatRetainedChildren, listRetainedChildren } from "../background/retained-children.ts";
 import { resolveModelScopesForAgent, type ModelScopeConfig } from "../shared/model-scope.ts";
@@ -3336,9 +3336,9 @@ async function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 				details: { mode: "single" as const, results: [] },
 			};
 		}
-		const rawOutput = params.output;
+		const rawOutput = params.output ?? a.output;
 		const effectiveOutput = normalizeSingleOutputOverride(rawOutput, undefined);
-		const effectiveOutputMode = params.outputMode ?? "inline";
+		const effectiveOutputMode = params.outputMode ?? a.outputMode ?? "inline";
 		const normalizedSkills = normalizeSkillInput(params.skill);
 		const skills = normalizedSkills === false ? [] : normalizedSkills;
 		const maxSubagentDepth = resolveChildMaxSubagentDepth(currentMaxSubagentDepth, a.maxSubagentDepth);
@@ -3584,7 +3584,14 @@ function resolveWorkflowChildOutputPath(input: {
 	const childCwd = resolveWorkflowChildLocalCwd(input);
 	let agentOutput: string | undefined;
 	if (rawOutput === true || rawOutput === "true" || (!hasExplicitOutput && !input.aggregateOutputPath)) {
-		agentOutput = undefined;
+		if (typeof input.params.agent === "string") {
+			const agentScope = resolveExecutionAgentScope(input.params.agentScope ?? input.workflowAgentScope);
+						const workflowAgents = input.discoverAgents(childCwd, agentScope).agents;
+			const agent = resolveAgentName(input.params.agent, workflowAgents).agent ?? resolveAgentName(input.params.agent, input.agents).agent;
+			agentOutput = typeof agent?.output === "string" ? agent.output : undefined;
+		} else {
+			agentOutput = undefined;
+		}
 	}
 	const output = rawOutput === true || rawOutput === "true"
 		? agentOutput
@@ -3846,9 +3853,9 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 	if (launchRuleError) return toExecutionErrorResult(params, new Error(launchRuleError), data.contextPolicy.contextSummary);
 	let skillOverride: string[] | false | undefined = normalizeSkillInput(params.skill);
 	let readsOverride: string[] | false | undefined = params.reads;
-	const rawOutput = params.output;
+	const rawOutput = params.output ?? agentConfig.output;
 	let effectiveOutput = normalizeSingleOutputOverride(rawOutput, undefined);
-	const effectiveOutputMode = params.outputMode ?? "inline";
+	const effectiveOutputMode = params.outputMode ?? agentConfig.outputMode ?? "inline";
 	const currentMaxSubagentDepth = resolveCurrentMaxSubagentDepth(deps.config.maxSubagentDepth, deps.childRuntime);
 	const maxSubagentDepth = resolveChildMaxSubagentDepth(currentMaxSubagentDepth, agentConfig.maxSubagentDepth);
 
@@ -4006,6 +4013,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 			permissions: deps.config.permissions,
 			runtimeSnapshotHost: deps.pi,
 			hostAvailableBuiltins: getHostBuiltinToolNames(deps.pi),
+			hostAvailableTools: getHostAvailableTools(deps.pi),
 			parentSessionId: ctx.sessionManager.getSessionId() ?? undefined,
 			requiredExtensions,
 			llmIntentArbiter: createTaskMutationArbiter({ model: ctx.model, modelRegistry: ctx.modelRegistry, sessionId: ctx.sessionManager.getSessionId() }),

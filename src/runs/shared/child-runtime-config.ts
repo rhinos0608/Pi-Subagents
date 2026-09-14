@@ -5,6 +5,7 @@ import type { PermissionRules } from "./permissions.ts";
 import type { ChildWatchdogConfig, ChildWatchdogStatusEvent } from "../../watchdog/child-status.ts";
 import type { ResolvedWaitToolConfig } from "../background/wait-config.ts";
 import type { ChildToolDiagnostic } from "./tool-availability.ts";
+import { isInternalChildTool } from "./tool-availability.ts";
 import type { ResolvedSubagentCapabilityCeiling } from "./capability-ceiling.ts";
 import type { RequiredChildExtensionSnapshot } from "../../shared/required-child-extensions.ts";
 
@@ -114,18 +115,53 @@ export function childSupervisorMetadata(config: ChildRuntimeConfig): ChildSuperv
 	};
 }
 
-/** Compute the child tool-availability diagnostic; undefined when every required tool is present. */
-export function evaluateChildToolDiagnostic(config: Pick<ChildRuntimeConfig, "agent" | "requiredTools" | "mcpDirectTools">, availableTools: string[]): ChildToolDiagnostic | undefined {
+/**
+ * Tools the prompt runtime itself registers. Their absence means our own
+ * plumbing broke, so it stays fatal; every other absent tool (including the
+ * external `intercom` provider tool) is disabled with a warning instead.
+ */
+
+function normalizeAvailableTools(availableTools: readonly (string | { name: string; label?: string })[]): Array<{ name: string; label?: string }> {
+	return availableTools.map((tool) => (typeof tool === "string" ? { name: tool } : tool));
+}
+
+function isToolAvailable(identities: readonly { name: string; label?: string }[], required: string): boolean {
+	// Internal plumbing must match the exact registered name: a display label
+	// on an unrelated tool (e.g. `{ name: "bash", label: "bg_wait" }`) must
+	// never prove the primitive exists.
+	const identityStrict = isInternalChildTool(required) || isInternalChildTool(required.toLowerCase());
+	for (const identity of identities) {
+		if (identity.name === required) return true;
+		if (identityStrict) continue;
+		if (identity.label === required) return true;
+		if (identity.name.toLowerCase() === required.toLowerCase()) return true;
+		if (identity.label !== undefined && identity.label.toLowerCase() === required.toLowerCase()) return true;
+	}
+	return false;
+}
+
+/**
+ * Compute the child tool-availability diagnostic; undefined when every required
+ * tool is present. Absent external tools land in `disabled` (warn and
+ * continue); absent internal coordination tools land in `missing` (fatal).
+ * Matching accepts internal names and display labels, case-insensitively,
+ * except internal coordination tools, which require the exact registered name.
+ */
+export function evaluateChildToolDiagnostic(config: Pick<ChildRuntimeConfig, "agent" | "requiredTools" | "mcpDirectTools">, availableTools: readonly (string | { name: string; label?: string })[]): ChildToolDiagnostic | undefined {
 	if (!config.requiredTools) return undefined;
-	const available = new Set(availableTools);
-	const missing = config.requiredTools.filter((name) => !available.has(name));
-	if (missing.length === 0) return undefined;
-	const missingMcpDirectTools = config.mcpDirectTools?.length ? missing.filter((name) => config.mcpDirectTools!.includes(name)) : [];
+	const identities = normalizeAvailableTools(availableTools);
+	const available = identities.map((identity) => identity.name);
+	const absent = config.requiredTools.filter((name) => !isToolAvailable(identities, name));
+	if (absent.length === 0) return undefined;
+	const missing = absent.filter((name) => isInternalChildTool(name) || isInternalChildTool(name.toLowerCase()));
+	const disabled = absent.filter((name) => !missing.includes(name));
+	const missingMcpDirectTools = config.mcpDirectTools?.length ? disabled.filter((name) => config.mcpDirectTools!.includes(name)) : [];
 	return {
 		...(config.agent ? { agent: config.agent } : {}),
 		required: config.requiredTools,
-		available: availableTools,
+		available,
 		missing,
+		...(disabled.length > 0 ? { disabled } : {}),
 		...(missingMcpDirectTools.length > 0 ? { missingMcpDirectTools } : {}),
 	};
 }

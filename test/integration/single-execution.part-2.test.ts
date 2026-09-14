@@ -4351,36 +4351,35 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		assert.equal(runtime?.childIndex, 2);
 	});
 
-	it("fails with actionable diagnostics when a requested extension tool is not loaded", async () => {
+	it("continues with a warning when a requested extension tool is not loaded", async () => {
 		mockPi.onCall({ output: "Model incorrectly claimed success", missingTools: ["fixture_search"] });
 		const agents = [makeAgent("extension-worker", { tools: ["read", "fixture_search"], fallbackModels: ["mock/fallback-model"] })];
 
-		const result = await runSync(tempDir, agents, "extension-worker", "Use fixture search", { runId: "missing-extension-tool" });
+		const warnings: string[] = [];
+		const originalWarn = console.warn;
+		console.warn = (...args: unknown[]) => { warnings.push(args.map(String).join(" ")); };
+		let result;
+		try {
+			result = await runSync(tempDir, agents, "extension-worker", "Use fixture search", { runId: "missing-extension-tool" });
+		} finally {
+			console.warn = originalWarn;
+		}
 
-		assert.equal(result.exitCode, 1);
-		assert.match(result.error ?? "", /ran as a foreground child, which never loads the parent's ambient extensions, and these child tools were unavailable: fixture_search/);
-		assert.match(result.error ?? "", /must run as background children \(`async: true`\)/);
-		assert.match(result.error ?? "", /subagentOnlyExtensions/);
-		assert.match(result.error ?? "", /strict allowlist/);
-		assert.doesNotMatch(result.finalOutput ?? "", /Model incorrectly claimed success/);
-		assert.equal(result.messages?.length, 0);
-		assert.equal(result.usage.turns, 0);
-		assert.equal(result.modelAttempts?.length, 1);
+		assert.equal(result.exitCode, 0);
+		assert.equal(result.error, undefined);
+		assert.match(result.finalOutput ?? "", /Model incorrectly claimed success/);
+		assert.ok(warnings.some((warning) => warning.includes("fixture_search") && warning.includes("continues without unavailable child tools")), `expected disabled-tool warning, got: ${warnings.join("\n")}`);
 	});
 
-	it("records blocked mutation effects when foreground implementation tools are missing", async () => {
+	it("reports the completion guard when foreground implementation tools are disabled", async () => {
 		mockPi.onCall({ output: "I cannot edit because fixture_search is missing", missingTools: ["fixture_search"] });
 		const agents = [makeAgent("worker", { tools: ["read", "fixture_search"] })];
 
 		const result = await runSync(tempDir, agents, "worker", "Implement the requested source fix", { runId: "missing-implementation-tool" });
 
 		assert.equal(result.exitCode, 1);
-		assert.match(result.error ?? "", /these child tools were unavailable: fixture_search/);
-		assert.doesNotMatch(result.error ?? "", /completed without making edits/);
-		assert.equal(result.effects?.fileMutation?.status, "blocked");
-		assert.equal(result.effects?.fileMutation?.expected, true);
-		assert.equal(result.effects?.fileMutation?.attempted, false);
-		assert.match(result.effects?.fileMutation?.message ?? "", /these child tools were unavailable: fixture_search/);
+		assert.match(result.error ?? "", /completed without making edits/);
+		assert.doesNotMatch(result.error ?? "", /these child tools were unavailable/);
 	});
 
 	it("passes custom tool extensions through even when explicit extensions are allowlisted", { skip: process.platform === "win32" ? "extension path resolution intermittent on Windows CI" : undefined }, async () => {

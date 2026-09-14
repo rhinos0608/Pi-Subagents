@@ -9,13 +9,16 @@ const MAX_TRACKED_PATHS = 500;
 const MAX_HASH_BYTES = 1024 * 1024;
 const MAX_TIMEOUT_FILES = 20;
 
+/** Bounded git spawn so a wedged git child cannot hang mutation-evidence collection. */
+const GIT_TIMEOUT_MS = 10_000;
+
 function gitArguments(args: string[]): string[] {
 	// Mutation evidence must not block child startup on a stale fsmonitor daemon.
 	return ["-c", "core.fsmonitor=false", ...args];
 }
 
 function gitOutput(cwd: string, args: string[], maxBuffer = MAX_HASH_BYTES): string {
-	return execFileSync("git", gitArguments(args), { cwd, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"], maxBuffer, windowsHide: true });
+	return execFileSync("git", gitArguments(args), { cwd, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"], maxBuffer, windowsHide: true, timeout: GIT_TIMEOUT_MS, killSignal: "SIGKILL" });
 }
 
 function splitNul(output: string): string[] {
@@ -26,7 +29,7 @@ function hashLargeDiff(cwd: string, relativePath: string): string {
 	const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-tracked-diff-"));
 	const diffPath = path.join(tempDir, "diff.patch");
 	try {
-		execFileSync("git", gitArguments(["diff", "--no-ext-diff", "--binary", `--output=${diffPath}`, "HEAD", "--", relativePath]), { cwd, stdio: "ignore", windowsHide: true });
+		execFileSync("git", gitArguments(["diff", "--no-ext-diff", "--binary", `--output=${diffPath}`, "HEAD", "--", relativePath]), { cwd, stdio: "ignore", windowsHide: true, timeout: GIT_TIMEOUT_MS, killSignal: "SIGKILL" });
 		const hash = createHash("sha256");
 		const buffer = Buffer.allocUnsafe(64 * 1024);
 		const fd = fs.openSync(diffPath, "r");

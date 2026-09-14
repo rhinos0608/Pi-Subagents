@@ -14,6 +14,7 @@ import { randomUUID } from "node:crypto";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { ChildSession, ChildSessionEvent, ChildSessionFactory, ChildSessionLaunch } from "../../src/runs/shared/child-session.ts";
 import { isChildWatchdogStatusEvent } from "../../src/watchdog/child-status.ts";
+import { evaluateChildToolDiagnostic } from "../../src/runs/shared/child-runtime-config.ts";
 
 export interface FakeChildResponse {
 	output?: string;
@@ -37,6 +38,7 @@ export interface FakeChildResponse {
 	/** Captures structured output and emits the structured_output tool events. */
 	structuredOutput?: unknown;
 	runtimeAcknowledgedExtensions?: unknown;
+	/** Required tools absent from the fake registry; mirrors the real runtime (external tools disable with a warning, internal tools fail). */
 	missingTools?: string[];
 	/** Rejects the session creation itself (a startup failure). */
 	createError?: string;
@@ -351,14 +353,9 @@ export function createFakeChildSessions(queueDir: () => string): FakeChildSessio
 				}
 				if (Array.isArray(response.missingTools) && response.missingTools.length > 0) {
 					const required = launch.runtime.requiredTools ?? [];
-					const missing = response.missingTools.filter((name) => required.includes(name));
-					if (missing.length > 0) {
-						launch.runtime.toolDiagnostic?.({
-							...(launch.runtime.agent ? { agent: launch.runtime.agent } : {}),
-							required,
-							available: required.filter((name) => !missing.includes(name)),
-							missing,
-						});
+					const absent = response.missingTools.filter((name) => required.includes(name));
+					if (absent.length > 0) {
+						launch.runtime.toolDiagnostic?.(evaluateChildToolDiagnostic({ ...(launch.runtime.agent ? { agent: launch.runtime.agent } : {}), requiredTools: required, ...(launch.runtime.mcpDirectTools ? { mcpDirectTools: launch.runtime.mcpDirectTools } : {}) }, required.filter((name) => !absent.includes(name))));
 					}
 				}
 				emit({ type: "agent_start" });

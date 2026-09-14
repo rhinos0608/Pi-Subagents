@@ -75,8 +75,9 @@ describe("child runtime config", () => {
 		const pi = fakePi(["read"]);
 		for (const hook of createChildHooks(config)) hook.factory(pi.api as never);
 
-		assert.throws(() => pi.handlers.get("agent_start")?.[0]?.({}), /Agent 'config-agent' requested unavailable child tools: fixture_search/);
-		assert.deepEqual(diagnostics, [{ agent: "config-agent", required: ["read", "fixture_search"], available: ["read", "bg_wait", "structured_output"], missing: ["fixture_search"] }]);
+		// Absent external tools disable with a warning instead of failing the child.
+		pi.handlers.get("agent_start")?.[0]?.({});
+		assert.deepEqual(diagnostics, [{ agent: "config-agent", required: ["read", "fixture_search"], available: ["read", "bg_wait", "structured_output"], missing: [], disabled: ["fixture_search"] }]);
 
 		const structured = pi.tools.find((tool) => tool.name === "structured_output") as { execute: (id: string, params: { value: unknown }) => Promise<unknown> } | undefined;
 		assert.ok(structured, "structured_output tool registered from config");
@@ -92,7 +93,25 @@ describe("child runtime config", () => {
 		assert.equal(evaluateChildToolDiagnostic(baseConfig({ requiredTools: ["read"] }), ["read", "write"]), undefined);
 		assert.deepEqual(
 			evaluateChildToolDiagnostic(baseConfig({ agent: "worker", requiredTools: ["read", "mcp_search"], mcpDirectTools: ["mcp_search"] }), ["read"]),
-			{ agent: "worker", required: ["read", "mcp_search"], available: ["read"], missing: ["mcp_search"], missingMcpDirectTools: ["mcp_search"] },
+			{ agent: "worker", required: ["read", "mcp_search"], available: ["read"], missing: [], disabled: ["mcp_search"], missingMcpDirectTools: ["mcp_search"] },
+		);
+		assert.deepEqual(
+			evaluateChildToolDiagnostic(baseConfig({ requiredTools: ["read", "structured_output"] }), ["read"]),
+			{ required: ["read", "structured_output"], available: ["read"], missing: ["structured_output"] },
+		);
+		assert.equal(evaluateChildToolDiagnostic(baseConfig({ requiredTools: ["Browser"] }), [{ name: "browser", label: "Browser" }]), undefined);
+		assert.equal(evaluateChildToolDiagnostic(baseConfig({ requiredTools: ["browser"] }), [{ name: "browser", label: "Browser" }]), undefined);
+	});
+
+	it("requires exact registered names for internal coordination tools", () => {
+		// A display label on an unrelated tool must not prove the primitive exists.
+		assert.deepEqual(
+			evaluateChildToolDiagnostic(baseConfig({ agent: "worker", requiredTools: ["bg_wait"] }), [{ name: "bash", label: "bg_wait" }]),
+			{ agent: "worker", required: ["bg_wait"], available: ["bash"], missing: ["bg_wait"] },
+		);
+		assert.equal(
+			evaluateChildToolDiagnostic(baseConfig({ requiredTools: ["bg_wait"] }), [{ name: "bg_wait", label: "Background Wait" }]),
+			undefined,
 		);
 	});
 
