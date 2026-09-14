@@ -521,6 +521,42 @@ describe("builtin agent overrides", () => {
 		assert.equal(reviewer.override?.path, path.join(tempProject, ".pi", "settings.json"));
 	});
 
+	it("layers a project builtin override on top of a user builtin override instead of discarding it", () => {
+		fs.mkdirSync(path.join(tempProject, ".pi"), { recursive: true });
+		writeJson(path.join(tempHome, ".pi", "agent", "settings.json"), {
+			subagents: { agentOverrides: { reviewer: { model: "openai/gpt-5.4", thinking: "low" } } },
+		});
+		writeJson(path.join(tempProject, ".pi", "settings.json"), {
+			subagents: { agentOverrides: { reviewer: { thinking: "high" } } },
+		});
+
+		const reviewer = discoverAgents(tempProject, "both").agents.find((agent) => agent.name === "reviewer");
+		assert.ok(reviewer);
+		assert.equal(reviewer.model, "openai/gpt-5.4");
+		assert.equal(reviewer.thinking, "high");
+		assert.equal(reviewer.override?.scope, "project");
+		assert.deepEqual(reviewer.override?.fieldScopes?.model, ["user"]);
+		assert.deepEqual(reviewer.override?.fieldScopes?.thinking, ["project", "user"]);
+	});
+
+	it("rejects invalid thinking values in builtin overrides and defaultThinking", () => {
+		writeJson(path.join(tempHome, ".pi", "agent", "settings.json"), {
+			subagents: { agentOverrides: { reviewer: { thinking: "ultra" } } },
+		});
+		assert.throws(
+			() => discoverAgents(tempProject, "both"),
+			(error: unknown) => error instanceof Error && error.message.includes("'thinking'") && error.message.includes("off, minimal, low"),
+		);
+
+		writeJson(path.join(tempHome, ".pi", "agent", "settings.json"), {
+			subagents: { defaultThinking: "ultra" },
+		});
+		assert.throws(
+			() => discoverAgents(tempProject, "both"),
+			(error: unknown) => error instanceof Error && error.message.includes("defaultThinking"),
+		);
+	});
+
 	it("layers active-provider overrides over default agentOverrides", () => {
 		writeJson(path.join(tempHome, ".pi", "agent", "settings.json"), {
 			subagents: {

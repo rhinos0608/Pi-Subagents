@@ -24,6 +24,7 @@ import { parseMemoryFrontmatter } from "./agent-memory.ts";
 import { validateAcceptanceInput } from "../runs/shared/acceptance.ts";
 import { validatePermissionRules, type PermissionRules } from "../runs/shared/permissions.ts";
 import { parseThinkingLevel, type ThinkingLevel } from "../shared/thinking-ceiling.ts";
+import { validateToolBudgetConfig } from "../runs/shared/tool-budget.ts";
 import { assertJsonSchemaObject } from "../runs/shared/structured-output.ts";
 
 export type AgentScope = "user" | "project" | "both";
@@ -1000,8 +1001,15 @@ function parseBuiltinOverrideEntry(
 	}
 
 	if ("thinking" in input) {
-		if (typeof input.thinking === "string" || input.thinking === false) override.thinking = input.thinking;
-		else throw new Error(`Builtin override '${name}' in '${filePath}' has invalid 'thinking'; expected a string or false.`);
+		if (input.thinking === false) override.thinking = false;
+		else if (typeof input.thinking === "string") {
+			try {
+				parseThinkingLevel(input.thinking, `builtin override '${name}' 'thinking'`);
+			} catch {
+				throw new Error(`Builtin override '${name}' in '${filePath}' has invalid 'thinking'; expected one of off, minimal, low, medium, high, xhigh, max, or false.`);
+			}
+			override.thinking = input.thinking.trim();
+		} else throw new Error(`Builtin override '${name}' in '${filePath}' has invalid 'thinking'; expected one of off, minimal, low, medium, high, xhigh, max, or false.`);
 	}
 
 	if ("systemPromptMode" in input) {
@@ -1167,9 +1175,14 @@ function readSubagentSettings(filePath: string | null): SubagentSettings {
 	let defaultThinking: string | undefined;
 	if ("defaultThinking" in subagentsObject) {
 		if (typeof subagentsObject.defaultThinking === "string" && subagentsObject.defaultThinking.trim()) {
+			try {
+				parseThinkingLevel(subagentsObject.defaultThinking, "subagents.defaultThinking");
+			} catch {
+				throw new Error(`Subagent settings in '${filePath}' have invalid 'defaultThinking'; expected one of off, minimal, low, medium, high, xhigh, max.`);
+			}
 			defaultThinking = subagentsObject.defaultThinking.trim();
 		} else {
-			throw new Error(`Subagent settings in '${filePath}' have invalid 'defaultThinking'; expected a non-empty string.`);
+			throw new Error(`Subagent settings in '${filePath}' have invalid 'defaultThinking'; expected one of off, minimal, low, medium, high, xhigh, max.`);
 		}
 	}
 	let maxThinking: ThinkingLevel | undefined;
@@ -1459,37 +1472,29 @@ function applyBuiltinOverrides(
 	};
 
 	return builtinAgents.map((agent) => {
-		const projectOverride = projectSettings.overrides[agent.name];
-		if (projectOverride && projectSettingsPath) {
-			return applyGlobalThinking(
-				applyBuiltinOverride(agent, projectOverride, { scope: "project", path: projectSettingsPath }),
-				projectOverride.thinking !== undefined,
-			);
-		}
-
-		if (projectBulkDisabled && projectSettingsPath) {
-			return applyGlobalThinking(
-				applyBuiltinOverride(agent, { disabled: true }, { scope: "project", path: projectSettingsPath }),
-				false,
-			);
-		}
-
+		// Field-level precedence: layer the user override first, then the project
+		// override on top, so project fields win per-field instead of the project
+		// override discarding every user-configured field.
+		let next = agent;
+		let hasExplicitThinkingOverride = false;
 		const userOverride = userSettings.overrides[agent.name];
+		if (userBulkDisabled && !userOverride) {
+			next = applyBuiltinOverride(next, { disabled: true }, { scope: "user", path: userSettingsPath });
+		}
 		if (userOverride) {
-			return applyGlobalThinking(
-				applyBuiltinOverride(agent, userOverride, { scope: "user", path: userSettingsPath }),
-				!projectThinkingConfigured && userOverride.thinking !== undefined,
-			);
+			next = applyBuiltinOverride(next, userOverride, { scope: "user", path: userSettingsPath });
+			hasExplicitThinkingOverride = !projectThinkingConfigured && userOverride.thinking !== undefined;
 		}
-
-		if (userBulkDisabled) {
-			return applyGlobalThinking(
-				applyBuiltinOverride(agent, { disabled: true }, { scope: "user", path: userSettingsPath }),
-				false,
-			);
+		const projectOverride = projectSettings.overrides[agent.name];
+		if (projectBulkDisabled && !projectOverride && projectSettingsPath) {
+			next = applyBuiltinOverride(next, { disabled: true }, { scope: "project", path: projectSettingsPath });
+			hasExplicitThinkingOverride = false;
 		}
-
-		return applyGlobalThinking(agent, false);
+		if (projectOverride && projectSettingsPath) {
+			next = applyBuiltinOverride(next, projectOverride, { scope: "project", path: projectSettingsPath });
+			if (projectOverride.thinking !== undefined) hasExplicitThinkingOverride = true;
+		}
+		return applyGlobalThinking(next, hasExplicitThinkingOverride);
 	});
 }
 
@@ -2090,6 +2095,17 @@ function loadAgentsFromDefinitionFiles(files: AgentDefinitionFile[], source: Age
 			else if (frontmatter.allowNestedSubagents === "false") allowNestedSubagents = false;
 			else throw new Error(`Agent '${localName}' has invalid allowNestedSubagents frontmatter; expected true or false.`);
 		}
+		let frontmatterThinking: string | false | undefined;
+		if (frontmatter.thinking !== undefined && frontmatter.thinking.trim()) {
+			if (frontmatter.thinking.trim() === "false") frontmatterThinking = false;
+			else {
+				try {
+					frontmatterThinking = parseThinkingLevel(frontmatter.thinking, `agent '${localName}' thinking frontmatter`);
+				} catch {
+					throw new Error(`Agent '${localName}' has invalid thinking frontmatter; expected one of off, minimal, low, medium, high, xhigh, max, or false.`);
+				}
+			}
+		}
 
 		const extraFields: Record<string, string> = {};
 		for (const [key, value] of Object.entries(frontmatter)) {
@@ -2110,7 +2126,9 @@ function loadAgentsFromDefinitionFiles(files: AgentDefinitionFile[], source: Age
 			if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
 				throw new Error(`Agent '${localName}' has invalid toolBudget frontmatter; expected a JSON object.`);
 			}
-			toolBudget = parsed as ToolBudgetConfig;
+			const budgetValidation = validateToolBudgetConfig(parsed, `Agent '${localName}' toolBudget`);
+			if (budgetValidation.error) throw new Error(`Agent '${localName}' has invalid toolBudget frontmatter in '${filePath}'; ${budgetValidation.error}`);
+			toolBudget = (budgetValidation.budget ?? parsed) as ToolBudgetConfig;
 		}
 		let outputSchema: JsonSchemaObject | undefined;
 		if (frontmatter.outputSchema !== undefined && frontmatter.outputSchema.trim()) {
@@ -2147,7 +2165,7 @@ function loadAgentsFromDefinitionFiles(files: AgentDefinitionFile[], source: Age
 			...(frontmatter.model !== undefined ? { model: frontmatter.model } : {}),
 			...(fallbackModels?.length ? { fallbackModels } : {}),
 			...(fast !== undefined ? { fast } : {}),
-			...(frontmatter.thinking !== undefined ? { thinking: frontmatter.thinking === "false" ? false : frontmatter.thinking } : {}),
+			...(frontmatterThinking !== undefined ? { thinking: frontmatterThinking } : {}),
 			systemPromptMode,
 			inheritProjectContext,
 			inheritGlobalContext,

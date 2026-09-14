@@ -56,11 +56,11 @@ const SUBAGENT_ORCHESTRATION_SKILL = "pi-subagents";
 
 const SOURCE_PRIORITY: Record<SkillSource, number> = {
 	project: 700,
-	"project-settings": 650,
-	"project-package": 600,
+	"project-package": 650,
+	"project-settings": 600,
 	user: 300,
-	"user-settings": 250,
-	"user-package": 200,
+	"user-package": 250,
+	"user-settings": 200,
 	extension: 150,
 	builtin: 100,
 	unknown: 0,

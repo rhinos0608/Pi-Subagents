@@ -1606,6 +1606,46 @@ Do work
 			assert.equal(agent.thinking, level);
 		}
 	});
+
+	it("rejects unsupported frontmatter thinking strings", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-agent-thinking-invalid-"));
+		tempDirs.push(dir);
+		const agentsDir = path.join(dir, ".pi", "agents");
+		fs.mkdirSync(agentsDir, { recursive: true });
+		fs.writeFileSync(path.join(agentsDir, "worker.md"), `---
+name: invalid-thinking-worker
+description: Worker
+thinking: ultra
+---
+
+Do work
+`, "utf-8");
+
+		// Invalid agent files surface as blocking diagnostics, not throws.
+		const { agents, agentDiagnostics } = discoverAgents(dir, "project");
+		assert.equal(agents.find((agent) => agent.name === "invalid-thinking-worker"), undefined);
+		assert.ok(agentDiagnostics?.some((diagnostic) => diagnostic.error?.includes("invalid thinking frontmatter")));
+	});
+
+	it("rejects invalid frontmatter toolBudget configs", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-agent-budget-invalid-"));
+		tempDirs.push(dir);
+		const agentsDir = path.join(dir, ".pi", "agents");
+		fs.mkdirSync(agentsDir, { recursive: true });
+		fs.writeFileSync(path.join(agentsDir, "worker.md"), `---
+name: invalid-budget-worker
+description: Worker
+toolBudget: {"soft":5,"hard":4}
+---
+
+Do work
+`, "utf-8");
+
+		// Invalid agent files surface as blocking diagnostics, not throws.
+		const { agents, agentDiagnostics } = discoverAgents(dir, "project");
+		assert.equal(agents.find((agent) => agent.name === "invalid-budget-worker"), undefined);
+		assert.ok(agentDiagnostics?.some((diagnostic) => diagnostic.error?.includes("invalid toolBudget frontmatter")));
+	});
 });
 
 describe("agent frontmatter fallbackModels", () => {
