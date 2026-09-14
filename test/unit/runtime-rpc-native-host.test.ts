@@ -11,7 +11,7 @@
  * be allowlisted or this suite fails — allowlist updates ride this proof.
  */
 import assert from "node:assert/strict";
-import { existsSync, readFileSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, mkdirSync, writeFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
@@ -29,23 +29,27 @@ import { LeafModelRuntime, RuntimeError } from "../../src/runs/runtime/leaf-mode
 import {
 	buildLeafSessionSpec,
 	executeLeafRun,
+	LeafFailure,
 	LEAF_SYSTEM_PROMPT,
+	NATIVE_HOST_SPECIFIER,
 	probeRealLeafHost,
 	resolveEffectiveCap,
 	resolveExactModel,
+	STRICT_HOST_SEMVER,
 } from "../../src/runs/runtime/leaf-model-session.ts";
 import {
 	buildNativeResourceLoaderOptions,
 	createNativeLeafHost,
 	type NativeSdkModules,
+	type NativeSessionEvent,
 	type NativeSessionLike,
 } from "../../src/runs/runtime/leaf-host-native.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
-function findRealSdkDir(): string | null {
+function findRealSdkDir(envRoot: string | null | undefined = process.env.PI_SUBAGENTS_NATIVE_SDK_ROOT): string | null {
 	const candidates = [
-		process.env.PI_SUBAGENTS_NATIVE_SDK_ROOT ?? null,
+		envRoot ?? null,
 		join(REPO_ROOT, "..", "Pi-Atlas", "node_modules", "@earendil-works", "pi-coding-agent"),
 	];
 	for (const candidate of candidates) {
@@ -71,6 +75,52 @@ const REAL_SDK_DIR = findRealSdkDir();
 function readSdkVersion(sdkDir: string): string {
 	const manifest = JSON.parse(readFileSync(join(sdkDir, "package.json"), "utf8")) as { version: string };
 	return manifest.version;
+}
+
+/**
+ * Positive real-SDK checks: the resolved module must carry NO
+ * `__piSubagentsTestShim` property in any form (any presence fails — not
+ * truthy AND never `=== true`), AND `SessionManager.inMemory` plus
+ * `createAgentSession` must both be functions. Anything else is a
+ * shim/masquerade and must take the fail-closed path, never the open gate.
+ */
+async function passesPositiveRealSdkChecks(sdkDir: string): Promise<boolean> {
+	try {
+		// Derive the entry from this directory's own manifest — never resolve
+		// the bare package specifier: Node self-reference scoping can land on
+		// a same-named package elsewhere (e.g. a test shim) instead of sdkDir.
+		const manifest = JSON.parse(readFileSync(join(sdkDir, "package.json"), "utf8")) as {
+			exports?: unknown;
+			main?: unknown;
+		};
+		const dot = (manifest.exports as Record<string, unknown> | undefined)?.["."];
+		const entry =
+			typeof dot === "string"
+				? dot
+				: dot !== null && typeof dot === "object"
+					? ((): string | undefined => {
+							const conditions = dot as Record<string, unknown>;
+							const pick = conditions["import"] ?? conditions["default"];
+							return typeof pick === "string" ? pick : undefined;
+						})()
+					: typeof manifest.main === "string"
+						? manifest.main
+						: undefined;
+		if (!entry || entry.startsWith("..") || entry.startsWith("/")) return false;
+		const entryPath = join(sdkDir, entry);
+		if (!existsSync(entryPath)) return false;
+		const sdkUrl = pathToFileURL(entryPath).href;
+		const sdk = (await import(sdkUrl)) as unknown as Record<string, unknown>;
+		if ("__piSubagentsTestShim" in sdk) return false;
+		if ((sdk as { __piSubagentsTestShim?: unknown }).__piSubagentsTestShim) return false;
+		if ((sdk as { __piSubagentsTestShim?: unknown }).__piSubagentsTestShim === true) return false;
+		const sessionManager = sdk.SessionManager as { inMemory?: unknown } | undefined;
+		if (typeof sessionManager?.inMemory !== "function") return false;
+		if (typeof sdk.createAgentSession !== "function") return false;
+		return true;
+	} catch {
+		return false;
+	}
 }
 
 class FakeEvents {
@@ -104,6 +154,83 @@ function startParams(modelId: string) {
 		correlation: { owner: "northstar", correlationId: "c", queryIndex: 0, role: "researcher", stage: "s", attempt: 0 },
 	} as Parameters<LeafModelRuntime["start"]>[0];
 }
+
+describe("env-var SDK masquerade lands fail-closed", () => {
+	it("fake shim directory via the env var fails positive checks and never opens the gate", async () => {
+		const fake = mkdtempSync(join(tmpdir(), "pi-fake-sdk-"));
+		try {
+			mkdirSync(join(fake, "dist"), { recursive: true });
+			writeFileSync(
+				join(fake, "package.json"),
+				JSON.stringify({ name: "@earendil-works/pi-coding-agent", version: "0.85.1" }),
+			);
+			writeFileSync(
+				join(fake, "dist", "index.js"),
+				"export const __piSubagentsTestShim = true;\n" +
+					"export const SessionManager = { inMemory() { return {}; } };\n" +
+					"export const createAgentSession = async () => ({});\n" +
+					"export const DefaultResourceLoader = function () {};\n",
+			);
+			// The old name + non-shim-version filter alone accepts this directory…
+			assert.equal(findRealSdkDir(fake), fake);
+			// …but the positive real-SDK checks reject it: shim flag present in any form.
+			assert.equal(await passesPositiveRealSdkChecks(fake), false);
+			// Fail-closed: the probe sees the shim flag and returns null; the gate stays closed.
+			assert.equal(await probeRealLeafHost({ resolutionBase: join(fake, "package.json") }), null);
+			assert.equal(isRuntimeGateOpen("0.0.0-pi-subagents-test-shim"), false);
+		} finally {
+			rmSync(fake, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("probe version stamping rejects malformed semver (fail closed)", () => {
+	const MALFORMED = [
+		" 0.85.1",
+		"0.85.1 ",
+		"0.85.1\n",
+		"\t0.85.1",
+		"v0.85.1",
+		"0.85",
+		"0.85.1.0",
+		"",
+		"test-shim",
+		"0.85.1\u0000",
+		"0.85.1\u007f",
+	];
+	it("STRICT_HOST_SEMVER pins digits.digits.digits with optional prerelease", () => {
+		assert.ok(STRICT_HOST_SEMVER.test("0.85.1"), "installed SDK style version accepted");
+		assert.ok(STRICT_HOST_SEMVER.test("0.85.1-beta.2"), "prerelease accepted");
+		for (const version of MALFORMED) {
+			assert.equal(STRICT_HOST_SEMVER.test(version), false, `malformed ${JSON.stringify(version)} rejected`);
+		}
+	});
+	for (const version of MALFORMED) {
+		it(`malformed manifest version ${JSON.stringify(version)} → probe null`, async () => {
+			const dir = mkdtempSync(join(tmpdir(), "pi-badver-"));
+			try {
+				mkdirSync(join(dir, "dist"), { recursive: true });
+				writeFileSync(
+					join(dir, "package.json"),
+					JSON.stringify({ name: NATIVE_HOST_SPECIFIER, version }),
+				);
+				writeFileSync(join(dir, "dist", "index.js"), "export const marker = 1;\n");
+				const validModule = {
+					SessionManager: { inMemory: () => ({}) },
+					createAgentSession: async () => ({ session: {} }),
+					DefaultResourceLoader: function () {},
+				};
+				const probe = await probeRealLeafHost({
+					resolutionBase: join(dir, "dist", "index.js"),
+					load: async () => validModule,
+				});
+				assert.equal(probe, null, `malformed version ${JSON.stringify(version)} stays fail-closed`);
+			} finally {
+				rmSync(dir, { recursive: true, force: true });
+			}
+		});
+	}
+});
 
 if (!REAL_SDK_DIR) {
 	describe("native host gate (shim-only environment: open-gate proof skipped)", () => {
@@ -175,6 +302,23 @@ if (!REAL_SDK_DIR) {
 	}
 
 	describe(`native host gate (real SDK ${SDK_VERSION})`, () => {
+		it("resolved SDK passes positive real-SDK checks (env-var masquerade guard)", async () => {
+			const { sdk } = await loadRealSdk();
+			assert.ok(!("__piSubagentsTestShim" in sdk), "shim flag absent (no property presence)");
+			assert.ok(!(sdk as { __piSubagentsTestShim?: unknown }).__piSubagentsTestShim, "shim flag not truthy");
+			assert.ok(
+				(sdk as { __piSubagentsTestShim?: unknown }).__piSubagentsTestShim !== true,
+				"shim flag never === true",
+			);
+			assert.equal(
+				typeof (sdk.SessionManager as { inMemory?: unknown } | undefined)?.inMemory,
+				"function",
+				"SessionManager.inMemory is a function",
+			);
+			assert.equal(typeof sdk.createAgentSession, "function", "createAgentSession is a function");
+			assert.equal(await passesPositiveRealSdkChecks(SDK_DIR), true, "resolved dir passes positive checks");
+		});
+
 		it("installed real-SDK version is allowlisted (allowlist rides this proof)", () => {
 			assert.ok(
 				(VERIFIED_RUNTIME_HOST_VERSIONS as readonly string[]).includes(SDK_VERSION),
@@ -296,11 +440,17 @@ if (!REAL_SDK_DIR) {
 					provider === "native-proof" && id === "proof-leaf-1" ? syntheticModel : undefined,
 			};
 			let seenSession: NativeSessionLike | undefined;
+			let sessionDisposed = false;
 			const host = createNativeLeafHost(synthModules, SDK_VERSION, {
 				modelRuntime,
 				agentDir,
 				onSession: (session) => {
 					seenSession = session;
+					const origDispose = session.dispose.bind(session);
+					session.dispose = async () => {
+						sessionDisposed = true;
+						await origDispose();
+					};
 				},
 			});
 			const listed = host.listModels();
@@ -335,6 +485,7 @@ if (!REAL_SDK_DIR) {
 			assert.equal(seenModelMaxTokens, CAP, "requested cap enforced on the pi-ai Model object");
 
 			await handle.dispose();
+			assert.equal(sessionDisposed, true, "session.dispose() was actually called");
 
 			const integrated = await executeLeafRun(host, {
 				modelId: "native-proof/proof-leaf-1",
@@ -405,9 +556,36 @@ if (!REAL_SDK_DIR) {
 					method: "negotiate",
 					params: { modelId: audited.fullId },
 				});
-				const answered = (await reply) as { success: boolean; data: { compatible: boolean } };
+				const answered = (await reply) as {
+					version: number;
+					requestId: string;
+					method: string;
+					success: boolean;
+					data: { compatible: boolean; capabilities: Record<string, unknown> };
+				};
+				assert.equal(answered.version, 1, "reply envelope version is 1");
+				assert.equal(answered.requestId, requestId, "reply echoes the sent requestId");
+				assert.equal(answered.method, "negotiate", "reply method is negotiate");
 				assert.equal(answered.success, true);
 				assert.equal(answered.data.compatible, true);
+				assert.ok(
+					answered.data.capabilities && typeof answered.data.capabilities === "object",
+					"capabilities object present",
+				);
+				for (
+					const field of [
+						"boundedCancellationSettlement",
+						"leafOnlyExecution",
+						"exactModelSelection",
+						"maxOutputTokensEnforced",
+						"backgroundExecution",
+						"maxParallelRuns",
+						"maxResultBytes",
+						"outputModes",
+					]
+				) {
+					assert.ok(field in answered.data.capabilities, `capability ${field} present`);
+				}
 			} finally {
 				await bridge.dispose();
 			}
@@ -422,3 +600,214 @@ if (!REAL_SDK_DIR) {
 		});
 	});
 }
+
+// ---------------------------------------------------------------------------
+// Adapter guard proof (fake SDK modules; runs with or without a real SDK).
+// ---------------------------------------------------------------------------
+
+type FakeAdapterListener = (event: NativeSessionEvent) => void;
+
+class FakeAdapterSession {
+	readonly listeners = new Set<FakeAdapterListener>();
+	toolNames: string[] = [];
+	promptText: string = `${LEAF_SYSTEM_PROMPT}\nCurrent working directory: /repo\n`;
+	retryOn = true;
+	compactionOn = true;
+	throwOnSetRetry = false;
+	stickRetry = false;
+	throwOnDispose = false;
+	abortCalls = 0;
+	disposeCalls = 0;
+	messageEnds = 1;
+	beforeEmit: (() => Promise<void>) | null = null;
+
+	get systemPrompt(): string {
+		return this.promptText;
+	}
+	get autoRetryEnabled(): boolean {
+		return this.retryOn;
+	}
+	get autoCompactionEnabled(): boolean {
+		return this.compactionOn;
+	}
+	getActiveToolNames(): string[] {
+		return [...this.toolNames];
+	}
+	setAutoRetryEnabled(enabled: boolean): void {
+		if (this.throwOnSetRetry) throw new Error("retry setter boom");
+		if (!this.stickRetry) this.retryOn = enabled;
+	}
+	setAutoCompactionEnabled(enabled: boolean): void {
+		this.compactionOn = enabled;
+	}
+	subscribe(listener: FakeAdapterListener): () => void {
+		this.listeners.add(listener);
+		return () => {
+			this.listeners.delete(listener);
+		};
+	}
+	async prompt(_text: string): Promise<void> {
+		if (this.beforeEmit) await this.beforeEmit();
+		for (let index = 0; index < this.messageEnds; index += 1) {
+			for (const listener of [...this.listeners]) {
+				listener({
+					type: "message_end",
+					message: {
+						role: "assistant",
+						content: [{ type: "text", text: "proof" }],
+						usage: { output: 16 },
+					},
+				});
+			}
+		}
+	}
+	async abort(): Promise<void> {
+		this.abortCalls += 1;
+	}
+	async waitForIdle(): Promise<void> {}
+	dispose(): void {
+		this.disposeCalls += 1;
+		if (this.throwOnDispose) throw new Error("dispose boom");
+	}
+}
+
+interface FakeSessionInit {
+	messageEnds?: number;
+	toolNames?: string[];
+	promptText?: string;
+	throwOnSetRetry?: boolean;
+	stickRetry?: boolean;
+	throwOnDispose?: boolean;
+}
+
+function makeAdapterHarness(sessionInit: FakeSessionInit = {}, harnessInit: { listThrows?: boolean } = {}): {
+	session: FakeAdapterSession;
+	seen: { options?: Record<string, unknown> };
+	host: ReturnType<typeof createNativeLeafHost>;
+} {
+	const session = new FakeAdapterSession();
+	Object.assign(session, sessionInit);
+	const seen: { options?: Record<string, unknown> } = {};
+	const fakeModel = { provider: "t", id: "m", api: "openai-completions", maxTokens: 64, contextWindow: 4096 };
+	const modules: NativeSdkModules = {
+		SessionManager: { inMemory: (_cwd?: string) => ({}) },
+		createAgentSession: async (options: Record<string, unknown>) => {
+			seen.options = options;
+			return { session: session as unknown as NativeSessionLike };
+		},
+		DefaultResourceLoader: class {
+			constructor(_options: Record<string, unknown>) {}
+			async reload(): Promise<unknown> {
+				return {};
+			}
+		} as unknown as NativeSdkModules["DefaultResourceLoader"],
+		SettingsManager: {
+			create: (_cwd: string, _agentDir?: string) => ({
+				setRetryEnabled(_enabled: boolean): void {},
+				setCompactionEnabled(_enabled: boolean): void {},
+			}),
+		},
+		getAgentDir: () => "/agent",
+		getBuiltinProviders: () => {
+			if (harnessInit.listThrows) throw new Error("catalog boom");
+			return ["t"];
+		},
+		getBuiltinModels: () => [fakeModel],
+		getBuiltinModel: (provider: string, id: string) => (provider === "t" && id === "m" ? fakeModel : undefined),
+	};
+	const host = createNativeLeafHost(modules, "9.9.9-test", { agentDir: "/agent" });
+	return { session, seen, host };
+}
+
+function adapterLeafSpec(): ReturnType<typeof buildLeafSessionSpec> {
+	return buildLeafSessionSpec("/repo", { provider: "t", id: "m", api: "openai-completions", maxTokens: 64 }, 16);
+}
+
+describe("native leaf adapter guards (fake SDK modules)", () => {
+	it("passes noTools all plus explicit builtin excludeTools", async () => {
+		const { host, seen } = makeAdapterHarness();
+		const handle = await host.createLeafSession(adapterLeafSpec());
+		const options = seen.options as Record<string, unknown>;
+		assert.equal(options.noTools, "all");
+		assert.deepEqual(options.excludeTools, ["read", "bash", "edit", "write"]);
+		await handle.dispose();
+	});
+
+	it("aborts after the first message_end and fails closed on two turns", async () => {
+		const { host, session } = makeAdapterHarness({ messageEnds: 2 });
+		await assert.rejects(
+			executeLeafRun(host, { modelId: "t/m", prompt: "hi", maxOutputTokens: 16, cwd: "/repo" }),
+			/single-turn/,
+		);
+		assert.ok(session.abortCalls >= 1, "adapter aborted after the first assistant message_end");
+	});
+
+	it("rejects a non-empty tool registry at creation and disposes the session", async () => {
+		const { host, session } = makeAdapterHarness({ toolNames: ["read"] });
+		await assert.rejects(host.createLeafSession(adapterLeafSpec()), /used tools/);
+		assert.equal(session.disposeCalls, 1, "rejected session is disposed");
+	});
+
+	it("rejects tools activated between creation and prompt", async () => {
+		const { host, session } = makeAdapterHarness();
+		const handle = await host.createLeafSession(adapterLeafSpec());
+		session.toolNames.push("read");
+		await assert.rejects(handle.prompt("hi"), /used tools/);
+		await handle.dispose();
+	});
+
+	it("rejects an altered system prompt", async () => {
+		const { host } = makeAdapterHarness({ promptText: "evil override" });
+		await assert.rejects(host.createLeafSession(adapterLeafSpec()), /system prompt/);
+	});
+
+	it("rejects when retry/compaction cannot be verified off (no silent catch)", async () => {
+		const throwing = makeAdapterHarness({ throwOnSetRetry: true });
+		await assert.rejects(throwing.host.createLeafSession(adapterLeafSpec()), /retry/);
+		const stuck = makeAdapterHarness({ stickRetry: true });
+		await assert.rejects(stuck.host.createLeafSession(adapterLeafSpec()), /retry/);
+	});
+
+	it("fails closed when abort lands before waitForIdle settles", async () => {
+		const { host, session } = makeAdapterHarness();
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		session.beforeEmit = () => gate;
+		const handle = await host.createLeafSession(adapterLeafSpec());
+		const pending = handle.prompt("hi");
+		await handle.abort();
+		release();
+		await assert.rejects(pending, /Leaf prompt failed/);
+		await handle.dispose();
+	});
+
+	it("contains listModels and dispose failures", async () => {
+		const broken = makeAdapterHarness({}, { listThrows: true });
+		assert.throws(
+			() => broken.host.listModels(),
+			(error: unknown) => error instanceof LeafFailure && error.code === "provider_error",
+		);
+		const { host, session } = makeAdapterHarness({ throwOnDispose: true });
+		const handle = await host.createLeafSession(adapterLeafSpec());
+		await handle.dispose();
+		assert.equal(session.disposeCalls, 1);
+	});
+
+	it("treats any truthy shim marker as a shim (not just === true)", async () => {
+		const scratch = mkdtempSync(join(tmpdir(), "pi-shim-proof-"));
+		const root = join(scratch, "node_modules", "@earendil-works", "pi-coding-agent");
+		mkdirSync(join(root, "dist"), { recursive: true });
+		writeFileSync(
+			join(root, "package.json"),
+			JSON.stringify({ name: "@earendil-works/pi-coding-agent", version: "0.0.0-shim", main: "dist/index.js" }),
+		);
+		writeFileSync(join(root, "dist", "index.js"), "export default {};\n");
+		const probed = await probeRealLeafHost({
+			resolutionBase: join(root, "dist", "index.js"),
+			load: async () => ({ __piSubagentsTestShim: 1 }),
+		});
+		assert.equal(probed, null);
+	});
+});

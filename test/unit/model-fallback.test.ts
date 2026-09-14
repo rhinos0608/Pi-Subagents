@@ -6,6 +6,7 @@ import {
 	fuzzyResolveModel,
 	formatSubagentModelVerificationError,
 	isContextOverflow,
+	isNonCacheableTransportFailure,
 	isRetryableModelFailure,
 	isRetryableModelFailureAttempt,
 	normalizeModelSegment,
@@ -226,6 +227,27 @@ describe("model fallback helpers", () => {
 		assert.equal(isContextOverflow(error), true);
 		recordRetryableModelFailure("openai/gpt-5-mini", error);
 		assert.equal(getExcludedCount(), 0);
+	});
+
+	it("retries transient transport failures without caching a model exclusion", () => {
+		for (const error of [
+			"fetch failed",
+			"Request timed out.",
+			"APIConnectionError: Connection closed.",
+			"socket hang up",
+		]) {
+			assert.equal(isRetryableModelFailure(error), true, error);
+			assert.equal(isNonCacheableTransportFailure(error), true, error);
+			recordRetryableModelFailure("openai/gpt-5-mini", error);
+			assert.equal(findModelExclusion("openai/gpt-5-mini"), undefined, error);
+			assert.equal(getExcludedCount(), 0, error);
+			assert.deepEqual(
+				buildModelCandidates("openai/gpt-5-mini", ["anthropic/claude-sonnet-4"], availableModels),
+				["openai/gpt-5-mini", "anthropic/claude-sonnet-4"],
+				error,
+			);
+			clearExclusions();
+		}
 	});
 
 	it("retries canonical no-output failures without caching a model exclusion", () => {

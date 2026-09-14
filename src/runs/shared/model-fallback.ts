@@ -634,9 +634,20 @@ export function isRetryableModelFailureAttempt(input: { error: string | undefine
 // but do not establish that the model is unhealthy for subsequent requests.
 const REQUEST_SHAPE_FAILURE_PATTERN = /\b(?:bad[ _]request|invalid[ _]argument|invalid_request_error)\b/i;
 
+// Transient transport blips (fetch failed, timeouts, connection resets) say the
+// network flaked, not that the model is unhealthy. Still retryable within the
+// run (fall through to next candidate), but never cached as an exclusion — a
+// 24h exclusion for a momentary blip wrongly drains good models on later runs.
+const TRANSIENT_TRANSPORT_NO_CACHE_PATTERN = /fetch failed|request timed out|\btimed?\s?out\b|timeout|econnreset|etimedout|socket hang up|network(?:work)? (?:error|failure)|econnrefused|enotfound|eai_again|connection\s+(?:error|reset|closed|aborted|refused)|connection reset by peer|APIConnectionError/i;
+
+export function isNonCacheableTransportFailure(error: string | undefined): boolean {
+	return TRANSIENT_TRANSPORT_NO_CACHE_PATTERN.test(error ?? "");
+}
+
 export function recordRetryableModelFailure(model: string | undefined, error: string | undefined): void {
 	if (!model || !error || !isRetryableModelFailure(error) || isContextOverflow(error)) return;
 	if (REQUEST_SHAPE_FAILURE_PATTERN.test(error) || isTransientNoOutputFailure(error)) return;
+	if (TRANSIENT_TRANSPORT_NO_CACHE_PATTERN.test(error)) return;
 	const { provider, modelId } = parseModelKey(model);
 	recordModelFailure({ modelId, reason: error, ...(provider ? { provider } : {}) });
 }
