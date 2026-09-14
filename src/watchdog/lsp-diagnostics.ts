@@ -1,4 +1,4 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -61,12 +61,114 @@ const PROVIDER_NAME = "typescript-language-server";
 const MAX_MESSAGE_LENGTH = 500;
 const MAX_STDERR_LENGTH = 2_000;
 const SHUTDOWN_TIMEOUT_MS = 250;
+const SIGKILL_GRACE_MS = 250;
 function normalizeRelPath(value: string): string {
 	return value.replaceAll(path.sep, "/").replace(/^\.\//, "");
 }
 function isPathInsideRoot(absPath: string, root: string): boolean {
 	const rel = path.relative(root, absPath);
 	return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+}
+function canonicalPath(value: string): string {
+	try {
+		return fs.realpathSync.native(value);
+	} catch {
+		return path.resolve(value);
+	}
+}
+
+function resolveTargetRealPath(absPath: string): string | undefined {
+	try {
+		return fs.realpathSync.native(absPath);
+	} catch {
+		return undefined;
+	}
+}
+
+// Read-time TOCTOU guard: containment was checked at collect time, but the
+// path is re-resolved at read time, so a symlink swapped in between could
+// serve outside-root content. Open first, verify the opened descriptor still
+// resolves inside the root, then read through the fd. Returns undefined when
+// verification fails (caller skips the target); other I/O errors throw.
+function realPathForOpenFd(fd: number, absPath: string): string | undefined {
+	if (process.platform === "linux") {
+		try {
+			return fs.realpathSync.native(`/proc/self/fd/${fd}`);
+		} catch {
+			return undefined;
+	}
+	}
+	// No /proc/self/fd on non-Linux: re-resolve the path, then bind the
+	// resolution to the opened descriptor via dev/ino identity. A swap between
+	// open and realpath resolves to a different file, the identity check
+	// fails, and the target is skipped. Residual: realpath and stat are
+	// separate path resolutions, so a hostile writer mutating the path between
+	// them (e.g. installing a symlink at the checked path pointing at the
+	// already-open outside file) still passes, as does a hardlink swap to the
+	// same inode. This check blocks ordinary swaps, not a concurrent mutator:
+	// the watchdog assumes repo paths are not concurrently controlled by a
+	// separate untrusted principal (a writer with that access can already
+	// commit malicious content directly).
+	try {
+		const real = fs.realpathSync.native(absPath);
+		const opened = fs.fstatSync(fd);
+		const resolved = fs.statSync(real);
+		if (opened.dev !== resolved.dev || opened.ino !== resolved.ino) return undefined;
+		return real;
+	} catch {
+		return undefined;
+	}
+}
+
+function readTargetTextSecure(target: TargetFile, realRoot: string): string | undefined {
+	let fd: number | undefined;
+	try {
+		fd = fs.openSync(target.absPath, "r");
+		const real = realPathForOpenFd(fd, target.absPath);
+		if (!real || !isPathInsideRoot(real, realRoot)) return undefined;
+		return fs.readFileSync(fd, "utf-8");
+	} finally {
+		if (fd !== undefined) {
+			try {
+				fs.closeSync(fd);
+			} catch {
+				// Descriptor already gone; nothing to do.
+			}
+		}
+	}
+}
+
+// Smallest testable seam for the win32 kill path: env override selects the
+// platform so the tree-kill branch is provable without restructuring the client.
+// The taskkill runner defaults to the real spawn and is injectable in tests.
+export function terminateLspChild(
+	child: Pick<ChildProcessWithoutNullStreams, "pid" | "kill">,
+	signal: NodeJS.Signals = "SIGTERM",
+	taskkillRunner: (pid: number) => void = (pid) => {
+		const result = spawnSync("taskkill", ["/pid", String(pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
+		if (result.error) throw result.error;
+		if (result.status !== 0) throw new Error(`taskkill exited ${String(result.status)}`);
+	},
+): void {
+	if ((process.env.PI_WATCHDOG_LSP_PLATFORM_OVERRIDE ?? process.platform) === "win32") {
+		// .cmd/.bat servers spawn with shell:true, so the direct child is a
+		// cmd.exe shell and the real server is its child. Killing only the
+		// shell orphans the server with inherited pipes. Kill the tree.
+		const pid = child.pid;
+		if (pid !== undefined) {
+			try {
+				taskkillRunner(pid);
+				return;
+			} catch {
+				// Best-effort: fall through to child.kill.
+			}
+		}
+	}
+	try {
+		child.kill(signal);
+	} catch {
+		// Already gone; exit event resolves waiters.
+	}
 }
 function languageIdForPath(filePath: string): string | undefined {
 	return TS_JS_EXTENSIONS.get(path.extname(filePath).toLowerCase());
@@ -119,6 +221,7 @@ function resolveTypeScriptLanguageServer(root: string): LspCommand | undefined {
 function collectTargetFiles(root: string, changedPaths: string[], maxFiles: number): { targets: TargetFile[]; skippedPaths: string[] } {
 	const targets: TargetFile[] = [];
 	const skippedPaths: string[] = [];
+	const realRoot = canonicalPath(root);
 	for (const changedPath of changedPaths) {
 		const relPath = normalizeRelPath(changedPath);
 		const absPath = path.resolve(root, relPath);
@@ -130,14 +233,20 @@ function collectTargetFiles(root: string, changedPaths: string[], maxFiles: numb
 		let stat: fs.Stats;
 		try {
 			stat = fs.statSync(absPath);
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-				skippedPaths.push(relPath);
-				continue;
-			}
-			throw error;
+		} catch {
+			// Fail closed: unreadable or unresolvable paths are skipped, never read.
+			skippedPaths.push(relPath);
+			continue;
 		}
 		if (!stat.isFile()) {
+			skippedPaths.push(relPath);
+			continue;
+		}
+		// statSync follows symlinks: resolve the real target and re-enforce
+		// root containment so a symlink inside the repo cannot pull file
+		// content from outside the root into the LSP request.
+		const realTarget = resolveTargetRealPath(absPath);
+		if (!realTarget || !isPathInsideRoot(realTarget, realRoot)) {
 			skippedPaths.push(relPath);
 			continue;
 		}
@@ -145,7 +254,7 @@ function collectTargetFiles(root: string, changedPaths: string[], maxFiles: numb
 			skippedPaths.push(relPath);
 			continue;
 		}
-		targets.push({ relPath, absPath, uri: pathToFileURL(absPath).href, languageId });
+		targets.push({ relPath, absPath: realTarget, uri: pathToFileURL(realTarget).href, languageId });
 	}
 	return { targets, skippedPaths };
 }
@@ -305,12 +414,25 @@ class JsonRpcLspClient {
 			}
 		}
 		await this.waitForExit(SHUTDOWN_TIMEOUT_MS);
+		if (!this.exited) {
+			// SIGTERM was ignored: escalate so a wedged server cannot outlive shutdown.
+			terminateLspChild(this.child, "SIGKILL");
+			await this.waitForExit(SIGKILL_GRACE_MS);
+		}
 	}
 
 	kill(): void {
 		if (this.exited || this.terminating) return;
 		this.terminating = true;
-		this.child.kill("SIGTERM");
+		terminateLspChild(this.child, "SIGTERM");
+		// Escalate to SIGKILL if the server ignores SIGTERM, so timeout and
+		// protocol-failure paths cannot leak a surviving child process.
+		const timer = setTimeout(() => {
+			if (!this.exited) {
+				terminateLspChild(this.child, "SIGKILL");
+			}
+		}, SIGKILL_GRACE_MS);
+		timer.unref?.();
 	}
 
 	stderrTail(): string {
@@ -454,11 +576,37 @@ async function collectWithTypeScriptLanguageServer(input: {
 	const remaining = () => Math.max(1, input.config.timeoutMs - (Date.now() - started));
 	const abort = () => client.kill();
 	input.signal?.addEventListener("abort", abort, { once: true });
+	let readableTargets = input.targets;
+	let combinedSkipped = input.skippedPaths;
 	try {
 		await client.request("initialize", initializeParams(input.root), remaining(), input.signal);
 		client.notify("initialized", {});
+		// Re-verify containment at read time: a symlink swapped in after
+		// collect must not serve outside-root content to the LSP server.
+		// Unverifiable targets are skipped, never read.
+		const realRoot = canonicalPath(input.root);
+		const readable: TargetFile[] = [];
+		const texts = new Map<string, string>();
+		const extraSkipped: string[] = [];
 		for (const target of input.targets) {
-			const text = fs.readFileSync(target.absPath, "utf-8");
+			let text: string | undefined;
+			try {
+				text = readTargetTextSecure(target, realRoot);
+			} catch {
+				extraSkipped.push(target.relPath);
+				continue;
+			}
+			if (text === undefined) {
+				extraSkipped.push(target.relPath);
+				continue;
+			}
+			readable.push(target);
+			texts.set(target.relPath, text);
+		}
+		readableTargets = readable;
+		combinedSkipped = [...input.skippedPaths, ...extraSkipped];
+		for (const target of readable) {
+			const text = texts.get(target.relPath) ?? "";
 			client.notify("textDocument/didOpen", {
 				textDocument: { uri: target.uri, languageId: target.languageId, version: 1, text },
 			});
@@ -467,15 +615,15 @@ async function collectWithTypeScriptLanguageServer(input: {
 				text,
 			});
 		}
-		const complete = await waitForDiagnostics(client, input.targets, remaining(), input.signal);
-		const diagnostics = input.targets
+		const complete = await waitForDiagnostics(client, readable, remaining(), input.signal);
+		const diagnostics = readable
 			.flatMap((target) => convertDiagnostics(target, client.diagnostics.get(target.uri) ?? []))
 			.slice(0, input.config.maxDiagnostics);
 		return {
 			status: complete ? "ok" : "timeout",
 			provider: input.command.label,
-			checkedPaths: input.targets.map((target) => target.relPath),
-			skippedPaths: input.skippedPaths,
+			checkedPaths: readable.map((target) => target.relPath),
+			skippedPaths: combinedSkipped,
 			diagnostics,
 			...(complete ? {} : { message: `Timed out waiting ${input.config.timeoutMs}ms for fresh LSP diagnostics.` }),
 		};
@@ -486,8 +634,8 @@ async function collectWithTypeScriptLanguageServer(input: {
 		return {
 			status: timedOut ? "timeout" : "failed",
 			provider: input.command.label,
-			checkedPaths: input.targets.map((target) => target.relPath),
-			skippedPaths: input.skippedPaths,
+			checkedPaths: readableTargets.map((target) => target.relPath),
+			skippedPaths: combinedSkipped,
 			diagnostics: [],
 			message: stderr ? `${message}; ${stderr}` : message,
 		};

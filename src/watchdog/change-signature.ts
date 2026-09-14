@@ -14,6 +14,9 @@ const DEFAULT_MAX_HASH_TOTAL_BYTES = 64 * 1024 * 1024;
 const DEFAULT_MAX_HASH_ENTRIES = 2_000;
 const TRACKED_ENTRY_PROBE_MAX_BYTES = 1_024;
 
+/** Bounded git spawn so a wedged git child cannot hang the watchdog synchronously. */
+const GIT_TIMEOUT_MS = 10_000;
+
 function positiveEnvNumber(name: string, fallback: number): number {
 	const parsed = Number(process.env[name]);
 	return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
@@ -40,7 +43,7 @@ export interface WatchdogRepoChangeSignature {
 }
 
 function git(cwd: string, args: string[]): string | undefined {
-	const result = spawnSync("git", ["-C", cwd, ...args], { encoding: "utf-8", maxBuffer: 10 * 1024 * 1024, windowsHide: true });
+	const result = spawnSync("git", ["-C", cwd, ...args], { encoding: "utf-8", maxBuffer: 10 * 1024 * 1024, windowsHide: true, timeout: GIT_TIMEOUT_MS, killSignal: "SIGKILL" });
 	if (result.status !== 0) return undefined;
 	return result.stdout;
 }
@@ -69,6 +72,8 @@ function hasTrackedEntries(root: string): boolean | undefined {
 		encoding: "utf-8",
 		maxBuffer: TRACKED_ENTRY_PROBE_MAX_BYTES,
 		windowsHide: true,
+		timeout: GIT_TIMEOUT_MS,
+		killSignal: "SIGKILL",
 	});
 	const errorCode = (result.error as NodeJS.ErrnoException | undefined)?.code;
 	if (result.status === 0 || errorCode === "ENOBUFS") return true;

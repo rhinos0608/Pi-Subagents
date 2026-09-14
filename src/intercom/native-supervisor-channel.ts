@@ -5,7 +5,7 @@ import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import type { ChildSupervisorMetadata } from "../runs/shared/child-runtime-config.ts";
-import { INTERCOM_DETACH_REQUEST_EVENT, POLL_INTERVAL_MS, TEMP_ROOT_DIR, type ControlEvent, type IntercomEventBus, type SubagentState } from "../shared/types.ts";
+import { ensureTempRootDir, INTERCOM_DETACH_REQUEST_EVENT, POLL_INTERVAL_MS, TEMP_ROOT_DIR, type ControlEvent, type IntercomEventBus, type SubagentState } from "../shared/types.ts";
 import { writeAtomicJson } from "../shared/atomic-json.ts";
 import { shouldUseNativeFsWatch } from "../shared/watch-strategy.ts";
 import {
@@ -113,9 +113,75 @@ export function resolveSupervisorChannelDir(runId: string, agent: string, childI
 	return path.join(SUPERVISOR_CHANNEL_ROOT, `${safeSegment(runId)}-${safeSegment(agent)}-${childIndex}`);
 }
 
+function assertTrustedChannelDir(dir: string, label: string): void {
+	let stat: fs.Stats;
+	try { stat = fs.lstatSync(dir); }
+	catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new Error(`Supervisor ${label} is missing.`);
+		throw error;
+	}
+	if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error(`Supervisor ${label} is unsafe.`);
+	if (typeof process.getuid === "function" && stat.uid !== process.getuid()) throw new Error(`Supervisor ${label} is not owned by the current user.`);
+	if ((stat.mode & 0o777) !== 0o700) {
+		fs.chmodSync(dir, 0o700);
+		stat = fs.lstatSync(dir);
+		if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error(`Supervisor ${label} is unsafe.`);
+		if (typeof process.getuid === "function" && stat.uid !== process.getuid()) throw new Error(`Supervisor ${label} is not owned by the current user.`);
+		if ((stat.mode & 0o777) !== 0o700) throw new Error(`Supervisor ${label} is not a mode-0700 agent-private directory.`);
+	}
+}
+
+function assertChannelPathSafe(channelDir: string): void {
+	const root = path.resolve(SUPERVISOR_CHANNEL_ROOT);
+	const resolved = path.resolve(channelDir);
+	if (resolved !== root && !resolved.startsWith(`${root}${path.sep}`)) throw new Error("Supervisor channel directory escapes its root.");
+	try { assertTrustedChannelDir(root, "channel root"); }
+	catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+		if (error instanceof Error && /is missing\./.test(error.message)) return;
+		throw error;
+	}
+	let current = root;
+	for (const part of path.relative(root, resolved).split(path.sep)) {
+		if (!part || part === "." || part === "..") throw new Error("Supervisor channel path contains an unsafe segment.");
+		current = path.join(current, part);
+		let stat: fs.Stats;
+		try { stat = fs.lstatSync(current); }
+		catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+			throw error;
+		}
+		if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error("Supervisor channel path traverses an unsafe component.");
+		if (typeof process.getuid === "function" && stat.uid !== process.getuid()) throw new Error("Supervisor channel path traverses an unowned component.");
+		if ((stat.mode & 0o777) !== 0o700) {
+			fs.chmodSync(current, 0o700);
+			stat = fs.lstatSync(current);
+			if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error("Supervisor channel path traverses an unsafe component.");
+			if (typeof process.getuid === "function" && stat.uid !== process.getuid()) throw new Error("Supervisor channel path traverses an unowned component.");
+			if ((stat.mode & 0o777) !== 0o700) throw new Error("Supervisor channel path traverses a non-private component.");
+		}
+	}
+	try {
+		const leaf = fs.lstatSync(resolved);
+		if (!leaf.isDirectory() || leaf.isSymbolicLink()) throw new Error("Supervisor channel directory is unsafe.");
+		if (typeof process.getuid === "function" && leaf.uid !== process.getuid()) throw new Error("Supervisor channel directory is not owned by the current user.");
+		if ((leaf.mode & 0o777) !== 0o700) throw new Error("Supervisor channel directory is not a mode-0700 agent-private directory.");
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+		throw error;
+	}
+}
+
 export function ensureSupervisorChannelDir(channelDir: string): void {
+	assertChannelPathSafe(channelDir);
+	ensureTempRootDir();
 	fs.mkdirSync(path.join(channelDir, REQUESTS_DIR), { recursive: true, mode: 0o700 });
 	fs.mkdirSync(path.join(channelDir, REPLIES_DIR), { recursive: true, mode: 0o700 });
+	assertChannelPathSafe(channelDir);
+	assertTrustedChannelDir(path.resolve(SUPERVISOR_CHANNEL_ROOT), "channel root");
+	assertTrustedChannelDir(path.resolve(channelDir), "channel directory");
+	assertTrustedChannelDir(path.join(path.resolve(channelDir), REQUESTS_DIR), "channel requests directory");
+	assertTrustedChannelDir(path.join(path.resolve(channelDir), REPLIES_DIR), "channel replies directory");
 }
 
 function requestPath(channelDir: string, requestId: string): string {
@@ -189,6 +255,7 @@ async function sendSupervisorRequest(params: ContactSupervisorParams, metadata: 
 	if (!params.message?.trim() && params.reason !== "interview_request") {
 		throw new Error("message is required for supervisor decisions and progress updates.");
 	}
+	assertChannelPathSafe(metadata.channelDir);
 	ensureSupervisorChannelDir(metadata.channelDir);
 	const requestId = randomUUID();
 	const expectsReply = params.reason !== "progress_update";
@@ -867,7 +934,7 @@ export function createNativeSupervisorChannel(pi: ExtensionAPI, state: SubagentS
 			poll();
 			if (deps.getChannelDirs) return; // Child polling starts only after a descendant launch.
 			try {
-				fs.mkdirSync(SUPERVISOR_CHANNEL_ROOT, { recursive: true });
+				fs.mkdirSync(SUPERVISOR_CHANNEL_ROOT, { recursive: true, mode: 0o700 });
 				if (!useNativeWatcher()) {
 					if (platform === "win32") startPolling();
 					return;

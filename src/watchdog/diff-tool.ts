@@ -7,6 +7,9 @@ export const WATCHDOG_DIFF_TOOL_NAME = "watchdog_diff";
 export const WATCHDOG_DIFF_MAX_CHARS = 24_000;
 const MAX_UNTRACKED_FILES = 50;
 
+/** Bounded git spawn so a wedged git child cannot hang the watchdog synchronously. */
+const GIT_TIMEOUT_MS = 10_000;
+
 export interface WatchdogDiffBaseline {
 	root: string;
 	ref: string;
@@ -20,7 +23,7 @@ const WatchdogDiffParams = Type.Object({
 type WatchdogDiffParams = Static<typeof WatchdogDiffParams>;
 
 function runGit(root: string, args: string[]): { ok: boolean; stdout: string; stderr: string } {
-	const result = spawnSync("git", ["-C", root, ...args], { encoding: "utf-8", maxBuffer: 16 * 1024 * 1024, windowsHide: true });
+	const result = spawnSync("git", ["-C", root, ...args], { encoding: "utf-8", maxBuffer: 16 * 1024 * 1024, windowsHide: true, timeout: GIT_TIMEOUT_MS, killSignal: "SIGKILL" });
 	return { ok: result.status === 0, stdout: result.stdout ?? "", stderr: (result.stderr ?? "").trim() };
 }
 
