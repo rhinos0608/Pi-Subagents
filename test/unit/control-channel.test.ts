@@ -11,6 +11,7 @@ import {
 	consumeStopRequestPayload,
 	consumeStopRequestPayloads,
 	deliverInterruptRequest,
+	drainTerminalControlInbox,
 	interruptRequestPath,
 	MAX_STEER_QUEUE_SIZE,
 	queueRevivalBrief,
@@ -154,6 +155,32 @@ describe("control channel: request file", () => {
 		}
 	});
 
+	it("does not lose a request written during consume (atomic rename claim)", () => {
+		const asyncDir = tmpAsyncDir("pi-control-consume-race-");
+		try {
+			requestAsyncInterrupt(asyncDir, { source: "request-a" });
+			// Simulate request B landing after the claim: claim A via rename first,
+			// then recreate the original path before the claimed file is removed.
+			const racingFs = {
+				...fs,
+				renameSync: ((from: fs.PathLike, to: fs.PathLike) => {
+					const claimed = fs.renameSync(from, to);
+					fs.writeFileSync(from as string, JSON.stringify({ type: "interrupt", ts: 2, source: "request-b" }), "utf-8");
+					return claimed;
+				}) as typeof fs.renameSync,
+			};
+			assert.equal(consumeInterruptRequest(asyncDir, racingFs), true);
+			assert.equal(fs.existsSync(interruptRequestPath(asyncDir)), true);
+			const survivor = JSON.parse(fs.readFileSync(interruptRequestPath(asyncDir), "utf-8"));
+			assert.equal(survivor.source, "request-b");
+			assert.equal(consumeInterruptRequest(asyncDir), true);
+			assert.equal(fs.existsSync(interruptRequestPath(asyncDir)), false);
+			assert.equal(consumeInterruptRequest(asyncDir), false);
+		} finally {
+			cleanup(asyncDir);
+		}
+	});
+
 	it("removes a malformed request directory instead of firing forever", () => {
 		const asyncDir = tmpAsyncDir("pi-control-consume-dir-");
 		try {
@@ -216,6 +243,8 @@ describe("control channel: request file", () => {
 			let failScan = true;
 			const fsImpl = {
 				existsSync: fs.existsSync,
+				rmSync: fs.rmSync,
+				renameSync: fs.renameSync,
 				readdirSync: ((target: fs.PathLike) => {
 					if (failScan) {
 						failScan = false;
@@ -242,6 +271,8 @@ describe("control channel: request file", () => {
 			requestAsyncSteer(asyncDir, { message: "already taken", id: "s", ts: 1 });
 			const fsImpl = {
 				existsSync: fs.existsSync,
+				rmSync: fs.rmSync,
+				renameSync: fs.renameSync,
 				readdirSync: fs.readdirSync,
 				readFileSync: fs.readFileSync,
 				rmSync: (target: fs.PathLike, options?: fs.RmOptions) => {
@@ -337,6 +368,7 @@ describe("control channel: watchAsyncControlInbox", () => {
 			mkdirSync: fs.mkdirSync,
 			existsSync: fs.existsSync,
 			rmSync: fs.rmSync,
+			renameSync: fs.renameSync,
 			readdirSync: fs.readdirSync,
 			readFileSync: fs.readFileSync,
 			realpathSync,
@@ -666,6 +698,45 @@ describe("control channel: watchAsyncControlInbox", () => {
 	});
 });
 
+describe("control inbox terminal drain", () => {
+	it("consumes stop/timeout/interrupt/steer requests that land after the watcher is disposed", () => {
+		const asyncDir = tmpAsyncDir("pi-terminal-drain-");
+		try {
+			const seen: string[] = [];
+			const dispose = watchAsyncControlInbox(asyncDir, {
+				onStop: (request) => seen.push(request.childId ?? "stop"),
+				onTimeout: () => seen.push("timeout"),
+				onInterrupt: () => seen.push("interrupt"),
+				onSteer: (request) => seen.push(request.message),
+			});
+			dispose();
+			// Race window: status still reads running, but the live watcher is dead.
+			// A single stop-only drain would strand the timeout/interrupt/steer files.
+			requestAsyncStop(asyncDir, { childId: "late-stop" });
+			requestAsyncTimeout(asyncDir);
+			requestAsyncInterrupt(asyncDir);
+			requestAsyncSteer(asyncDir, { message: "late-steer", id: "s1", ts: 1 });
+			assert.deepEqual(seen, [], "disposed watcher must not consume late requests");
+			const drained = drainTerminalControlInbox(asyncDir);
+			assert.equal(drained.stops.length, 1);
+			assert.equal(drained.stops[0]?.childId, "late-stop");
+			assert.equal(drained.timeout, true);
+			assert.equal(drained.interrupt, true);
+			assert.deepEqual(drained.steers.map((request) => request.message), ["late-steer"]);
+			assert.equal(fs.existsSync(stopRequestPath(asyncDir)), false);
+			assert.equal(fs.existsSync(timeoutRequestPath(asyncDir)), false);
+			assert.equal(fs.existsSync(interruptRequestPath(asyncDir)), false);
+			const settled = drainTerminalControlInbox(asyncDir);
+			assert.deepEqual(settled.stops, []);
+			assert.equal(settled.timeout, false);
+			assert.equal(settled.interrupt, false);
+			assert.deepEqual(settled.steers, []);
+		} finally {
+			cleanup(asyncDir);
+		}
+	});
+});
+
 describe("control inbox diagnostics and active-owner cost", () => {
 	for (const operation of ["read", "remove"] as const) it(`retries stop request ${operation} failures without losing readable siblings`, () => {
 		const asyncDir = tmpAsyncDir("pi-stop-retry-");
@@ -679,10 +750,10 @@ describe("control inbox diagnostics and active-owner cost", () => {
 			onError: (error, phase) => { assert.equal(phase, "scan"); failures.push(error); },
 			platform: "darwin",
 			fs: { ...fs, readFileSync: ((...args: Parameters<typeof fs.readFileSync>) => {
-				if (failing && operation === "read" && args[0] === pending) throw denied;
+				if (failing && operation === "read" && typeof args[0] === "string" && args[0].startsWith(pending)) throw denied;
 				return fs.readFileSync(...args);
 			}) as typeof fs.readFileSync, rmSync: (target, options) => {
-				if (failing && operation === "remove" && target === pending) throw denied;
+				if (failing && operation === "remove" && typeof target === "string" && target.startsWith(pending)) throw denied;
 				fs.rmSync(target, options);
 			} },
 			timers: { setInterval: ((handler: () => void) => { tick = handler; return { unref() {} }; }) as unknown as typeof setInterval, clearInterval() {} },

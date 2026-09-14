@@ -22,7 +22,7 @@ import { POLL_INTERVAL_MS } from "../../shared/types.ts";
 import { shouldUseNativeFsWatch } from "../../shared/watch-strategy.ts";
 import { resolveWatchPath } from "../../shared/utils.ts";
 
-export type ControlChannelFs = Pick<typeof fs, "mkdirSync" | "existsSync" | "rmSync" | "watch" | "readdirSync" | "readFileSync" | "realpathSync">;
+export type ControlChannelFs = Pick<typeof fs, "mkdirSync" | "existsSync" | "rmSync" | "renameSync" | "watch" | "readdirSync" | "readFileSync" | "realpathSync">;
 
 function writeJsonToExistingDir(filePath: string, payload: object): void {
 	const tempPath = path.join(path.dirname(filePath), `.${path.basename(filePath)}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`);
@@ -275,7 +275,7 @@ function parseSteerRequest(raw: unknown): SteerRequest | undefined {
 	};
 }
 
-export function consumeSteerRequestsFromDir(dir: string, fsImpl: Pick<typeof fs, "existsSync" | "rmSync" | "readdirSync" | "readFileSync"> = fs, onError: (error: unknown) => void = () => {}): SteerRequest[] {
+export function consumeSteerRequestsFromDir(dir: string, fsImpl: Pick<typeof fs, "existsSync" | "rmSync" | "renameSync" | "readdirSync" | "readFileSync"> = fs, onError: (error: unknown) => void = () => {}): SteerRequest[] {
 	let entries: string[];
 	try {
 		entries = fsImpl.readdirSync(dir).filter((name) => name.endsWith(".json")).sort();
@@ -287,12 +287,17 @@ export function consumeSteerRequestsFromDir(dir: string, fsImpl: Pick<typeof fs,
 	const requests: SteerRequest[] = [];
 	for (const entry of entries) {
 		const requestPath = path.join(dir, entry);
+		const claimedPath = claimSingleRequestPath(requestPath, fsImpl);
+		if (claimedPath === undefined) continue;
 		let parsed: SteerRequest | undefined;
 		let text: string;
 		try {
-			text = fsImpl.readFileSync(requestPath, "utf-8");
+			text = fsImpl.readFileSync(claimedPath, "utf-8");
 		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code !== "ENOENT") onError(error);
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+				onError(error);
+				try { fsImpl.renameSync(claimedPath, requestPath); } catch {}
+			}
 			continue;
 		}
 		try {
@@ -301,10 +306,13 @@ export function consumeSteerRequestsFromDir(dir: string, fsImpl: Pick<typeof fs,
 			parsed = undefined;
 		}
 		try {
-			fsImpl.rmSync(requestPath, { recursive: true });
+			fsImpl.rmSync(claimedPath, { recursive: true });
 		} catch (error) {
-			// Already removed by a concurrent check — do not execute it twice.
-			if ((error as NodeJS.ErrnoException).code !== "ENOENT") onError(error);
+			// Execute only after successful removal; otherwise restore for retry.
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+				onError(error);
+				try { fsImpl.renameSync(claimedPath, requestPath); } catch {}
+			}
 			continue;
 		}
 		if (parsed) requests.push(parsed);
@@ -312,7 +320,7 @@ export function consumeSteerRequestsFromDir(dir: string, fsImpl: Pick<typeof fs,
 	return requests.sort((left, right) => left.ts - right.ts || left.id.localeCompare(right.id));
 }
 
-export function consumeSteerRequests(asyncDir: string, fsImpl: Pick<typeof fs, "existsSync" | "rmSync" | "readdirSync" | "readFileSync"> = fs, onError?: (error: unknown) => void): SteerRequest[] {
+export function consumeSteerRequests(asyncDir: string, fsImpl: Pick<typeof fs, "existsSync" | "rmSync" | "renameSync" | "readdirSync" | "readFileSync"> = fs, onError?: (error: unknown) => void): SteerRequest[] {
 	return consumeSteerRequestsFromDir(steerRequestsDir(asyncDir), fsImpl, onError);
 }
 
@@ -338,17 +346,40 @@ export function readRevivalBriefs(asyncDir: string): Array<{ request: SteerReque
 }
 
 /**
- * Runner side: consume a pending interrupt request. Idempotent — removes the file
- * so each distinct request fires exactly once. Returns whether one was pending.
+ * Atomically claim a single-path request file via rename to a unique sibling.
+ * existsSync-then-rmSync on the fixed path can delete a concurrently-written
+ * request B while the handler processes only A. Rename claims exactly the
+ * bytes present at claim time; a writer landing after the rename creates a
+ * fresh file at the original path that a later drain still observes.
+ * Returns the claimed sibling path, or undefined when nothing was pending.
+ */
+function claimSingleRequestPath(
+	requestPath: string,
+	fsImpl: Pick<typeof fs, "renameSync">,
+): string | undefined {
+	const claimedPath = `${requestPath}.${process.pid}.${Date.now()}.${randomUUID()}.consuming`;
+	try {
+		fsImpl.renameSync(requestPath, claimedPath);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+		throw error;
+	}
+	return claimedPath;
+}
+
+/**
+ * Runner side: consume a pending interrupt request. Idempotent — claims the file
+ * via atomic rename so each distinct request fires exactly once. Returns whether one was pending.
  */
 export function consumeInterruptRequest(
 	asyncDir: string,
-	fsImpl: Pick<typeof fs, "existsSync" | "rmSync"> = fs,
+	fsImpl: Pick<typeof fs, "existsSync" | "rmSync" | "renameSync"> = fs,
 ): boolean {
 	const requestPath = interruptRequestPath(asyncDir);
-	if (!fsImpl.existsSync(requestPath)) return false;
+	const claimedPath = claimSingleRequestPath(requestPath, fsImpl);
+	if (claimedPath === undefined) return false;
 	try {
-		fsImpl.rmSync(requestPath, { force: true, recursive: true });
+		fsImpl.rmSync(claimedPath, { force: true, recursive: true });
 	} catch {
 		// Already removed by a concurrent check — still counts as consumed.
 	}
@@ -357,12 +388,13 @@ export function consumeInterruptRequest(
 
 export function consumeTimeoutRequest(
 	asyncDir: string,
-	fsImpl: Pick<typeof fs, "existsSync" | "rmSync"> = fs,
+	fsImpl: Pick<typeof fs, "existsSync" | "rmSync" | "renameSync"> = fs,
 ): boolean {
 	const requestPath = timeoutRequestPath(asyncDir);
-	if (!fsImpl.existsSync(requestPath)) return false;
+	const claimedPath = claimSingleRequestPath(requestPath, fsImpl);
+	if (claimedPath === undefined) return false;
 	try {
-		fsImpl.rmSync(requestPath, { force: true, recursive: true });
+		fsImpl.rmSync(claimedPath, { force: true, recursive: true });
 	} catch {
 		// Already removed by a concurrent check — still counts as consumed.
 	}
@@ -371,7 +403,7 @@ export function consumeTimeoutRequest(
 
 export function consumeStopRequest(
 	asyncDir: string,
-	fsImpl: Pick<typeof fs, "existsSync" | "rmSync" | "readdirSync" | "readFileSync"> = fs,
+	fsImpl: Pick<typeof fs, "existsSync" | "rmSync" | "renameSync" | "readdirSync" | "readFileSync"> = fs,
 ): boolean {
 	return consumeStopRequestPayload(asyncDir, fsImpl) !== undefined;
 }
@@ -422,7 +454,7 @@ function consumeStopRequestFile(
 
 export function consumeStopRequestPayloads(
 	asyncDir: string,
-	fsImpl: Pick<typeof fs, "existsSync" | "rmSync" | "readdirSync" | "readFileSync"> = fs,
+	fsImpl: Pick<typeof fs, "existsSync" | "rmSync" | "renameSync" | "readdirSync" | "readFileSync"> = fs,
 	onError?: (error: unknown) => void,
 ): StopRequest[] {
 	const dir = stopRequestsDir(asyncDir);
@@ -436,14 +468,29 @@ export function consumeStopRequestPayloads(
 			entries = [];
 		}
 		for (const entry of entries) {
-			const request = consumeStopRequestFile(path.join(dir, entry), fsImpl, onError);
-			if (request) requests.push(request);
+			const requestPath = path.join(dir, entry);
+			const claimedPath = claimSingleRequestPath(requestPath, fsImpl);
+			if (claimedPath === undefined) continue;
+			const request = consumeStopRequestFile(claimedPath, fsImpl, onError);
+			if (request) {
+				requests.push(request);
+				continue;
+			}
+			// Read/parse/remove failure leaves retryable bytes claimed; restore
+			// for retry unless the entry was already consumed (e.g. malformed
+			// payloads are deleted by consumeStopRequestFile).
+			try {
+				if (fsImpl.existsSync(claimedPath)) fsImpl.renameSync(claimedPath, requestPath);
+			} catch (error) {
+				onError?.(error);
+			}
 		}
 	}
 
 	const legacyPath = stopRequestPath(asyncDir);
-	if (fsImpl.existsSync(legacyPath)) {
-		const request = consumeStopRequestFile(legacyPath, fsImpl, onError);
+	const claimedLegacyPath = claimSingleRequestPath(legacyPath, fsImpl);
+	if (claimedLegacyPath !== undefined) {
+		const request = consumeStopRequestFile(claimedLegacyPath, fsImpl, onError);
 		if (request) requests.push(request);
 	}
 	return requests.sort((left, right) => (left.ts ?? 0) - (right.ts ?? 0));
@@ -451,7 +498,7 @@ export function consumeStopRequestPayloads(
 
 export function consumeStopRequestPayload(
 	asyncDir: string,
-	fsImpl: Pick<typeof fs, "existsSync" | "rmSync" | "readdirSync" | "readFileSync"> = fs,
+	fsImpl: Pick<typeof fs, "existsSync" | "rmSync" | "renameSync" | "readdirSync" | "readFileSync"> = fs,
 ): StopRequest | undefined {
 	return consumeStopRequestPayloads(asyncDir, fsImpl)[0];
 }
@@ -596,5 +643,31 @@ export function watchAsyncControlInbox(
 		}
 		if (interval) timers.clearInterval(interval);
 		if (safetyInterval) timers.clearInterval(safetyInterval);
+	};
+}
+
+export interface TerminalControlDrain {
+	stops: StopRequest[];
+	timeout: boolean;
+	interrupt: boolean;
+	steers: SteerRequest[];
+}
+
+/**
+ * Synchronized terminal drain: consume every pending control kind in one pass so
+ * requests landing after the live watcher is disposed are never stranded.
+ * Call before terminal state selection and again after terminal persistence;
+ * the second pass is the settlement for the race window in between.
+ */
+export function drainTerminalControlInbox(
+	asyncDir: string,
+	fsImpl: Pick<typeof fs, "existsSync" | "rmSync" | "renameSync" | "readdirSync" | "readFileSync"> = fs,
+	onError?: (error: unknown) => void,
+): TerminalControlDrain {
+	return {
+		stops: consumeStopRequestPayloads(asyncDir, fsImpl, onError),
+		timeout: consumeTimeoutRequest(asyncDir, fsImpl),
+		interrupt: consumeInterruptRequest(asyncDir, fsImpl),
+		steers: consumeSteerRequests(asyncDir, fsImpl, onError),
 	};
 }
