@@ -226,6 +226,37 @@ describe("leaf runtime manager", () => {
 		await runtime.shutdown(5);
 	});
 
+	it("four concurrent hung providers all forfeit slots; capacity recovers", async () => {
+		const runtime = new LeafModelRuntime({
+			host: {
+				hostVersion: VERIFIED_HOST_VERSION,
+				listModels: () => FAKE_MODELS,
+				createLeafSession: async () => ({
+					prompt: () => new Promise(() => {}),
+					abort: async () => {},
+					waitForIdle: async () => {},
+					dispose: async () => {},
+				}),
+			} as unknown as LeafHost,
+			cwd: "/repo",
+		});
+		const ids: string[] = [];
+		for (let i = 0; i < RUNTIME_RPC_BOUNDS.maxParallelRuns; i += 1) {
+			ids.push(runtime.start({ ...startParams(), timeoutMs: 15 }).runId);
+		}
+		assert.equal(runtime.activeRuns, RUNTIME_RPC_BOUNDS.maxParallelRuns);
+		// All four hang past their timeouts: every slot forfeits, breaker stays
+		// untripped, and fresh starts succeed (no permanent wedge).
+		await new Promise((resolve) => setTimeout(resolve, 500));
+		assert.equal(runtime.activeRuns, 0);
+		assert.equal(runtime.isUnhealthy, false);
+		for (const id of ids) assert.equal(runtime.status(id).state, "cancelled");
+		for (let i = 0; i < RUNTIME_RPC_BOUNDS.maxParallelRuns; i += 1) runtime.start(startParams());
+		assert.equal(runtime.activeRuns, RUNTIME_RPC_BOUNDS.maxParallelRuns);
+		assert.throws(() => runtime.start(startParams()), (error: unknown) => error instanceof RuntimeError && error.code === "capacity_exceeded");
+		await runtime.shutdown(5);
+	});
+
 	it("shutdown with hung abort resolves bounded and force-finishes cancelled", async () => {
 		const runtime = new LeafModelRuntime({
 			host: {

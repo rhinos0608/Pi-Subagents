@@ -52,6 +52,7 @@ interface RunRecord {
 	abort: () => Promise<void>;
 	settled: Promise<void>;
 	resolveSettled: () => void;
+	timeoutTimer?: ReturnType<typeof setTimeout>;
 	expiredTimer?: ReturnType<typeof setTimeout>;
 }
 
@@ -123,6 +124,11 @@ export class LeafModelRuntime {
 
 	get activeRuns(): number {
 		return this.runningCount;
+	}
+
+	/** True once shutdown() has run: late probes must not re-arm the runtime. */
+	get isDisposed(): boolean {
+		return this.disposed;
 	}
 
 	/** Binds the probed host after async verification; fail-closed until set. Late
@@ -245,13 +251,16 @@ export class LeafModelRuntime {
 				);
 			})();
 			const timeoutWork = new Promise<never>((_, reject) => {
-				timeout = setTimeout(() => {
-					timedOut = true;
-					void abortState.sessionAbort().catch(() => {});
-					reject(new RuntimeError("timeout"));
-				}, params.timeoutMs);
-				timeout.unref?.();
-			});
+			timeout = setTimeout(() => {
+				timedOut = true;
+				void abortState.sessionAbort().catch(() => {});
+				reject(new RuntimeError("timeout"));
+			}, params.timeoutMs);
+			timeout.unref?.();
+			// Reachable for force-finish on shutdown: the per-run timer must
+			// not outlive a shutdown that settles this record first.
+			record.timeoutTimer = timeout;
+		});
 			const outcome = await Promise.race([work, timeoutWork]);
 			const totalBytes = Buffer.byteLength(JSON.stringify({ output: outcome.output, outputTokens: outcome.outputTokens }), "utf8");
 			if (totalBytes > RUNTIME_RPC_BOUNDS.maxResultBytes) {
@@ -329,7 +338,7 @@ export class LeafModelRuntime {
 		const deadline = this.now() + settlementWindowMs;
 		// Bounded abort phase: hung abort() must not stall past the deadline.
 		// Unsettled runs trip the breaker below via the per-run wait.
-		await Promise.race([
+		await raceWithDeadline(
 			Promise.allSettled(
 				runIds.map((runId) => {
 					const record = this.runs.get(runId);
@@ -337,11 +346,8 @@ export class LeafModelRuntime {
 					return Promise.resolve();
 				}),
 			),
-			new Promise((resolve) => {
-				const timer = setTimeout(resolve, Math.max(0, deadline - this.now()));
-				timer.unref?.();
-			}),
-		]);
+			Math.max(0, deadline - this.now()),
+		);
 		const settlements: RuntimeCancelSettlement[] = [];
 		for (const runId of runIds) {
 			const record = this.runs.get(runId);
@@ -355,13 +361,7 @@ export class LeafModelRuntime {
 					this.tripBreaker();
 					throw new RuntimeError("contract_breach");
 				}
-				const settled = await Promise.race([
-					record.settled.then(() => true),
-					new Promise<false>((resolve) => {
-						const timer = setTimeout(() => resolve(false), remaining);
-						timer.unref?.();
-					}),
-				]);
+				const settled = (await raceWithDeadline(record.settled.then(() => true), remaining)) ?? false;
 				if (!settled) {
 					// Slot stays reserved; hung work is never falsely settled.
 					this.tripBreaker();
@@ -382,6 +382,10 @@ export class LeafModelRuntime {
 	 * its slot) and resolves its settled promise so waiters never stick. */
 	private forceFinishCancelled(record: RunRecord): void {
 		if (record.state !== "running") return;
+		if (record.timeoutTimer !== undefined) {
+			clearTimeout(record.timeoutTimer);
+			record.timeoutTimer = undefined;
+		}
 		try {
 			this.transition(record, "cancelled");
 		} catch {

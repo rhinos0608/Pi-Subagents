@@ -776,7 +776,9 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	if (!isRuntimeRpcDisabled()) {
 		void (async () => {
 			const probed = await probeRealLeafHost().catch(() => null);
-			if (probed) {
+			// A probe resolving after shutdown must not re-arm a dead runtime
+			// or emit a spurious ready: gate, host, and readiness stay closed.
+			if (probed && !leafRuntime.isDisposed) {
 				leafRuntime.setHost(probed);
 				runtimeBridgeOptions.hostVersion = probed.hostVersion;
 				// The gate opens only after a verified probe: emit ready now that
