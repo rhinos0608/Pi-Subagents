@@ -451,7 +451,9 @@ export async function probeRealLeafHost(options: RealHostProbeOptions = {}): Pro
 	const sdkPath = resolveFromBase(NATIVE_HOST_SPECIFIER, base);
 	if (!sdkPath) return null;
 	const sdk = asRecord(await load(pathToFileURL(sdkPath).href).catch(() => null));
-	if (!sdk || sdk.__piSubagentsTestShim) return null;
+	// Presence-rejection (not truthy): any __piSubagentsTestShim property in
+	// any form marks a shim/masquerade, matching the proof helper's checks.
+	if (!sdk || "__piSubagentsTestShim" in sdk) return null;
 	const sessionManager = asRecord(sdk.SessionManager);
 	if (typeof sessionManager?.inMemory !== "function" || typeof sdk.createAgentSession !== "function") {
 		return null;

@@ -13,8 +13,7 @@
 import assert from "node:assert/strict";
 import { existsSync, readFileSync, mkdirSync, writeFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { createRequire } from "node:module";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, it } from "node:test";
 import {
@@ -84,11 +83,14 @@ function readSdkVersion(sdkDir: string): string {
  * `createAgentSession` must both be functions. Anything else is a
  * shim/masquerade and must take the fail-closed path, never the open gate.
  */
-async function passesPositiveRealSdkChecks(sdkDir: string): Promise<boolean> {
+/**
+ * Resolve a package directory's own entry file from its manifest
+ * (exports["."].import/default else main) — never via bare-specifier or CJS
+ * resolution, which can land on a same-named package elsewhere. Returns null
+ * when the entry is missing, escapes sdkDir, or is otherwise unusable.
+ */
+function readSdkEntryFile(sdkDir: string): string | null {
 	try {
-		// Derive the entry from this directory's own manifest — never resolve
-		// the bare package specifier: Node self-reference scoping can land on
-		// a same-named package elsewhere (e.g. a test shim) instead of sdkDir.
 		const manifest = JSON.parse(readFileSync(join(sdkDir, "package.json"), "utf8")) as {
 			exports?: unknown;
 			main?: unknown;
@@ -106,9 +108,24 @@ async function passesPositiveRealSdkChecks(sdkDir: string): Promise<boolean> {
 					: typeof manifest.main === "string"
 						? manifest.main
 						: undefined;
-		if (!entry || entry.startsWith("..") || entry.startsWith("/")) return false;
-		const entryPath = join(sdkDir, entry);
-		if (!existsSync(entryPath)) return false;
+		if (!entry) return null;
+		const entryPath = resolve(join(sdkDir, entry));
+		const root = join(resolve(sdkDir), sep);
+		if (entryPath !== resolve(sdkDir) && !entryPath.startsWith(root)) return null;
+		if (!existsSync(entryPath)) return null;
+		return entryPath;
+	} catch {
+		return null;
+	}
+}
+
+async function passesPositiveRealSdkChecks(sdkDir: string): Promise<boolean> {
+	try {
+		// Derive the entry from this directory's own manifest — never resolve
+		// the bare package specifier: Node self-reference scoping can land on
+		// a same-named package elsewhere (e.g. a test shim) instead of sdkDir.
+		const entryPath = readSdkEntryFile(sdkDir);
+		if (!entryPath) return false;
 		const sdkUrl = pathToFileURL(entryPath).href;
 		const sdk = (await import(sdkUrl)) as unknown as Record<string, unknown>;
 		if ("__piSubagentsTestShim" in sdk) return false;
@@ -259,20 +276,10 @@ if (!REAL_SDK_DIR) {
 
 	async function loadRealSdk(): Promise<RealSdk> {
 		const base = join(SDK_DIR, "package.json");
-		const require = createRequire(base);
-		// The real SDK manifest lacks a require-resolvable exports main
-		// (`ERR_PACKAGE_PATH_NOT_EXPORTED` under require.resolve); the
-		// exports map + dist paths below are its own canonical entries.
-		const resolveEntry = (specifier: string, distFallback: string): string => {
-			try {
-				return require.resolve(specifier);
-			} catch {
-				const entry = join(SDK_DIR, distFallback);
-				if (!existsSync(entry)) throw new Error(`real SDK entry missing: ${entry}`);
-				return entry;
-			}
-		};
-		const sdkPath = resolveEntry("@earendil-works/pi-coding-agent", "dist/index.js");
+		// Manifest-derived entry (same helper as the positive checks): no
+		// bare-specifier or CJS resolution anywhere in this file.
+		const sdkPath = readSdkEntryFile(SDK_DIR);
+		if (!sdkPath) throw new Error(`real SDK entry missing in ${base}`);
 		const sdkDir = dirname(sdkPath);
 		const piAiPkgDir = join(dirname(SDK_DIR), "pi-ai");
 		const piAiPath = existsSync(join(piAiPkgDir, "dist", "compat.js"))
