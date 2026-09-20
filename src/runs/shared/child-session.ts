@@ -11,7 +11,7 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { pinChildCacheRetention } from "../../shared/child-cache-retention.ts";
 import { getAgentDir } from "../../shared/utils.ts";
-import { prepareReadonlySessionEvidence } from "./readonly-session-evidence.ts";
+import { prepareReadonlySessionEvidence, recordReadonlyProviderInheritance } from "./readonly-session-evidence.ts";
 import { toModelInfo, type ModelInfo } from "../../shared/model-info.ts";
 import type { ChildRuntimeConfig } from "./child-runtime-config.ts";
 import type { RequiredChildExtensionSnapshot } from "../../shared/required-child-extensions.ts";
@@ -162,9 +162,15 @@ function inheritParentProviders(modelRuntime: ModelRuntimeInstance, parentProvid
 		try {
 			const native = parentProviders.getRegisteredNativeProvider(providerId);
 			const config = native ? undefined : parentProviders.getRegisteredProviderConfig(providerId);
-			if (native) modelRuntime.registerNativeProvider(native);
-			else if (config) modelRuntime.registerProvider(providerId, config);
-			else throw new Error(`Parent provider '${providerId}' has no registered native provider or config.`);
+			if (native) {
+				modelRuntime.registerNativeProvider(native);
+				recordReadonlyProviderInheritance(modelRuntime, parentProviders, providerId, { kind: "native", value: native });
+			} else if (config) {
+				modelRuntime.registerProvider(providerId, config);
+				const registeredConfig = modelRuntime.getRegisteredProviderConfig(providerId);
+				if (!registeredConfig) throw new Error(`Parent provider '${providerId}' registration was not retained by the child runtime.`);
+				recordReadonlyProviderInheritance(modelRuntime, parentProviders, providerId, { kind: "config", sourceConfig: config, registeredConfig });
+			} else throw new Error(`Parent provider '${providerId}' has no registered native provider or config.`);
 			registered = true;
 		} catch (error) {
 			onError?.({ extensionPath: `<parent-provider:${providerId}>`, event: "inherit_provider", error });

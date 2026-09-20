@@ -422,9 +422,14 @@ function emptyUsage(): Usage {
 	return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 };
 }
 
-function tokenUsageFromUsage(usage: Usage | undefined): TokenUsage | null {
-	const input = usage?.input ?? 0;
-	const output = usage?.output ?? 0;
+function tokenUsageFromAttempts(attempts: ModelAttempt[] | undefined): TokenUsage | null {
+	if (!attempts || attempts.length === 0) return null;
+	let input = 0;
+	let output = 0;
+	for (const attempt of attempts) {
+		input += attempt.usage?.input ?? 0;
+		output += attempt.usage?.output ?? 0;
+	}
 	const total = input + output;
 	return total > 0 ? { input, output, total } : null;
 }
@@ -2447,6 +2452,8 @@ export async function runSubagent(
 				model: step.model,
 				thinking: step.thinking,
 				requestedModel: step.requestedModel,
+				attemptedModels: step.attemptedModels,
+				modelAttempts: step.modelAttempts,
 				contextOverflow: step.contextOverflow,
 			})),
 			exitCode: state === "complete" || state === "paused" ? 0 : 1,
@@ -3997,6 +4004,8 @@ export async function runSubagent(
 				setOptionalProperty(requiredStatusStep(statusPayload, fi), "model", singleResult.model);
 				setOptionalProperty(requiredStatusStep(statusPayload, fi), "thinking", resolveEffectiveThinking(singleResult.model, requiredStatusStep(statusPayload, fi).thinking));
 				setOptionalProperty(requiredStatusStep(statusPayload, fi), "requestedModel", singleResult.requestedModel);
+				setOptionalProperty(requiredStatusStep(statusPayload, fi), "attemptedModels", singleResult.attemptedModels);
+				setOptionalProperty(requiredStatusStep(statusPayload, fi), "modelAttempts", singleResult.modelAttempts);
 				setOptionalProperty(requiredStatusStep(statusPayload, fi), "contextOverflow", singleResult.contextOverflow);
 				setOptionalProperty(requiredStatusStep(statusPayload, fi), "totalCost", singleResult.totalCost);
 				if (singleResult.totalCost) {
@@ -4066,6 +4075,8 @@ export async function runSubagent(
 					model: pr.model,
 					thinking: pr.thinking,
 					requestedModel: pr.requestedModel,
+					attemptedModels: pr.attemptedModels,
+					modelAttempts: pr.modelAttempts,
 					contextOverflow: pr.contextOverflow,
 					totalCost: pr.totalCost,
 					usage: pr.usage,
@@ -4418,6 +4429,8 @@ export async function runSubagent(
 						setOptionalProperty(requiredStatusStep(statusPayload, fi), "model", singleResult.model);
 						setOptionalProperty(requiredStatusStep(statusPayload, fi), "thinking", resolveEffectiveThinking(singleResult.model, requiredStatusStep(statusPayload, fi).thinking));
 						setOptionalProperty(requiredStatusStep(statusPayload, fi), "requestedModel", singleResult.requestedModel);
+						setOptionalProperty(requiredStatusStep(statusPayload, fi), "attemptedModels", singleResult.attemptedModels);
+						setOptionalProperty(requiredStatusStep(statusPayload, fi), "modelAttempts", singleResult.modelAttempts);
 						setOptionalProperty(requiredStatusStep(statusPayload, fi), "contextOverflow", singleResult.contextOverflow);
 						setOptionalProperty(requiredStatusStep(statusPayload, fi), "totalCost", singleResult.totalCost);
 						if (singleResult.totalCost) {
@@ -4484,7 +4497,7 @@ export async function runSubagent(
 					const sessionTokens = config.sessionDir
 						? parseSessionTokens(path.join(config.sessionDir, `parallel-${t}`))
 						: null;
-					const fallbackTokens = tokenUsageFromUsage(parallelResults[t]?.usage);
+					const fallbackTokens = tokenUsageFromAttempts(parallelResults[t]?.modelAttempts);
 					const observedTokens = requiredStatusStep(statusPayload, fi).tokens;
 					const taskTokens = sessionTokens ?? (fallbackTokens
 						? { ...fallbackTokens, ...(observedTokens?.window !== undefined ? { window: observedTokens.window } : {}), ...(observedTokens?.windowPeak !== undefined ? { windowPeak: observedTokens.windowPeak } : {}) }
@@ -4528,6 +4541,8 @@ export async function runSubagent(
 						model: pr.model,
 						thinking: pr.thinking,
 						requestedModel: pr.requestedModel,
+						attemptedModels: pr.attemptedModels,
+						modelAttempts: pr.modelAttempts,
 						contextOverflow: pr.contextOverflow,
 						totalCost: pr.totalCost,
 						usage: pr.usage,
@@ -4827,6 +4842,8 @@ export async function runSubagent(
 				model: singleResult.model,
 				thinking: singleResult.thinking,
 				requestedModel: singleResult.requestedModel,
+				attemptedModels: singleResult.attemptedModels,
+				modelAttempts: singleResult.modelAttempts,
 				contextOverflow: singleResult.contextOverflow,
 				totalCost: singleResult.totalCost,
 				usage: singleResult.usage,
@@ -4878,7 +4895,7 @@ export async function runSubagent(
 			if (cumulativeTokens) {
 				previousCumulativeTokens = cumulativeTokens;
 			} else {
-				const fallbackTokens = tokenUsageFromUsage(singleResult.usage);
+				const fallbackTokens = tokenUsageFromAttempts(singleResult.modelAttempts);
 				const observedTokens = requiredStatusStep(statusPayload, flatIndex).tokens;
 				stepTokens = fallbackTokens
 					? { ...fallbackTokens, ...(observedTokens?.window !== undefined ? { window: observedTokens.window } : {}), ...(observedTokens?.windowPeak !== undefined ? { windowPeak: observedTokens.windowPeak } : {}) }
@@ -4912,6 +4929,8 @@ export async function runSubagent(
 			setOptionalProperty(requiredStatusStep(statusPayload, flatIndex), "model", singleResult.model);
 			setOptionalProperty(requiredStatusStep(statusPayload, flatIndex), "thinking", resolveEffectiveThinking(singleResult.model, requiredStatusStep(statusPayload, flatIndex).thinking));
 			setOptionalProperty(requiredStatusStep(statusPayload, flatIndex), "requestedModel", singleResult.requestedModel);
+			setOptionalProperty(requiredStatusStep(statusPayload, flatIndex), "attemptedModels", singleResult.attemptedModels);
+			setOptionalProperty(requiredStatusStep(statusPayload, flatIndex), "modelAttempts", singleResult.modelAttempts);
 			setOptionalProperty(requiredStatusStep(statusPayload, flatIndex), "contextOverflow", singleResult.contextOverflow);
 			setOptionalProperty(requiredStatusStep(statusPayload, flatIndex), "totalCost", singleResult.totalCost);
 			setOptionalProperty(requiredStatusStep(statusPayload, flatIndex), "error", stopped || childStopped ? stopMessage : timedOut ? (timeoutMessage ?? "Subagent timed out.") : singleResult.error);

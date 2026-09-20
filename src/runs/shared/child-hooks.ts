@@ -56,7 +56,7 @@ function dataKeys(value: unknown): string[] | undefined {
 
 /** Only reviewed data and the capture callbacks constructed below; no caller callback opt-in. */
 function readonlyConfig(config: ChildRuntimeConfig, capture?: OwnedCapture): string | undefined {
-	const strings = ["runId", "agent", "sessionName", "forkCacheKey", "parentSessionId", "orchestratorSessionId"];
+	const strings = ["cwd", "runId", "agent", "sessionName", "forkCacheKey", "parentSessionId", "orchestratorSessionId"];
 	const numbers = ["childIndex", "depth", "maxDepth"];
 	const booleans = ["inheritProjectContext", "inheritGlobalContext", "inheritSkills"];
 	const keys = dataKeys(config);

@@ -26,8 +26,52 @@ export interface SettledReadonlyEvidence {
 
 const requested = new WeakMap<ChildSessionLaunch, SettledReadonlyEvidence | null>();
 const receipts = new WeakMap<ChildSession, SettledReadonlyEvidence>();
-// Opaque configured-provider continuity, never an implementation-origin attestation.
-const providers = new WeakMap<SettledReadonlyEvidence, object>();
+
+type InheritedProviderProvenance =
+	| { kind: "config"; parentRegistry: object; sourceConfig: unknown; registeredConfig: unknown }
+	| { kind: "native"; parentRegistry: object; value: unknown };
+type ProviderContinuity =
+	| { kind: "local"; provider: object }
+	| { kind: "parent-config"; provider: object; parentRegistry: object; config: unknown };
+
+// Factory-owned provenance distinguishes upstream's isolated parent-provider
+// inheritance from a provider registered or replaced by arbitrary runtime code.
+const inheritedProviders = new WeakMap<Runtime, Map<string, InheritedProviderProvenance>>();
+// Opaque provider continuity, never an implementation-origin attestation.
+const providers = new WeakMap<SettledReadonlyEvidence, ProviderContinuity>();
+
+/** Internal factory seam: record only provider registrations performed by the default child factory itself. */
+export function recordReadonlyProviderInheritance(runtime: Runtime, parentRegistry: object, providerId: string, provenance: { kind: "config"; sourceConfig: unknown; registeredConfig: unknown } | { kind: "native"; value: unknown }): void {
+	let byId = inheritedProviders.get(runtime);
+	if (!byId) {
+		byId = new Map();
+		inheritedProviders.set(runtime, byId);
+	}
+	byId.set(providerId, { ...provenance, parentRegistry } as InheritedProviderProvenance);
+}
+
+function providerContinuity(runtime: Runtime, providerId: string, provider: object): ProviderContinuity | undefined {
+	const inherited = inheritedProviders.get(runtime)?.get(providerId);
+	if (inherited) {
+		if (inherited.kind !== "config") return undefined;
+		if (runtime.getRegisteredNativeProvider(providerId)) return undefined;
+		if (runtime.getRegisteredProviderConfig(providerId) !== inherited.registeredConfig) return undefined;
+		return { kind: "parent-config", provider, parentRegistry: inherited.parentRegistry, config: inherited.sourceConfig };
+	}
+	if (runtime.getRegisteredNativeProvider(providerId) || runtime.getRegisteredProviderConfig(providerId)) return undefined;
+	return { kind: "local", provider };
+}
+
+function sameProviderLineage(current: ProviderContinuity, expected: ProviderContinuity): boolean {
+	if (current.kind !== expected.kind) return false;
+	if (current.kind === "local" && expected.kind === "local") return current.provider === expected.provider;
+	return current.kind === "parent-config" && expected.kind === "parent-config"
+		&& current.parentRegistry === expected.parentRegistry && current.config === expected.config;
+}
+
+function sameProviderInstance(current: ProviderContinuity, initial: ProviderContinuity): boolean {
+	return sameProviderLineage(current, initial) && current.provider === initial.provider;
+}
 
 /** Internal integration seam: opt in before factory creation. Ordinary launches do no evidence I/O. */
 export function requestReadonlySessionEvidence(launch: ChildSessionLaunch, expected?: SettledReadonlyEvidence): void {
@@ -114,6 +158,7 @@ function completedResults(messages: AgentSession["messages"]): number {
 function eligibleLaunch(launch: ChildSessionLaunch): boolean {
 	const r = launch.runtime;
 	return launch.ambientExtensions === false && !launch.extensionPaths.length
+		&& (r.cwd === undefined || resolve(r.cwd) === resolve(launch.cwd))
 		&& isReadonlyChildSessionReporting(launch)
 		&& (!launch.hooks.length || (launch.storage.kind === "file" && isReadonlyChildHookProfile(launch.hooks, r)))
 		&& launch.tools !== undefined && launch.tools.every((tool) => tool === "read" || tool === "ls")
@@ -168,11 +213,21 @@ export function prepareReadonlySessionEvidence(launch: ChildSessionLaunch): { lo
 		const header = initialHeader;
 		const model = { ...session.model };
 		const provider = runtime.getProvider(model.provider);
-		if (expected && provider !== providers.get(expected)) return deny();
+		if (!provider) return deny();
+		const providerLineage = providerContinuity(runtime, model.provider, provider);
+		if (!providerLineage) return deny();
+		const expectedContinuity = expected ? providers.get(expected) : undefined;
+		if (expected && (!expectedContinuity || !sameProviderLineage(providerLineage, expectedContinuity))) return deny();
 		// Coverage is namespace/API plus the observed POST topology below, not builtin provider origin.
-		const supported = (m: Model): boolean => m.provider === "baseten" && m.api === "openai-completions"
-			&& runtime.getProvider(m.provider) === provider
-			&& !runtime.getRegisteredNativeProvider(m.provider) && !runtime.getRegisteredProviderConfig(m.provider);
+		// Parent-configured providers are accepted only when the default factory recorded
+		// the exact inheritance source/config. Runtime-native and unproven registrations deny.
+		const supported = (m: Model): boolean => {
+			const activeProvider = runtime.getProvider(m.provider);
+			if (!activeProvider || activeProvider !== provider) return false;
+			const activeContinuity = providerContinuity(runtime, m.provider, activeProvider);
+			return m.provider === "baseten" && m.api === "openai-completions"
+				&& activeContinuity !== undefined && sameProviderInstance(activeContinuity, providerLineage);
+		};
 		const allowed = launch.tools!.filter((name) => !launch.excludeTools?.includes(name)).sort();
 		const toolsMatch = (): boolean => {
 			const tools = session.getAllTools();
@@ -297,7 +352,7 @@ export function prepareReadonlySessionEvidence(launch: ChildSessionLaunch): { lo
 					const receipt: SettledReadonlyEvidence = Object.freeze({ sessionFile: file, sessionId: session.sessionId, leafId: h.leaf,
 						provider: model.provider, model: model.id, api: model.api, status: 429, contextJson: JSON.stringify(h.messages),
 						completedToolResults: h.completed, fileDigest: digest(h.bytes) });
-					providers.set(receipt, provider);
+					providers.set(receipt, providerLineage);
 					receipts.set(child, receipt);
 				} catch { /* Strict checkpoint failures only deny evidence; never repair storage. */ }
 			},

@@ -2,7 +2,6 @@
 
 ## [Unreleased]
 
-
 ### Added
 
 - Add opt-in internal leaf-model runtime RPC namespace `subagents:runtime:v1` (`negotiate`, `start`, `status`, `result`, `cancelAndSettle`) with exact model selection, bounded leaf execution, and bounded cancellation settlement. Legacy `subagents:rpc:v1` behavior is unchanged. Readiness stays disabled until native host/API versions are proven; until then every request answers `runtime_unavailable`.
@@ -15,6 +14,11 @@
 - Run Pi, Claude Code, Codex, and Cursor subagents on another computer by setting `machine` to a saved Herdr machine.
 - Add `checkpointBeforeDeadlineMs` for async single-agent runs (call param, with a global config default): the runner requests that the child "checkpoint and stop" that many milliseconds before its run deadline. This best-effort handoff request uses the normal steering lifecycle at the child's next tool boundary, so its receipt appears in status and events; the ordinary `timeoutMs` kill still applies. Absent option keeps the current behavior. Thanks to [@freezscholte](https://github.com/freezscholte) for #2141.
 - Add `subagents.agentExcludeDirs` to prune directory subtrees from agent discovery, including nested plugin sources, without disabling ordinary legacy agents. Exclusions respect symlink aliases and apply to explicit/package roots, diagnostics, and agent cache fingerprints. Thanks to [@xarillian](https://github.com/xarillian) for #2131.
+
+### Changed
+
+- Split Windows tests across two isolated CI shards and batch repeated foreign-process steering checks while preserving the per-process concurrency limit.
+- Require substantial delegated mutation work to be classified by implementation topology before writer launch, preventing issue-wide writer commissions across independent seams without forcing artificial fanout.
 
 ### Fixed
 
@@ -32,7 +36,7 @@
 - Let Pi continue threshold and overflow compactions without an extra extension resume, while preserving manual re-drive for active async work. Thanks to [@mxp7064](https://github.com/mxp7064) for #2144.
 - Allow an explicit model request when a cached unavailable-model exclusion is contradicted by the current model registry, while preserving live health, auth, quota, and rate-limit exclusions. Thanks to [@xz-dev](https://github.com/xz-dev) for identifying the stale explicit-request cache symptom in #2145.
 - Preserve wrapped Pi core tools and explicitly requested non-core tools in child launches. Core slots still respect host availability; non-core tools are validated in the child's runtime after ceilings and exclusions (#2132, #2133, #2134, #2135, #2140). Thanks to [@carlesba](https://github.com/carlesba) for #2137 and [@clementprevot](https://github.com/clementprevot) for #2138.
-
+- Update the development SDK and npm-host smoke coverage for Pi 0.86.0, including compatibility with its stricter JSON message types.
 
 ## [0.70.0] - 2026-09-19
 

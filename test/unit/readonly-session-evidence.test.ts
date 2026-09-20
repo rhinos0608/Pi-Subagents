@@ -334,7 +334,7 @@ export default function (pi) {
 	}
 
 	for (const budgetOwner of ["none", "single", "workflow"] as const) {
-		it(`actual executor propagates ${budgetOwner} configured usage budget`, async () => fixture(async ({ factory, cwd, setResponses }) => {
+		it(`actual executor propagates ${budgetOwner} configured usage budget`, async () => fixture(async ({ factory, cwd, agentDir, setResponses }) => {
 			const agent: AgentConfig = { name: "reader", description: "Read", systemPrompt: "Read marker.txt", systemPromptMode: "append", tools: ["read"], extensions: [], allowNestedSubagents: false, inheritProjectContext: false, inheritGlobalContext: false, inheritSkills: false, source: "project", filePath: join(cwd, "reader.md"), model: "baseten/model-a", fallbackModels: ["baseten/model-b"] };
 			const children: ChildSession[] = [];
 			const inputs: ChildSessionLaunch[] = [];
@@ -350,7 +350,14 @@ export default function (pi) {
 				setResponses([() => sse(true), () => http(429), () => sse()]);
 				const single = { agent: "reader", task: "Read marker.txt once", async: false, output: false };
 				const request = budgetOwner === "workflow" ? { workflowScript: `return await runs.run('reader', ${JSON.stringify(single)});`, async: false, mission: false, usageBudget: { tokens: { hard: 100000 } } } : { ...single, ...(budgetOwner === "single" ? { usageBudget: { tokens: { hard: 100000 } } } : {}) };
-				const result = await executor.execute("budget-owner", request, undefined, undefined, { cwd, hasUI: false, sessionManager: { getSessionId() { return "parent"; }, getSessionFile() { return null; } }, modelRegistry: { getAvailable() { return ["model-a", "model-b"].map((id) => ({ provider: "baseten", id })); } }, model: { provider: "baseten", id: "model-a" } } as any);
+				const parentProviderConfig = JSON.parse(readFileSync(join(agentDir, "models.json"), "utf8")).providers.baseten;
+				const modelRegistry = {
+					getAvailable() { return ["model-a", "model-b"].map((id) => ({ provider: "baseten", id })); },
+					getRegisteredProviderIds() { return ["baseten"]; },
+					getRegisteredProviderConfig(id: string) { return id === "baseten" ? parentProviderConfig : undefined; },
+					getRegisteredNativeProvider() { return undefined; },
+				};
+				const result = await executor.execute("budget-owner", request, undefined, undefined, { cwd, hasUI: false, sessionManager: { getSessionId() { return "parent"; }, getSessionFile() { return null; } }, modelRegistry, model: { provider: "baseten", id: "model-a" } } as any);
 				assert.ok(children[0] && getReadonlySessionEvidence(children[0]), JSON.stringify(inputs));
 				assert.equal(children.length, budgetOwner === "none" ? 2 : 1, JSON.stringify(result));
 			} finally {
@@ -689,7 +696,7 @@ export default function (pi) {
 			assert.equal(intent?.model, captured.at(-1)!.session.model);
 			assert.ok(intent?.modelRegistry);
 			assert.deepEqual(intent.modelRegistry.find("baseten", intent.model!.id), intent.model);
-			assert.deepEqual(Object.keys(intent!), ["model", "modelRegistry"]);
+			assert.deepEqual(Object.keys(intent!), ["model", "modelRegistry", "sessionId"]);
 			acknowledge("runner-reviewed");
 			const diagnostic = { required: ["read"], available: [], missing: ["read"] };
 			input.runtime.toolDiagnostic!(diagnostic);
@@ -1195,6 +1202,31 @@ export default function (pi) {
 		await assert.rejects(opening, /checkpoint changed/);
 		assert.equal(readFileSync(receipt.sessionFile, "utf8"), truncated);
 		assert.equal(captured.length, 1, "must reject before constructing the sibling SDK session");
+	}));
+
+	it("denies isolated parent-provider continuation after the parent config identity changes", async () => fixture(async ({ l, factory, agentDir, requests, setResponses }) => {
+		const config = JSON.parse(readFileSync(join(agentDir, "models.json"), "utf8")).providers.baseten;
+		let currentConfig = config;
+		const parentProviderRegistry = {
+			getRegisteredProviderIds() { return ["baseten"]; },
+			getRegisteredProviderConfig(id: string) { return id === "baseten" ? currentConfig : undefined; },
+			getRegisteredNativeProvider() { return undefined; },
+		};
+		const source = { ...l, parentProviderRegistry };
+		source.hooks = l.hooks;
+		requestReadonlySessionEvidence(source);
+		const child = await factory.create(source);
+		setResponses([() => sse(true), () => http(429)]);
+		await child.prompt("Read marker.txt");
+		await child.dispose();
+		const receipt = getReadonlySessionEvidence(child);
+		assert.ok(receipt);
+		currentConfig = { ...config };
+		const sibling = { ...l, model: "baseten/model-b", parentProviderRegistry };
+		sibling.hooks = l.hooks;
+		requestReadonlySessionEvidence(sibling, receipt);
+		await assert.rejects(factory.create(sibling), /Unsupported read-only continuation session/);
+		assert.equal(requests.length, 2, "changed parent config must veto before sibling dispatch");
 	}));
 
 	for (const timing of ["before prompt", "before dispatch"] as const) {

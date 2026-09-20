@@ -20,6 +20,8 @@ type Runtime = {
 	refreshes: number;
 	registerProvider(id: string, config: Config): void;
 	registerNativeProvider(provider: Native): void;
+	getRegisteredProviderConfig(id: string): Config | undefined;
+	getRegisteredNativeProvider(id: string): Native | undefined;
 	refresh(): Promise<void>;
 };
 
@@ -69,6 +71,8 @@ function fakePi(input: {
 						this.configs.delete(provider.id);
 						this.native.set(provider.id, provider);
 					},
+					getRegisteredProviderConfig(id) { return this.configs.get(id); },
+					getRegisteredNativeProvider(id) { return this.native.get(id); },
 					async refresh() {
 						this.refreshes += 1;
 						input.onRefresh?.(this);
