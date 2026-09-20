@@ -562,8 +562,11 @@ const RETRYABLE_MODEL_FAILURE_PATTERNS = [
 	/quota/i,
 	/billing/i,
 	/credit/i,
-	// OpenRouter can return only a status-prefixed body, without auth-related prose.
+	// Some gateways return only status/type metadata for account/provider
+	// restrictions. 401/403 are candidate-specific authorization failures:
+	// another configured provider/model may still work and should be tried.
 	/^\s*401\s*:/,
+	/\b403\b/,
 	/auth(?:entication)?/i,
 	/unauthori[sz]ed/i,
 	/forbidden/i,

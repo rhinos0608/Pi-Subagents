@@ -50,6 +50,10 @@ export const RUNTIME_RPC_BOUNDS = {
 	maxNegotiatedOutputTokens: 16_384,
 	/** Bounded idempotency records for duplicate request-ID defense. */
 	maxIdempotencyRecords: 512,
+	/** Bounded per-model negotiation state (negotiatedModels + negotiatedJsonSchema).
+	 * Oldest-evicted on overflow; re-negotiation re-admits. Follows the
+	 * maxIdempotencyRecords oldest-eviction pattern. */
+	maxNegotiatedModels: 256,
 	idempotencyTtlMs: 10 * 60 * 1000,
 } as const;
 
@@ -72,8 +76,29 @@ export const RUNTIME_RPC_REJECTED_APIS = ["openai-codex-responses"] as const;
 export const RUNTIME_RPC_ROLES = ["coverage_planner", "researcher", "synthesizer"] as const;
 export type RuntimeRpcRole = (typeof RUNTIME_RPC_ROLES)[number];
 
+/** Role registry export for consumers: the known v1 roles, also advertised via negotiate correlationV2. */
+export const RUNTIME_RPC_ROLE_REGISTRY: readonly RuntimeRpcRole[] = RUNTIME_RPC_ROLES;
+
+/** Supported leaf output modes. Additive: consumers must use membership checks, never exact equality. */
+export const RUNTIME_RPC_OUTPUT_MODES = ["text", "json"] as const;
+export type RuntimeOutputMode = (typeof RUNTIME_RPC_OUTPUT_MODES)[number];
+
+/** Supported JSON schema dialects. Additive: consumers must use membership checks, never exact equality. */
+export const RUNTIME_RPC_JSON_SCHEMA_DIALECTS = ["flat-v1", "structured-v1"] as const;
+export type RuntimeJsonSchemaDialect = (typeof RUNTIME_RPC_JSON_SCHEMA_DIALECTS)[number];
+
+/** Correlation protocol versions. 1 is the closed northstar shape; 2 opens owner/role by pattern. */
+export const RUNTIME_RPC_CORRELATION_VERSIONS = [1, 2] as const;
+export type RuntimeCorrelationVersion = (typeof RUNTIME_RPC_CORRELATION_VERSIONS)[number];
+
+/** v2 owner handle: lowercase start, 3-32 chars of lowercase/digit/underscore/hyphen. */
+export const RUNTIME_RPC_CORRELATION_V2_OWNER_PATTERN = /^[a-z][a-z0-9_-]{2,31}$/;
+/** v2 role handle: lowercase start, up to 48 chars of lowercase/digit/underscore. */
+export const RUNTIME_RPC_CORRELATION_V2_ROLE_PATTERN = /^[a-z][a-z0-9_]{0,47}$/;
+
 /** Closed content-free correlation metadata. No arbitrary fields. */
 export interface RuntimeCorrelationV1 {
+	correlationVersion?: 1;
 	owner: "northstar";
 	correlationId: string;
 	queryIndex: number;
@@ -82,15 +107,37 @@ export interface RuntimeCorrelationV1 {
 	attempt: number;
 }
 
+/**
+ * Correlation v2: same closed shape and field rules as v1, except owner and
+ * role are open handles matched by pattern (not the northstar literal / role
+ * enum). Discriminated by required correlationVersion: 2.
+ */
+export interface RuntimeCorrelationV2 {
+	correlationVersion: 2;
+	owner: string;
+	correlationId: string;
+	queryIndex: number;
+	role: string;
+	stage: string;
+	attempt: number;
+}
+
+/** Correlation union discriminated by correlationVersion (absent means 1). */
+export type RuntimeCorrelation = RuntimeCorrelationV1 | RuntimeCorrelationV2;
+
 export interface RuntimeStartV1 {
 	/** Exact `provider/model` ID. No fuzzy resolution, no thinking suffix, no fallback. */
 	modelId: string;
 	prompt: string;
 	maxOutputTokens: number;
 	timeoutMs: number;
-	/** Syntactically accepted; semantically rejected while text-only. */
+	/** Present selects JSON mode: output carries JSON-as-text validated against this schema. */
 	outputSchema?: Record<string, unknown>;
-	correlation: RuntimeCorrelationV1;
+	/** Bridge-injected only (never on the wire: the start gate rejects unknown
+	 * fields): the per-model negotiated JSON schema dialect. Present only when
+	 * outputSchema is present; absent means flat-v1. */
+	outputSchemaDialect?: RuntimeJsonSchemaDialect;
+	correlation: RuntimeCorrelation;
 }
 
 export type RuntimeRpcV1Request =
@@ -105,6 +152,16 @@ export type RuntimeRpcV1Request =
 			params: { runIds: string[]; settlementWindowMs: number };
 	  };
 
+/**
+ * Advertised v2 correlation support. Additive and optional: v1-only consumers
+ * ignore it. ownerPattern is the source of the v2 owner regex; roles lists
+ * the known role registry (v2 roles additionally match the role pattern).
+ */
+export interface RuntimeCorrelationV2Capability {
+	ownerPattern: string;
+	roles: readonly string[];
+}
+
 export interface RuntimeCapabilitiesV1 {
 	boundedCancellationSettlement: true;
 	leafOnlyExecution: true;
@@ -115,7 +172,11 @@ export interface RuntimeCapabilitiesV1 {
 	maxResultBytes: number;
 	minOutputTokens: number;
 	maxOutputTokens: number;
-	outputModes: ["text"];
+	outputModes: readonly RuntimeOutputMode[];
+	correlationV2?: RuntimeCorrelationV2Capability;
+	/** Advertised JSON schema dialect. Additive and optional: v1-only consumers
+	 * ignore it. Absent means flat-v1 semantics. */
+	jsonSchema?: RuntimeJsonSchemaDialect;
 }
 
 export interface RuntimeNegotiateOk {

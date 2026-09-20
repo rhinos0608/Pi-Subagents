@@ -552,6 +552,7 @@ describe("model fallback helpers", () => {
 		assert.equal(isRetryableModelFailure("The usage limit has been reached"), true);
 		assert.equal(isRetryableModelFailure("model unavailable"), true);
 		assert.equal(isRetryableModelFailure("authentication failed"), true);
+		assert.equal(isRetryableModelFailure('OpenAI API error (403): {"type":"FreeTierError","message":"OpenCode free tier is unavailable from this client"}'), true);
 		assert.equal(isRetryableModelFailure("Subagent produced no output (possible model cold-start or empty response)."), true);
 		assert.equal(isRetryableModelFailure("model load failed"), true);
 		assert.equal(isRetryableModelFailure("Stream ended without finish_reason"), true);

@@ -55,9 +55,39 @@ describe("leaf runtime manager", () => {
 		for (const run of runs) assert.equal(runtime.result(run.runId).state, "completed");
 	});
 
-	it("rejects text-only violation: outputSchema unsupported", () => {
-		const runtime = new LeafModelRuntime({ host: HOST, cwd: "/repo" });
-		assert.throws(() => runtime.start(startParams({ outputSchema: { type: "object" } })), (error: unknown) => error instanceof RuntimeError && error.code === "unsupported_capability");
+	it("accepts outputSchema as JSON mode and forwards it to execution", async () => {
+		let seen: Record<string, unknown> | undefined;
+		const runtime = new LeafModelRuntime({
+			host: HOST,
+			cwd: "/repo",
+			execute: (input) => {
+				seen = input;
+				return Promise.resolve({ output: "ok", outputTokens: 2 });
+			},
+		});
+		const run = runtime.start(startParams({ outputSchema: { type: "object" } }));
+		await new Promise((resolve) => setTimeout(resolve, 25));
+		assert.equal(runtime.result(run.runId).state, "completed");
+		assert.deepEqual(seen?.outputSchema, { type: "object" });
+	});
+
+	it("forwards outputSchemaDialect to execution only when present", async () => {
+		const seen: Array<Record<string, unknown>> = [];
+		const runtime = new LeafModelRuntime({
+			host: HOST,
+			cwd: "/repo",
+			execute: (input) => {
+				seen.push({ ...input });
+				return Promise.resolve({ output: "ok", outputTokens: 2 });
+			},
+		});
+		runtime.start(startParams({ outputSchema: { type: "object" }, outputSchemaDialect: "structured-v1" }));
+		runtime.start(startParams({ outputSchema: { type: "object" } }));
+		await new Promise((resolve) => setTimeout(resolve, 25));
+		assert.equal(seen.length, 2);
+		assert.equal(seen[0]?.outputSchemaDialect, "structured-v1");
+		assert.equal("outputSchemaDialect" in (seen[1] ?? {}), false);
+		await runtime.shutdown(5);
 	});
 
 	it("fails closed without host", () => {

@@ -9,16 +9,20 @@
 import { createHash } from "node:crypto";
 import {
 	RUNTIME_RPC_BOUNDS,
+	RUNTIME_RPC_CORRELATION_V2_OWNER_PATTERN,
 	RUNTIME_RPC_ERROR_MESSAGES,
+	RUNTIME_RPC_OUTPUT_MODES,
 	RUNTIME_RPC_PROTOCOL,
 	RUNTIME_RPC_READY_EVENT,
 	RUNTIME_RPC_REQUEST_EVENT,
+	RUNTIME_RPC_ROLE_REGISTRY,
 	RUNTIME_RPC_VERSION,
 	runtimeRpcReplyEvent,
 	type RuntimeRpcErrorCode,
 	type RuntimeRpcMethod,
 	type RuntimeRpcReply,
 	type RuntimeRpcV1Request,
+	type RuntimeJsonSchemaDialect,
 } from "../api/runtime-rpc.ts";
 import { safeRuntimeRequestId, validateRuntimeRequest } from "./runtime-rpc-schemas.ts";
 import { isVerifiedHostVersion } from "../runs/runtime/leaf-model-session.ts";
@@ -112,6 +116,43 @@ export function registerRuntimeRpcBridge(options: RuntimeRpcBridgeOptions): {
 	// Synchronous in-flight reservation: concurrent duplicate requestIds join
 	// one dispatch instead of double-executing runtime.start.
 	const inFlight = new Map<string, { digest: string; reply: Promise<RuntimeRpcReply> }>();
+	// Model IDs with a successful negotiate on this bridge instance. v2
+	// correlation starts require prior negotiation (fail-closed). The
+	// negotiated JSON schema dialect binds per modelId: start requests
+	// validate their outputSchema against the dialect negotiated for that
+	// model (absent means flat-v1).
+	const negotiatedModels = new Set<string>();
+	const negotiatedJsonSchema = new Map<string, RuntimeJsonSchemaDialect>();
+
+	/** Bounded insert with oldest-eviction, mirroring the idempotency prune pattern. */
+	const rememberNegotiated = (modelId: string, dialect: RuntimeJsonSchemaDialect): void => {
+		if (negotiatedModels.has(modelId)) negotiatedModels.delete(modelId);
+		if (negotiatedJsonSchema.has(modelId)) negotiatedJsonSchema.delete(modelId);
+		while (negotiatedModels.size >= RUNTIME_RPC_BOUNDS.maxNegotiatedModels) {
+			const oldest = negotiatedModels.values().next();
+			if (oldest.done) break;
+			negotiatedModels.delete(oldest.value);
+		}
+		while (negotiatedJsonSchema.size >= RUNTIME_RPC_BOUNDS.maxNegotiatedModels) {
+			const oldest = negotiatedJsonSchema.keys().next();
+			if (oldest.done) break;
+			negotiatedJsonSchema.delete(oldest.value);
+		}
+		negotiatedModels.add(modelId);
+		negotiatedJsonSchema.set(modelId, dialect);
+	};
+
+	/** Safe peek at unvalidated wire data: selects the start-gate dialect for a model. */
+	const peekNegotiatedDialect = (raw: unknown): RuntimeJsonSchemaDialect => {
+		if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return "flat-v1";
+		const envelope = raw as Record<string, unknown>;
+		if (envelope.method !== "start") return "flat-v1";
+		const params = envelope.params;
+		if (typeof params !== "object" || params === null || Array.isArray(params)) return "flat-v1";
+		const modelId = (params as Record<string, unknown>).modelId;
+		if (typeof modelId !== "string") return "flat-v1";
+		return negotiatedJsonSchema.get(modelId) ?? "flat-v1";
+	};
 
 	const prune = () => {
 		const at = now();
@@ -153,6 +194,10 @@ export function registerRuntimeRpcBridge(options: RuntimeRpcBridgeOptions): {
 					// Fail closed: a model whose max sits below the API minimum
 					// cannot advertise an impossibly inverted token range.
 					if (maxOutputTokens < minOutputTokens) throw new RuntimeError("unsupported_capability");
+					// Structured validation is live: advertise structured-v1 and
+					// bind it for this modelId so later starts validate against it.
+					// Bounded with oldest-eviction (maxNegotiatedModels).
+					rememberNegotiated(request.params.modelId, "structured-v1");
 					return ok({
 						compatible: true,
 						modelId: request.params.modelId,
@@ -166,12 +211,31 @@ export function registerRuntimeRpcBridge(options: RuntimeRpcBridgeOptions): {
 							maxResultBytes: RUNTIME_RPC_BOUNDS.maxResultBytes,
 							minOutputTokens,
 						maxOutputTokens,
-							outputModes: ["text"],
+							outputModes: [...RUNTIME_RPC_OUTPUT_MODES],
+							jsonSchema: "structured-v1" as RuntimeJsonSchemaDialect,
+							correlationV2: {
+								ownerPattern: RUNTIME_RPC_CORRELATION_V2_OWNER_PATTERN.source,
+								roles: [...RUNTIME_RPC_ROLE_REGISTRY],
+							},
 						},
 					});
 				}
 				case "start":
-					return ok(options.runtime.start(request.params));
+					// Fail-closed: v2 correlation requires a negotiated v2
+					// capability for the same model on this bridge.
+					if (request.params.correlation.correlationVersion === 2 && !negotiatedModels.has(request.params.modelId)) {
+						throw new RuntimeError("invalid_params");
+					}
+					// Plumb the per-model negotiated dialect into the runtime call:
+					// present only when outputSchema is present, omitted otherwise.
+					// Dialect absent means flat-v1 (unchanged behavior).
+					if (request.params.outputSchema === undefined) return ok(options.runtime.start(request.params));
+					return ok(
+						options.runtime.start({
+							...request.params,
+							outputSchemaDialect: peekNegotiatedDialect({ method: "start", params: request.params }),
+						}),
+					);
 				case "status":
 					return ok(options.runtime.status(request.params.runId));
 				case "result":
@@ -203,7 +267,7 @@ export function registerRuntimeRpcBridge(options: RuntimeRpcBridgeOptions): {
 
 	const unsubscribe = options.events.on(RUNTIME_RPC_REQUEST_EVENT, (raw) => {
 		void (async () => {
-			const validated = validateRuntimeRequest(raw);
+			const validated = validateRuntimeRequest(raw, { jsonSchemaDialect: peekNegotiatedDialect(raw) });
 			if (!validated.ok) {
 				const requestId = safeRuntimeRequestId(raw);
 				// Missing/unsafe requestId cannot route safely: ignore, no side effects.
@@ -279,10 +343,12 @@ export function registerRuntimeRpcBridge(options: RuntimeRpcBridgeOptions): {
 				methods: ["negotiate", "start", "status", "result", "cancelAndSettle"],
 			});
 		},
-		dispose: async () => {
+			dispose: async () => {
 			if (typeof unsubscribe === "function") unsubscribe();
 			seen.clear();
 			inFlight.clear();
+			negotiatedModels.clear();
+			negotiatedJsonSchema.clear();
 			const settling = options.runtime.shutdown();
 			markRuntimeSettling(settling);
 			await settling;

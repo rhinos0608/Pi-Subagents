@@ -10,7 +10,10 @@ import { randomUUID } from "node:crypto";
 import {
 	RUNTIME_RPC_BOUNDS,
 	RUNTIME_RPC_ERROR_MESSAGES,
+	RUNTIME_RPC_OUTPUT_MODES,
 	type RuntimeCancelSettlement,
+	type RuntimeJsonSchemaDialect,
+	type RuntimeOutputMode,
 	type RuntimeRunState,
 	type RuntimeStartV1,
 } from "../../api/runtime-rpc.ts";
@@ -61,7 +64,7 @@ export interface LeafRuntimeOptions {
 	cwd: string;
 	now?: () => number;
 	/** Test seam replacing real leaf execution. */
-	execute?: (input: { modelId: string; prompt: string; maxOutputTokens: number; cwd: string }) => Promise<{
+	execute?: (input: { modelId: string; prompt: string; maxOutputTokens: number; cwd: string; outputSchema?: Record<string, unknown>; outputSchemaDialect?: RuntimeJsonSchemaDialect }) => Promise<{
 		output: string;
 		outputTokens: number;
 	}>;
@@ -168,7 +171,10 @@ export class LeafModelRuntime {
 
 	start(params: RuntimeStartV1): { runId: string; state: "running" } {
 		this.requireAvailable();
-		if (params.outputSchema !== undefined) throw new RuntimeError("unsupported_capability");
+		// Output mode is derived: outputSchema present selects JSON, else text.
+		// Membership (never exact equality) against the advertised modes.
+		const outputMode: RuntimeOutputMode = params.outputSchema !== undefined ? "json" : "text";
+		if (!(RUNTIME_RPC_OUTPUT_MODES as readonly string[]).includes(outputMode)) throw new RuntimeError("unsupported_capability");
 		if (this.runningCount >= RUNTIME_RPC_BOUNDS.maxParallelRuns) throw new RuntimeError("capacity_exceeded");
 		const promptBytes = Buffer.byteLength(params.prompt, "utf8");
 		if (promptBytes > RUNTIME_RPC_BOUNDS.maxPromptBytes) throw new RuntimeError("invalid_params");
@@ -234,7 +240,7 @@ export class LeafModelRuntime {
 		let work!: Promise<{ output: string; outputTokens: number }>;
 		try {
 			work = (async () => {
-				if (execute) return execute({ modelId: params.modelId, prompt: params.prompt, maxOutputTokens: params.maxOutputTokens, cwd: this.options.cwd });
+				if (execute) return execute({ modelId: params.modelId, prompt: params.prompt, maxOutputTokens: params.maxOutputTokens, cwd: this.options.cwd, ...(params.outputSchema !== undefined ? { outputSchema: params.outputSchema } : {}), ...(params.outputSchemaDialect !== undefined ? { outputSchemaDialect: params.outputSchemaDialect } : {}) });
 				if (!host) throw new LeafFailure("provider_error", "No host.");
 				// Wire abort into the session when the real host supports it.
 				return executeLeafRun(
@@ -247,7 +253,7 @@ export class LeafModelRuntime {
 							return session;
 						},
 					},
-					{ modelId: params.modelId, prompt: params.prompt, maxOutputTokens: params.maxOutputTokens, cwd: this.options.cwd },
+					{ modelId: params.modelId, prompt: params.prompt, maxOutputTokens: params.maxOutputTokens, cwd: this.options.cwd, ...(params.outputSchema !== undefined ? { outputSchema: params.outputSchema } : {}), ...(params.outputSchemaDialect !== undefined ? { outputSchemaDialect: params.outputSchemaDialect } : {}) },
 				);
 			})();
 			const timeoutWork = new Promise<never>((_, reject) => {

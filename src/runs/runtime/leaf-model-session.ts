@@ -20,6 +20,7 @@ import {
 	RUNTIME_RPC_BOUNDS,
 	RUNTIME_RPC_REJECTED_APIS,
 	VERIFIED_RUNTIME_HOST_VERSIONS,
+	type RuntimeJsonSchemaDialect,
 } from "../../api/runtime-rpc.ts";
 import type { ModelInfo } from "../../shared/model-info.ts";
 import { createNativeLeafHost, type NativeSdkModules } from "./leaf-host-native.ts";
@@ -169,10 +170,10 @@ export function resolveEffectiveCap(model: AuditedLeafModel, requested: number):
  * Assert an observable outbound provider payload carries the requested cap
  * exactly. Throws on absence, widening, or ambiguous duplication.
  *
- * Residual: the native adapter cannot observe the SDK's internal provider
- * payload, so this validator is NOT wired into the live path — there the
- * pre-call spec-cap check runs before any provider call and over-cap
- * usage fails post-hoc. This covers payloads the caller can observe.
+ * Wired into the live result path (executeLeafRun asserts a spec-derived
+ * payload before returning): the SDK still hides the transmitted bytes, so
+ * this proves the audited spec cap survived unmutated from pre-call check to
+ * result — not a pre-transmission wire proof. Over-cap usage fails post-hoc.
  */
 export function assertOutboundTokenCap(api: string, payload: unknown, expected: number): void {
 	if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
@@ -233,15 +234,254 @@ export function buildLeafSessionSpec(cwd: string, model: AuditedLeafModel, cap: 
 }
 
 export interface LeafRunInput {
-	modelId: string;
-	prompt: string;
-	maxOutputTokens: number;
-	cwd: string;
+modelId: string;
+prompt: string;
+maxOutputTokens: number;
+cwd: string;
+/** Present selects JSON mode: output must be JSON-as-text valid against this schema. */
+outputSchema?: Record<string, unknown>;
+/** Schema dialect for JSON-mode validation. Defaults to flat-v1 (current behavior). */
+outputSchemaDialect?: RuntimeJsonSchemaDialect;
 }
 
 export interface LeafRunSuccess {
 	output: string;
 	outputTokens: number;
+}
+
+const LEAF_JSON_PRIMITIVE_TYPES = ["string", "number", "integer", "boolean"] as const;
+const LEAF_JSON_SCHEMA_KEYS = ["type", "required", "properties", "additionalProperties", "title", "description"];
+const LEAF_JSON_PROPERTY_KEYS = ["type", "description", "title", "enum"];
+
+/**
+ * Validate JSON-mode output against the request-carried schema. The flat-v1
+ * path below is exactly the previous behavior, byte-for-byte: basic flat
+ * object schemas (type/required/properties over JSON primitives); anything
+ * complex or unsupported fails closed. The structured-v1 path accepts the
+ * bounded nested subset (object/array/items/enum/minimum/maximum) and
+ * validates output recursively. All failures are fixed safe messages:
+ * provider text never enters errors, and partial output is never
+ * interpreted.
+ */
+function validateLeafJsonContract(outputSchema: Record<string, unknown>, text: string, dialect: RuntimeJsonSchemaDialect = "flat-v1"): void {
+	if (dialect !== "flat-v1" && dialect !== "structured-v1") {
+		throw new LeafFailure("invalid_params", "Unknown leaf JSON schema dialect.");
+	}
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(text);
+	} catch {
+		throw new LeafFailure("output_contract_breach", "Leaf run output is not valid JSON.");
+	}
+	if (dialect === "structured-v1") {
+		validateStructuredJsonContract(outputSchema, parsed);
+		return;
+	}
+	for (const key of Object.keys(outputSchema)) {
+		if (!LEAF_JSON_SCHEMA_KEYS.includes(key)) {
+			throw new LeafFailure("output_contract_breach", "Leaf run outputSchema is not a supported flat object schema.");
+		}
+	}
+	if (outputSchema.type !== undefined && outputSchema.type !== "object") {
+		throw new LeafFailure("output_contract_breach", "Leaf run outputSchema is not a supported flat object schema.");
+	}
+	const required = outputSchema.required;
+	if (required !== undefined) {
+		if (!Array.isArray(required) || required.some((entry) => typeof entry !== "string")) {
+			throw new LeafFailure("output_contract_breach", "Leaf run outputSchema is not a supported flat object schema.");
+		}
+	}
+	const properties = outputSchema.properties;
+	if (properties !== undefined) {
+		if (properties === null || typeof properties !== "object" || Array.isArray(properties)) {
+			throw new LeafFailure("output_contract_breach", "Leaf run outputSchema is not a supported flat object schema.");
+		}
+		for (const spec of Object.values(properties)) {
+			if (spec === null || typeof spec !== "object" || Array.isArray(spec)) {
+				throw new LeafFailure("output_contract_breach", "Leaf run outputSchema is not a supported flat object schema.");
+			}
+			const record = spec as Record<string, unknown>;
+			for (const key of Object.keys(record)) {
+				if (!LEAF_JSON_PROPERTY_KEYS.includes(key)) {
+					throw new LeafFailure("output_contract_breach", "Leaf run outputSchema is not a supported flat object schema.");
+				}
+			}
+			if (!(LEAF_JSON_PRIMITIVE_TYPES as readonly string[]).includes(record.type as string)) {
+				throw new LeafFailure("output_contract_breach", "Leaf run outputSchema is not a supported flat object schema.");
+			}
+			if (record.enum !== undefined && !Array.isArray(record.enum)) {
+				throw new LeafFailure("output_contract_breach", "Leaf run outputSchema is not a supported flat object schema.");
+			}
+		}
+	}
+	if (outputSchema.additionalProperties !== undefined && typeof outputSchema.additionalProperties !== "boolean") {
+		throw new LeafFailure("output_contract_breach", "Leaf run outputSchema is not a supported flat object schema.");
+	}
+	if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+		throw new LeafFailure("output_contract_breach", "Leaf run output failed schema validation.");
+	}
+	const record = parsed as Record<string, unknown>;
+	for (const name of (required ?? []) as string[]) {
+		if (!Object.hasOwn(record, name)) {
+			throw new LeafFailure("output_contract_breach", "Leaf run output failed schema validation.");
+		}
+	}
+	if (properties !== undefined) {
+		const specs = properties as Record<string, { type: string; enum?: unknown[] }>;
+		for (const [name, spec] of Object.entries(specs)) {
+			if (!Object.hasOwn(record, name)) continue;
+			const value = record[name];
+			const ok =
+				spec.type === "string"
+					? typeof value === "string"
+					: spec.type === "boolean"
+						? typeof value === "boolean"
+						: spec.type === "integer"
+							? typeof value === "number" && Number.isInteger(value)
+							: typeof value === "number";
+			if (!ok || (spec.enum !== undefined && !spec.enum.includes(value))) {
+				throw new LeafFailure("output_contract_breach", "Leaf run output failed schema validation.");
+			}
+		}
+		if (outputSchema.additionalProperties === false) {
+			for (const name of Object.keys(record)) {
+				if (!Object.hasOwn(specs, name)) {
+					throw new LeafFailure("output_contract_breach", "Leaf run output failed schema validation.");
+				}
+			}
+		}
+	}
+}
+
+/** Structured-v1 schema shape: mirror of the start-gate subset (extension/runtime-rpc-schemas.ts). */
+const LEAF_STRUCTURED_SCHEMA_KEYS = ["type", "properties", "required", "items", "enum", "minimum", "maximum", "additionalProperties", "title", "description"];
+const LEAF_STRUCTURED_TYPES = ["object", "array", "string", "number", "integer", "boolean"];
+
+function isStructuredSchemaNode(node: unknown): boolean {
+	if (node === null || typeof node !== "object" || Array.isArray(node)) return false;
+	const record = node as Record<string, unknown>;
+	for (const key of Object.keys(record)) {
+		if (!LEAF_STRUCTURED_SCHEMA_KEYS.includes(key)) return false;
+	}
+	if (record.type !== undefined && !LEAF_STRUCTURED_TYPES.includes(record.type as string)) return false;
+	if (record.properties !== undefined) {
+		if (record.properties === null || typeof record.properties !== "object" || Array.isArray(record.properties)) return false;
+		for (const sub of Object.values(record.properties as Record<string, unknown>)) {
+			if (!isStructuredSchemaNode(sub)) return false;
+		}
+	}
+	if (record.required !== undefined) {
+		if (!Array.isArray(record.required) || record.required.some((entry) => typeof entry !== "string")) return false;
+	}
+	if (record.items !== undefined) {
+		if (record.type !== undefined && record.type !== "array") return false;
+		if (!isStructuredSchemaNode(record.items)) return false;
+	}
+	if (record.enum !== undefined && !Array.isArray(record.enum)) return false;
+	if (record.minimum !== undefined) {
+		if (record.type !== undefined && record.type !== "number" && record.type !== "integer") return false;
+		if (typeof record.minimum !== "number" || !Number.isFinite(record.minimum)) return false;
+	}
+	if (record.maximum !== undefined) {
+		if (record.type !== undefined && record.type !== "number" && record.type !== "integer") return false;
+		if (typeof record.maximum !== "number" || !Number.isFinite(record.maximum)) return false;
+	}
+	if (record.additionalProperties !== undefined && typeof record.additionalProperties !== "boolean") return false;
+	return true;
+}
+
+/** Canonical JSON encoding with sorted object keys: key order never affects equality. */
+function canonicalJson(value: unknown): string {
+	if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
+	if (Array.isArray(value)) return `[${value.map((entry) => canonicalJson(entry)).join(",")}]`;
+	const record = value as Record<string, unknown>;
+	return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(",")}}`;
+}
+
+function assertStructuredValue(value: unknown, schema: Record<string, unknown>): void {
+	const fail = (): never => {
+		throw new LeafFailure("output_contract_breach", "Leaf run output failed schema validation.");
+	};
+	if (schema.enum !== undefined) {
+		if (!Array.isArray(schema.enum)) fail();
+		const options = schema.enum as unknown[];
+		const matched = options.some(
+			(option) => option === value || (typeof option === "object" && typeof value === "object" && canonicalJson(option) === canonicalJson(value)),
+		);
+		if (!matched) fail();
+	}
+	const type = schema.type as string | undefined;
+	const properties = schema.properties as Record<string, Record<string, unknown>> | undefined;
+	const required = schema.required as string[] | undefined;
+	const items = schema.items as Record<string, unknown> | undefined;
+	if (schema.additionalProperties === false && properties === undefined && (type === "object" || type === undefined)) {
+		if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+			if (Object.keys(value).length > 0) fail();
+			return;
+		}
+		// Typeless closed-world ({additionalProperties:false} with no type)
+		// rejects every non-object value; the typed-object case is
+		// unchanged (it always failed here).
+		fail();
+	}
+	if (type === "object" || (type === undefined && (properties !== undefined || required !== undefined))) {
+		if (value === null || typeof value !== "object" || Array.isArray(value)) fail();
+		const record = value as Record<string, unknown>;
+		for (const name of required ?? []) {
+			if (!Object.hasOwn(record, name)) fail();
+		}
+		if (properties !== undefined) {
+			for (const [name, sub] of Object.entries(properties)) {
+				if (!Object.hasOwn(record, name)) continue;
+				assertStructuredValue(record[name], sub);
+			}
+			if (schema.additionalProperties === false) {
+				for (const name of Object.keys(record)) {
+					if (!Object.hasOwn(properties, name)) fail();
+				}
+			}
+		}
+		return;
+	}
+	if (type === "array" || (type === undefined && items !== undefined)) {
+		if (!Array.isArray(value)) fail();
+		if (items !== undefined) {
+			for (const entry of value as unknown[]) assertStructuredValue(entry, items);
+		}
+		return;
+	}
+	if (type === "string") {
+		if (typeof value !== "string") fail();
+		return;
+	}
+	if (type === "boolean") {
+		if (typeof value !== "boolean") fail();
+		return;
+	}
+	if (type === "number" || type === "integer") {
+		if (typeof value !== "number" || (type === "integer" && !Number.isInteger(value))) fail();
+		const numeric = value as number;
+		if (typeof schema.minimum === "number" && numeric < (schema.minimum as number)) fail();
+		if (typeof schema.maximum === "number" && numeric > (schema.maximum as number)) fail();
+		return;
+	}
+	// Untyped bounds: the gate admits minimum/maximum on typeless nodes, so
+	// enforce them here against numeric values (no integer semantics unless
+	// explicitly typed — that stays in the typed branch above).
+	if ((schema.minimum !== undefined || schema.maximum !== undefined) && typeof value === "number") {
+		if (typeof schema.minimum === "number" && (value as number) < (schema.minimum as number)) fail();
+		if (typeof schema.maximum === "number" && (value as number) > (schema.maximum as number)) fail();
+		return;
+	}
+	// Untyped leaf with no other structural keys: enum check above already applied.
+}
+
+/** Structured-v1 contract: schema shape fails closed, then output validated recursively. */
+function validateStructuredJsonContract(outputSchema: Record<string, unknown>, parsed: unknown): void {
+	if (!isStructuredSchemaNode(outputSchema)) {
+		throw new LeafFailure("output_contract_breach", "Leaf run outputSchema is not a supported structured schema.");
+	}
+	assertStructuredValue(parsed, outputSchema);
 }
 
 /**
@@ -257,7 +497,8 @@ export async function executeLeafRun(host: LeafHost, input: LeafRunInput): Promi
 	// Pre-call spec-cap check: the audited session spec must carry the
 	// requested cap exactly. This rejects widening/clamping before any
 	// provider call but is NOT a pre-transmission payload proof — the SDK
-	// hides the transmitted payload (see assertOutboundTokenCap residual).
+	// hides the transmitted payload; the live result-path assertion below
+	// re-proves the spec cap survived unmutated to result.
 	if (spec.model.maxTokens !== cap) throw new LeafFailure("output_contract_breach", "Leaf spec cap absent or altered.");
 	const session = await host.createLeafSession(spec).catch((error) => {
 		if (error instanceof LeafFailure) throw error;
@@ -290,6 +531,17 @@ export async function executeLeafRun(host: LeafHost, input: LeafRunInput): Promi
 	if (typeof result.text !== "string" || result.text.trim().length === 0) {
 		throw new LeafFailure("output_contract_breach", "Leaf run produced no text.");
 	}
+	// Live cap assertion on the result path: the SDK hides the transmitted
+	// payload, so assert the spec-derived outbound payload still carries the
+	// audited cap exactly (spec must survive unmutated to result).
+	assertOutboundTokenCap(
+		model.api,
+		model.api === "openai-responses" ? { max_output_tokens: spec.model.maxTokens } : { max_tokens: spec.model.maxTokens },
+		cap,
+	);
+	// Structured path: same single-turn/zero-tool session; JSON-as-text output
+	// validated against the request-carried schema. Envelope shape unchanged.
+	if (input.outputSchema !== undefined) validateLeafJsonContract(input.outputSchema, result.text, input.outputSchemaDialect ?? "flat-v1");
 	return { output: result.text, outputTokens: result.outputTokens };
 }
 
