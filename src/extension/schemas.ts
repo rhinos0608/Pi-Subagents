@@ -323,7 +323,7 @@ const SubagentParamProperties = {
 		description: "create/update agent config; object or JSON string."
 	})),
 	workflow: Type.Optional(Type.String({ minLength: 1, description: "Extension-owned workflow resource." })),
-	args: Type.Optional(Type.Unsafe({ type: "object", maxProperties: 16, additionalProperties: true, description: "Bounded plain-JSON resource args." })),
+	args: Type.Optional(Type.Unsafe({ type: "object", maxProperties: 16, additionalProperties: true, description: "Bounded plain-JSON args for named, inline, or file-backed workflows; raw-script args are exposed deeply frozen and persisted, so do not include secrets." })),
 	workflowScript: Type.Optional(Type.String({ minLength: 1, description: "Inline JavaScript statement body; raw/unknown provenance, no runs.host. Use explicit return and top-level await; see tool guidance/guide workflows." })),
 	workflowScriptPath: Type.Optional(Type.String({ minLength: 1, description: "Raw script file; host reads from request cwd before sandbox. Mutually exclusive with workflowScript and workflow." })),
 	globalConcurrencyLimit: Type.Optional(Type.Integer({ minimum: 1 })),
@@ -362,7 +362,13 @@ const SubagentParamProperties = {
 	outputSchema: Type.Optional(OutputSchemaOverride),
 	agentContract: Type.Optional(AgentContractOverride),
 	acceptance: Type.Optional(AcceptanceOverride),
-	gate: Type.Optional(Type.String({ minLength: 1, description: "Host gate command. Cannot be combined with acceptance; an explicit acceptance of false is treated as omitted." })),
+	gate: Type.Optional(Type.Unsafe({
+		anyOf: [
+			{ type: "string", minLength: 1 },
+			{ type: "object", properties: { command: { type: "string", minLength: 1 }, output: { type: "string", enum: ["json"] }, schema: { type: "object" }, timeoutMs: { type: "integer", minimum: 1 } }, required: ["command"], additionalProperties: false },
+		],
+		description: "Host gate command run after the child finishes: a string, or { command, output: \"json\", schema?, timeoutMs? } whose passing stdout becomes structuredOutput (not with outputSchema). Cannot be combined with acceptance; an explicit acceptance of false is treated as omitted.",
+	})),
 };
 
 const SubagentParamsSchema = Type.Object(SubagentParamProperties);
@@ -407,9 +413,12 @@ const COMPACT_TOP_LEVEL_DESCRIPTION_KEYS = [
 // Shortened where the full text exceeds what the compact budget allows. Meaning
 // is preserved; only examples and restated defaults are trimmed.
 const COMPACT_TOP_LEVEL_DESCRIPTION_OVERRIDES: Record<string, string> = {
-	context: "fresh/fork overrides every child; profile requires the agent's declared defaultContext. Omitted: defaultSubagentContext wins; implicit fork needs persisted parent + leaf, else fresh.",
+	context: "fresh/fork overrides every child; profile uses agent default. Omitted uses defaultSubagentContext; implicit fork needs a persisted parent leaf.",
 	thinking: "watchdog.configure only; true invalid. Dispatch ignores this; use model suffix.",
 	timeoutMs: "Foreground and single async runs default to config timeoutMs, else 30m; async composites have no parent deadline.",
+	mission: "false disables; object needs title/summary; goal:true requires budget.tokens.",
+	acceptance: "Evidence policy; false disables, true invalid. Prefer object; see guide tool-reference for levels, evidence and review.required.",
+	gate: "Host gate after child completion; JSON stdout may become structuredOutput; cannot be combined with acceptance or outputSchema.",
 };
 
 function shallowCloneSchema<T>(value: T): T {

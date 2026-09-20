@@ -12,6 +12,7 @@ import {
 	getExcludedCount,
 	getExclusionsFilePath,
 	isExcluded,
+	modelExclusionScopeForCwd,
 	parseModelKey,
 	recordModelFailure,
 	reloadFromDisk,
@@ -57,6 +58,33 @@ after(() => {
 		process.env.PI_CODING_AGENT_DIR = previousAgentDir;
 	}
 	fs.rmSync(testAgentDir, { recursive: true, force: true });
+});
+
+describe("model exclusions — project scope", () => {
+	it("keeps markerless working directories in distinct health scopes", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-model-scope-markerless-"));
+		try {
+			const left = path.join(root, "left");
+			const right = path.join(root, "right");
+			fs.mkdirSync(left);
+			fs.mkdirSync(right);
+			assert.notEqual(modelExclusionScopeForCwd(left), modelExclusionScopeForCwd(right));
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("collapses nested directories onto their nearest project marker", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-model-scope-project-"));
+		try {
+			fs.mkdirSync(path.join(root, ".git"));
+			const nested = path.join(root, "packages", "worker");
+			fs.mkdirSync(nested, { recursive: true });
+			assert.equal(modelExclusionScopeForCwd(nested), modelExclusionScopeForCwd(root));
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
 });
 
 describe("model exclusions — record & query", () => {

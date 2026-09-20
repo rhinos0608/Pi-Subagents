@@ -74,7 +74,7 @@ import { SUBAGENT_CHILD_ENV, SUBAGENT_PARENT_SESSION_ENV } from "../runs/shared/
 import { disposeChildSessions } from "../runs/shared/child-session.ts";
 import { resolveCurrentSubagentCapabilityCeiling } from "../runs/shared/capability-ceiling.ts";
 import { formatDuration, shortenPath } from "../shared/formatters.ts";
-import { applyModelExclusionsConfig, loadConfig, resolveAsyncByDefault, resolveScheduledStoreRoot } from "./config.ts";
+import { loadConfig, resolveAsyncByDefault, resolveScheduledStoreRoot } from "./config.ts";
 import { buildSubagentToolDescription, buildSubagentToolPromptMetadata } from "./tool-description.ts";
 import { formatWorkflowPreflightSummary, normalizeWorkflowPreflight } from "../workflows/workflow-preflight.ts";
 import { finalizeToolResult } from "./tool-result.ts";
@@ -434,8 +434,6 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	cleanupOldChainDirs();
 
 	const config = loadConfig();
-	// Apply the process-wide exclusion TTL before any child launch can record a model failure.
-	applyModelExclusionsConfig(config);
 	const waitToolConfig = resolveWaitToolConfig(config.waitTool);
 	const asyncByDefault = resolveAsyncByDefault(config);
 	const fleetViewEnabled = config.fleetView !== false;
@@ -445,14 +443,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	const tempArtifactsDir = getArtifactsDir(null);
 	const artifactCleanupDays = config.artifactConfig?.cleanupDays ?? DEFAULT_ARTIFACT_CONFIG.cleanupDays;
 	cleanupAllArtifactDirs(artifactCleanupDays);
-	const resultIndexCleanupTimer = setTimeout(() => {
-		try {
-			cleanupResultIndexes(DIRS.results);
-		} catch (error) {
-			console.error("Failed to clean stale subagent result indexes:", error);
-		}
-	}, 30_000);
-	resultIndexCleanupTimer.unref?.();
+	let resultIndexCleanupTimer: ReturnType<typeof setTimeout> | undefined;
 
 	const state: SubagentState = {
 		baseCwd: "",
@@ -523,7 +514,6 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		: undefined;
 	let executorScheduled: ((id: string, params: SubagentParamsLike, signal: AbortSignal, ctx: ExtensionContext) => Promise<AgentToolResult<Details>>) | undefined;
 	let goalTurnId = 0;
-	let parentSessionEnvValue: string | null = null;
 	let releaseHostSessionLiveness = () => {};
 	const scheduledStoreRoot = config.scheduledRuns?.storeRoot === undefined ? undefined : resolveScheduledStoreRoot(config.scheduledRuns.storeRoot);
 	const scheduledRunManager = createScheduledRunManager({
@@ -598,23 +588,39 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	const { startResultWatcher, transitionResultDelivery, primeExistingResults, stopResultWatcher } = resultWatcher;
 	refreshResultDelivery = resultWatcher.refreshResultDelivery;
 	const asyncRetentionAbort = new AbortController();
-	const asyncRetentionTimer = setTimeout(async () => {
-		try {
-			await cleanupAsyncRetention({
-				asyncDirRoot: DIRS.async,
-				resultsDir: DIRS.results,
-				signal: asyncRetentionAbort.signal,
-				protectedRunIds: new Set([
-					...state.asyncJobs.keys(),
-					...(state.workflowControllers?.keys() ?? []),
-					...scheduledRunManager.referencedAsyncRunIds(),
-				]),
-			});
-		} catch (error) {
-			console.error("Failed to clean retained async subagent state:", error);
+	let asyncRetentionTimer: ReturnType<typeof setTimeout> | undefined;
+	const startSessionMaintenance = () => {
+		if (!resultIndexCleanupTimer) {
+			resultIndexCleanupTimer = setTimeout(() => {
+				try {
+					cleanupResultIndexes(DIRS.results);
+				} catch (error) {
+					console.error("Failed to clean stale subagent result indexes:", error);
+				}
+			}, 30_000);
+			resultIndexCleanupTimer.unref?.();
 		}
-	}, ASYNC_RETENTION_DELAY_MS);
-	asyncRetentionTimer.unref?.();
+		waitSubscriptionManager.start();
+		if (!asyncRetentionTimer) {
+			asyncRetentionTimer = setTimeout(async () => {
+				try {
+					await cleanupAsyncRetention({
+						asyncDirRoot: DIRS.async,
+						resultsDir: DIRS.results,
+						signal: asyncRetentionAbort.signal,
+						protectedRunIds: new Set([
+							...state.asyncJobs.keys(),
+							...(state.workflowControllers?.keys() ?? []),
+							...scheduledRunManager.referencedAsyncRunIds(),
+						]),
+					});
+				} catch (error) {
+					console.error("Failed to clean retained async subagent state:", error);
+				}
+			}, ASYNC_RETENTION_DELAY_MS);
+			asyncRetentionTimer.unref?.();
+		}
+	};
 
 	const executorDeps: Parameters<typeof createSubagentExecutor>[0] = {
 		pi,
@@ -856,10 +862,10 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		if (systemPrompt !== event.systemPrompt) return { systemPrompt };
 	});
 
-	registerWaitTool(pi, state, waitToolConfig.enabled, waitSubscriptionManager, waitToolConfig.defaultTimeoutMs);
+	registerWaitTool(pi, state, waitToolConfig.enabled, waitSubscriptionManager, waitToolConfig.defaultTimeoutMs, undefined, supervisorChannel.hasPendingRequests);
 
 	pi.on("agent_end", async (_event, ctx) => {
-		if (!ctx.hasUI) await drainOutstandingWork({ state, events: pi.events });
+		if (!ctx.hasUI) await drainOutstandingWork({ state, events: pi.events, hasPendingSupervisorRequest: supervisorChannel.hasPendingRequests });
 		const ownerSessionId = state.currentSessionId;
 		if (!ownerSessionId) return;
 		goalTurnId += 1;
@@ -1010,17 +1016,10 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		};
 		const projectPaneOwnerRoot = path.resolve(ctx.cwd);
 		restoreHerdrProjectPaneSnapshots(state, [...new Set([...(state.herdrProjectPanes?.keys() ?? []), ...listHerdrProjectPaneRoots(projectPaneOwnerRoot), projectPaneOwnerRoot])]);
-		// Set PI_SUBAGENT_PARENT_SESSION for permission-system forwarding.
-		// Only set in the root session (the interactive UI session), not in a
-		// child host: the runner process inherits the parent's value through
-		// its environment at spawn time and must not overwrite it with a child
-		// session's identity.
+		// Root hosts may contain independent sessions, so a process-global parent
+		// identity is unsafe. Dedicated child runners retain their launch-owned value.
 		if (!process.env[SUBAGENT_CHILD_ENV]) {
-			const sessionId = ctx.sessionManager.getSessionId();
-			if (sessionId) {
-				process.env[SUBAGENT_PARENT_SESSION_ENV] = sessionId;
-				parentSessionEnvValue = sessionId;
-			}
+			delete process.env[SUBAGENT_PARENT_SESSION_ENV];
 		}
 		state.lastUiContext = ctx;
 		let phaseStartedAt = Date.now();
@@ -1068,7 +1067,6 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		cleanup() {
 			if (runtimeCleaned) return;
 			runtimeCleaned = true;
-			const shuttingDownParentSession = parentSessionEnvValue;
 			releaseHostSessionLiveness();
 			releaseHostSessionLiveness = () => {};
 			// Workflow continuations retain their launch context; abort them before
@@ -1079,8 +1077,10 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 			state.workflowControllers?.clear();
 			state.workflowChildStops?.clear();
 			clearRuntimeAgentsForPi(pi);
-			clearTimeout(resultIndexCleanupTimer);
-			clearTimeout(asyncRetentionTimer);
+			if (resultIndexCleanupTimer) clearTimeout(resultIndexCleanupTimer);
+			resultIndexCleanupTimer = undefined;
+			if (asyncRetentionTimer) clearTimeout(asyncRetentionTimer);
+			asyncRetentionTimer = undefined;
 			asyncRetentionAbort.abort();
 			stopResultWatcher();
 			resultDeliveryOwnership.clear();
@@ -1114,10 +1114,6 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 			state.supervisorOwnerSessionId = null;
 			state.statusProjectionSessionId = null;
 			state.parentSessionFile = null;
-			parentSessionEnvValue = null;
-			if (shuttingDownParentSession && process.env[SUBAGENT_PARENT_SESSION_ENV] === shuttingDownParentSession) {
-				delete process.env[SUBAGENT_PARENT_SESSION_ENV];
-			}
 			if (runtimeEntry.sessionManager && runtimeRegistry.bySessionManager.get(runtimeEntry.sessionManager) === runtimeEntry) {
 				runtimeRegistry.bySessionManager.delete(runtimeEntry.sessionManager);
 			}
@@ -1190,6 +1186,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 
 	pi.on("session_start", (event, ctx) => {
 		installRuntime(ctx);
+		startSessionMaintenance();
 		const recovering = event.reason === "startup" || event.reason === "reload" || event.reason === "resume";
 		resetSessionState(ctx, recovering, event.previousSessionFile);
 		releaseHostSessionLiveness();

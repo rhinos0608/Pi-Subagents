@@ -9,11 +9,12 @@ const AGENT_SELECTION_GUIDANCE = 'First call {action:"list",capabilities:true}: 
 const SUBAGENT_FAILURE_RECOVERY_GUIDANCE = "Workflow, child launch, prompt runtime, extension load or child tooling failure is a lane infrastructure blocker. Stop; report exact failure, run/status and repo/cwd/worktree/branch/ref; verify clean worktree or capture partial diff before same-protocol retry or asking the owner. Never silently switch to interactive_shell, pi -ne, Codex/Claude/Cursor CLI or foreground/external mode: governed-workflow fallback requires explicit owner approval, not Pi core's generic pi -ne hint. Explicit foreground/CLI requests and work outside that protocol remain valid.";
 
 const FULL_SAFETY_GUIDANCE = `SAFETY-CRITICAL SUBAGENT GUIDANCE:
+• Direct parent execution is the default. Invoke subagents only when delegation is authorized by the operator's current request or applicable user/project instructions; task size, complexity, risk, tool-call count, or recipe fit do not independently authorize delegation.
 • ${AGENT_SELECTION_GUIDANCE}
 • ${SUBAGENT_FAILURE_RECOVERY_GUIDANCE}
-• Omit action for execution. Multi-step/parallel work: exactly one top-level subagent workflow call with async:true; children launch only inside it.
+• Omit action for execution. For an authorized delegated multi-step/parallel workflow: exactly one top-level subagent workflow call with async:true; children launch only inside it.
 • Async follows asyncByDefault (normally true); async:false only to block the parent, not for final reviews/gates. Consume results at dependency barriers. Native async completion wakes this session: return control, no sleep/poll or bg_wait merely for a wake. bg_wait is for provider/detached work without native notification needing a same-turn result.
-• Ordinary child subagents are not orchestrators; only configured fanout within depth/session limits. One writer per cwd/worktree; isolate concurrent writers. Fresh-context read-only reviewers, then parent synthesis/fixes. Oracle/advisor unknowns use supervisor dialogue; one-shot only when requested.
+• Ordinary child subagents are not orchestrators; only configured fanout within depth/session limits. For an authorized delegated workflow, keep one writer per cwd/worktree and isolate concurrent writers. Use fresh-context read-only reviewers when independent review was requested, then parent synthesis/fixes. Oracle/advisor unknowns use supervisor dialogue; one-shot only when requested.
 • Bind durable output on runs.run/runs.all, not task filename prose; return actual outputReference/outputPathMapping/artifactPaths, evidence and residual risks.
 • children.list: resume only resumable rows. {action:"resume",id,message} detaches a follow-up/challenge with stored agent/model/tool contract. If none is resumable, label a same-role fallback challenge. Scripts await runs.run(newKey,{resume:runId,task}); continue from latest returned runId. Each distinct resume pass needs a new stable key; same-key reuse requires identical launch parameters.
 • Named resources own authority; raw workflowScript/workflowScriptPath cannot use runs.host. Granted commands/relative outputs use workflow cwd, never per-step cwd.
@@ -21,26 +22,27 @@ const FULL_SAFETY_GUIDANCE = `SAFETY-CRITICAL SUBAGENT GUIDANCE:
 
 /** Compact safety kernel retained in every description path. */
 export const SUBAGENT_SAFETY_GUIDANCE = `SAFETY KERNEL (authoritative):
-- Authoritative discovery/preflight: {action:"list",capabilities:true}; executable, non-disabled agents only; PATH/PATHEXT/X_OK is not proof.
-- No silent fallback on infra failure (lane infrastructure blocker): stop, report exact evidence; interactive_shell, pi -ne, external/foreground execution need owner approval.
-- One writer per cwd/worktree; ordinary child subagents are not orchestrators. Native async completion wakes session; do not sleep, poll, or bg_wait for wake.
-- Bind durable output to runs.run/runs.all; return output references, artifacts, evidence, residual risks.
-- Named raw workflow resources own authority; workflow scripts cannot use runs.host; relative commands/outputs use workflow cwd.
-- Evidence: asyncId/asyncDir (status.json, events.jsonl, logs). Read {action:"guide",topic:"tool-reference"} for advanced controls and evidence gates.`;
+- Direct parent execution is the default. Invoke subagents only when delegation is authorized by the operator's current request or applicable user/project instructions; task size, complexity, risk, tool-call count, or recipe fit do not independently authorize delegation.
+- Authoritative preflight: {action:"list",capabilities:true}; executable, non-disabled only; PATH is not proof.
+- No silent fallback on infra failure (lane infrastructure blocker): stop/report evidence; alternate execution needs owner approval.
+- One writer per cwd/worktree; ordinary child subagents are not orchestrators. Async completion wakes session; do not sleep, poll, or bg_wait.
+- Bind durable output to runs.run/runs.all; return references, artifacts, evidence, risks.
+- Raw workflow resources own authority; no runs.host; relative I/O uses workflow cwd.
+- Evidence: asyncId/asyncDir status.json/logs. Read guide tool-reference for controls/gates.`;
 
-const EXECUTION_GUIDANCE = `Delegate one child with {agent,task?}; otherwise choose exactly one of workflowScript, workflowScriptPath or {workflow,args}. agent/task exclude workflow inputs; task excludes action. agent may target management actions. action is management/control; validate accepts either script without launching. workflowScriptPath loads from request cwd before sandbox execution.
+const EXECUTION_GUIDANCE = `Delegate one child with {agent,task?}; otherwise choose exactly one of {workflowScript,args?}, {workflowScriptPath,args?} or {workflow,args}. agent/task exclude workflow inputs; task excludes action. agent may target management actions. action is management/control; validate accepts either script without launching. workflowScriptPath loads from request cwd before sandbox execution.
 Scripts: JavaScript statement bodies with explicit return, top-level await, plain helpers/Promise chains; nested async function/arrow/method helpers are rejected. Await runs.run('key',{agent,task}) before .output; await runs.all([{key,agent,task},...]) for an ordered array, not a key map. Observe every stored run promise with direct await, Promise.race or Promise.all. Await/return runs.steer(key,message,options?) for a prior key, never raw run ids; queued/delivered/missed/failed receipts are not compliance proof.
-Before advanced orchestration (runs.lanes, rolling fanout, mission state, handoffs), read {action:"guide",topic:"workflows"} or the pi-subagents skill. Sandbox: runs, emit, console, JavaScript and enabled mission state; no filesystem/shell/Pi tools/host globals. External CLI agents support native options only when their runner declares them; read guide tool-reference before passing model, structured output, acceptance/agentContract, tool budget, fast, fork context or skills/tools.
+Before advanced orchestration (runs.lanes, rolling fanout, mission state, handoffs), read {action:"guide",topic:"workflows"} or the pi-subagents skill. Raw-script sandboxes add deeply frozen args; all sandboxes provide runs, emit, console, JavaScript and enabled mission state, with no filesystem/shell/Pi tools/host globals. External CLI agents support native options only when their runner declares them; read guide tool-reference before passing model, structured output, acceptance/agentContract, tool budget, fast, fork context or skills/tools.
 Model override: first call {action:"models"}; copy exact provider/id, not agent names. Thinking uses model suffix, not watchdog-only thinking.
-Named resources: {workflow:'review',args:{task:'...'}} or {workflow:'run-ci',args:{command:'npm test'}}; args are bounded plain data. worktree:true requires clean source; baseRef defaults to HEAD at allocation or a supported named ref, never full 40/64-character commit IDs or revision expressions.`;
+Named resources: {workflow:'review',args:{task:'...'}} or {workflow:'run-ci',args:{command:'npm test'}}. Raw scripts also accept bounded plain-data args; raw-script args persist as evidence, so never include secrets. worktree:true requires clean source; baseRef defaults to HEAD at allocation or a supported named ref, never full 40/64-character commit IDs or revision expressions.`;
 
-const COMPACT_EXECUTION_GUIDANCE = `Delegate one child with {agent,task?} or {workflow,args}; workflowScript/workflowScriptPath only when needed. Omit action for execution. Scripts need explicit return with awaited runs.run/runs.all; observe every run promise.`;
+const COMPACT_EXECUTION_GUIDANCE = `Delegate with {agent,task?} or {workflow,args}; raw workflowScript/path only when needed. Omit action for execution. Scripts must return and await runs.run/runs.all.`;
 
 export const DEFAULT_SUBAGENT_TOOL_DESCRIPTION = `${COMPACT_EXECUTION_GUIDANCE}\n\n${SUBAGENT_SAFETY_GUIDANCE}`;
 
-export const SUBAGENT_TOOL_PROMPT_SNIPPET = "Delegate to subagents; orchestrate in one workflow call.";
+export const SUBAGENT_TOOL_PROMPT_SNIPPET = "For operator-requested delegation, use subagents; compose multi-child work in one workflow call.";
 export const SUBAGENT_TOOL_PROMPT_GUIDELINES = [
-	"Use subagent only when delegation is needed.",
+	"Do not invoke subagents unless the operator requested delegation directly or through applicable instructions.",
 ];
 
 export const COMPACT_SUBAGENT_TOOL_DESCRIPTION = DEFAULT_SUBAGENT_TOOL_DESCRIPTION;

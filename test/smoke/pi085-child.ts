@@ -6,8 +6,8 @@ import { createModels } from "@earendil-works/pi-ai";
 
 const state = globalThis.__pi085Smoke = { AgentSession, BACKGROUND_CONTEXT, createModels, started: 0, stopped: 0, faux: undefined };
 // Exercise the runner's reachable watchdog graph, including its runtime TUI import.
-await import(pathToFileURL(`${process.env.SMOKE_EXTENSION}/src/watchdog/tool-actions.ts`).href);
-const { loadRunnerChildSessionFactory } = await import(pathToFileURL(`${process.env.SMOKE_EXTENSION}/src/runs/background/runner-child-sessions.ts`).href);
+await import(pathToFileURL(`${process.env.SMOKE_EXTENSION}/src/watchdog/tool-actions.js`).href);
+const { loadRunnerChildSessionFactory } = await import(pathToFileURL(`${process.env.SMOKE_EXTENSION}/src/runs/background/runner-child-sessions.js`).href);
 const factory = await loadRunnerChildSessionFactory({});
 const errors = [];
 let started = 0, stopped = 0;
@@ -30,7 +30,7 @@ try {
 	assert.deepEqual([started, stopped, state.started, state.stopped], [1, 1, 1, 1]);
 	assert.deepEqual(errors, []);
 	console.log("PASS public SDK/default child factory: local prompt, API identity, startup/shutdown");
-	const { buildInProcessChildLaunch } = await import(pathToFileURL(`${process.env.SMOKE_EXTENSION}/src/runs/shared/child-launch.ts`).href);
+	const { buildInProcessChildLaunch } = await import(pathToFileURL(`${process.env.SMOKE_EXTENSION}/src/runs/shared/child-launch.js`).href);
 	for (const tools of [
 		["read", "subagent", "contact_supervisor", "subagent_supervisor"],
 		["read", "subagent", "contact_supervisor"],
@@ -38,7 +38,7 @@ try {
 	]) {
 		const launch = buildInProcessChildLaunch({
 			host: "runner", cwd: process.cwd(), childAgentName: "coordinator-smoke", childIndex: 0,
-			sessionEnabled: false, model: "pi085-smoke/local", tools, hostAvailableBuiltins: ["read"],
+			sessionEnabled: false, model: "pi085-smoke/local", tools,
 			runId: `coordination-${tools.length}`, parentSessionId: "root-A", orchestratorIntercomTarget: "root-A",
 			extensions: [`${process.cwd()}/pi085-extension.ts`],
 			inheritProjectContext: false, inheritGlobalContext: false, inheritSkills: false,

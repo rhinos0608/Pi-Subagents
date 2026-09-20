@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { splitKnownThinkingSuffix } from "../../shared/model-info.ts";
@@ -9,12 +10,15 @@ export const EXCLUSIONS_PATH_ENV = "PI_MODEL_EXCLUSIONS_PATH";
 type ModelExclusionTarget = { modelId: string; provider?: string } | { provider: string; modelId?: never };
 
 export type ModelExclusion = ModelExclusionTarget & {
+	/** Opaque project health scope. Legacy entries omit this and never poison scoped execution. */
+	scope?: string;
 	reason?: string;
 	recordedAt: number;
 	expiresAt: number;
 };
 
 type RecordModelFailureOptions = ModelExclusionTarget & {
+	scope?: string;
 	reason?: string;
 	ttlMs?: number;
 };
@@ -30,6 +34,27 @@ let defaultTTLMs = DEFAULT_MODEL_EXCLUSION_TTL_MS;
 let loadedTTLCeilingMs: number | undefined;
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
 let persistSeq = 0;
+
+/**
+ * Derive an opaque project-local health scope. The nearest project marker wins,
+ * so unrelated repositories cannot share cached model-health failures.
+ */
+export function modelExclusionScopeForCwd(cwd: string): string {
+	const resolvedCwd = path.resolve(cwd);
+	let current = resolvedCwd;
+	let projectRoot: string | undefined;
+	while (true) {
+		if (fs.existsSync(path.join(current, ".git")) || fs.existsSync(path.join(current, ".pi")) || fs.existsSync(path.join(current, ".agents"))) {
+			projectRoot = current;
+			break;
+		}
+		const parent = path.dirname(current);
+		if (parent === current) break;
+		current = parent;
+	}
+	const scopeRoot = projectRoot ?? resolvedCwd;
+	return `project:${createHash("sha256").update(scopeRoot).digest("hex").slice(0, 24)}`;
+}
 
 const AUTH_FAILURE_PATTERNS = [
 	/auth(?:entication)?/i,
@@ -167,15 +192,16 @@ function invalidPersistedExclusion(index: number, message: string): PersistedExc
 
 function readPersistedExclusion(entry: unknown, index: number): PersistedExclusionRead {
 	if (!entry || typeof entry !== "object" || Array.isArray(entry)) return invalidPersistedExclusion(index, "must be an object");
-	const candidate = entry as { modelId?: unknown; provider?: unknown; reason?: unknown; recordedAt?: unknown; expiresAt?: unknown };
-	const { modelId, provider, reason } = candidate;
+	const candidate = entry as { modelId?: unknown; provider?: unknown; scope?: unknown; reason?: unknown; recordedAt?: unknown; expiresAt?: unknown };
+	const { modelId, provider, scope, reason } = candidate;
 	if (modelId !== undefined && (typeof modelId !== "string" || modelId.length === 0)) return invalidPersistedExclusion(index, "has an invalid modelId");
 	if (provider !== undefined && (typeof provider !== "string" || provider.length === 0)) return invalidPersistedExclusion(index, "has an invalid provider");
+	if (scope !== undefined && (typeof scope !== "string" || scope.length === 0)) return invalidPersistedExclusion(index, "has an invalid scope");
 	if (reason !== undefined && typeof reason !== "string") return invalidPersistedExclusion(index, "has an invalid reason");
 	const { recordedAt, expiresAt } = candidate;
 	if (typeof recordedAt !== "number" || !Number.isFinite(recordedAt) || recordedAt <= 0 || recordedAt > MAX_DATE_TIMESTAMP_MS) return invalidPersistedExclusion(index, "has an invalid recordedAt");
 	if (typeof expiresAt !== "number" || !Number.isFinite(expiresAt) || expiresAt <= 0 || expiresAt > MAX_DATE_TIMESTAMP_MS) return invalidPersistedExclusion(index, "has an invalid expiresAt");
-	const metadata = { ...(reason === undefined ? {} : { reason }), recordedAt, expiresAt };
+	const metadata = { ...(scope === undefined ? {} : { scope }), ...(reason === undefined ? {} : { reason }), recordedAt, expiresAt };
 	if (modelId === undefined) {
 		if (provider === undefined) return invalidPersistedExclusion(index, "must include modelId or provider");
 		return { ok: true, exclusion: { provider, ...metadata } };
@@ -184,7 +210,7 @@ function readPersistedExclusion(entry: unknown, index: number): PersistedExclusi
 }
 
 function dedupKey(entry: ModelExclusion): string {
-	return `${entry.provider ?? ""}|${entry.modelId ?? ""}`;
+	return `${entry.scope ?? ""}|${entry.provider ?? ""}|${entry.modelId ?? ""}`;
 }
 
 function deduplicate(items: ModelExclusion[]): ModelExclusion[] {
@@ -214,6 +240,7 @@ export function recordModelFailure(options: RecordModelFailureOptions): void {
 		: { provider: options.provider };
 	const exclusion: ModelExclusion = {
 		...target,
+		...(options.scope ? { scope: options.scope } : {}),
 		reason: options.reason ?? "runtime-failure",
 		recordedAt: now,
 		expiresAt: now + ttl,
@@ -253,8 +280,9 @@ export function clearExclusions(): void {
  * - Entry without modelId: provider-wide exclusion (e.g. quota or auth failure).
  *   Matches every model of that provider.
  */
-function entryMatches(entry: ModelExclusion, candidateModelId: string, candidateProvider: string | undefined, now: number): boolean {
+function entryMatches(entry: ModelExclusion, candidateModelId: string, candidateProvider: string | undefined, now: number, scope?: string): boolean {
 	if (entry.expiresAt <= now) return false;
+	if (scope !== undefined && entry.scope !== scope) return false;
 	if (entry.modelId !== undefined) {
 		if (entry.modelId !== candidateModelId) return false;
 		return !entry.provider || !candidateProvider || entry.provider === candidateProvider;
@@ -265,10 +293,10 @@ function entryMatches(entry: ModelExclusion, candidateModelId: string, candidate
 /**
  * Whether a model (or its provider) is currently excluded.
  */
-export function isExcluded(modelId: string, provider: string): boolean {
+export function isExcluded(modelId: string, provider: string, opts?: { scope?: string }): boolean {
 	ensureLoaded();
 	invalidateAuthExclusions();
-	return exclusions.some((entry) => entryMatches(entry, modelId, provider, Date.now()));
+	return exclusions.some((entry) => entryMatches(entry, modelId, provider, Date.now(), opts?.scope));
 }
 
 /**
@@ -279,13 +307,14 @@ export function isExcluded(modelId: string, provider: string): boolean {
  */
 export function findModelExclusion(fullId: string, opts?: {
 	now?: number;
+	scope?: string;
 	ignoreExclusion?: (candidate: string, exclusion: Readonly<ModelExclusion>) => boolean;
 }): Readonly<ModelExclusion> | undefined {
 	ensureLoaded();
 	invalidateAuthExclusions();
 	const { provider, modelId } = parseModelKey(fullId);
 	const now = opts?.now ?? Date.now();
-	return exclusions.find((entry) => entryMatches(entry, modelId, provider, now) && opts?.ignoreExclusion?.(fullId, entry) !== true);
+	return exclusions.find((entry) => entryMatches(entry, modelId, provider, now, opts?.scope) && opts?.ignoreExclusion?.(fullId, entry) !== true);
 }
 
 /**
@@ -320,6 +349,7 @@ export function parseModelKey(fullId: string): { provider?: string; modelId: str
  */
 export function filterFallbackCandidates(candidates: string[], opts?: {
 	now?: number;
+	scope?: string;
 	onExcluded?: (candidate: string, exclusion: Readonly<ModelExclusion>) => void;
 	ignoreExclusion?: (candidate: string, exclusion: Readonly<ModelExclusion>) => boolean;
 }): string[] {
@@ -331,7 +361,7 @@ export function filterFallbackCandidates(candidates: string[], opts?: {
 	for (const raw of candidates) {
 		if (!raw || seen.has(raw)) continue;
 		const { provider: candidateProvider, modelId: candidateModelId } = parseModelKey(raw);
-		const exclusion = exclusions.find((entry) => entryMatches(entry, candidateModelId, candidateProvider, timestamp) && opts?.ignoreExclusion?.(raw, entry) !== true);
+		const exclusion = exclusions.find((entry) => entryMatches(entry, candidateModelId, candidateProvider, timestamp, opts?.scope) && opts?.ignoreExclusion?.(raw, entry) !== true);
 		if (exclusion) {
 			opts?.onExcluded?.(raw, exclusion);
 			continue;

@@ -59,6 +59,7 @@ export interface ChildSupervisorMetadata {
  * that hosts the child session builds it and passes it to the hooks directly.
  */
 export interface ChildRuntimeConfig {
+	cwd?: string;
 	runId?: string;
 	agent?: string;
 	childIndex?: number;
@@ -92,6 +93,8 @@ export interface ChildRuntimeConfig {
 	waitTool: ResolvedWaitToolConfig;
 	runtimeState?: SubagentState;
 	holdFinalDrain?: (held: boolean) => void;
+	/** Installation-local downward owner-channel barrier; never inherited or serialized into descendants. */
+	hasPendingSupervisorRequest?: () => boolean;
 	structuredOutput?: ChildStructuredOutput;
 	requiredTools?: string[];
 	mcpDirectTools?: string[];

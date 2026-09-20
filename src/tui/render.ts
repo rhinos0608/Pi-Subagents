@@ -26,7 +26,7 @@ import {
 	WIDGET_KEY,
 } from "../shared/types.ts";
 import { previewDisplayText, sanitizeDisplayText, truncateDisplayText } from "../shared/display-text.ts";
-import { FLEET_OPEN_SHORTCUT, formatShortcutLabel } from "../shared/shortcuts.ts";
+import { formatShortcutLabel } from "../shared/shortcuts.ts";
 import { formatContextUsage, formatTokens, formatUsage, formatDuration, formatModelThinking, formatToolCall, formatTokenUsage, shortenPath } from "../shared/formatters.ts";
 import { getDisplayItems, getSingleResultOutput, PROMPT_REDACTED } from "../shared/utils.ts";
 import { flatToLogicalStepIndex } from "../runs/background/parallel-groups.ts";
@@ -95,11 +95,11 @@ function liveDetailKeyText(): string {
 }
 
 export function liveDetailHintText(): string {
-	return `Press ${liveDetailKeyText()} for live detail · ${formatShortcutLabel(FLEET_OPEN_SHORTCUT)} Fleet`;
+	return `Press ${liveDetailKeyText()} for live detail`;
 }
 
 function workflowDetailHintText(): string {
-	return `Press ${liveDetailKeyText()} for details · ${formatShortcutLabel(FLEET_OPEN_SHORTCUT)} Fleet`;
+	return `Press ${liveDetailKeyText()} for details`;
 }
 
 function foregroundSingleHintText(shortcut?: string): string {
@@ -2545,6 +2545,10 @@ function buildSingleLineWidgetLines(jobs: AsyncJobState[], theme: Theme, width: 
 	if (counts.failed.length > 0) parts.push(`${counts.failed.length} failed`);
 	if (counts.stopped.length > 0) parts.push(`${counts.stopped.length} stopped`);
 	if (counts.paused.length > 0) parts.push(`${counts.paused.length} paused`);
+	for (const status of ["partial", "rejected"] as const) {
+		const count = jobs.filter((job) => job.status === status).length;
+		if (count > 0) parts.push(`${count} ${status}`);
+	}
 	if (!hasActive && counts.complete.length > 0) parts.push(`${counts.complete.length}/${jobs.length} done`);
 	return [truncLine(`${theme.fg(hasActive ? "accent" : "dim", glyph)} ${theme.fg(hasActive ? "accent" : "dim", "subagents")} (${parts.join(", ") || `${jobs.length} total`})`, width)];
 }
@@ -2749,13 +2753,38 @@ const asyncWidgetUpdates = new WeakMap<ExtensionContext["ui"], (jobs: AsyncJobSt
 const inlineWorkflowCoverage = new WeakMap<ExtensionContext["ui"], ReadonlyMap<string, string>>();
 const asyncWidgetInvalidations = new WeakMap<ExtensionContext["ui"], () => void>();
 
-/** Include child identity and freshness in the roster's existing snapshot. */
+function inlineWorkflowDescendantShape(children: AsyncJobState["nestedChildren"]): unknown {
+	return children?.map((child) => [child.id, child.agent, inlineWorkflowDescendantShape(child.children)]);
+}
+
+function inlineWorkflowRowShape(job: AsyncJobState): unknown[] {
+	return [
+		job.asyncId,
+		job.parentWorkflowRunId,
+		job.workflowKey,
+		job.mode,
+		job.currentStep,
+		job.activeParallelGroup,
+		job.status,
+		job.context,
+		job.agents,
+		job.steps?.map((step, index) => [
+			step.index ?? index,
+			step.workflowKey,
+			step.agent,
+			step.status,
+			Boolean(step.runner),
+			inlineWorkflowDescendantShape(step.children),
+		]),
+		inlineWorkflowDescendantShape(job.nestedChildren),
+		job.hostSteps?.map((row) => [row.id, row.monitorKind, row.label]),
+		Boolean(job.workflowGraph),
+	];
+}
+
+/** Structural identity of the workflow rows that Fleet can cover. */
 export function inlineWorkflowRenderKey(job: AsyncJobState, children: AsyncJobState[]): string {
-	if (!children.length) return widgetRenderKey(job);
-	return JSON.stringify([widgetRenderKey(job), children.map((child) => [
-		child.asyncId, widgetRenderKey(child, true), child.context,
-		child.steps?.map((step) => [Boolean(step.runner), step.tokens?.window]), Boolean(child.workflowGraph),
-	])]);
+	return JSON.stringify([inlineWorkflowRowShape(job), children.map(inlineWorkflowRowShape)]);
 }
 
 /** Presentation-only coverage from the mounted inline Fleet roster, never configuration. */
@@ -2817,12 +2846,17 @@ function buildWidgetComponent(jobs: AsyncJobState[], ui: ExtensionContext["ui"])
 		let cachedExpanded: boolean | undefined;
 		let cachedLines: string[] | undefined;
 		let cachedCoverage = "[]";
+		let collapsed = false;
 		const invalidate = (): void => {
 			cachedLines = undefined;
 			resetWidgetLayoutSession();
 			tui.requestRender();
 		};
-		asyncWidgetInvalidations.set(ui, invalidate);
+		const invalidateCoverage = (): void => {
+			cachedLines = undefined;
+			tui.requestRender();
+		};
+		asyncWidgetInvalidations.set(ui, invalidateCoverage);
 		const update = (nextJobs: AsyncJobState[]): void => {
 			jobs = nextJobs;
 			cachedLines = undefined;
@@ -2830,9 +2864,17 @@ function buildWidgetComponent(jobs: AsyncJobState[], ui: ExtensionContext["ui"])
 		};
 		asyncWidgetUpdates.set(ui, update);
 		const component = Object.assign(container, {
+			// Only the mouse fields used here, without requiring newer Pi type exports.
+			handleMouse(event: { type: string; button: string; y: number; shift: boolean; alt: boolean; ctrl: boolean }) {
+				if (event.type !== "click" || event.button !== "left" || event.y !== 0) return undefined;
+				if (event.shift || event.alt || event.ctrl) return undefined;
+				collapsed = !collapsed;
+				invalidate();
+				return { handled: true };
+			},
 			dispose(): void {
 				if (asyncWidgetUpdates.get(ui) === update) asyncWidgetUpdates.delete(ui);
-				if (asyncWidgetInvalidations.get(ui) === invalidate) asyncWidgetInvalidations.delete(ui);
+				if (asyncWidgetInvalidations.get(ui) === invalidateCoverage) asyncWidgetInvalidations.delete(ui);
 			},
 		});
 		container.render = (renderWidth: number): string[] => {
@@ -2872,7 +2914,10 @@ function buildWidgetComponent(jobs: AsyncJobState[], ui: ExtensionContext["ui"])
 			cachedRenderWidth = renderWidth;
 			cachedFrame = frame;
 			cachedExpanded = expanded;
-			cachedLines = fitAdaptiveWidgetLines(roots, buildLines, theme, width, expanded, frame, projectionFor).map((line) => paddedWidgetLine(line, renderWidth));
+			cachedLines = (collapsed
+				? buildSingleLineWidgetLines(jobs, theme, width, frame)
+				: fitAdaptiveWidgetLines(roots, buildLines, theme, width, expanded, frame, projectionFor)
+			).map((line) => paddedWidgetLine(line, renderWidth));
 			return cachedLines;
 		};
 		return component;
@@ -3468,9 +3513,6 @@ export function renderSubagentResult(
 		if (r.skillsWarning) {
 			c.addChild(new Text(fit(theme.fg("warning", `Warning: ${r.skillsWarning}`)), 0, 0));
 		}
-		if (r.attemptedModels && r.attemptedModels.length > 1) {
-			c.addChild(new Text(fit(theme.fg("dim", `Fallbacks: ${r.attemptedModels.join(" → ")}`)), 0, 0));
-		}
 		c.addChild(new Text(fit(theme.fg("dim", formatUsage(r.usage, r.model))), 0, 0));
 		if (r.sessionFile) {
 			c.addChild(new Text(fit(theme.fg("dim", `Session: ${shortenPath(r.sessionFile)}`)), 0, 0));
@@ -3646,9 +3688,6 @@ export function renderSubagentResult(
 		}
 		if (r.skillsWarning) {
 			c.addChild(new Text(fit(theme.fg("warning", `    Warning: ${r.skillsWarning}`)), 0, 0));
-		}
-		if (r.attemptedModels && r.attemptedModels.length > 1) {
-			c.addChild(new Text(fit(theme.fg("dim", `    fallbacks: ${r.attemptedModels.join(" → ")}`)), 0, 0));
 		}
 
 		if (rRunning && rProg) {

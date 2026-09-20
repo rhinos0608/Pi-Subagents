@@ -34,18 +34,18 @@ import {
 const MAX_LAUNCH_RESOLVED_EXTENSION_IDS = 32;
 const PROMPT_RUNTIME_EXTENSION_PATH = path.join(
 	path.dirname(fileURLToPath(import.meta.url)),
-	"subagent-prompt-runtime.ts",
+	`subagent-prompt-runtime${path.extname(fileURLToPath(import.meta.url))}`,
 );
 const FANOUT_CHILD_EXTENSION_PATH = path.join(
 	path.dirname(fileURLToPath(import.meta.url)),
 	"..",
 	"..",
 	"extension",
-	"fanout-child.ts",
+	`fanout-child${path.extname(fileURLToPath(import.meta.url))}`,
 );
 const FAST_MODE_EXTENSION_PATH = path.join(
 	path.dirname(fileURLToPath(import.meta.url)),
-	"fast-mode-extension.ts",
+	`fast-mode-extension${path.extname(fileURLToPath(import.meta.url))}`,
 );
 const SUBAGENT_RUNTIME_EXTENSION_PATHS = new Set([
 	PROMPT_RUNTIME_EXTENSION_PATH,
@@ -299,8 +299,6 @@ export interface PiLaunchToolPlan {
 	capabilityAudit?: SubagentCapabilityAudit;
 	/** Non-fatal launch warnings; they do not change behavior. */
 	warnings: string[];
-	/** Builtin tools the agent declared but the host runtime does not provide. */
-	unavailableHostBuiltins: string[];
 }
 
 function extensionIdentifier(value: string): string {
@@ -420,20 +418,11 @@ export function resolvePermissionSystemExtension(): string | undefined {
 }
 
 /**
- * Extract the names of builtin tools the host provides. Use this to pass
- * `hostAvailableBuiltins` to `resolvePiLaunchToolPlan` so child tool plans
- * intersect known core slots with what the host actually supports. Wrapped
- * core slots count regardless of source; host-specific builtins count too.
- *
- * Returns `undefined` when builtin tool discovery fails or yields nothing,
- * so callers skip the intersection (fail-safe to allowing all declared tools).
- * This handles test mocks without proper tool registration and hosts whose
- * getAllTools() throws before extensions load.
+ * Extract builtin tool names exposed by the host runtime.
  */
 export function getHostBuiltinToolNames(pi: Pick<ExtensionAPI, "getAllTools">): string[] | undefined {
 	try {
-		const builtins = pi
-			.getAllTools()
+		const builtins = pi.getAllTools()
 			.filter((tool) => {
 				const source = (tool.sourceInfo as { source?: string } | undefined)?.source;
 				return source === "builtin" || PI_BUILTIN_TOOL_NAMES.has(tool.name);
@@ -635,32 +624,6 @@ export function resolvePiLaunchToolPlan(
 					]),
 				]
 			: undefined;
-	const missingPermittedRepositoryTools = input.tools !== undefined
-		? missingPermittedRepositoryInspectionTools(unavailableHostBuiltins, excludeTools)
-		: [];
-	if (missingPermittedRepositoryTools.length > 0 && isReviewOrScoutLaneAgent(input.agentName)) {
-		throw new Error(formatReviewLaneToolContractFailure({
-			agentName: input.agentName,
-			missingTools: missingPermittedRepositoryTools,
-			requestedTools: requestedToolNames,
-			effectiveTools: effectiveToolAllowlist,
-			ceilingSources: capabilityCeiling?.sources,
-			excludeTools,
-		}));
-	}
-	// Host pruning also happens without a ceiling (and therefore without an
-	// audit). Use the existing non-fatal launch warnings rather than inventing
-	// a ceiling or treating the requested allowlist as a minimum requirement.
-	if (unavailableHostBuiltins.length > 0) {
-		const subject = input.agentName ? `Agent '${input.agentName}'` : "Subagent";
-		warnings.push(
-			`${subject}: host runtime tool availability omitted [${unavailableHostBuiltins.join(", ")}]. `
-				+ `Requested tool names: ${requestedToolNames ? `[${requestedToolNames.join(", ")}]` : "not explicitly specified"}; effective tool allowlist: [${effectiveToolAllowlist.join(", ")}]. `
-				+ (capabilityCeiling ? `Active capability ceiling sources: [${capabilityCeiling.sources.join(", ") || "unknown source"}]. ` : "")
-				+ (excludeTools.length > 0 ? `Explicit excludeTools: [${excludeTools.join(", ")}]. ` : "")
-				+ "This is a non-fatal tool-plan diagnostic, not verification of the child's runtime tool menu.",
-		);
-	}
 	const capabilityAudit = capabilityCeiling
 		? ({
 				ceiling: capabilityCeiling,
@@ -698,7 +661,6 @@ export function resolvePiLaunchToolPlan(
 								capabilityCeilingAgentRestrictionSources(capabilityCeiling),
 						}
 					: {}),
-				...(unavailableHostBuiltins.length > 0 ? { unavailableHostBuiltins } : {}),
 			} satisfies SubagentCapabilityAudit)
 		: undefined;
 	return {
@@ -721,7 +683,6 @@ export function resolvePiLaunchToolPlan(
 		extensionArgs,
 		disableAmbientExtensions,
 		warnings,
-		unavailableHostBuiltins,
 		...(capabilityAudit ? { capabilityAudit } : {}),
 	};
 }

@@ -210,7 +210,7 @@ function formatRetainedPathError(label: string, error: RetainedPathError): strin
 function childStatus(child: CompletionChild, workflowState?: string): string {
 	const knownStatus = child.status === "complete"
 		? "completed"
-		: child.status === "completed" || child.status === "failed" || child.status === "paused" || child.status === "stopped" || child.status === "detached"
+		: child.status === "running" || child.status === "completed" || child.status === "failed" || child.status === "paused" || child.status === "stopped" || child.status === "detached"
 			? child.status
 		: undefined;
 	if (knownStatus) return knownStatus;
@@ -362,6 +362,20 @@ export function formatSingleCompletion(details: SubagentNotifyDetails): string {
 
 export function scheduledCompletionTriggersTurn(origin: ScheduleOrigin | undefined, outcome: string): boolean {
 	return !(origin?.quiet === true && outcome === "completed");
+}
+
+/**
+ * Child settlement is useful context, but an ordinary successful child does not
+ * establish the workflow's dependency barrier while its workflow is running.
+ * Keep actionable outcomes waking the parent, and preserve a terminal child as
+ * the barrier for hosts that do not emit a separate workflow completion wake.
+ */
+export function incrementalChildCompletionTriggersTurn(
+	child: Pick<IncrementalChildCompletion, "outcome" | "workflowRunning">,
+	origin: ScheduleOrigin | undefined,
+): boolean {
+	if (child.workflowRunning && child.outcome === "completed") return false;
+	return scheduledCompletionTriggersTurn(origin, child.outcome);
 }
 
 export function formatIncrementalChildCompletion(child: IncrementalChildCompletion): string {
@@ -550,8 +564,11 @@ export function buildCompletionDetails(result: CompletionNotification): Subagent
 		|| summary.startsWith("Paused after interrupt.")
 	);
 	const status = stopped ? "stopped" : paused ? "paused" : result.success ? "completed" : "failed";
-	const taskInfo =
-		result.taskIndex !== undefined && result.totalTasks !== undefined
+	const runningChildren = (result.mode === "workflow" || agent === "workflow")
+		? result.results?.filter((child) => childStatus(child) === "running").length ?? 0 : 0;
+	const taskInfo = runningChildren > 0
+		? ` (${status === "completed" ? "dispatch complete; " : ""}${runningChildren} ${runningChildren === 1 ? "child" : "children"} running or uncollected)`
+		: result.taskIndex !== undefined && result.totalTasks !== undefined
 			? ` (${result.taskIndex + 1}/${result.totalTasks})`
 			: undefined;
 
@@ -624,14 +641,16 @@ export function buildCompletionDetails(result: CompletionNotification): Subagent
 	const reconciledFromDetachedChild = typeof result.reconciledFromDetachedChild === "string" ? result.reconciledFromDetachedChild : undefined;
 	const asyncDir = nonemptyPath(result.asyncDir);
 	const watchdogBlockers: SubagentNotifyWatchdogBlocker[] = [];
-	const collectWatchdogBlockers = (owner: string, progress: ChildWatchdogProgress | undefined) => {
+	const watchdogConcerns: string[] = [];
+	const collectWatchdogFindings = (owner: string, progress: ChildWatchdogProgress | undefined) => {
 		for (const warning of progress?.warnings ?? []) {
-			if (warning.severity !== "blocker") continue;
-			watchdogBlockers.push({ agent: owner, summary: warning.summary, addressed: warning.addressed, stalemate: warning.stalemate });
+			if (warning.importance !== "high") continue;
+			if (warning.severity === "blocker") watchdogBlockers.push({ agent: owner, summary: warning.summary, addressed: warning.addressed, stalemate: warning.stalemate });
+			else watchdogConcerns.push(`${owner}: ${warning.summary}\nEvidence: ${warning.evidence}\nRecommended action: ${warning.recommendedAction}`);
 		}
 	};
-	collectWatchdogBlockers(agent, result.watchdog);
-	for (const child of result.results ?? []) collectWatchdogBlockers(typeof child.agent === "string" ? child.agent : agent, child.watchdog);
+	collectWatchdogFindings(agent, result.watchdog);
+	for (const child of result.results ?? []) collectWatchdogFindings(typeof child.agent === "string" ? child.agent : agent, child.watchdog);
 	const session =
 		result.shareUrl
 			? { label: "Session", value: result.shareUrl }
@@ -652,7 +671,7 @@ export function buildCompletionDetails(result: CompletionNotification): Subagent
 		...(asyncDir ? { asyncDir } : {}),
 		...(result.source ? { source: result.source } : {}),
 		...(taskInfo ? { taskInfo } : {}),
-		resultPreview,
+		resultPreview: watchdogConcerns.length ? `${resultPreview}\n\nHigh-importance watchdog concerns:\n${watchdogConcerns.map((warning) => `- ${warning}`).join("\n")}` : resultPreview,
 		...(typeof result.durationMs === "number" ? { durationMs: result.durationMs } : {}),
 		...(handoffPath ? { handoffPath } : {}),
 		...(workflowRunId ? { workflowRunId } : {}),

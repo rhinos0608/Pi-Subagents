@@ -248,6 +248,10 @@ describe("native runner result publication", { skip: !available ? "pi packages u
 		}) as typeof fs.watch);
 		const file = path.join(alias, "ready");
 		const ready = fileBarrier(file);
+		// On Darwin the native watcher registration can settle on the next event-loop
+		// turn even though fs.watch() has returned. Yield once before creating the file
+		// so this test measures alias/canonical-path delivery rather than registration timing.
+		await new Promise<void>((resolve) => setImmediate(resolve));
 		fs.writeFileSync(file, "");
 		await ready;
 	});

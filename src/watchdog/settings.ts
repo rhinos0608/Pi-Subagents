@@ -111,7 +111,7 @@ const ROLE_MODEL_RULE_FIELDS = new Set(["allow", "deny", "note"]);
 const GUIDANCE_FIELDS = new Set(["watchdogMd"]);
 const SCOPE_FIELDS = new Set(["enabled"]);
 const CADENCE_FIELDS = new Set(["everyNTools"]);
-const ENDPOINT_FIELDS = new Set(["enabled", "model", "fallbackModels", "thinking"]);
+const ENDPOINT_FIELDS = new Set(["enabled", "model", "thinking"]);
 const CHILDREN_FIELDS = new Set(["enabled", "model", "fallbackModels", "thinking", "watchdogTailTimeoutMs", "cadence", "overrides"]);
 const CHILD_OVERRIDE_FIELDS = new Set(["enabled", "model", "fallbackModels", "thinking", "cadence"]);
 const LSP_FIELDS = new Set(["enabled", "timeoutMs", "maxFiles", "maxDiagnostics"]);
@@ -221,7 +221,6 @@ function parseEndpointPatch(value: unknown, field: string, meta: ParseMeta): Wat
 	const input = parseObject(value, field, meta);
 	assertKnownFields(input, ENDPOINT_FIELDS, field, meta);
 	const patch: WatchdogEndpointPatch = {};
-	if ("fallbackModels" in input) patch.fallbackModels = parseStringList(input.fallbackModels, `${field}.fallbackModels`, meta);
 	if ("enabled" in input) patch.enabled = parseBoolean(input.enabled, `${field}.enabled`, meta);
 	if ("model" in input) patch.model = parseNonEmptyString(input.model, `${field}.model`, meta);
 	if ("thinking" in input) patch.thinking = parseThinking(input.thinking, `${field}.thinking`, meta);
@@ -232,9 +231,9 @@ function parseChildOverridePatch(value: unknown, field: string, meta: ParseMeta)
 	const input = parseObject(value, field, meta);
 	assertKnownFields(input, CHILD_OVERRIDE_FIELDS, field, meta);
 	const patch: WatchdogChildOverridePatch = {};
-	if ("fallbackModels" in input) patch.fallbackModels = parseStringList(input.fallbackModels, `${field}.fallbackModels`, meta);
 	if ("enabled" in input) patch.enabled = parseBoolean(input.enabled, `${field}.enabled`, meta);
 	if ("model" in input) patch.model = parseNonEmptyString(input.model, `${field}.model`, meta);
+	if ("fallbackModels" in input) patch.fallbackModels = parseStringList(input.fallbackModels, `${field}.fallbackModels`, meta);
 	if ("thinking" in input) patch.thinking = parseThinking(input.thinking, `${field}.thinking`, meta);
 	if ("cadence" in input) patch.cadence = parseCadencePatch(input.cadence, `${field}.cadence`, meta);
 	return patch;
@@ -244,9 +243,9 @@ function parseChildrenPatch(value: unknown, field: string, meta: ParseMeta): Wat
 	const input = parseObject(value, field, meta);
 	assertKnownFields(input, CHILDREN_FIELDS, field, meta);
 	const patch: WatchdogChildrenPatch = {};
-	if ("fallbackModels" in input) patch.fallbackModels = parseStringList(input.fallbackModels, `${field}.fallbackModels`, meta);
 	if ("enabled" in input) patch.enabled = parseBoolean(input.enabled, `${field}.enabled`, meta);
 	if ("model" in input) patch.model = parseNonEmptyString(input.model, `${field}.model`, meta);
+	if ("fallbackModels" in input) patch.fallbackModels = parseStringList(input.fallbackModels, `${field}.fallbackModels`, meta);
 	if ("thinking" in input) patch.thinking = parseThinking(input.thinking, `${field}.thinking`, meta);
 	if ("watchdogTailTimeoutMs" in input) {
 		patch.watchdogTailTimeoutMs = parseInteger(input.watchdogTailTimeoutMs, `${field}.watchdogTailTimeoutMs`, meta, "a positive integer", (candidate) => candidate >= 1);

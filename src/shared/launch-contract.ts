@@ -5,10 +5,10 @@ import type { PiLaunchToolPlan } from "../runs/shared/child-tool-plan.ts";
 import type { ExtensionBindings } from "../runs/shared/extension-bindings.ts";
 import type { PermissionRules } from "../runs/shared/permissions.ts";
 
-export const AGENT_DEFINITION_PROJECTION_VERSION = 3 as const;
-// v2: the Intercom bridge prompt and tools are part of the binding on every
-// path, and the bridge text no longer names the parent session.
-export const LAUNCH_BINDING_PROJECTION_VERSION = 3 as const;
+// v4 binds the upstream descendant allowlist alongside the fork's model/fallback policy.
+export const AGENT_DEFINITION_PROJECTION_VERSION = 4 as const;
+// v4 binds the immutable ordered model-candidate set and resolved permission rules.
+export const LAUNCH_BINDING_PROJECTION_VERSION = 4 as const;
 
 function stableJson(value: unknown): string {
 	if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
@@ -57,6 +57,7 @@ export function projectAgentDefinition(agent: AgentConfig): Record<string, unkno
 		tools: agent.tools,
 		excludeTools: agent.excludeTools,
 		allowNestedSubagents: agent.allowNestedSubagents,
+		allowedAgents: agent.allowedAgents,
 		mcpDirectTools: agent.mcpDirectTools,
 		extensions: agent.extensions,
 		subagentOnlyExtensions: agent.subagentOnlyExtensions,
@@ -118,8 +119,6 @@ export function projectLaunchBinding(input: LaunchBindingInput): Record<string, 
 		version: LAUNCH_BINDING_PROJECTION_VERSION,
 		definitionDigest: input.definitionDigest,
 		taskDigest: input.task === undefined ? undefined : stableJsonDigest(input.task),
-		// The ordered candidate set already contains each attempted model; keeping only
-		// this set makes retries correlate to the same preflight binding.
 		modelCandidates: input.modelCandidates,
 		fast: input.fast,
 		thinking: input.thinking,

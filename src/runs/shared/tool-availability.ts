@@ -11,7 +11,7 @@ export interface ChildToolDiagnostic {
 
 /** Internal coordination tools the child runtime registers itself; absence is fatal, never warn-and-continue. */
 export function isInternalChildTool(name: string): boolean {
-	return name === "contact_supervisor" || name === "bg_wait" || name === "structured_output";
+	return name === "contact_supervisor" || name === "bg_wait" || name === "structured_output" || name === "watchdog_diff";
 }
 
 /** True when the diagnostic reports fatally missing internal tools. Disabled-only diagnostics warn and continue. */
@@ -59,7 +59,7 @@ export function formatChildToolDiagnostic(diagnostic: ChildToolDiagnostic, optio
 		"For extension tools, add the provider path to `subagentOnlyExtensions` (child-only), `extensions`, or as a path-like entry in `tools`, while keeping each registered tool name in `tools`.",
 		"For MCP tools, verify the MCP adapter configuration and selected tool names. For builtin tools, verify the name against the installed Pi version.",
 		...(diagnostic.missing.some((name) => isInternalChildTool(name))
-			? ["`contact_supervisor`, `bg_wait`, and `structured_output` are registered by the child runtime itself, not by extensions: their absence means runtime plumbing failed (check `waitTool` and supervisor-channel configuration), not tool allowlists."]
+			? ["`contact_supervisor`, `bg_wait`, `structured_output`, and `watchdog_diff` are registered by the child runtime itself, not ambient extensions: their absence means runtime plumbing failed or the requested runtime capability could not be established."]
 			: []),
 	].join("\n");
 }

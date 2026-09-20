@@ -7,6 +7,7 @@ import { describe, it } from "node:test";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { buildCompletionKey } from "../../src/runs/background/completion-dedupe.ts";
 import { createResultWatcher as createRawResultWatcher } from "../../src/runs/background/result-watcher.ts";
+import { collectWaitCompletions } from "../../src/runs/background/wait-completions.ts";
 import registerSubagentNotify from "../../src/runs/background/notify.ts";
 import { createResultDeliveryOwnership } from "../../src/runs/background/result-delivery-ownership.ts";
 import { writeAsyncResultFile, writePendingAsyncResultFile } from "../../src/runs/background/result-files.ts";
@@ -16,6 +17,7 @@ import { prepareMissionLaunch, writeMissionAsyncBinding } from "../../src/missio
 import { readMission, updateMission } from "../../src/missions/store.ts";
 import { createNestedRoute, writeNestedEvent } from "../../src/runs/shared/nested-events.ts";
 import { SUBAGENT_ASYNC_COMPLETE_EVENT, type SubagentState } from "../../src/shared/types.ts";
+import type { AsyncRunSummary } from "../../src/runs/background/async-status.ts";
 
 const COMPLETION_OWNER_ID = "completion-owner-default";
 
@@ -68,6 +70,31 @@ async function waitForPredicate(predicate: () => boolean, timeoutMs = 2_500): Pr
 }
 
 describe("result watcher", () => {
+	it("keeps running workflow launch receipts nonterminal in notifications and completion events", async () => {
+		const resultsDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-result-watcher-dispatch-"));
+		const state = createState();
+		state.currentSessionId = "session-1";
+		const delivered: unknown[] = [], completed: unknown[] = [];
+		const watcher = createResultWatcher({ events: { on: () => () => {}, emit(event, value) { if (event === SUBAGENT_ASYNC_COMPLETE_EVENT) completed.push(value); } } }, state, resultsDir, 60_000, {
+			notifier: { async deliver(value) { delivered.push(value); return true; } },
+		});
+		try {
+			watcher.startResultWatcher();
+			writeIndexedResult(path.join(resultsDir, "dispatch.json"), { id: "dispatch", runId: "dispatch", mode: "workflow", state: "complete", success: true, sessionId: "session-1",
+				results: [{ workflowKey: "child", runId: "child-run", state: "running", output: "", outputState: "absent" }],
+			});
+			assert.equal(await waitForPredicate(() => completed.length === 1), true);
+			for (const value of [...delivered, ...completed]) {
+				assert.equal(value.results[0].status, "running");
+				assert.equal(value.results[0].success, undefined);
+				assert.equal(value.results[0].outputState, "absent");
+				assert.equal(value.results[0].artifactPath, undefined);
+			}
+		} finally {
+			watcher.stopResultWatcher();
+			fs.rmSync(resultsDir, { recursive: true, force: true });
+		}
+	});
 	it("does not create Darwin native watchers or idle timers", () => {
 		const resultsDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-result-watcher-darwin-idle-"));
 		try {
@@ -170,6 +197,33 @@ describe("result watcher", () => {
 
 			assert.equal(emitted.filter((entry) => entry.event === "subagent:async-complete").length, 1);
 			assert.equal(fs.existsSync(resultPath), false);
+		} finally {
+			fs.rmSync(resultsDir, { recursive: true, force: true });
+		}
+	});
+
+	it("records an id-alias result when runId is empty", async () => {
+		const resultsDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-result-watcher-id-alias-"));
+		try {
+			const state = createState();
+			state.currentSessionId = "session-current";
+			const resultPath = path.join(resultsDir, "alias-run.json");
+			writeIndexedResult(resultPath, {
+				id: "alias-run",
+				runId: "",
+				sessionId: "session-current",
+				success: true,
+				summary: "done",
+			});
+			const watcher = createResultWatcher({ events: { on: () => () => {}, emit() {} } }, state, resultsDir, 60_000);
+			try {
+				watcher.primeExistingResults();
+				assert.equal(await waitForPredicate(() => !fs.existsSync(resultPath)), true);
+			} finally {
+				watcher.stopResultWatcher();
+			}
+			assert.equal(state.completedResults?.get("alias-run")?.sessionId, "session-current");
+			assert.equal(state.completedResults?.get("alias-run")?.completion.runId, "alias-run");
 		} finally {
 			fs.rmSync(resultsDir, { recursive: true, force: true });
 		}
@@ -601,6 +655,56 @@ describe("result watcher", () => {
 			assert.equal(observerCalls, 2);
 			assert.equal(deliveries, 1);
 			assert.equal(emitted, 1);
+		} finally {
+			console.error = originalError;
+			fs.rmSync(resultsDir, { recursive: true, force: true });
+		}
+	});
+
+	it("retains a readable result reference until failed completion replay persistence recovers", async () => {
+		const resultsDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-result-watcher-replay-failure-"));
+		const originalError = console.error;
+		try {
+			console.error = () => {};
+			const runId = "replay-failure";
+			const resultPath = path.join(resultsDir, `${runId}.json`);
+			const archiveDir = path.join(resultsDir, "output-archives");
+			fs.writeFileSync(archiveDir, "blocks archive persistence");
+			writeIndexedResult(resultPath, {
+				id: runId, runId, sessionId: "session-current", success: true,
+				summary: "READABLE_FINDING",
+			});
+			let deliveries = 0;
+			const state = createState();
+			state.currentSessionId = "session-current";
+			const watcher = createResultWatcher({ events: { on: () => () => {}, emit() {} } }, state, resultsDir, 60_000, {
+				notifier: { deliver: async () => { deliveries += 1; return true; } },
+			});
+			const terminal = [{ id: runId, sessionId: "session-current" }] as AsyncRunSummary[];
+			try {
+				watcher.primeExistingResults();
+				assert.equal(await waitForPredicate(() => {
+					if (deliveries !== 1 || !fs.existsSync(resultPath)) return false;
+					return typeof (JSON.parse(fs.readFileSync(resultPath, "utf-8")) as { notificationDeliveredAt?: unknown }).notificationDeliveredAt === "number";
+				}), true);
+				const beforeReferences: string[] = [];
+				assert.equal(collectWaitCompletions(terminal, state, resultsDir, (text) => beforeReferences.push(text))?.[0]?.runId, runId);
+				assert.deepEqual(beforeReferences, [`Result [${runId}]: ${resultPath}`]);
+				assert.match(fs.readFileSync(resultPath, "utf-8"), /READABLE_FINDING/);
+
+				fs.rmSync(archiveDir);
+				watcher.primeExistingResults();
+				assert.equal(await waitForPredicate(() => !fs.existsSync(resultPath)), true);
+				const afterReferences: string[] = [];
+				const completion = collectWaitCompletions(terminal, state, resultsDir, (text) => afterReferences.push(text))?.[0];
+				assert.equal(completion?.runId, runId);
+				assert.equal(typeof completion?.archivePath, "string");
+				assert.deepEqual(afterReferences, [`Result [${runId}]: ${completion!.archivePath}`]);
+				assert.match(fs.readFileSync(completion!.archivePath!, "utf-8"), /READABLE_FINDING/);
+				assert.equal(deliveries, 1);
+			} finally {
+				watcher.stopResultWatcher();
+			}
 		} finally {
 			console.error = originalError;
 			fs.rmSync(resultsDir, { recursive: true, force: true });
@@ -1364,7 +1468,7 @@ describe("result watcher", () => {
 				assert.equal(state.watcher, null);
 				assert.notEqual(state.watcherRestartTimer, null);
 
-				writeIndexedResult(path.join(resultsDir, "done.json"), { sessionId: "session-1", summary: "done" });
+				writeIndexedResult(path.join(resultsDir, "done.json"), { id: "done", sessionId: "session-1", summary: "done" });
 				poll?.();
 				await new Promise((resolve) => setTimeout(resolve, 10));
 			} finally {
@@ -2240,7 +2344,7 @@ describe("result watcher", () => {
 			const emitted: string[] = [];
 			const watcher = createResultWatcher({ events: { on: () => () => {}, emit(event) { emitted.push(event); } } }, state, resultsDir, 60_000);
 			const resultFile = "expired.json";
-			const result = { sessionId: "session-1", agent: "worker", success: true, summary: "new result", timestamp: 123 };
+			const result = { id: "expired", sessionId: "session-1", agent: "worker", success: true, summary: "new result", timestamp: 123 };
 			const resultPath = path.join(resultsDir, resultFile);
 			writeIndexedResult(resultPath, result);
 			state.completionSeen.set(buildCompletionKey(result, `result:${resultFile}`), Date.now() - 61_000);

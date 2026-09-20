@@ -129,16 +129,17 @@ describe("dynamic fanout helpers", () => {
 		// (allowRunnerFields) without leaking into the user-facing dynamic field whitelist.
 		const runnerStep = {
 			expand: { from: { output: "targets", path: "/items" }, maxItems: 4 },
-			parallel: { agent: "reviewer", task: "Review {item.path}", parentSessionId: "session-parent", requiredExtensions: [{ id: "provider", path: "/private/provider.mjs" }] },
+			parallel: { agent: "reviewer", task: "Review {item.path}", parentSessionId: "session-parent", modelHealthScope: "project:opaque", requiredExtensions: [{ id: "provider", path: "/private/provider.mjs" }] },
 			collect: { as: "reviews" },
 		};
 		assert.doesNotThrow(() => validateDynamicStepShape(runnerStep, 1, { allowRunnerFields: true }));
 		const materialized = materializeDynamicParallelStep(runnerStep, outputs, 1, { allowRunnerFields: true });
 		assert.ok(materialized.parallel[0] && "requiredExtensions" in materialized.parallel[0]);
 		assert.deepEqual(materialized.parallel[0].requiredExtensions, [{ id: "provider", path: "/private/provider.mjs" }]);
+		assert.equal(materialized.parallel[0].modelHealthScope, "project:opaque");
 		assert.throws(
 			() => validateDynamicStepShape(runnerStep, 1),
-			(error: unknown) => error instanceof DynamicFanoutError && /parentSessionId/.test(error.message),
+			(error: unknown) => error instanceof DynamicFanoutError && /(parentSessionId|modelHealthScope)/.test(error.message),
 		);
 	});
 

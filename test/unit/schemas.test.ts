@@ -226,6 +226,7 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 		assert.equal(args?.type, "object");
 		assert.equal(args?.maxProperties, 16);
 		assert.match(String(args?.description ?? ""), /bounded plain-JSON/i);
+		assert.match(String(args?.description ?? ""), /inline.*file-backed.*deeply frozen.*persisted.*secrets/i);
 		const workflowScript = SubagentParams?.properties?.workflowScript;
 		assert.equal(workflowScript?.type, "string");
 		assert.equal(workflowScript?.minLength, 1);
@@ -264,8 +265,11 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 		assert.equal(isolation?.type, "string");
 		assert.deepEqual(isolation?.enum, ["none", "worktree"]);
 		const gate = SubagentParams?.properties?.gate;
-		assert.equal(gate?.type, "string");
-		assert.equal(gate?.minLength, 1);
+		assert.equal(hasAnyOfType(gate, "string"), true);
+		assert.equal(hasAnyOfType(gate, "object"), true);
+		const gateObject = anyOfBranches(gate).find((branch) => branch.type === "object");
+		assert.deepEqual(gateObject?.required, ["command"]);
+		assert.deepEqual((gateObject?.properties as Record<string, JsonSchemaNode> | undefined)?.output?.enum, ["json"]);
 		assert.match(String(gate?.description ?? ""), /cannot be combined with acceptance/i);
 		const properties = SubagentParams?.properties as Record<string, JsonSchemaNode> | undefined;
 		assert.equal(properties?.task?.type, "string");

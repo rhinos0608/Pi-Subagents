@@ -37,12 +37,16 @@ export interface RunnerSubagentStep {
 	/** Original cwd input retained for launch diagnostics. */
 	requestedCwd?: string;
 	model?: string;
+	/** Frozen ordered allowlist resolved by the parent at launch. */
+	modelCandidates?: string[];
+	/** Opaque project-local model-health scope captured by the parent. */
+	modelHealthScope?: string;
 	modelResolution?: import("../../shared/types.ts").ModelResolutionMetadata;
 	contextLimit?: number;
 	fast?: boolean;
 	thinking?: string;
 	thinkingCeiling?: import("../../shared/model-info.ts").ThinkingLevel;
-	modelCandidates?: string[];
+	requestedModel?: string;
 	/** The primary model is inherited from the parent session and should not be verified against the child-reported active registry model. */
 	skipPrimaryModelVerification?: boolean;
 	modelVerificationRegistry?: Array<{ provider: string; id: string; fullId: string; contextWindow?: number }>;
@@ -50,6 +54,8 @@ export interface RunnerSubagentStep {
 	tools?: string[];
 	excludeTools?: string[];
 	allowNestedSubagents?: boolean;
+	/** Resolved selected-agent policy for launches made by this child. */
+	allowedAgents?: string[];
 	extensions?: string[];
 	subagentOnlyExtensions?: string[];
 	/** Private immutable host policy snapshot serialized to the native runner. */

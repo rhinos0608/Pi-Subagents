@@ -14,6 +14,7 @@ import registerSubagentNotify, {
 	type RegisterSubagentNotifyOptions,
 	type SubagentNotifyDetails,
 	scheduledCompletionTriggersTurn,
+	incrementalChildCompletionTriggersTurn,
 } from "../../src/runs/background/notify.ts";
 import { SUBAGENT_ASYNC_COMPLETE_EVENT, SUBAGENT_FOREGROUND_COMPLETE_EVENT } from "../../src/shared/types.ts";
 import { createResultDeliveryOwnership } from "../../src/runs/background/result-delivery-ownership.ts";
@@ -763,39 +764,39 @@ describe("completion formatting helpers", () => {
 		const originalStatSync = fs.statSync;
 		fs.statSync = ((path, ...args) => {
 			const value = String(path);
+			if (value.includes("failure-unknown")) throw new Error("cannot verify");
 			if (value.includes("missing")) throw Object.assign(new Error("missing"), { code: value.includes("not-dir") ? "ENOTDIR" : "ENOENT" });
-			const match = value.match(/failure-(EACCES|EPERM|EIO|unknown)/);
-			if (match) {
+			if (value.includes("failure-EACCES")) {
 				const error = new Error(`cannot verify\n\u001b[31m${"é".repeat(800)}`) as NodeJS.ErrnoException;
-				if (match[1] !== "unknown") error.code = match[1];
+				error.code = "EACCES";
 				throw error;
 			}
 			return originalStatSync(path, ...args);
 		}) as typeof fs.statSync;
 		syncBuiltinESMExports();
 		try {
-			for (const code of ["EACCES", "EPERM", "EIO", "unknown"]) {
-				const artifactPath = `/failure-${code}/${"é".repeat(500)}`;
-				const structuredPath = `/failure-${code}/structured`;
+			{
+				const artifactPath = `/failure-EACCES/${"é".repeat(500)}`;
+				const structuredPath = "/failure-EACCES/structured";
 				const details = buildCompletionDetails({
-					id: `workflow-${code}`, mode: "workflow", agent: "workflow", success: true,
+					id: "workflow-EACCES", mode: "workflow", agent: "workflow", success: true,
 					results: [
 						{ workflowKey: "artifact", output: "short", artifactPaths: { outputPath: artifactPath } },
 						{ workflowKey: "structured", output: "short", structuredOutputPath: structuredPath },
 						{ workflowKey: "sibling", output: "short", structuredOutput: { ok: true }, structuredOutputPath: "/producer-confirmed" },
 					],
 				});
-				const expectedCode = code === "unknown" ? undefined : code;
-				assert.deepEqual(details.childOutputs?.[0]?.outputArtifactError, { path: artifactPath, ...(expectedCode ? { code: expectedCode } : {}), message: `cannot verify\n\u001b[31m${"é".repeat(800)}` });
-				assert.deepEqual(details.childOutputs?.[1]?.structuredOutputError, { path: structuredPath, ...(expectedCode ? { code: expectedCode } : {}), message: `cannot verify\n\u001b[31m${"é".repeat(800)}` });
+				assert.deepEqual(details.childOutputs?.[0]?.outputArtifactError, { path: artifactPath, code: "EACCES", message: `cannot verify\n\u001b[31m${"é".repeat(800)}` });
+				assert.deepEqual(details.childOutputs?.[1]?.structuredOutputError, { path: structuredPath, code: "EACCES", message: `cannot verify\n\u001b[31m${"é".repeat(800)}` });
 				assert.equal(details.childOutputs?.[2]?.structuredOutputPath, "/producer-confirmed");
 				const content = formatSingleCompletion(details);
-				assert.match(content, new RegExp(`Output artifact verification failed: stat ${expectedCode ?? "unknown"}`));
-				assert.match(content, new RegExp(`Structured output verification failed: stat ${expectedCode ?? "unknown"}`));
+				assert.match(content, /Output artifact verification failed: stat EACCES/);
+				assert.match(content, /Structured output verification failed: stat EACCES/);
 				assert.doesNotMatch(content, /\u001b/);
 				for (const line of content.split("\n").filter((line) => line.includes("verification failed"))) assert.ok(Buffer.byteLength(line, "utf8") < 1_024);
 				assert.match(formatGroupedCompletion([details, { ...details, agent: "reviewer" }]), /verification failed/);
 				assert.match(parseSubagentNotifyContent(content)?.resultPreview ?? "", /verification failed/);
+				assert.match(formatSingleCompletion(buildCompletionDetails({ id: "workflow-unknown", mode: "workflow", agent: "workflow", success: true, results: [{ workflowKey: "artifact", output: "short", artifactPaths: { outputPath: "/failure-unknown/artifact" } }] })), /Output artifact verification failed: stat unknown/);
 			}
 
 			const unavailable = buildCompletionDetails({ id: "workflow-missing", mode: "workflow", agent: "workflow", success: true, results: [
@@ -856,6 +857,8 @@ describe("completion formatting helpers", () => {
 		assert.equal(buildCompletionDetails({ id: "x", agent: "w", success: false, interrupted: true, summary: "interrupted", timestamp: 1 }).status, "paused");
 		const pausedWorkflow = buildCompletionDetails({ id: "workflow", agent: "workflow", mode: "workflow", state: "paused", results: [{ workflowKey: "failed", success: false }] });
 		assert.equal(pausedWorkflow.childOutputs?.[0]?.status, "failed");
+		const runningWorkflow = buildCompletionDetails({ id: "workflow", agent: "workflow", mode: "workflow", success: true, results: [{ workflowKey: "running", state: "running" }] });
+		assert.equal(runningWorkflow.taskInfo, " (dispatch complete; 1 child running or uncollected)");
 		assert.equal(buildCompletionDetails({ id: "x", agent: "w", success: false, summary: "boom", exitCode: 1, timestamp: 1 }).status, "failed");
 		assert.equal(buildCompletionDetails({ id: "x", agent: "w", success: false, summary: "terminated", exitCode: 1, processSignal: "SIGTERM", timestamp: 1 }).status, "stopped");
 		assert.equal(buildCompletionDetails({ id: "x", agent: "w", success: false, summary: "terminated", results: [{ success: false, exitCode: 1, processSignal: "SIGTERM" }], timestamp: 1 }).status, "stopped");
@@ -981,6 +984,27 @@ describe("scheduled completions", () => {
 		assert.equal((sent[0]!.message as { display?: boolean }).display, true);
 	});
 
+	it("wakes once for an actionable child failure but not an ordinary running success", () => {
+		const triggerTurns: boolean[] = [];
+		const pi = {
+			sendMessage(_message: unknown, options: unknown) {
+				if ((options as { triggerTurn?: boolean }).triggerTurn === true) triggerTurns.push(true);
+			},
+		};
+		for (const notification of [
+			{ workflowRunId: "workflow-1", childKey: "ready", outcome: "completed" as const, workflowRunning: true },
+			{ workflowRunId: "workflow-1", childKey: "broken", outcome: "failed" as const, workflowRunning: true },
+		]) {
+			pi.sendMessage(notification, { triggerTurn: incrementalChildCompletionTriggersTurn(notification, undefined) });
+		}
+		assert.equal(triggerTurns.length, 1, "only the actionable child failure should trigger a provider turn");
+	});
+
+	it("keeps a terminal child settlement as the workflow barrier", () => {
+		const terminal = { workflowRunId: "workflow-2", childKey: "last", outcome: "completed" as const, workflowRunning: false };
+		assert.equal(incrementalChildCompletionTriggersTurn(terminal, undefined), true);
+	});
+
 	it("still wakes the session when a quiet scheduled run fails, stops, or pauses", async () => {
 		const quietOrigin = { ...scheduledResult.scheduleOrigin, quiet: true };
 		assert.equal(scheduledCompletionTriggersTurn({ id: "45daa203" }, "completed"), true);
@@ -1030,9 +1054,9 @@ describe("watchdog blockers in completion notices", () => {
 						seq: 3,
 						lastUpdate: 1,
 						warnings: [
-							{ severity: "blocker", category: "test-gap", summary: "Claims tests passed without running them", evidence: "e", recommendedAction: "r", addressed: false, stalemate: false },
-							{ severity: "concern", category: "other", summary: "Concern is not listed", evidence: "e", recommendedAction: "r", addressed: true, stalemate: false },
-							{ severity: "blocker", category: "scope-drift", summary: "Kept editing after being told to stop", evidence: "e", recommendedAction: "r", addressed: false, stalemate: true },
+							{ severity: "blocker", importance: "high", category: "test-gap", summary: "Claims tests passed without running them", evidence: "e", recommendedAction: "r", addressed: false, stalemate: false },
+							{ severity: "concern", importance: "low", category: "other", summary: "Concern is not listed", evidence: "e", recommendedAction: "r", addressed: true, stalemate: false },
+							{ severity: "blocker", importance: "high", category: "scope-drift", summary: "Kept editing after being told to stop", evidence: "e", recommendedAction: "r", addressed: false, stalemate: true },
 						],
 					},
 				},

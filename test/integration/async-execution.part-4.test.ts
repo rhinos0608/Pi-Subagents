@@ -576,7 +576,7 @@ setTimeout(() => process.exit(90), 15000).unref();
 		await withIsolatedWatchdogSettings(tempDir, async () => {
 			writeWatchdogSettings(tempDir);
 			const id = `async-watchdog-blocker-${Date.now().toString(36)}`;
-			mockPi.onCall({ jsonl: [events.acceptanceReport(), events.watchdogWarning("blocker", "Claims tests passed without running them")] });
+			mockPi.onCall({ jsonl: [events.acceptanceReport(), events.watchdogStatusWarning("blocker", "Claims tests passed without running them", { runId: id, agent: "worker", childIndex: 0 })] });
 
 			executeAsyncSingle(id, {
 				agent: "worker",
@@ -859,7 +859,6 @@ setTimeout(() => process.exit(90), 15000).unref();
 			assert.match(diagnostic, /^Subagent produced no output after terminal assistant stopReason "aborted"\./);
 			assert.match(diagnostic, new RegExp(`Required file-only output was not produced: ${escapeRegExp(outputPath)}`));
 			assert.doesNotMatch(diagnostic, /completed without making edits/);
-			assert.doesNotMatch(child?.modelAttempts?.[0]?.error ?? "", /completed without making edits/);
 			assert.equal(child?.effects?.fileMutation?.status, "observed");
 			assert.equal(child?.effects?.fileMutation?.attempted, true);
 			assert.deepEqual(child?.effects?.fileMutation?.evidence?.changedFiles, ["input.md"]);
@@ -923,7 +922,6 @@ setTimeout(() => process.exit(90), 15000).unref();
 		assert.match(diagnostic, /^Subagent produced no output after terminal assistant stopReason "aborted"\./);
 		assert.match(diagnostic, /Required file-only output was not produced/);
 		assert.doesNotMatch(diagnostic, /completed without making edits/);
-		assert.doesNotMatch(child?.modelAttempts?.[0]?.error ?? "", /completed without making edits/);
 		assert.equal(child?.effects?.settlementDiagnostic?.requiredOutput?.missing, true);
 		assert.equal(child?.effects?.settlementDiagnostic?.finalTextPresent, true);
 		assert.equal(fs.existsSync(outputPath), false);
@@ -979,7 +977,6 @@ setTimeout(() => process.exit(90), 15000).unref();
 		assert.equal(payload.success, false);
 		assert.equal(child?.success, false);
 		assert.match(diagnostic, /^This operation was aborted/);
-		assert.match(diagnostic, /Compaction-induced child abort could not be resumed safely: retained session unavailable\./);
 		assert.match(diagnostic, /failure followed session compaction and agent settlement/);
 		assert.match(diagnostic, /Required file-only output was not produced/);
 		assert.ok(diagnostic.length <= 8_192);

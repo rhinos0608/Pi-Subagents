@@ -19,13 +19,15 @@ import {
 	type ChildWatchdogStatusEvent,
 } from "../../watchdog/child-status.ts";
 import { projectChildLifecycle, type ChildLifecycleAction, type ChildLifecycleState } from "../shared/child-lifecycle.ts";
-import { formatSubagentModelVerificationError } from "../shared/model-fallback.ts";
+import { formatSubagentModelVerificationError } from "../shared/model-resolution.ts";
+import { formatChildModelResolutionDiagnostic, isChildModelResolutionFailure } from "../shared/model-resolution-diagnostic.ts";
 import { isMutatingTool, resolveCurrentPath } from "../shared/long-running-guard.ts";
 import { effectiveToolTimeoutMs, formatToolTimeoutMessage, toolTimeoutCallKey } from "../shared/tool-timeout.ts";
 import { createReportedChildSessionInput, type InProcessChildLaunch } from "../shared/child-launch.ts";
 import { childSessionHasQueuedMessages, projectChildSessionEventForJson, type ChildSession, type ChildSessionEvent, type ChildSessionFactory } from "../shared/child-session.ts";
-import { formatSteerMessage } from "../shared/subagent-prompt-runtime.ts";
+import { reconcileAttemptUsage } from "../shared/usage-reconciliation.ts";
 import { getReadonlySessionEvidence, requestReadonlySessionEvidence, type SettledReadonlyEvidence } from "../shared/readonly-session-evidence.ts";
+import { formatSteerMessage } from "../shared/subagent-prompt-runtime.ts";
 import type { SteerDeliveryStatus, SteerRequest } from "./control-channel.ts";
 import { takeMatchingAcceptedSteer, unconsumedSteerReason } from "./steering.ts";
 
@@ -134,12 +136,12 @@ export interface RunChildSessionResult {
 	currentToolArgs?: string;
 	currentPath?: string;
 	afterCompactionSettlement?: boolean;
+	abortRecoveryDiagnostic?: string;
 	/** Set by the runner while it finalizes the attempt. */
 	toolBudget?: ToolBudgetState;
 	toolBudgetBlocked?: boolean;
 	structuredOutput?: unknown;
 	runtimeAcknowledgedExtensions?: RuntimeAcknowledgedChildExtensions;
-	abortRecoveryDiagnostic?: string;
 	effects?: EffectsProjection;
 }
 
@@ -191,6 +193,7 @@ export function runChildSession(input: RunChildSessionInput): Promise<RunChildSe
 		let currentPath: string | undefined;
 		let toolCount = 0;
 		let session: ChildSession | undefined;
+		let messageBaseline: number | undefined;
 		const acceptedSteers: Array<{ request: SteerRequest; text: string }> = [];
 		let unsubscribe: (() => void) | undefined;
 		let settled = false;
@@ -253,8 +256,10 @@ export function runChildSession(input: RunChildSessionInput): Promise<RunChildSe
 		};
 
 		const abortChild = (): void => {
-			if (!session || settled || promptSettled) return;
-			void session.abort().catch(() => {
+			if (settled || promptSettled) return;
+			// A hung session creation has no session to abort yet; the settle timer below is the only
+			// thing that ends the run, and a session created afterwards is disposed by the launch block.
+			void session?.abort().catch(() => {
 				// The run settles through its prompt promise; abort failures are not separately actionable.
 			});
 			if (!abortSettleTimer) {
@@ -573,11 +578,27 @@ export function runChildSession(input: RunChildSessionInput): Promise<RunChildSe
 			if (settled) return;
 			settled = true;
 			failUnconsumedSteers();
+			const terminalUsage = session && messageBaseline !== undefined
+				? reconcileAttemptUsage(usage, session.messages, messageBaseline)
+				: usage;
 			const closed = finish();
 			const finalOutput = getFinalOutput(messages);
 			let finalError = error ?? assistantError;
-			if (!finalError && promptError !== undefined) {
-				finalError = promptError instanceof Error ? promptError.message : String(promptError);
+			const promptErrorMessage = promptError === undefined ? undefined : promptError instanceof Error ? promptError.message : String(promptError);
+			if (!finalError && promptErrorMessage !== undefined) {
+				finalError = promptErrorMessage;
+			}
+			// A child launched without the ambient extensions resolves a provider
+			// extension's model as "not found". Annotate only a creation/prompt failure
+			// that produced no turn; keep the core error and add the rule and the
+			// remedies that load the extension for this child.
+			if (promptErrorMessage !== undefined
+				&& finalError === promptErrorMessage
+				&& isChildModelResolutionFailure(promptErrorMessage)
+				&& messages.length === 0
+				&& terminalUsage.turns === 0
+				&& !input.launch.session.ambientExtensions) {
+				finalError = `${promptErrorMessage}\n\n${formatChildModelResolutionDiagnostic({ agent: input.launch.config.agent, model: input.launch.session.model, host: "runner", capabilityCeiling: input.launch.toolPlan.capabilityCeiling })}`;
 			}
 			const forcedDrainAfterFinalSuccess = (forced || forcedTermination) && (cleanTerminalAssistantStopReceived || agentSettledReceived) && !finalError;
 			const forcedDrainAfterEmptyTerminal = forcedDrainAfterFinalSuccess && hasEmptyTerminalAssistantResponse(messages);
@@ -593,7 +614,7 @@ export function runChildSession(input: RunChildSessionInput): Promise<RunChildSe
 				const result: RunChildSessionResult = omitUndefined({
 					exitCode,
 					messages,
-					usage,
+					usage: terminalUsage,
 					toolCount,
 					durationMs: Date.now() - startedAt,
 					model,
@@ -649,10 +670,12 @@ export function runChildSession(input: RunChildSessionInput): Promise<RunChildSe
 				if (input.collectReadonlyEvidence || continuation) requestReadonlySessionEvidence(createInput, continuation?.expected);
 				const created = await input.factory.create(createInput);
 				if (settled) {
-					void created.dispose();
+					await created.dispose().catch(() => undefined);
 					return;
 				}
 				session = created;
+				checkContinuation();
+				if (continuation && (created.modelId !== continuation.modelId || input.launch.capture.completionIntentContext?.()?.model?.api !== continuation.expected.api)) throw new Error("Read-only continuation model changed");
 				const steer = created.steer.bind(created);
 				const followUp = created.followUp.bind(created);
 				created.steer = async (text) => {
@@ -663,8 +686,6 @@ export function runChildSession(input: RunChildSessionInput): Promise<RunChildSe
 					if (cleanTerminalAssistantStopReceived || agentSettledReceived) queuedDrainHold = true;
 					return followUp(text);
 				};
-				checkContinuation();
-				if (continuation && (created.modelId !== continuation.modelId || input.launch.capture.completionIntentContext?.()?.model?.api !== continuation.expected.api)) throw new Error("Read-only continuation model changed");
 				unsubscribe = created.subscribe(processEvent);
 				input.registerWatchdogStatus?.((event) => processEvent(event as unknown as ChildSessionEvent));
 				input.registerSteer?.(async (request) => {
@@ -689,6 +710,7 @@ export function runChildSession(input: RunChildSessionInput): Promise<RunChildSe
 				});
 				if (interrupted || timedOut || stopped) abortChild();
 				checkContinuation();
+				messageBaseline = created.messages.length;
 				await created.prompt(input.prompt);
 				promptSettled = true;
 				settle(undefined);

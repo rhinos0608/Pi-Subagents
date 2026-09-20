@@ -56,10 +56,6 @@ import { resolveSkillsWithFallback } from "../../agents/skills.ts";
 import { effectiveToolTimeoutMs, formatToolTimeoutMessage, resolveToolTimeoutMs, toolTimeoutCallKey, toolTimeoutFromEnv } from "../shared/tool-timeout.ts";
 import { evaluateCompletionMutationGuard, expectsImplementationMutation, hasMutationToolCapability, validateImplementationToolContract } from "../shared/completion-guard.ts";
 import { planCompletionEvidence } from "../shared/completion-evidence.ts";
-import { planAbortRecovery } from "../shared/abort-recovery.ts";
-import { planReadonlyModelContinuation, type LogicalRecoveryState } from "../shared/readonly-model-continuation.ts";
-import { getReadonlySessionEvidence, requestReadonlySessionEvidence, type SettledReadonlyEvidence } from "../shared/readonly-session-evidence.ts";
-import { getReadonlyChildModels } from "../shared/child-session.ts";
 import { arbitrateCompletionGuardRescue } from "../shared/llm-intent-arbiter.ts";
 import { preflightLaunchCwd } from "../shared/launch-cwd.ts";
 import { createJsonlWriter } from "../../shared/jsonl-writer.ts";
@@ -73,15 +69,22 @@ import { assertThinkingWithinCeiling, intersectThinkingCeilings } from "../../sh
 import { MISSING_STRUCTURED_ACCEPTANCE_REPORT_ERROR, MISSING_STRUCTURED_OUTPUT_CALL_ERROR } from "../shared/structured-output.ts";
 import { formatMidToolExitError, isOrdinaryToolForMidToolExit } from "../shared/process-signal.ts";
 import { formatChildToolDiagnostic, formatChildToolDisabledWarning, hasFatalMissingTools } from "../shared/tool-availability.ts";
+import { formatChildModelResolutionDiagnostic, isChildModelResolutionFailure } from "../shared/model-resolution-diagnostic.ts";
+import { planAbortRecovery } from "../shared/abort-recovery.ts";
+import { planReadonlyModelContinuation, type LogicalRecoveryState } from "../shared/readonly-model-continuation.ts";
+import { modelExclusionScopeForCwd } from "../shared/model-exclusions.ts";
+import { getReadonlySessionEvidence, requestReadonlySessionEvidence, type SettledReadonlyEvidence } from "../shared/readonly-session-evidence.ts";
 import { buildTimeoutRecoverySummary, collectTrackedMutationEvidence, snapshotTrackedMutations } from "../shared/mutation-evidence.ts";
 import { captureSingleOutputSnapshot, extractChildWrittenOutput, finalizeSingleOutput, formatSavedOutputReference, hasSingleOutputChangedSinceSnapshot, resolveSingleOutput, validateFileOnlyOutputMode, type SingleOutputSnapshot } from "../shared/single-output.ts";
 import {
+	formatSubagentModelVerificationError,
+	isContextOverflow,
+} from "../shared/model-resolution.ts";
+import {
 	buildModelCandidates,
 	buildModelResolutionMetadata,
-	formatSubagentModelVerificationError,
 	resolveModelResolutionSource,
 	formatModelAttemptNote,
-	isContextOverflow,
 	isRetryableModelFailureAttempt,
 	recordRetryableModelFailure,
 } from "../shared/model-fallback.ts";
@@ -96,10 +99,10 @@ import {
 	shouldEscalateMutatingFailures,
 	summarizeRecentMutatingFailures,
 } from "../shared/long-running-guard.ts";
-import { acceptanceFailureMessage, buildSkippedAcceptanceLedger, evaluateAcceptance, formatAcceptancePrompt, resolveEffectiveAcceptance, stripAcceptanceReport, validateAcceptanceInput } from "../shared/acceptance.ts";
+import { acceptanceFailureMessage, buildSkippedAcceptanceLedger, captureStagedIndexBaseline, evaluateAcceptance, formatAcceptancePrompt, resolveEffectiveAcceptance, stripAcceptanceReport, validateAcceptanceInput, typedVerifyOutput } from "../shared/acceptance.ts";
 import { PROMPT_REDACTED } from "../../shared/utils.ts";
 import { attachContractProjections, isAgentContract } from "../shared/agent-contract.ts";
-import { initialToolBudgetState, toolBudgetState } from "../shared/tool-budget.ts";
+import { initialToolBudgetState, isToolBudgetBlockedMessage, toolBudgetState } from "../shared/tool-budget.ts";
 import { resolveWatchdogConfig } from "../../watchdog/settings.ts";
 import { resolveLaunchBinding } from "../../shared/launch-contract.ts";
 import { consumeWorkflowChildPermit } from "../../shared/workflow-child-permit.ts";
@@ -114,7 +117,8 @@ import {
 	type ChildWatchdogStatusEvent,
 } from "../../watchdog/child-status.ts";
 import { buildInProcessChildLaunch, createReportedChildSessionInput } from "../shared/child-launch.ts";
-import { childSessionFactory, childSessionHasQueuedMessages, projectChildSessionEventForJson, type ChildSession, type ChildSessionEvent } from "../shared/child-session.ts";
+import { childSessionFactory, childSessionHasQueuedMessages, getReadonlyChildModels, projectChildSessionEventForJson, type ChildSession, type ChildSessionEvent } from "../shared/child-session.ts";
+import { reconcileAttemptUsage } from "../shared/usage-reconciliation.ts";
 
 const artifactOutputByResult = new WeakMap<SingleResult, string>();
 const acceptanceOutputByResult = new WeakMap<SingleResult, string>();
@@ -165,6 +169,7 @@ function persistSingleResultMetadata(input: {
 		modelResolution: target.modelResolution,
 		attemptedModels: target.attemptedModels,
 		modelAttempts: target.modelAttempts,
+		requestedModel: target.requestedModel,
 		durationMs: target.progressSummary?.durationMs,
 		toolCount: target.progressSummary?.toolCount,
 		error: target.error,
@@ -264,13 +269,6 @@ function snapshotResult(result: SingleResult, progress: AgentProgress): SingleRe
 		messages: result.outputMode === "file-only" && result.savedOutputPath ? undefined : result.messages ? [...result.messages] : undefined,
 		usage: { ...result.usage },
 		skills: result.skills ? [...result.skills] : undefined,
-		attemptedModels: result.attemptedModels ? [...result.attemptedModels] : undefined,
-		modelAttempts: result.modelAttempts
-			? result.modelAttempts.map((attempt) => ({
-				...attempt,
-				usage: attempt.usage ? { ...attempt.usage } : undefined,
-			}))
-			: undefined,
 		controlEvents: result.controlEvents ? result.controlEvents.map((event) => ({ ...event })) : undefined,
 		progress,
 		progressSummary: result.progressSummary ? { ...result.progressSummary } : undefined,
@@ -343,11 +341,11 @@ function structuredDelegationProgressChanged(
 	return false;
 }
 
+
+const STOPPED_BEFORE_COMPLETION_ERROR = "Subagent stopped before completion.";
 const AFTER_COMPACTION_SETTLEMENT = Symbol("afterCompactionSettlement");
 type AbortRecoverySingleResult = SingleResult & { [AFTER_COMPACTION_SETTLEMENT]?: true };
 const settledReadonlySource = new WeakMap<SingleResult, ChildSession>();
-
-const STOPPED_BEFORE_COMPLETION_ERROR = "Subagent stopped before completion.";
 
 
 async function runSingleAttempt(
@@ -418,6 +416,7 @@ async function runSingleAttempt(
 		tools: agent.tools,
 		excludeTools: agent.excludeTools,
 		allowNestedSubagents: agent.allowNestedSubagents,
+		descendantAllowedAgents: agent.allowedAgents,
 		extensions: agent.extensions,
 		subagentOnlyExtensions: agent.subagentOnlyExtensions,
 		// Exact terminal protocol belongs to session resources, not compactable history.
@@ -454,6 +453,7 @@ async function runSingleAttempt(
 		inherited: options.childRuntime,
 		host: "parent",
 	});
+	if (!options.machine && options.parentProviderRegistry) launch.session.parentProviderRegistry = options.parentProviderRegistry;
 	const { toolPlan, capabilityAudit, warnings, launchResolvedExtensions, capture } = launch;
 	if (!shared.launchWarnings.emitted && warnings.length > 0) {
 		for (const warning of warnings) console.warn(`[pi-subagents] ${warning}`);
@@ -583,6 +583,7 @@ async function runSingleAttempt(
 	let structuredOutputMessageStartIndex: number | undefined;
 	let toolAvailabilityError: string | undefined;
 	let abortedBySignal = options.signal?.aborted === true;
+	let afterCompactionSettlement = false;
 
 	if (options.workflowChildPermitLaunch) {
 		const permitError = consumeWorkflowChildPermit(options.workflowChildPermitLaunch.permit, {
@@ -603,10 +604,10 @@ async function runSingleAttempt(
 		}
 	}
 	const childSessions = options.childSessionFactory ?? childSessionFactory();
-	let afterCompactionSettlement = false;
 	const exitCode = await new Promise<number>((resolve) => {
 		const jsonlWriter = createJsonlWriter(shared.jsonlPath, { pause() {}, resume() {} });
 		let session: ChildSession | undefined;
+		let messageBaseline: number | undefined;
 		let unsubscribe: (() => void) | undefined;
 		let sessionSettled = false;
 		let lifecycleFinished = false;
@@ -1180,9 +1181,18 @@ async function runSingleAttempt(
 				}
 				result.messages!.push(evt.message);
 				const resultText = extractTextFromContent(evt.message.content);
-				if (options.toolBudget && pendingToolResult && resultText.includes("Tool budget hard limit reached")) {
+				// The result event's own tool name is authoritative; the single pending slot can
+				// describe a different, overlapping call and serves only as a fallback.
+				const blockedTool = (typeof toolResultCompletion.toolName === "string" && toolResultCompletion.toolName.length > 0
+					? toolResultCompletion.toolName
+					: undefined) ?? pendingToolResult?.tool;
+				if (options.toolBudget && isToolBudgetBlockedMessage(options.toolBudget, resultText, blockedTool)) {
 					result.toolBudgetBlocked = true;
-					result.toolBudget = toolBudgetState(options.toolBudget, progress.toolCount, pendingToolResult.tool);
+					result.toolBudget = toolBudgetState(
+						options.toolBudget,
+						Math.max(progress.toolCount, options.toolBudget.hard + 1),
+						blockedTool,
+					);
 				}
 				appendRecentOutput(progress, resultText.split("\n").slice(-10));
 				const toolSnapshot = pendingToolResult;
@@ -1327,8 +1337,21 @@ async function runSingleAttempt(
 			result.runtimeAcknowledgedExtensions = capture.runtimeAcknowledgedExtensions();
 			if (session?.machineEvidence) result.nativeMachine = { provider: "herdr", machineId: session.machineEvidence.machineId, ...(session.machineEvidence.initial ? { initialGit: session.machineEvidence.initial } : {}), ...(session.machineEvidence.final ? { finalGit: session.machineEvidence.final } : {}) };
 			let closeError = result.error ?? toolDiagnosticError ?? assistantError;
-			if (!closeError && promptError !== undefined) {
-				closeError = promptError instanceof Error ? promptError.message : String(promptError);
+			const promptErrorMessage = promptError === undefined ? undefined : promptError instanceof Error ? promptError.message : String(promptError);
+			if (!closeError && promptErrorMessage !== undefined) {
+				closeError = promptErrorMessage;
+			}
+			// A foreground child never loads the parent's ambient extensions, so a
+			// provider one registers resolves as "not found" before the child starts.
+			// Annotate only a creation/prompt failure that produced no turn; keep the
+			// core error and add the host rule and both remedies after it.
+			if (promptErrorMessage !== undefined
+				&& closeError === promptErrorMessage
+				&& isChildModelResolutionFailure(promptErrorMessage)
+				&& (result.messages?.length ?? 0) === 0
+				&& result.usage.turns === 0
+				&& !launch.session.ambientExtensions) {
+				closeError = `${promptErrorMessage}\n\n${formatChildModelResolutionDiagnostic({ agent: agent.name, model: launch.session.model, host: "parent", capabilityCeiling: launch.toolPlan.capabilityCeiling })}`;
 			}
 			const forcedDrainAfterFinalSuccess = (forced || forcedTermination) && (cleanTerminalAssistantStopReceived || agentSettledReceived) && !closeError;
 			const forcedDrainAfterEmptyTerminal = forcedDrainAfterFinalSuccess && hasEmptyTerminalAssistantResponse(result.messages ?? []);
@@ -1340,6 +1363,13 @@ async function runSingleAttempt(
 			}
 			const finalCode = forcedDrainAfterFinalSuccess && !forcedDrainAfterEmptyTerminal ? 0 : closeError || promptError !== undefined ? 1 : 0;
 			if (!result.error && closeError) result.error = closeError;
+			if (session && messageBaseline !== undefined) {
+				result.usage = reconcileAttemptUsage(result.usage, session.messages, messageBaseline);
+				progress.tokens = result.usage.input + result.usage.output;
+				progress.inputTokens = result.usage.input;
+				progress.outputTokens = result.usage.output;
+				progress.turnCount = result.usage.turns;
+			}
 			finish(finalCode);
 		};
 
@@ -1429,6 +1459,7 @@ async function runSingleAttempt(
 				if (shared.readonlyExpected && (!actualReadonlyModel || actualReadonlyModel.fullId !== shared.readonlyModel
 					|| actualReadonlyModel.api !== shared.readonlyExpected.api || created.modelId !== shared.readonlyModel || abortedBySignal || interruptedByControl || result.timedOut
 					|| !shared.readonlyHandoffAllowed?.())) throw new Error("Read-only continuation handoff vetoed.");
+				messageBaseline = created.messages.length;
 				await created.prompt(`Task: ${task}`);
 				settle(undefined);
 			} catch (error) {
@@ -1823,6 +1854,8 @@ async function runSyncCompletionInner(
 	}
 	const systemPrompt = buildEffectiveSystemPrompt({ agent, resolvedSkills, cwd: skillCwd, ...(options.outputPath ? { outputPath: options.outputPath } : {}) });
 
+	const requestedModel = options.modelOverrideFromParent ? undefined : (options.modelOverride ?? agent.model);
+	const modelHealthScope = modelExclusionScopeForCwd(options.cwd ?? runtimeCwd);
 	const candidates = buildModelCandidates(
 		options.modelOverride ?? agent.model,
 		agent.fallbackModels,
@@ -1830,6 +1863,7 @@ async function runSyncCompletionInner(
 		agent.modelProvider ?? options.preferredModelProvider,
 		{
 			scope: options.modelScope,
+			healthScope: modelHealthScope,
 			primaryModelFromParent: options.modelOverrideFromParent,
 			origin: options.modelOrigin ?? (options.modelOverrideFromParent ? "inherited" : "configured"),
 		},
@@ -1934,6 +1968,22 @@ async function runSyncCompletionInner(
 		},
 	};
 	let lastResult: SingleResult | undefined;
+	let stagedIndexBaseline: string | undefined;
+	if (effectiveAcceptance.preserveStagedIndex) {
+		try {
+			stagedIndexBaseline = captureStagedIndexBaseline(options.cwd ?? runtimeCwd);
+		} catch (error) {
+			return redactResultPrompt(withRunContext({
+				index: options.index ?? 0,
+				agent: agentName,
+				task,
+				exitCode: 1,
+				messages: [],
+				usage: emptyUsage(),
+				error: error instanceof Error ? error.message : String(error),
+			}, options.context));
+		}
+	}
 	const modelsToTry = candidates.length > 0 ? candidates : [undefined];
 	let recoveryState: LogicalRecoveryState = "unused";
 	let readonlyExpected: SettledReadonlyEvidence | undefined;
@@ -2076,7 +2126,7 @@ async function runSyncCompletionInner(
 			if (attemptSucceeded) break modelAttemptsLoop;
 
 			const retryableModelFailure = isRetryableModelFailureAttempt({ error: result.error, messages: result.messages, toolCount: result.progressSummary?.toolCount });
-			if (retryableModelFailure) recordRetryableModelFailure(result.model ?? candidate, result.error);
+			if (retryableModelFailure) recordRetryableModelFailure(result.model ?? candidate, result.error, modelHealthScope);
 			if (isContextOverflow(result.error)) {
 				result.contextOverflow = true;
 				attemptNotes.push(`[fallback] ${attempt.model} failed: context overflow — the input exceeds this model's context window. Reduce the task input or use a model with a larger context window.`);
@@ -2103,6 +2153,7 @@ async function runSyncCompletionInner(
 	result.attemptedModels = attemptedModels.length > 0 ? attemptedModels : undefined;
 	result.modelResolution = buildModelResolutionMetadata({ requested: options.modelResolutionRequested ?? (options.modelOverrideFromParent ? undefined : options.modelOverride ?? agent.model), resolved: result.model, source: options.modelResolutionSource ?? resolveModelResolutionSource({ explicit: options.modelOverride !== undefined, fromParent: options.modelOverrideFromParent === true, agentConfigured: agent.model !== undefined }), ...(attemptedModels.length > 1 ? { fallbackReason: "retryable-model-failure" as const } : {}) });
 	result.modelAttempts = modelAttempts.length > 0 ? modelAttempts : undefined;
+	result.requestedModel = requestedModel;
 	result.progressSummary = {
 		...(childSessionName ? { sessionName: childSessionName } : {}),
 		toolCount: totalToolCount,
@@ -2168,6 +2219,7 @@ async function runSyncCompletionInner(
 					? { content: childWrittenOutput, path: options.outputPath, authoritative: options.outputMode === "file-only", durable: result.savedOutputPath !== undefined }
 					: undefined,
 				cwd: options.cwd ?? runtimeCwd,
+				stagedIndexBaseline,
 				reportOptional: isAgentContract(options.agentContract),
 				artifactsDir: options.artifactsDir,
 				runId: options.runId,
@@ -2180,6 +2232,12 @@ async function runSyncCompletionInner(
 	}
 	const acceptanceFailure = acceptanceFailureMessage(result.acceptance);
 	stripAcceptanceReportsFromMessages(result.messages);
+	// A passing typed gate supplies the structured output for runs that have no
+	// outputSchema of their own; preflight rejects the combination.
+	const typedGate = typedVerifyOutput(result.acceptance);
+	if (typedGate && result.structuredOutput === undefined && !acceptanceFailure && result.exitCode === 0) {
+		result.structuredOutput = typedGate.value;
+	}
 	if (acceptanceFailure && result.acceptance.explicit && result.exitCode === 0 && !result.interrupted && !result.timedOut && !isAgentContract(options.agentContract)) {
 		result.exitCode = 1;
 		if (result.savedOutputPath) {
@@ -2192,7 +2250,6 @@ async function runSyncCompletionInner(
 				savedPath: result.savedOutputPath,
 				outputReference: result.outputReference,
 			}).displayOutput;
-			artifactOutputByResult.set(result, result.finalOutput);
 		}
 		result.error = result.error ? `${result.error}\n${acceptanceFailure}` : acceptanceFailure;
 		if (artifactPathsResult && options.artifactConfig?.enabled !== false && options.artifactConfig?.includeOutput !== false) {

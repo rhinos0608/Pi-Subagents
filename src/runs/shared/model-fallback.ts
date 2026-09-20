@@ -344,8 +344,9 @@ export function isTransientExclusionReason(reason: string | undefined): boolean 
 	return TRANSIENT_EXCLUSION_PATTERN.test(reason ?? "");
 }
 
-function throwForExplicitModelExclusion(model: string, availableModels: AvailableModelInfo[] | undefined): void {
+function throwForExplicitModelExclusion(model: string, availableModels: AvailableModelInfo[] | undefined, healthScope?: string): void {
 	const exclusion = findModelExclusion(model, {
+		scope: healthScope,
 		ignoreExclusion: (candidate, exclusion) => ignoreStaleModelUnavailableExclusion(candidate, exclusion, availableModels)
 			|| isTransientExclusionReason(exclusion.reason),
 	});
@@ -438,6 +439,8 @@ export type ModelOrigin = ModelSource | "configured";
 export interface BuildModelCandidatesOptions {
 	/** Fallback models warn by default and throw when strict scope enforcement is enabled. */
 	scope?: ModelScopeCheckRule | ModelScopeCheckRule[];
+	/** Project-local model health scope. Scoped execution ignores legacy/global exclusions. */
+	healthScope?: string;
 	onWarn?: (violation: ModelScopeViolation) => void;
 	/** The primary model came from the running parent session, not configuration. */
 	primaryModelFromParent?: boolean;
@@ -494,7 +497,7 @@ export function buildModelCandidates(
 	};
 	if (origin === "explicit" && primaryModel) {
 		const normalized = resolveRequiredSubagentModelCandidate(primaryModel.trim(), availableModels, preferredProvider);
-		throwForExplicitModelExclusion(normalized, availableModels);
+		throwForExplicitModelExclusion(normalized, availableModels, options?.healthScope);
 		enforceModelScopes(normalized, scopes, "explicit", options?.onWarn);
 		primaryModel = normalized;
 	}
@@ -530,6 +533,7 @@ export function buildModelCandidates(
 	// exclusion filtering so fallback rotation still skips bad models fast.
 	const ignoreTransient = origin === "explicit";
 	const resolved = filterFallbackCandidates(candidates, {
+		scope: options?.healthScope,
 		onExcluded: warnCachedExclusion,
 		ignoreExclusion: (candidate, exclusion) => ignoreStaleModelUnavailableExclusion(candidate, exclusion, availableModels)
 			|| (ignoreTransient && isTransientExclusionReason(exclusion.reason)),
@@ -641,18 +645,18 @@ const REQUEST_SHAPE_FAILURE_PATTERN = /\b(?:bad[ _]request|invalid[ _]argument|i
 // network flaked, not that the model is unhealthy. Still retryable within the
 // run (fall through to next candidate), but never cached as an exclusion — a
 // 24h exclusion for a momentary blip wrongly drains good models on later runs.
-const TRANSIENT_TRANSPORT_NO_CACHE_PATTERN = /fetch failed|request timed out|\btimed?\s?out\b|timeout|econnreset|etimedout|socket hang up|network(?:work)? (?:error|failure)|econnrefused|enotfound|eai_again|connection\s+(?:error|reset|closed|aborted|refused)|connection reset by peer|APIConnectionError/i;
+const TRANSIENT_TRANSPORT_NO_CACHE_PATTERN = /fetch failed|request timed out|\btimed?\s?out\b|timeout|econnreset|etimedout|socket hang up|network(?:work)? (?:error|failure)|econnrefused|enotfound|eai_again|connection\s+(?:error|reset|closed|aborted|refused)|connection reset by peer|APIConnectionError|\b429\b|rate\s*limit|too many requests|REQUEST_LIMIT_EXCEEDED/i;
 
 export function isNonCacheableTransportFailure(error: string | undefined): boolean {
 	return TRANSIENT_TRANSPORT_NO_CACHE_PATTERN.test(error ?? "");
 }
 
-export function recordRetryableModelFailure(model: string | undefined, error: string | undefined): void {
+export function recordRetryableModelFailure(model: string | undefined, error: string | undefined, healthScope?: string): void {
 	if (!model || !error || !isRetryableModelFailure(error) || isContextOverflow(error)) return;
 	if (REQUEST_SHAPE_FAILURE_PATTERN.test(error) || isTransientNoOutputFailure(error)) return;
 	if (TRANSIENT_TRANSPORT_NO_CACHE_PATTERN.test(error)) return;
 	const { provider, modelId } = parseModelKey(model);
-	recordModelFailure({ modelId, reason: error, ...(provider ? { provider } : {}) });
+	recordModelFailure({ modelId, reason: error, ...(provider ? { provider } : {}), ...(healthScope ? { scope: healthScope } : {}) });
 }
 
 /**

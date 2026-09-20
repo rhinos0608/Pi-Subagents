@@ -504,8 +504,6 @@ describe("nested control routing", () => {
 			registerTool() {},
 			getSessionName() { return "child"; },
 		} as any;
-		fs.rmSync(route.controlInbox, { recursive: true, force: true });
-		fs.writeFileSync(route.controlInbox, "not a directory", "utf-8");
 		const originalError = console.error;
 		const logged: unknown[][] = [];
 		console.error = (...args: unknown[]) => {
@@ -513,10 +511,12 @@ describe("nested control routing", () => {
 		};
 		try {
 			registerFanoutChildSubagentExtension(pi, childRuntime);
+			fs.rmSync(route.controlInbox, { recursive: true, force: true });
+			fs.writeFileSync(route.controlInbox, "not a directory", "utf-8");
 			await waitFor(() => logged.some((entry) => String(entry[0] ?? "").includes(route.controlInbox) && String(entry[0] ?? "").includes("root-poll-error")));
 
 			fs.rmSync(route.controlInbox, { force: true });
-			fs.mkdirSync(route.controlInbox, { recursive: true });
+			fs.mkdirSync(route.controlInbox, { recursive: true, mode: 0o700 });
 			const requestPath = writeNestedControlRequest(route, {
 				ts: Date.now(),
 				requestId: "poll-error-recovers",
@@ -541,14 +541,6 @@ describe("nested control routing", () => {
 			registerTool() {},
 			getSessionName() { return "child"; },
 		} as any;
-		fs.rmSync(route.eventSink, { recursive: true, force: true });
-		fs.writeFileSync(route.eventSink, "not a directory", "utf-8");
-		const requestPath = writeNestedControlRequest(route, {
-			ts: Date.now(),
-			requestId: "result-write-fails",
-			targetRunId: "missing-run",
-			action: "interrupt",
-		});
 		const originalError = console.error;
 		const logged: unknown[][] = [];
 		console.error = (...args: unknown[]) => {
@@ -556,11 +548,19 @@ describe("nested control routing", () => {
 		};
 		try {
 			registerFanoutChildSubagentExtension(pi, childRuntime);
+			fs.rmSync(route.eventSink, { recursive: true, force: true });
+			fs.writeFileSync(route.eventSink, "not a directory", "utf-8");
+			const requestPath = writeNestedControlRequest(route, {
+				ts: Date.now(),
+				requestId: "result-write-fails",
+				targetRunId: "missing-run",
+				action: "interrupt",
+			});
 			await waitFor(() => logged.some((entry) => String(entry[0] ?? "").includes("result-write-fails") && /keeping request for retry/.test(String(entry[0] ?? ""))));
 			assert.equal(fs.existsSync(requestPath), true);
 
 			fs.rmSync(route.eventSink, { force: true });
-			fs.mkdirSync(route.eventSink, { recursive: true });
+			fs.mkdirSync(route.eventSink, { recursive: true, mode: 0o700 });
 			await waitFor(() => readNestedControlResults(route).some((result) => result.requestId === "result-write-fails" && result.ok === false));
 			assert.equal(fs.existsSync(requestPath), false);
 		} finally {

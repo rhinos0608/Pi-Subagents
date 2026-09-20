@@ -194,12 +194,12 @@ describe("model fallback helpers", () => {
 		);
 	});
 
-	it("excludes a candidate after a retryable model failure is recorded", () => {
+	it("excludes a candidate after a cacheable retryable model failure is recorded", () => {
 		const warnings: string[] = [];
 		const originalWarn = console.warn;
 		console.warn = (message: unknown) => warnings.push(String(message));
 		try {
-			recordRetryableModelFailure("openai/gpt-5-mini", "rate limit exceeded for Bearer secret-token-value");
+			recordRetryableModelFailure("openai/gpt-5-mini", "provider unavailable for Bearer secret-token-value");
 			assert.deepEqual(
 				buildModelCandidates("gpt-5-mini", ["anthropic/claude-sonnet-4"], availableModels),
 				["anthropic/claude-sonnet-4"],
@@ -208,7 +208,7 @@ describe("model fallback helpers", () => {
 			console.warn = originalWarn;
 		}
 		assert.equal(warnings.length, 1);
-		assert.match(warnings[0]!, /Skipping model 'openai\/gpt-5-mini'.*reason: rate limit exceeded for \[redacted\]; expires: \d{4}-\d{2}-\d{2}T/);
+		assert.match(warnings[0]!, /Skipping model 'openai\/gpt-5-mini'.*reason: provider unavailable for \[redacted\]; expires: \d{4}-\d{2}-\d{2}T/);
 		assert.doesNotMatch(warnings[0]!, /secret-token-value/);
 	});
 
@@ -296,23 +296,25 @@ describe("model fallback helpers", () => {
 		}
 	});
 
-	it("still caches rate limits that mention numeric request quotas", () => {
+	it("does not cache rate limits that mention numeric request quotas", () => {
 		const error = "rate limit exceeded: 400 requests per minute";
+		assert.equal(isNonCacheableTransportFailure(error), true);
 		recordRetryableModelFailure("openai/gpt-5-mini", error);
-		assert.equal(findModelExclusion("openai/gpt-5-mini")?.reason, error);
-		assert.equal(getExcludedCount(), 1);
+		assert.equal(findModelExclusion("openai/gpt-5-mini"), undefined);
+		assert.equal(getExcludedCount(), 0);
 	});
 
-	it("still caches raw request limits and per-minute input-token rate quotas", () => {
+	it("does not cache raw request limits or per-minute input-token rate quotas", () => {
 		for (const error of [
 			"REQUEST_LIMIT_EXCEEDED",
 			'{"error_code":"REQUEST_LIMIT_EXCEEDED","message":"REQUEST_LIMIT_EXCEEDED: Exceeded workspace input tokens per minute rate limit for <model>."}',
 		]) {
 			clearExclusions();
 			assert.equal(isContextOverflow(error), false);
+			assert.equal(isNonCacheableTransportFailure(error), true);
 			recordRetryableModelFailure("openai/gpt-5-mini", error);
-			assert.equal(findModelExclusion("openai/gpt-5-mini")?.reason, error);
-			assert.equal(getExcludedCount(), 1);
+			assert.equal(findModelExclusion("openai/gpt-5-mini"), undefined);
+			assert.equal(getExcludedCount(), 0);
 		}
 	});
 

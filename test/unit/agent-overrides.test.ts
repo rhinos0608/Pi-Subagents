@@ -113,6 +113,43 @@ describe("builtin agent overrides", () => {
 		assert.throws(() => discoverAgentsAll(tempProject), /field 'machine' must be a non-empty string or false/u);
 	});
 
+	it("replaces and clears custom-agent allowedAgents while preserving explicit deny-all", () => {
+		writeProjectAgent(tempProject, "coordinator", "---\nname: coordinator\ndescription: Coordinator\nallowedAgents: scout\n---\n\nCoordinate.\n");
+		writeJson(path.join(tempHome, ".pi", "agent", "settings.json"), {
+			subagents: { agentOverrides: { coordinator: { allowedAgents: false } } },
+		});
+		assert.equal(discoverAgents(tempProject, "both").agents.find((agent) => agent.name === "coordinator")?.allowedAgents, undefined);
+
+		writeJson(path.join(tempProject, ".pi", "settings.json"), {
+			subagents: { agentOverrides: { coordinator: { allowedAgents: [] } } },
+		});
+		assert.deepEqual(discoverAgents(tempProject, "both").agents.find((agent) => agent.name === "coordinator")?.allowedAgents, []);
+
+		writeJson(path.join(tempProject, ".pi", "settings.json"), {
+			subagents: { agentOverrides: { coordinator: { allowedAgents: ["worker", "reviewer"] } } },
+		});
+		assert.deepEqual(discoverAgents(tempProject, "both").agents.find((agent) => agent.name === "coordinator")?.allowedAgents, ["reviewer", "worker"]);
+	});
+
+	it("accepts fallbackModels in user agent overrides", () => {
+		writeJson(path.join(tempHome, ".pi", "agent", "settings.json"), {
+			subagents: { agentOverrides: { worker: { fallbackModels: ["model/user-backup"] } } },
+		});
+		const worker = discoverAgentsAll(tempProject).builtin.find((agent) => agent.name === "worker");
+		assert.deepEqual(worker?.fallbackModels, ["model/user-backup"]);
+	});
+
+	it("lets project fallbackModels override the user fallback chain", () => {
+		writeJson(path.join(tempHome, ".pi", "agent", "settings.json"), {
+			subagents: { agentOverrides: { worker: { fallbackModels: ["model/user-backup"] } } },
+		});
+		writeJson(path.join(tempProject, ".pi", "settings.json"), {
+			subagents: { agentOverrides: { worker: { fallbackModels: ["model/project-backup"] } } },
+		});
+		const worker = discoverAgentsAll(tempProject).builtin.find((agent) => agent.name === "worker");
+		assert.deepEqual(worker?.fallbackModels, ["model/project-backup"]);
+	});
+
 	it("lets a builtin agent inherit Pi's normal tools from an override", () => {
 		writeJson(path.join(tempHome, ".pi", "agent", "settings.json"), {
 			subagents: {
@@ -138,7 +175,9 @@ describe("builtin agent overrides", () => {
 
 		const builtins = discoverAgentsAll(tempProject).builtin;
 		assert.equal(builtins.find((agent) => agent.name === "researcher")?.tools, undefined);
-		assert.deepEqual(builtins.find((agent) => agent.name === "reviewer")?.tools, ["read", "grep", "find", "ls", "contact_supervisor"]);
+		assert.deepEqual(builtins.find((agent) => agent.name === "reviewer")?.tools, ["read", "grep", "find", "ls", "watchdog_diff", "contact_supervisor"]);
+		assert.deepEqual(builtins.find((agent) => agent.name === "worker")?.tools, ["read", "grep", "find", "ls", "bash", "edit", "write", "contact_supervisor"]);
+		assert.deepEqual(builtins.find((agent) => agent.name === "scout")?.tools, ["read", "grep", "find", "ls", "bash", "write", "contact_supervisor"]);
 	});
 
 	it("keeps explicit empty builtin tool allowlists distinct from inherited tools", () => {
