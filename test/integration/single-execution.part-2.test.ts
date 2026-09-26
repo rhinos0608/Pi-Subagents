@@ -64,7 +64,7 @@ import { createWorktrees } from "../../src/runs/shared/worktree.ts";
 import { resolveAsyncResumeTarget } from "../../src/runs/background/async-resume.ts";
 import { createResultWatcher } from "../../src/runs/background/result-watcher.ts";
 import { createWorkflowChildPermit, workflowChildPermitConsumed } from "../../src/shared/workflow-child-permit.ts";
-import { toSubagentDelegationExecutionParams } from "../../src/slash/delegation-adapters.ts";
+import { toSubagentDelegationExecutionParams, toSubagentDelegationUpdate } from "../../src/slash/delegation-adapters.ts";
 import { registerRequiredChildExtensions } from "../../src/api/required-child-extensions.ts";
 
 describe("single sync execution", { skip: !available ? "pi packages not available" : undefined }, () => {
@@ -990,6 +990,58 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		}
 	});
 
+	it("keeps unavailable cache classifications out of progress when cancelled before reconciliation", async () => {
+		mockPi.onCall({
+			steps: [
+				{
+					jsonl: [{
+						type: "message_end",
+						message: {
+							role: "assistant",
+							content: [{ type: "toolCall", id: "call-1", name: "read", arguments: { path: "package.json" } }],
+							model: "mock/test-model",
+							stopReason: "toolUse",
+							usage: { input: 5, output: 3, cacheRead: 0, cacheWrite: 0, cost: { total: 0.001 } },
+						},
+					}],
+				},
+				{ jsonl: [{ type: "tool_result_end", message: { role: "toolResult", toolCallId: "call-1", toolName: "read", isError: false, content: [] } }] },
+				{
+					jsonl: [{
+						type: "message_end",
+						message: {
+							role: "assistant",
+							content: [{ type: "text", text: "cache counters unavailable" }],
+							model: "mock/test-model",
+							stopReason: "length",
+							usage: { input: 9, output: 4, cost: { total: 0.002 } },
+						},
+					}],
+				},
+			],
+			keepAliveAfterFinalMessageMs: 10_000,
+		});
+		const controller = new AbortController();
+		const observed: Array<{ inputTokens?: number; outputTokens?: number; cacheRead?: number; cacheWrite?: number; turnCount?: number }> = [];
+		const result = await runSync(tempDir, makeAgentConfigs(["echo"]), "echo", "Task", {
+			acceptance: false,
+			signal: controller.signal,
+			onUpdate: (update) => {
+				const progress = (update as { details?: { progress?: typeof observed } }).details?.progress?.[0];
+				if (!progress || progress.turnCount !== 2) return;
+				observed.push(progress);
+				controller.abort();
+			},
+		});
+
+		assert.equal(result.exitCode, 1);
+		assert.ok(observed.length > 0);
+		assert.equal(observed.at(-1)?.inputTokens, 14);
+		assert.equal(observed.at(-1)?.outputTokens, 7);
+		assert.equal(observed.at(-1)?.cacheRead, undefined);
+		assert.equal(observed.at(-1)?.cacheWrite, undefined);
+	});
+
 	it("allows concurrent async launches in one turn", async () => {
 		mockPi.onCall({ output: "async one" });
 		mockPi.onCall({ output: "async two" });
@@ -1731,6 +1783,48 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		assert.equal(resumed.ok, true);
 		assert.deepEqual(resumed.structuredOutput, { ok: true });
 		assert.equal(resumed.savedOutputPath, undefined);
+	});
+
+	it("preserves original parent authority when reviving a foreground child", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		const callerRuntime: ChildRuntimeConfig = {
+			capabilityCeiling: {
+				version: 1,
+				allowedTools: ["read"],
+				allowedAgents: ["echo", "researcher"],
+				denyExtensions: true,
+				sources: ["original-parent"],
+			},
+		};
+		const executor = makeExecutor(
+			[makeAgent("echo", { allowedAgents: ["researcher"] }), makeAgent("researcher")],
+			{}, false, undefined, true, new Map(), undefined, undefined, createEventBus(), undefined, callerRuntime,
+		);
+		const ctx = makeMinimalCtx(tempDir);
+		mockPi.onCall({ output: "Initial foreground work" });
+		const firstResult = await executor.execute(
+			"foreground-authority-first",
+			{ async: false, workflowScript: `return runs.run("first", { agent: "echo", task: "First", acceptance: false, output: false });` },
+			new AbortController().signal, undefined, ctx,
+		);
+		assert.equal(firstResult.isError, undefined, firstResult.content[0]?.text ?? "foreground launch failed");
+		const first = firstResult.details.workflow?.value as { runId?: string };
+		assert.ok(first.runId);
+
+		callerRuntime.capabilityCeiling = undefined;
+		mockPi.onCall({ output: "Resumed foreground work" });
+		const resumedResult = await executor.execute(
+			"foreground-authority-resume",
+			{ async: false, workflowScript: `return runs.run("resumed", { resume: ${JSON.stringify(first.runId)}, task: "Resume", acceptance: false, output: false });` },
+			new AbortController().signal, undefined, ctx,
+		);
+		assert.equal(resumedResult.isError, undefined, resumedResult.content[0]?.text ?? "foreground resume failed");
+		assert.deepEqual(readCall().runtime?.capabilityCeiling, {
+			version: 1,
+			allowedTools: ["read"],
+			allowedAgents: ["researcher"],
+			denyExtensions: true,
+			sources: ["agent:echo", "original-parent"],
+		});
 	});
 
 	it("retains inherited and disabled discovered schemas across definition changes", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
@@ -2786,7 +2880,7 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 				events.toolEnd("write"),
 				events.toolResult("write", "Wrote side-effect.txt"),
 				{ type: "compaction_start" },
-				{ type: "message_end", message: { role: "assistant", content: [], model: "openai/gpt-5-mini", stopReason: "aborted", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: { total: 0 } } } },
+				{ type: "message_end", message: { role: "assistant", content: [], model: "openai/gpt-5-mini", stopReason: "aborted", usage: { input: 10, output: 0, cacheRead: 2, cacheWrite: 1, cost: { total: 0.01 } } } },
 				{ type: "agent_settled" },
 			],
 			writeFiles: [{ path: "side-effect.txt", content: "done" }, { path: sessionFile, content: "{}\n" }],
@@ -2795,10 +2889,22 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		});
 		mockPi.onCall({ output: "Recovered from retained session" });
 
-		const result = await runSync(tempDir, [makeAgent("echo", { model: "openai/gpt-5-mini" })], "echo", "Task", { runId: "same-model-abort-recovery", sessionFile });
+		const attemptUsage: Array<{ input: number; output: number; cacheRead: number; cacheWrite: number; turns: number }> = [];
+		const delegationRequest = { requestId: "retry-usage", ownerRunId: "owner", nodeId: "node", agent: "echo", task: "Task", context: "fresh", cwd: tempDir, result: { kind: "text" } } satisfies SubagentDelegationRequest;
+		const result = await runSync(tempDir, [makeAgent("echo", { model: "openai/gpt-5-mini" })], "echo", "Task", {
+			runId: "same-model-abort-recovery",
+			sessionFile,
+			onUpdate(update) {
+				const usage = toSubagentDelegationUpdate(delegationRequest, update)?.usage;
+				if (usage) attemptUsage.push(usage);
+			},
+		});
 
 		assert.equal(result.exitCode, 0);
 		assert.equal(result.finalOutput, "Recovered from retained session");
+		assert.deepEqual(attemptUsage[0], { input: 10, output: 0, cacheRead: 2, cacheWrite: 1, turns: 1 });
+		assert.deepEqual(attemptUsage.at(-1), { input: 100, output: 50, cacheRead: 0, cacheWrite: 0, turns: 1 });
+		assert.deepEqual(result.usage, { input: 110, output: 50, cacheRead: 2, cacheWrite: 1, cost: 0.011, turns: 2 });
 		assert.equal(mockPi.callCount(), 2);
 		for (const args of readAllCallArgs()) {
 			assert.equal(args[args.indexOf("--model") + 1], "openai/gpt-5-mini");

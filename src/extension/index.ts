@@ -66,6 +66,7 @@ import { probeRealLeafHost } from "../runs/runtime/leaf-model-session.ts";
 import { clearSlashSnapshots, getSlashRenderableSnapshot, resolveSlashMessageDetails, restoreSlashFinalSnapshots, type SlashMessageDetails } from "../slash/slash-live-state.ts";
 import { resolveWaitToolConfig } from "../runs/background/subagent-wait.ts";
 import { registerWaitTool } from "../runs/background/wait-tool.ts";
+import { registerSubagentToolActivation } from "./tool-activation.ts";
 import { createWaitSubscriptionManager } from "../runs/background/wait-subscriptions.ts";
 import { drainOutstandingWork } from "../runs/background/auto-drain.ts";
 import registerSubagentNotify, { parseSubagentNotifyContent, type SubagentNotifyDetails } from "../runs/background/notify.ts";
@@ -1230,5 +1231,9 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	pi.on("session_start", (_event, ctx) => {
 		advertisedContext = { cwd: ctx.cwd, model: ctx.model };
 		refreshAdvertisedAgents();
+	});
+
+	registerSubagentToolActivation(pi, {
+		advertisedPrompt: () => buildAdvertisedAgentPrompt(advertisedAgents, resolveCurrentSubagentCapabilityCeiling(state.currentSessionId ?? undefined)),
 	});
 }

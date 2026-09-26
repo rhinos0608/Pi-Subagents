@@ -967,6 +967,9 @@ export interface AgentProgress {
 	thinking?: string;
 	inputTokens?: number;
 	outputTokens?: number;
+	/** Cumulative cache-read/cache-write tokens for the current attempt, alongside inputTokens/outputTokens. */
+	cacheRead?: number;
+	cacheWrite?: number;
 	window?: number;
 	windowPeak?: number;
 	durationMs: number;
@@ -1718,9 +1721,9 @@ export interface AsyncStartedEvent {
 	mode?: SubagentRunMode;
 	agent?: string;
 	agents?: string[];
-	/** Truncated first child task retained for backwards compatibility. */
+	/** Redacted prompt marker for the first child task; workflow roots may omit this field. */
 	task?: string;
-	/** Workflow-level caller task, falling back to the first child task. */
+	/** Redacted prompt marker for the workflow-level caller task or first-child fallback. */
 	goal?: string;
 	chain?: string[];
 	chainStepCount?: number;
@@ -1927,6 +1930,8 @@ export interface AsyncStatus {
 	launchResolvedExtensions?: LaunchResolvedChildExtensions;
 	runtimeAcknowledgedExtensions?: RuntimeAcknowledgedChildExtensions;
 	capabilityCeiling?: ResolvedSubagentCapabilityCeiling;
+	/** Parent admission authority before the selected workflow child's descendant restrictions. */
+	admissionCapabilityCeiling?: ResolvedSubagentCapabilityCeiling;
 	capabilityAudit?: SubagentCapabilityAudit;
 	workflow?: Details["workflow"];
 	workflowChildren?: WorkflowChildSummary;
@@ -2414,7 +2419,7 @@ export interface SubagentChildStatusEvent {
 	version: 1;
 	runId: string;
 	childId: string;
-	status: "stopping" | "stopped";
+	status: "started" | "stopping" | "stopped";
 	ts: number;
 	reason?: string;
 	source?: "rpc" | "async";
