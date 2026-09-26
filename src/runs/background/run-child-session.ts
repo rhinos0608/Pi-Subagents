@@ -130,6 +130,7 @@ export interface RunChildSessionResult {
 	observedMutationAttempt?: boolean;
 	structuredOutputToolInvoked?: boolean;
 	structuredOutputMessageStartIndex?: number;
+	structuredOutputFailed?: boolean;
 	watchdog?: ChildWatchdogStateSnapshot;
 	sessionFile?: string;
 	currentTool?: string;

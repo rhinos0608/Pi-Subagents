@@ -39,6 +39,7 @@ import {
 import registerSubagentExtension from "../../src/extension/index.ts";
 import { handleSubagentControlNotice } from "../../src/extension/control-notices.ts";
 import { discoverAgents } from "../../src/agents/agents.ts";
+import { INVALID_STRUCTURED_OUTPUT_SCHEMA_ERROR, validateStructuredOutputValue } from "../../src/runs/shared/structured-output.ts";
 import {
 	SUBAGENT_DELEGATION_REQUEST_EVENT,
 	SUBAGENT_DELEGATION_RESPONSE_EVENT,
@@ -66,6 +67,7 @@ import { createResultWatcher } from "../../src/runs/background/result-watcher.ts
 import { createWorkflowChildPermit, workflowChildPermitConsumed } from "../../src/shared/workflow-child-permit.ts";
 import { toSubagentDelegationExecutionParams, toSubagentDelegationUpdate } from "../../src/slash/delegation-adapters.ts";
 import { registerRequiredChildExtensions } from "../../src/api/required-child-extensions.ts";
+import { createStructuredOutputRuntime } from "../../src/runs/shared/structured-output.ts";
 
 describe("single sync execution", { skip: !available ? "pi packages not available" : undefined }, () => {
 	installSingleExecutionHooks();
@@ -2177,6 +2179,61 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		assert.equal(fs.existsSync(path.dirname(child.structuredOutputPath)), false);
 	});
 
+	it("reports rejected structured_output evidence and lets a later valid call win", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		const rejectedEvents = [
+			{ type: "message_end", message: { role: "assistant", content: [{ type: "toolCall", id: "structured-rejected", name: "structured_output", arguments: { value: {} } }], model: "mock/test-model", stopReason: "toolUse", usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: { total: 0 } } } },
+			{ type: "tool_execution_start", toolCallId: "structured-rejected", toolName: "structured_output", args: { value: {} } },
+			{ type: "tool_result_end", message: { role: "toolResult", toolCallId: "structured-rejected", toolName: "structured_output", isError: true, content: [{ type: "text", text: "Structured output validation failed: ok: is required" }] } },
+			{ type: "tool_execution_end", toolCallId: "structured-rejected", toolName: "structured_output" },
+		];
+		mockPi.onCall({ stdoutRaw: rejectedEvents.map((entry) => JSON.stringify(entry)).join("\n") + "\n" });
+		const executor = makeExecutor([makeAgent("echo")]);
+		const params = { agent: "echo", task: "Return structured data", outputSchema: { type: "object", required: ["ok"], properties: { ok: { type: "boolean" } } }, acceptance: false, artifacts: false } as const;
+
+		const rejected = await executor.execute("single-schema-rejected", params, new AbortController().signal, undefined, makeMinimalCtx(tempDir));
+
+		assert.equal(rejected.isError, true);
+		assert.equal(rejected.details.results[0]?.structuredOutputFailed, true);
+		assert.match(rejected.details.results[0]?.error ?? "", /Structured output validation failed: ok: is required/);
+		assert.doesNotMatch(rejected.details.results[0]?.error ?? "", /Missing structured_output call/);
+
+		mockPi.reset();
+		mockPi.onCall({
+			stdoutRaw: rejectedEvents.map((entry) => JSON.stringify(entry)).join("\n") + "\n",
+			structuredOutput: { ok: true },
+		});
+		const recovered = await executor.execute("single-schema-recovered", params, new AbortController().signal, undefined, makeMinimalCtx(tempDir));
+
+		assert.equal(recovered.isError, undefined, recovered.content[0]?.text);
+		assert.deepEqual(recovered.details.results[0]?.structuredOutput, { ok: true });
+	});
+
+	it("does not expose malformed outputSchema compiler text in foreground results", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		const sentinel = "FOREGROUND_PRIVATE_SCHEMA_SENTINEL";
+		const outputSchema = { type: "string", pattern: `${sentinel}_[invalid` };
+		const validation = await validateStructuredOutputValue(outputSchema, "value");
+		assert.equal(validation.status, "invalid");
+		if (validation.status !== "invalid") return;
+		assert.match(validation.message, new RegExp(sentinel));
+		mockPi.onCall({
+			jsonl: [
+				{ type: "tool_execution_start", toolCallId: "structured-malformed-schema", toolName: "structured_output", args: { value: "value" } },
+				{ type: "tool_result_end", message: { role: "toolResult", toolCallId: "structured-malformed-schema", toolName: "structured_output", isError: true, content: [{ type: "text", text: `Structured output validation failed: ${validation.message}` }] } },
+				{ type: "tool_execution_end", toolCallId: "structured-malformed-schema", toolName: "structured_output" },
+			],
+		});
+
+		const result = await makeExecutor([makeAgent("echo")]).execute(
+			"single-schema-malformed",
+			{ agent: "echo", task: "Return structured data", outputSchema, acceptance: false, artifacts: false },
+			new AbortController().signal, undefined, makeMinimalCtx(tempDir),
+		);
+
+		assert.equal(result.isError, true);
+		assert.equal(result.details.results[0]?.error, INVALID_STRUCTURED_OUTPUT_SCHEMA_ERROR);
+		assert.doesNotMatch(JSON.stringify(result.details.results[0]), new RegExp(sentinel));
+	});
+
 	it("enforces a discovered agent outputSchema and lets false opt out", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
 		const agentDir = path.join(tempDir, ".pi", "agents");
 		fs.mkdirSync(agentDir, { recursive: true });
@@ -4195,6 +4252,24 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		});
 	});
 
+	it("completes a structured-only foreground terminal after watchdog settlement", async () => {
+		await withIsolatedWatchdogSettings(tempDir, async () => {
+			writeWatchdogSettings(tempDir);
+			const callsBefore = mockPi.callCount();
+			mockPi.onCall({
+				jsonl: [childWatchdogStatus("idle", 1)],
+				structuredOutput: { ok: true },
+			});
+			const structuredOutput = createStructuredOutputRuntime({ type: "object", required: ["ok"], properties: { ok: { type: "boolean" } } }, tempDir);
+
+			const result = await runSync(tempDir, makeAgentConfigs(["echo"]), "echo", "Return data", { runId: "watchdog-structured-terminal", structuredOutput });
+
+			assert.equal(result.exitCode, 0, result.error);
+			assert.deepEqual(result.structuredOutput, { ok: true });
+			assert.equal(mockPi.callCount(), callsBefore + 1, "settled structured completion must not continue with another turn");
+		});
+	});
+
 	it("falls back after child watchdog tail timeout without failing successful foreground output", async () => {
 		await withIsolatedWatchdogSettings(tempDir, async () => {
 			writeWatchdogSettings(tempDir, 150);
@@ -4272,13 +4347,15 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 			const acceptance = { level: "checked" as const, criteria: ["Ship it"] };
 			const blockerCheck = (result: RunSyncResult) => result.acceptance?.runtimeChecks?.find((entry) => entry.id === "watchdog-blocker");
 
-			mockPi.onCall({ jsonl: [events.watchdogStatusWarning("concern", "Minor naming concern", { runId: "watchdog-child-run", agent: "echo", childIndex: 0 }), events.acceptanceReport(), events.watchdogStatusWarning("blocker", "Claims tests passed without running them", { importance: "low", seq: 2, runId: "watchdog-child-run", agent: "echo", childIndex: 0 })] });
-			const unaddressed = await runSync(tempDir, agents, "echo", "Task", { runId: "watchdog-child-run", acceptance });
+			mockPi.onCall({ jsonl: [events.watchdogStatusWarning("concern", "Minor naming concern", { runId: "watchdog-child-run", agent: "echo", childIndex: 0 }), events.acceptanceReport(), events.watchdogStatusWarning("blocker", "Claims tests passed without running them", { importance: "low", seq: 2, runId: "watchdog-child-run", agent: "echo", childIndex: 0 })], structuredOutput: { ok: true } });
+			const structuredOutput = createStructuredOutputRuntime({ type: "object", required: ["ok"], properties: { ok: { type: "boolean" } } }, tempDir);
+			const unaddressed = await runSync(tempDir, agents, "echo", "Task", { runId: "watchdog-child-run", acceptance, structuredOutput });
 			assert.deepEqual(unaddressed.watchdog?.warnings?.map((warning) => [warning.severity, warning.addressed]), [["concern", true], ["blocker", false]]);
 			assert.equal(blockerCheck(unaddressed)?.status, "failed");
 			assert.equal(blockerCheck(unaddressed)?.message, "Unresolved watchdog blocker (details are available in child watchdog status).");
 			assert.equal(unaddressed.acceptance?.status, "rejected");
 			assert.equal(unaddressed.exitCode, 1);
+			assert.deepEqual(unaddressed.structuredOutput, { ok: true }, "a real blocker remains visible alongside valid structured evidence");
 			assert.match(unaddressed.error ?? "", /Unresolved watchdog blocker/);
 			assert.doesNotMatch(unaddressed.error ?? "", /Claims tests passed without running them/);
 

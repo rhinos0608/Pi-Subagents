@@ -62,7 +62,7 @@ import { deriveChildSessionName } from "../../shared/child-session-name.ts";
 import { assertAgentAllowedByCapabilityCeiling, intersectSubagentCapabilityCeilings, resolveCurrentSubagentCapabilityCeiling } from "../shared/capability-ceiling.ts";
 import { resolveEffectiveThinking } from "../../shared/model-info.ts";
 import { assertThinkingWithinCeiling, intersectThinkingCeilings } from "../../shared/thinking-ceiling.ts";
-import { MISSING_STRUCTURED_ACCEPTANCE_REPORT_ERROR, MISSING_STRUCTURED_OUTPUT_CALL_ERROR } from "../shared/structured-output.ts";
+import { formatStructuredOutputRejectionError, MISSING_STRUCTURED_ACCEPTANCE_REPORT_ERROR, MISSING_STRUCTURED_OUTPUT_CALL_ERROR } from "../shared/structured-output.ts";
 import { formatMidToolExitError, isOrdinaryToolForMidToolExit } from "../shared/process-signal.ts";
 import { formatChildToolDiagnostic } from "../shared/tool-availability.ts";
 import { formatChildModelResolutionDiagnostic, isChildModelResolutionFailure } from "../shared/model-resolution-diagnostic.ts";
@@ -1446,15 +1446,11 @@ async function runSingleAttempt(
 		result.exitCode = 1;
 	}
 	let validatedStructuredOutput = false;
-	if (options.structuredOutput && result.exitCode === 0 && !result.error) {
+	if (options.structuredOutput) {
 		result.structuredOutputSchemaPath = options.structuredOutput.schemaPath;
 		result.structuredOutputPath = options.structuredOutput.outputPath;
 		const structured = capture.structuredOutput();
-		if (!structuredOutputToolInvoked || !structured.called) {
-			result.exitCode = 1;
-			result.error = MISSING_STRUCTURED_OUTPUT_CALL_ERROR;
-			result.structuredOutputFailed = true;
-		} else {
+		if (structuredOutputToolInvoked && structured.called) {
 			result.structuredOutput = structured.value;
 			const acceptanceMode = options.structuredOutput.acceptanceReportPath
 				? options.structuredOutput.acceptanceReportRequired ? "required" : "optional"
@@ -1466,6 +1462,12 @@ async function runSingleAttempt(
 			(result as SingleResult & { structuredAcceptanceReport?: unknown; structuredAcceptanceReportError?: string }).structuredAcceptanceReportError = acceptanceReportError;
 			writeStructuredOutputArtifacts(options.structuredOutput, structured.value, acceptanceMode ? structured.acceptanceReport : undefined);
 			validatedStructuredOutput = true;
+		} else if (result.exitCode === 0 && !result.error) {
+			result.exitCode = 1;
+			result.error = structuredOutputToolInvoked
+				? formatStructuredOutputRejectionError(result.messages ?? [])
+				: MISSING_STRUCTURED_OUTPUT_CALL_ERROR;
+			result.structuredOutputFailed = true;
 		}
 	}
 	if (result.exitCode === 0 && !result.error) {
