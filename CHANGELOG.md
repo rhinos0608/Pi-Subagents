@@ -15,6 +15,7 @@ First npm release of the fork: `v0.71.0-fork.1` (published as `@rhinos0608/pi-su
 - **Breaking:** the npm package is now `@rhinos0608/pi-subagents` (scoped, public; version `0.71.0` kept). Migration: install `pi install npm:@rhinos0608/pi-subagents` (remove upstream `npm:pi-subagents` first so tools do not register twice); host import specifiers `pi-subagents/...` become `@rhinos0608/pi-subagents/...`.
 
 - The `subagent` tool description is now a single always-on default (~2.2 KB) instead of compact/full modes. `toolDescriptionMode` accepts `"default"` or `"custom"` (operator override via `subagent-tool-description.md` with `{{defaultDescription}}`); legacy `"full"`/`"compact"` values and `{{full}}`/`{{compact}}` placeholders keep working by rendering the default with a deprecation warning.
+- Pi starts faster with pi-subagents enabled: the foreground executor and Fleet view now load on first use instead of at startup. Tools, commands, and prompts are registered exactly as before. Thanks to [@h4yfans](https://github.com/h4yfans) for the measurements in [#2480](https://github.com/nicobailon/pi-subagents/issues/2480).
 
 ### Fork-preserved
 

@@ -4,7 +4,7 @@ import * as path from "node:path";
 import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { discoverAgents } from "../agents/agents.ts";
 import { getArtifactsDir } from "../shared/artifacts.ts";
-import { createSubagentExecutor, type SubagentParamsLike } from "../runs/foreground/subagent-executor.ts";
+import type { createSubagentExecutor, SubagentParamsLike } from "../runs/foreground/subagent-executor.ts";
 import type { ChildRuntimeConfig } from "../runs/shared/child-runtime-config.ts";
 import { readNestedControlRequests, resolveInheritedNestedRoute, type NestedRoute, writeNestedControlResult } from "../runs/shared/nested-events.ts";
 import { deliverSubagentIntercomMessageEvent } from "../intercom/result-intercom.ts";
@@ -191,20 +191,29 @@ export default function registerFanoutChildSubagentExtension(pi: ExtensionAPI, c
 	});
 	const hasPendingSupervisorRequest = supervisorChannel.hasPendingRequests;
 	childConfig.hasPendingSupervisorRequest = hasPendingSupervisorRequest;
-	const executor = createSubagentExecutor({
-		pi,
-		state,
-		config,
-		asyncByDefault: resolveAsyncByDefault(config),
-		tempArtifactsDir: getArtifactsDir(null),
-		getSubagentSessionRoot,
-		expandTilde,
-		discoverAgents,
-		allowMutatingManagementActions: false,
-		childRuntime: childConfig,
-		activateSupervisorTransport: supervisorChannel.activateTransport,
-		findPendingAsks: supervisorChannel.findPendingAsks,
-	});
+	// Created on first tool use so importing this module (via child-hooks) does not
+	// pull the foreground executor graph into extension startup.
+	let executor: ReturnType<typeof createSubagentExecutor> | undefined;
+	const getExecutor = async (): Promise<NonNullable<typeof executor>> => {
+		if (!executor) {
+		const { createSubagentExecutor: createExecutor } = await import("../runs/foreground/subagent-executor.ts");
+		executor = createExecutor({
+			pi,
+			state,
+			config,
+			asyncByDefault: resolveAsyncByDefault(config),
+			tempArtifactsDir: getArtifactsDir(null),
+			getSubagentSessionRoot,
+			expandTilde,
+			discoverAgents,
+			allowMutatingManagementActions: false,
+			childRuntime: childConfig,
+			activateSupervisorTransport: supervisorChannel.activateTransport,
+			findPendingAsks: supervisorChannel.findPendingAsks,
+		});
+		}
+		return executor;
+	};
 
 	const params = SubagentParams;
 	const tool: ToolDefinition<typeof params, Details> = {
@@ -217,7 +226,7 @@ export default function registerFanoutChildSubagentExtension(pi: ExtensionAPI, c
 		].join("\n"),
 		parameters: params,
 		async execute(id, params, signal, onUpdate, ctx) {
-			return finalizeToolResult(await executor.executeDelegated(id, params as SubagentParamsLike, signal ?? new AbortController().signal, onUpdate, ctx));
+			return finalizeToolResult(await (await getExecutor()).executeDelegated(id, params as SubagentParamsLike, signal ?? new AbortController().signal, onUpdate, ctx));
 		},
 	};
 

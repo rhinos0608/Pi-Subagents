@@ -32,11 +32,10 @@ import { isStaleExtensionContextError, withCachedUiContext } from "../shared/ext
 import { currentCompletionOwnerId } from "../shared/completion-owner.ts";
 import { cleanupOldChainDirs } from "../shared/settings.ts";
 import { clearLegacyResultAnimationTimer, renderSubagentResult, renderSubagentSummary, setInlineWorkflowCoverage } from "../tui/render.ts";
-import { openSubagentFleet } from "../tui/fleet.ts";
 import { createBuiltinInspectorPlugins } from "../inspectors/plugins.ts";
 import { SubagentFleetStatus, resolveFleetViewPlacement } from "../tui/fleet-status.ts";
 import { SubagentParams } from "./schemas.ts";
-import { createSubagentExecutor, resumeFleetRun, type SubagentParamsLike } from "../runs/foreground/subagent-executor.ts";
+import type { SubagentParamsLike } from "../runs/foreground/subagent-executor.ts";
 import { createAsyncJobTracker } from "../runs/background/async-job-tracker.ts";
 import { getActiveAsyncCapacitySnapshot, resolveAbandonedSlotReleaseAfterMs, resolveMaxActiveAsyncRunsPerSession } from "../runs/background/active-async-capacity.ts";
 import { cleanupResultIndexes, missionObserverResultCandidateFiles } from "../runs/background/result-files.ts";
@@ -108,6 +107,10 @@ export { loadConfig, resolveAsyncByDefault } from "./config.ts";
 
 const SLOW_RELOAD_PHASE_MS = 250;
 const RUNTIME_REGISTRY_STORE_KEY = "__piSubagentRuntimeRegistry";
+
+type SubagentExecutorModule = typeof import("../runs/foreground/subagent-executor.ts");
+type SubagentExecutor = ReturnType<SubagentExecutorModule["createSubagentExecutor"]>;
+type SubagentExecutorDeps = Parameters<SubagentExecutorModule["createSubagentExecutor"]>[0];
 
 interface SubagentRuntimeEntry {
 	cleanup(): void;
@@ -488,7 +491,8 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	};
 
 	const supervisorChannel = createNativeSupervisorChannel(pi, state, {
-		getCurrentOwnerStates: () => executor.getCurrentSupervisorOwnerStates(),
+		// Owner states are created only by scheduled execution, which loads the executor first.
+		getCurrentOwnerStates: () => executor?.getCurrentSupervisorOwnerStates() ?? [],
 	});
 	const waitSubscriptionManager = createWaitSubscriptionManager(pi, state);
 	const mainWatchdog = registerMainWatchdog(pi);
@@ -499,18 +503,19 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	// executor exists, but only fire on user interaction (after assignment).
 	// Deferred executor binding: the Fleet UI callbacks below are registered before the
 	// executor exists, but only fire on user interaction (after assignment).
-	let fleetExecutor: ReturnType<typeof createSubagentExecutor> | undefined;
-	const fleetResumeRun = (input: { runId: string; asyncDir: string; index?: number; message: string }): Promise<AgentToolResult<Details>> | AgentToolResult<Details> => {
+	let fleetExecutor: SubagentExecutor | undefined;
+	const fleetResumeRun = async (input: { runId: string; asyncDir: string; index?: number; message: string }): Promise<AgentToolResult<Details>> => {
 		const ctx = withLastUiContext((current) => current);
 		if (!ctx) return { content: [{ type: "text", text: "Resume unavailable: no active UI context." }], isError: true, details: { mode: "management" as const, results: [] } };
-		if (!fleetExecutor) return { content: [{ type: "text", text: "Resume unavailable: executor is not ready." }], isError: true, details: { mode: "management" as const, results: [] } };
-		return resumeFleetRun(fleetExecutor, ctx, { runId: input.runId, message: input.message });
+		const { resumeFleetRun } = await import("../runs/foreground/subagent-executor.ts");
+		return resumeFleetRun(await getExecutor(), ctx, { runId: input.runId, message: input.message });
 	};
 	const fleetStatus = fleetViewEnabled
 		? new SubagentFleetStatus(state, async (itemKey) => {
 			const ctx = withLastUiContext((current) => current);
 			if (!ctx) return;
 			try {
+				const { openSubagentFleet } = await import("../tui/fleet.ts");
 				await openSubagentFleet(ctx, state, { initialKey: itemKey, asyncDirRoot: DIRS.async, resultsDir: DIRS.results, fleetKeybindings: config.fleetKeybindings, inspectorPlugins: createBuiltinInspectorPlugins(), resumeRun: fleetResumeRun });
 			} catch (error) {
 				if (isStaleExtensionContextError(error)) {
@@ -521,7 +526,6 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 			}
 		}, { placement: fleetViewPlacement, onWorkflowCoverageChange: setInlineWorkflowCoverage })
 		: undefined;
-	let executorScheduled: ((id: string, params: SubagentParamsLike, signal: AbortSignal, ctx: ExtensionContext) => Promise<AgentToolResult<Details>>) | undefined;
 	let goalTurnId = 0;
 	let releaseHostSessionLiveness = () => {};
 	const scheduledStoreRoot = config.scheduledRuns?.storeRoot === undefined ? undefined : resolveScheduledStoreRoot(config.scheduledRuns.storeRoot);
@@ -529,15 +533,8 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		config,
 		storeRoot: scheduledStoreRoot,
 		launch: async (params, ctx, signal) => {
-			if (!executorScheduled) {
-				return {
-					content: [{ type: "text", text: "Scheduled subagent launch is unavailable (executor not ready)." }],
-					isError: true,
-					details: { mode: "management" as const, results: [] },
-				};
-			}
 			await waitForAdvertisement();
-			return executorScheduled(randomUUID(), params, signal, ctx);
+			return (await getExecutor()).executeScheduled(randomUUID(), params, signal, ctx);
 		},
 		resolveCapabilityCeiling: (sessionId) => resolveCurrentSubagentCapabilityCeiling(sessionId),
 	});
@@ -663,7 +660,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		}
 	};
 
-	const executorDeps: Parameters<typeof createSubagentExecutor>[0] = {
+	const executorDeps: SubagentExecutorDeps = {
 		pi,
 		state,
 		config,
@@ -688,9 +685,17 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		refreshResultDelivery: () => refreshResultDelivery(),
 		trackRetainedNestedRoute: undefined,
 	};
-	fleetExecutor = createSubagentExecutor(executorDeps);
-	const executor = fleetExecutor;
-	executorScheduled = executor.executeScheduled;
+	let executor: SubagentExecutor | undefined;
+	let executorPromise: Promise<SubagentExecutor> | undefined;
+	const getExecutor = (): Promise<SubagentExecutor> => {
+		executorPromise ??= (async () => {
+			const { createSubagentExecutor } = await import("../runs/foreground/subagent-executor.ts");
+			fleetExecutor = createSubagentExecutor(executorDeps);
+			executor = fleetExecutor;
+			return executor;
+		})();
+		return executorPromise;
+	};
 
 	pi.registerMessageRenderer<SupervisorRequestMessageDetails>(SUPERVISOR_REQUEST_MESSAGE_TYPE, renderSupervisorRequest);
 	const registerEntryRenderer = (pi as unknown as {
@@ -778,7 +783,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 
 	const executeSubagentReady = async (id: string, params: SubagentParamsLike, signal: AbortSignal, onUpdate: ((result: AgentToolResult<Details>) => void) | undefined, ctx: ExtensionContext) => {
 		await waitForAdvertisement();
-		return executor.executePublic(id, params, signal, onUpdate, ctx);
+		return (await getExecutor()).executePublic(id, params, signal, onUpdate, ctx);
 	};
 	const executeSubagentCollapsed = (id: string, params: SubagentParamsLike, signal: AbortSignal, onUpdate: ((result: AgentToolResult<Details>) => void) | undefined, ctx: ExtensionContext) => {
 		if (ctx.hasUI) ctx.ui.setToolsExpanded(false);
@@ -790,7 +795,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		// never the model-visible executePublic gate (which rejects schedule.* management).
 		return (async () => {
 			await waitForAdvertisement();
-			return executor.execute(id, params, signal, onUpdate, ctx);
+			return (await getExecutor()).execute(id, params, signal, onUpdate, ctx);
 		})();
 	};
 
@@ -800,7 +805,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		// never the model-visible executePublic gate.
 		return (async () => {
 			await waitForAdvertisement();
-			return executor.execute(id, params, signal, onUpdate, ctx);
+			return (await getExecutor()).execute(id, params, signal, onUpdate, ctx);
 		})();
 	};
 
@@ -819,7 +824,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		executeStructured: async (requestId, params, signal, ctx, onUpdate) => {
 			if (ctx.hasUI) ctx.ui.setToolsExpanded(false);
 			await waitForAdvertisement();
-			return executor.executeDelegated(requestId, params, signal, onUpdate, ctx);
+			return (await getExecutor()).executeDelegated(requestId, params, signal, onUpdate, ctx);
 		},
 	});
 
