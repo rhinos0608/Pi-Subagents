@@ -66,12 +66,6 @@ interface SubagentParamsSchema {
 			minimum?: number;
 			description?: string;
 		};
-		turnBudget?: {
-			properties?: {
-				maxTurns?: { minimum?: number };
-				graceTurns?: { minimum?: number };
-			};
-		};
 		usageBudget?: {
 			properties?: {
 				tokens?: { properties?: { soft?: { exclusiveMinimum?: number }; hard?: { exclusiveMinimum?: number } } };
@@ -325,7 +319,7 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 	it("documents workflow timeout aliases and omits removed turn budgets", () => {
 		const timeoutSchema = SubagentParams?.properties?.timeoutMs;
 		const maxRuntimeSchema = SubagentParams?.properties?.maxRuntimeMs;
-		const turnBudgetSchema = SubagentParams?.properties?.turnBudget;
+		const removedBudgetSchema = SubagentParams?.properties?.turnBudget;
 		const toolBudgetSchema = SubagentParams?.properties?.toolBudget;
 		assert.ok(timeoutSchema, "timeoutMs schema should exist");
 		assert.ok(maxRuntimeSchema, "maxRuntimeMs schema should exist");
@@ -337,7 +331,7 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 		assert.doesNotMatch(String(timeoutSchema.description ?? ""), /foreground-only/i);
 		assert.match(String(maxRuntimeSchema.description ?? ""), /timeoutMs/i);
 		assert.match(String(maxRuntimeSchema.description ?? ""), /Alias timeoutMs \(same defaults\)/);
-		assert.equal(turnBudgetSchema, undefined);
+		assert.equal(removedBudgetSchema, undefined);
 		assert.equal(toolBudgetSchema?.properties?.soft?.minimum, 1);
 		assert.equal(toolBudgetSchema?.properties?.hard?.minimum, 1);
 	});

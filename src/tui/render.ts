@@ -367,7 +367,6 @@ function workflowStepPriority(step: AsyncJobStep, currentNodeId?: string): numbe
 		|| step.status === "stopped"
 		|| step.status === "rejected"
 		|| step.toolBudgetBlocked === true
-		|| step.turnBudgetExceeded === true
 		|| step.activityState === "needs_attention"
 		|| step.watchdog?.phase === "stale"
 		|| unresolvedChildWatchdogBlockers(step.watchdog).length > 0
@@ -529,7 +528,7 @@ function laneGate(step: AsyncJobStep | undefined): string | undefined {
 function laneNextAction(state: AsyncLaneProjection["state"], step: AsyncJobStep | undefined, output: string | undefined, gate: string | undefined): string | undefined {
 	if (unresolvedChildWatchdogBlockers(step?.watchdog).length > 0) return "resolve watchdog blockers";
 	if (step?.watchdog?.phase === "stale") return "inspect stale state";
-	if (step?.toolBudgetBlocked === true || step?.turnBudgetExceeded === true) return "inspect blocked state";
+	if (step?.toolBudgetBlocked === true) return "inspect blocked state";
 	if (gate === "review blockers") return "resolve review blockers";
 	if (gate === "review required" || gate === "acceptance review") return "review output";
 	if (step?.activityState === "needs_attention") return "inspect attention";
@@ -567,7 +566,7 @@ export function projectAsyncLane(job: AsyncJobState, ...args: [selectedStep?: As
 		selectedStep?.activityState === "needs_attention" ? "attention" : undefined,
 		selectedStep?.watchdog?.phase === "stale" ? "stale" : undefined,
 		unresolvedChildWatchdogBlockers(selectedStep?.watchdog).length > 0 ? `wd:${unresolvedChildWatchdogBlockers(selectedStep?.watchdog).length}` : undefined,
-		selectedStep?.toolBudgetBlocked === true || selectedStep?.turnBudgetExceeded === true ? "blocked" : undefined,
+		selectedStep?.toolBudgetBlocked === true ? "blocked" : undefined,
 	].filter((chip): chip is string => Boolean(chip));
 	const state = isTerminalLaneState(job.status) ? job.status : selectedStep?.status ?? job.status;
 	const next = laneNextAction(state, selectedStep, output, gate);
@@ -1008,7 +1007,6 @@ function widgetStepRenderKey(step: AsyncJobStep, index: number, expanded = false
 		step.acceptance?.reviewResult?.status,
 		step.review?.status,
 		step.toolBudgetBlocked,
-		step.turnBudgetExceeded,
 		step.timedOut,
 		step.stopped,
 		step.execution?.status,
@@ -1431,7 +1429,7 @@ function compactWorkflowLaneRow(key: string, items: readonly WorkflowChecklistIt
 }
 
 function compactWorkflowFallbackState(job: AsyncJobState): WorkflowChecklistState {
-	if (job.activityState === "needs_attention" || job.timedOut || job.toolBudgetBlocked || job.turnBudgetExceeded) return "blocked";
+	if (job.activityState === "needs_attention" || job.timedOut || job.toolBudgetBlocked) return "blocked";
 	switch (job.status) {
 		case "complete": return "complete";
 		case "failed": return "failed";
@@ -1543,7 +1541,7 @@ function compactWorkflowBottleneck(rows: readonly CompactWorkflowLaneRow[], job:
 		if (!row || workflowChecklistItemPriority(candidate.state) < workflowChecklistItemPriority(row.state)) row = candidate;
 	}
 	if (row) return { text: `${row.key} · ${row.state}`, tone: row.state === "blocked" || row.state === "failed" ? "error" : "warning" };
-	if (job.activityState === "needs_attention" || job.timedOut || job.toolBudgetBlocked || job.turnBudgetExceeded) return { text: `workflow · ${job.activityState === "needs_attention" ? "needs attention" : "blocked"}`, tone: job.activityState === "needs_attention" ? "warning" : "error" };
+	if (job.activityState === "needs_attention" || job.timedOut || job.toolBudgetBlocked) return { text: `workflow · ${job.activityState === "needs_attention" ? "needs attention" : "blocked"}`, tone: job.activityState === "needs_attention" ? "warning" : "error" };
 	if (job.status === "failed" || job.status === "partial" || job.status === "rejected") return { text: `workflow · ${job.status}`, tone: "error" };
 	if (job.status === "paused" || job.status === "stopped") return { text: `workflow · ${job.status}`, tone: "warning" };
 	return undefined;
@@ -3156,7 +3154,6 @@ function foregroundWorkflowChecklist(details: Details): WorkflowChecklistProject
 			toolCount: progress?.toolCount ?? result.progressSummary?.toolCount,
 			error: result.error,
 			toolBudgetBlocked: result.toolBudgetBlocked,
-			turnBudgetExceeded: result.turnBudgetExceeded,
 			timedOut: result.timedOut,
 			stopped: result.stopped,
 			acceptance: result.acceptance ? { status: result.acceptance.status, reviewResult: result.acceptance.reviewResult ? { status: result.acceptance.reviewResult.status } : undefined } : undefined,

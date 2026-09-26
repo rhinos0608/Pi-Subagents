@@ -287,26 +287,6 @@ export interface ToolBudgetState extends ResolvedToolBudget {
 	blockedTool?: string;
 }
 
-/**
- * @deprecated Turn budgets are no longer accepted as launch configuration or
- * enforced. Retained only to decode historical persisted status and result data.
- */
-export type TurnBudgetOutcome = "within-budget" | "wrap-up-requested" | "termination-deferred" | "exceeded";
-
-/**
- * @deprecated Historical persisted turn-budget state. New runs do not produce
- * this field, but status readers retain it for backwards compatibility.
- */
-export interface TurnBudgetState {
-	maxTurns: number;
-	graceTurns: number;
-	outcome: TurnBudgetOutcome;
-	turnCount: number;
-	wrapUpRequestedAtTurn?: number;
-	terminationDeferredAtTurn?: number;
-	exceededAtTurn?: number;
-}
-
 export interface TokenUsage {
 	input: number;
 	output: number;
@@ -892,7 +872,7 @@ export type CostSummary = {
 
 export type PublicNestedRunSummary = Pick<
 	NestedRunSummary,
-	"id" | "parentRunId" | "parentStepIndex" | "parentAgent" | "depth" | "path" | "asyncDir" | "sessionId" | "sessionFile" | "intercomTarget" | "ownerIntercomTarget" | "leafIntercomTarget" | "ownerState" | "mode" | "state" | "agent" | "sessionName" | "agents" | "model" | "thinking" | "currentStep" | "chainStepCount" | "parallelGroups" | "activityState" | "lastActivityAt" | "currentTool" | "currentToolStartedAt" | "currentPath" | "turnCount" | "toolCount" | "toolBudget" | "toolBudgetBlocked" | "totalTokens" | "totalCost" | "startedAt" | "endedAt" | "lastUpdate" | "error" | "timeoutMs" | "deadlineAt" | "timedOut" | "stopped" | "turnBudget" | "turnBudgetExceeded" | "wrapUpRequested"
+	"id" | "parentRunId" | "parentStepIndex" | "parentAgent" | "depth" | "path" | "asyncDir" | "sessionId" | "sessionFile" | "intercomTarget" | "ownerIntercomTarget" | "leafIntercomTarget" | "ownerState" | "mode" | "state" | "agent" | "sessionName" | "agents" | "model" | "thinking" | "currentStep" | "chainStepCount" | "parallelGroups" | "activityState" | "lastActivityAt" | "currentTool" | "currentToolStartedAt" | "currentPath" | "turnCount" | "toolCount" | "toolBudget" | "toolBudgetBlocked" | "totalTokens" | "totalCost" | "startedAt" | "endedAt" | "lastUpdate" | "error" | "timeoutMs" | "deadlineAt" | "timedOut" | "stopped" | "wrapUpRequested"
 > & {
 	steps?: PublicNestedStepSummary[];
 	children?: PublicNestedRunSummary[];
@@ -1303,8 +1283,6 @@ export interface SingleResult {
 	interrupted?: boolean;
 	timedOut?: boolean;
 	stopped?: boolean;
-	turnBudget?: TurnBudgetState;
-	turnBudgetExceeded?: boolean;
 	wrapUpRequested?: boolean;
 	toolBudget?: ToolBudgetState;
 	toolBudgetBlocked?: boolean;
@@ -1645,8 +1623,6 @@ export interface NestedStepSummary {
 	watchdog?: ChildWatchdogProgress;
 	timedOut?: boolean;
 	stopped?: boolean;
-	turnBudget?: TurnBudgetState;
-	turnBudgetExceeded?: boolean;
 	wrapUpRequested?: boolean;
 	toolBudget?: ToolBudgetState;
 	toolBudgetBlocked?: boolean;
@@ -1704,8 +1680,6 @@ export interface NestedRunSummary extends NestedRunAddress {
 	deadlineAt?: number;
 	timedOut?: boolean;
 	stopped?: boolean;
-	turnBudget?: TurnBudgetState;
-	turnBudgetExceeded?: boolean;
 	wrapUpRequested?: boolean;
 	toolBudget?: ToolBudgetState;
 	toolBudgetBlocked?: boolean;
@@ -1748,7 +1722,6 @@ export interface AsyncStartedEvent {
 	usageBudget?: UsageBudgetState;
 	timeoutMs?: number;
 	deadlineAt?: number;
-	turnBudget?: TurnBudgetState;
 	nestedRoute?: NestedRouteInfo;
 	capabilityCeiling?: ResolvedSubagentCapabilityCeiling;
 	parentWorkflowRunId?: string;
@@ -1919,8 +1892,6 @@ export interface AsyncStatus {
 	deadlineAt?: number;
 	timedOut?: boolean;
 	stopped?: boolean;
-	turnBudget?: TurnBudgetState;
-	turnBudgetExceeded?: boolean;
 	wrapUpRequested?: boolean;
 	toolBudget?: ToolBudgetState;
 	toolBudgetBlocked?: boolean;
@@ -2008,8 +1979,6 @@ export interface AsyncStatus {
 		timedOut?: boolean;
 		timeoutRecovery?: TimeoutRecoverySummary;
 		stopped?: boolean;
-		turnBudget?: TurnBudgetState;
-		turnBudgetExceeded?: boolean;
 		wrapUpRequested?: boolean;
 		toolBudget?: ToolBudgetState;
 		toolBudgetBlocked?: boolean;
@@ -2106,8 +2075,6 @@ export interface AsyncJobState {
 	deadlineAt?: number;
 	timedOut?: boolean;
 	stopped?: boolean;
-	turnBudget?: TurnBudgetState;
-	turnBudgetExceeded?: boolean;
 	wrapUpRequested?: boolean;
 	toolBudget?: ToolBudgetState;
 	toolBudgetBlocked?: boolean;

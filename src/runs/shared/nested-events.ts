@@ -9,7 +9,6 @@ import {
 	type LaunchResolvedChildExtensions,
 	type RuntimeAcknowledgedChildExtensions,
 	type NestedRouteInfo,
-	type TurnBudgetState,
 	type NestedRunSummary,
 	type NestedRunState,
 	type NestedStepSummary,
@@ -299,25 +298,6 @@ function runtimeAcknowledgedEntry(value: unknown): { runtimeAcknowledgedExtensio
 	return sanitized ? { runtimeAcknowledgedExtensions: sanitized } : {};
 }
 
-function sanitizeTurnBudget(value: unknown): TurnBudgetState | undefined {
-	if (!value || typeof value !== "object") return undefined;
-	const raw = value as Record<string, unknown>;
-	const maxTurns = clampNumber(raw.maxTurns);
-	const graceTurns = clampNumber(raw.graceTurns);
-	const turnCount = clampNumber(raw.turnCount);
-	const outcome = raw.outcome === "within-budget" || raw.outcome === "wrap-up-requested" || raw.outcome === "termination-deferred" || raw.outcome === "exceeded" ? raw.outcome : undefined;
-	if (maxTurns === undefined || graceTurns === undefined || turnCount === undefined || !outcome) return undefined;
-	return {
-		maxTurns,
-		graceTurns,
-		turnCount,
-		outcome,
-		...(clampNumber(raw.wrapUpRequestedAtTurn) !== undefined ? { wrapUpRequestedAtTurn: clampNumber(raw.wrapUpRequestedAtTurn) } : {}),
-		...(clampNumber(raw.terminationDeferredAtTurn) !== undefined ? { terminationDeferredAtTurn: clampNumber(raw.terminationDeferredAtTurn) } : {}),
-		...(clampNumber(raw.exceededAtTurn) !== undefined ? { exceededAtTurn: clampNumber(raw.exceededAtTurn) } : {}),
-	};
-}
-
 function sanitizeState(value: unknown, fallback: NestedRunState): NestedRunState {
 	return value === "queued" || value === "running" || value === "complete" || value === "failed" || value === "partial" || value === "paused" || value === "stopped" || value === "rejected"
 		? value
@@ -353,8 +333,6 @@ function sanitizeStep(input: unknown, depth: number): NestedStepSummary | undefi
 		...(stringValue(raw.error, 1024) ? { error: stringValue(raw.error, 1024) } : {}),
 		...(raw.timedOut === true ? { timedOut: true } : {}),
 		...(raw.stopped === true ? { stopped: true } : {}),
-		...(sanitizeTurnBudget(raw.turnBudget) ? { turnBudget: sanitizeTurnBudget(raw.turnBudget) } : {}),
-		...(raw.turnBudgetExceeded === true ? { turnBudgetExceeded: true } : {}),
 		...(raw.wrapUpRequested === true ? { wrapUpRequested: true } : {}),
 		...(sanitizeLaunchResolvedExtensions(raw.launchResolvedExtensions) ? { launchResolvedExtensions: sanitizeLaunchResolvedExtensions(raw.launchResolvedExtensions) } : {}),
 		...(sanitizeRuntimeAcknowledgedExtensions(raw.runtimeAcknowledgedExtensions) ? { runtimeAcknowledgedExtensions: sanitizeRuntimeAcknowledgedExtensions(raw.runtimeAcknowledgedExtensions) } : {}),
@@ -414,8 +392,6 @@ export function sanitizeSummary(input: unknown, depth = 0): NestedRunSummary | u
 		...(clampNumber(raw.deadlineAt) !== undefined ? { deadlineAt: clampNumber(raw.deadlineAt) } : {}),
 		...(raw.timedOut === true ? { timedOut: true } : {}),
 		...(raw.stopped === true ? { stopped: true } : {}),
-		...(sanitizeTurnBudget(raw.turnBudget) ? { turnBudget: sanitizeTurnBudget(raw.turnBudget) } : {}),
-		...(raw.turnBudgetExceeded === true ? { turnBudgetExceeded: true } : {}),
 		...(raw.wrapUpRequested === true ? { wrapUpRequested: true } : {}),
 		...(stringValue(raw.error, 1024) ? { error: stringValue(raw.error, 1024) } : {}),
 		...(sanitizeLaunchResolvedExtensions(raw.launchResolvedExtensions) ? { launchResolvedExtensions: sanitizeLaunchResolvedExtensions(raw.launchResolvedExtensions) } : {}),
@@ -1082,8 +1058,6 @@ export function nestedSummaryFromAsyncStatus(status: AsyncStatus, asyncDir: stri
 		...(status.deadlineAt !== undefined ? { deadlineAt: status.deadlineAt } : {}),
 		...(status.timedOut !== undefined ? { timedOut: status.timedOut } : {}),
 		...(status.stopped !== undefined ? { stopped: status.stopped } : {}),
-		...(status.turnBudget ? { turnBudget: status.turnBudget } : {}),
-		...(status.turnBudgetExceeded !== undefined ? { turnBudgetExceeded: status.turnBudgetExceeded } : {}),
 		...(status.wrapUpRequested !== undefined ? { wrapUpRequested: status.wrapUpRequested } : {}),
 		...(status.error ? { error: status.error } : {}),
 		...(status.startedAt !== undefined ? { startedAt: status.startedAt } : { startedAt: fallback.ts }),
@@ -1111,8 +1085,6 @@ export function nestedSummaryFromAsyncStatus(status: AsyncStatus, asyncDir: stri
 			...runtimeAcknowledgedEntry(step.runtimeAcknowledgedExtensions),
 			...(step.timedOut !== undefined ? { timedOut: step.timedOut } : {}),
 			...(step.stopped !== undefined ? { stopped: step.stopped } : {}),
-			...(step.turnBudget ? { turnBudget: step.turnBudget } : {}),
-			...(step.turnBudgetExceeded !== undefined ? { turnBudgetExceeded: step.turnBudgetExceeded } : {}),
 			...(step.wrapUpRequested !== undefined ? { wrapUpRequested: step.wrapUpRequested } : {}),
 			...(step.processTerminal ? { processTerminal: sanitizeProcessTerminal(step.processTerminal, { runId: status.runId || fallback.id, runnerProcessInstanceId: step.processTerminal.runnerProcessInstanceId }, `${asyncDir}/status.json step ${index}`) } : {}),
 			...(step.capabilityCeiling ? { capabilityCeiling: step.capabilityCeiling } : {}),

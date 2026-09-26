@@ -136,7 +136,7 @@ describe("subagent control attention state", () => {
 
 	it("supports opt-in turn and token long-running thresholds", () => {
 		const tokenBudget = resolveControlConfig(undefined, { activeNoticeAfterMs: 999_999, activeNoticeAfterTokens: 500_000 });
-		const turnBudget = resolveControlConfig(undefined, { activeNoticeAfterMs: 999_999, activeNoticeAfterTurns: 5 });
+		const turnThreshold = resolveControlConfig(undefined, { activeNoticeAfterMs: 999_999, activeNoticeAfterTurns: 5 });
 
 		assert.equal(nextLongRunningTrigger(tokenBudget, {
 			startedAt: 0,
@@ -144,7 +144,7 @@ describe("subagent control attention state", () => {
 			turns: 1,
 			tokens: 500_000,
 		}), "token_threshold");
-		assert.equal(nextLongRunningTrigger(turnBudget, {
+		assert.equal(nextLongRunningTrigger(turnThreshold, {
 			startedAt: 0,
 			now: 77_000,
 			turns: 5,

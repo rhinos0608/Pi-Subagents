@@ -2405,7 +2405,6 @@ export function foregroundResultIntercomStatus(result: SingleResult): ReturnType
 		processSignal: result.processSignal,
 		timedOut: result.timedOut,
 		stopped: result.stopped,
-		turnBudgetExceeded: result.turnBudgetExceeded,
 	}));
 }
 
@@ -3847,7 +3846,6 @@ async function finalizeSingleWorktreeHandoff(input: {
 						processSignal: input.result.processSignal,
 						timedOut: input.result.timedOut,
 						stopped: input.result.stopped,
-						turnBudgetExceeded: input.result.turnBudgetExceeded,
 					})),
 					summary: resultSummaryForIntercom(input.result),
 					...(input.result.artifactPaths?.outputPath ? { outputPath: input.result.artifactPaths.outputPath } : {}),
@@ -4456,7 +4454,7 @@ function workflowChildResult(
 	const terminalOutcome = forcedTerminalOutcome
 		?? (result.details.results.some((child) => child.timedOut)
 			? { state: "partial" as const, reason: "timeout" as const }
-			: result.details.usageBudget?.exhausted || result.details.results.some((child) => child.turnBudgetExceeded || child.toolBudgetBlocked)
+			: result.details.usageBudget?.exhausted || result.details.results.some((child) => child.toolBudgetBlocked)
 				? { state: "partial" as const, reason: "budget_exhausted" as const }
 				: undefined);
 	const acceptanceRecovery = result.details.results.find((child) => child.acceptance?.recovery)?.acceptance?.recovery;
