@@ -29,6 +29,7 @@ const RESERVED_COMMAND_NAMES = new Set([
 	"run-chain",
 	"subagents-doctor",
 	"subagents-models",
+	"subagents-clear-model-exclusions",
 ]);
 
 function readPromptFiles(cwd: string): string[] {

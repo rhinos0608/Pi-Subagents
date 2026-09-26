@@ -564,12 +564,17 @@ const RETRYABLE_MODEL_FAILURE_PATTERNS = [
 	/too many requests/i,
 	/\b429\b/,
 	/quota/i,
+	/quota[\s_-]*exhausted/i,
 	/billing/i,
 	/credit/i,
+	/insufficient[\s_-]*credits?/i,
+	/purchase more credits/i,
+	/payment required/i,
 	// Some gateways return only status/type metadata for account/provider
 	// restrictions. 401/403 are candidate-specific authorization failures:
 	// another configured provider/model may still work and should be tried.
 	/^\s*401\s*:/,
+	/\b402\b/,
 	/\b403\b/,
 	/auth(?:entication)?/i,
 	/unauthori[sz]ed/i,
@@ -628,8 +633,21 @@ function isTransientNoOutputFailure(error: string | undefined): boolean {
 		|| /^Subagent produced no output after terminal assistant stopReason "[^"]+"\.$/.test(error ?? "");
 }
 
+/**
+ * Account-level exhaustion signals (quota, billing, credits). These identify the
+ * provider account — not the task or request shape — as the failure source, so
+ * they stay retryable across tool progress and stay cacheable even when wrapped
+ * in request-shape (`invalid_request_error`) or rate (`429`) envelopes.
+ */
+const ACCOUNT_EXHAUSTED_PATTERN = /quota[\s_-]*exhausted|resource[\s_-]*exhausted|insufficient[\s_-]*credits?|purchase more credits|billing|\bcredit\b|payment required|\b402\b/i;
+
+export function isAccountExhaustedFailure(error: string | undefined): boolean {
+	return ACCOUNT_EXHAUSTED_PATTERN.test(error ?? "");
+}
+
 export function isRetryableModelFailureAttempt(input: { error: string | undefined; messages?: readonly unknown[]; toolCount?: number }): boolean {
 	if (!isRetryableModelFailure(input.error)) return false;
+	if (isAccountExhaustedFailure(input.error)) return true;
 	if ((input.toolCount ?? 0) > 0) return false;
 	if (isTransientNoOutputFailure(input.error)) return true;
 	if ((input.toolCount ?? 0) === 0 && (input.messages?.length ?? 0) === 0) return true;
@@ -644,7 +662,7 @@ const REQUEST_SHAPE_FAILURE_PATTERN = /\b(?:bad[ _]request|invalid[ _]argument|i
 // Transient transport blips (fetch failed, timeouts, connection resets) say the
 // network flaked, not that the model is unhealthy. Still retryable within the
 // run (fall through to next candidate), but never cached as an exclusion — a
-// 24h exclusion for a momentary blip wrongly drains good models on later runs.
+// 5h exclusion for a momentary blip wrongly drains good models on later runs.
 const TRANSIENT_TRANSPORT_NO_CACHE_PATTERN = /fetch failed|request timed out|\btimed?\s?out\b|timeout|econnreset|etimedout|socket hang up|network(?:work)? (?:error|failure)|econnrefused|enotfound|eai_again|connection\s+(?:error|reset|closed|aborted|refused)|connection reset by peer|APIConnectionError|\b429\b|rate\s*limit|too many requests|REQUEST_LIMIT_EXCEEDED/i;
 
 export function isNonCacheableTransportFailure(error: string | undefined): boolean {
@@ -653,8 +671,9 @@ export function isNonCacheableTransportFailure(error: string | undefined): boole
 
 export function recordRetryableModelFailure(model: string | undefined, error: string | undefined, healthScope?: string): void {
 	if (!model || !error || !isRetryableModelFailure(error) || isContextOverflow(error)) return;
-	if (REQUEST_SHAPE_FAILURE_PATTERN.test(error) || isTransientNoOutputFailure(error)) return;
-	if (TRANSIENT_TRANSPORT_NO_CACHE_PATTERN.test(error)) return;
+	const accountExhausted = isAccountExhaustedFailure(error);
+	if (!accountExhausted && (REQUEST_SHAPE_FAILURE_PATTERN.test(error) || isTransientNoOutputFailure(error))) return;
+	if (!accountExhausted && TRANSIENT_TRANSPORT_NO_CACHE_PATTERN.test(error)) return;
 	const { provider, modelId } = parseModelKey(model);
 	recordModelFailure({ modelId, reason: error, ...(provider ? { provider } : {}), ...(healthScope ? { scope: healthScope } : {}) });
 }

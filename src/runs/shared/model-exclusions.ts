@@ -26,7 +26,7 @@ type RecordModelFailureOptions = ModelExclusionTarget & {
 let exclusions: ModelExclusion[] = [];
 let loaded = false;
 /** Default duration for a new model exclusion when no per-record TTL is supplied. */
-export const DEFAULT_MODEL_EXCLUSION_TTL_MS = 24 * 60 * 60_000;
+export const DEFAULT_MODEL_EXCLUSION_TTL_MS = 5 * 60 * 60_000;
 /** Keeps a new expiry safely below JavaScript's maximum Date timestamp. */
 export const MAX_MODEL_EXCLUSION_TTL_MS = 8_000_000_000_000_000;
 const MAX_DATE_TIMESTAMP_MS = 8_640_000_000_000_000;
