@@ -266,7 +266,6 @@ export function buildDoctorReport(input: DoctorReportInput): string {
 		"Intercom bridge",
 		...lineFromCheck("intercom bridge", () => formatIntercomDiagnostic(deps.diagnoseIntercomBridge({
 			config: input.config.intercomBridge,
-			context: input.context,
 			orchestratorTarget: input.orchestratorTarget,
 			cwd: input.cwd,
 		}), input.context).join("\n")).split("\n"),

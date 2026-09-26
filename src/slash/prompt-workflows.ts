@@ -207,12 +207,10 @@ function splitPromptChain(input: string): string[] {
 
 function workflowParams(workflow: PromptWorkflow, args: string[], runtime: ReturnType<typeof parseRuntimeOptions>): SubagentParamsLike {
 	const task = substituteArgs(workflow.body, args).trim();
-	const context = runtime.fork ? "fork" : runtime.fresh ? "fresh" : workflow.context;
 	return {
 		agent: runtime.agentOverride ?? workflow.agent,
 		task,
 		agentScope: "both",
-		...(context ? { context } : {}),
 		...(workflow.model ? { model: workflow.model } : {}),
 		...(workflow.skill !== undefined ? { skill: workflow.skill } : {}),
 		...(workflow.cwd ? { cwd: workflow.cwd } : {}),
@@ -237,7 +235,6 @@ function promptWorkflowScript(workflows: PromptWorkflow[], args: string[], runti
 			...(params.model ? { model: params.model } : {}),
 			...(params.skill !== undefined ? { skill: params.skill } : {}),
 			...(params.cwd ? { cwd: params.cwd } : {}),
-			...(params.context ? { context: params.context } : {}),
 		};
 		return `const step${index} = await runs.run(${JSON.stringify(`prompt-${index + 1}-${workflow.name}`)}, { ...${JSON.stringify(child)}, task: ${JSON.stringify(task)}.replaceAll("{previous}", previous) });\nprevious = step${index}.output;`;
 	});

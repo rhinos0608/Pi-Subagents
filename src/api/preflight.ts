@@ -334,7 +334,6 @@ export async function resolveSubagentLaunchContract(input: SubagentLaunchContrac
 	const bridge = resolveIntercomBridge({
 		config: loadConfig().intercomBridge,
 		...(bridgeOverride ? { override: bridgeOverride.value } : {}),
-		context,
 		orchestratorTarget: input.orchestratorTarget ?? PREFLIGHT_ORCHESTRATOR_TARGET,
 	});
 	if (bridge.active && bridge.interpolatesOrchestratorTarget && input.orchestratorTarget === undefined) {
