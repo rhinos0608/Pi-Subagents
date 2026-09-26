@@ -57,7 +57,7 @@ setTimeout(() => { if (phase === "old") fs.writeFileSync(${JSON.stringify(oldDon
 			import { registerRuntimeAgent } from "./src/agents/runtime-agent-registry.ts";
 			const hooks = new Map();
 			const tools = new Map();
-			let active = ["subagents_enable"];
+			let active = ["read"];
 			const pi = new Proxy({
 				events: { on() { return () => {}; }, emit() {} },
 				on(name, handler) { hooks.set(name, [...(hooks.get(name) ?? []), handler]); },
@@ -72,13 +72,13 @@ setTimeout(() => { if (phase === "old") fs.writeFileSync(${JSON.stringify(oldDon
 				modelRegistry: { getAvailable() { return []; }, getAll() { return []; } },
 				sessionManager: { getSessionId() { return "barrier-test"; }, getSessionFile() { return undefined; }, getBranch() { return []; }, buildSessionContext() { return { messages: [] }; } },
 			};
-			const start = hooks.get("session_start").at(-2);
-			const before = hooks.get("before_agent_start").at(-2);
+			const start = hooks.get("session_start").at(-1);
+			const before = hooks.get("before_agent_start").at(-1);
 			start({ reason: "startup" }, ctx);
 			let tick = false;
 			setTimeout(() => { tick = true; }, 10);
 			const firstPrompt = before({ systemPrompt: "base", systemPromptOptions: { selectedTools: ["subagent"] } }, ctx);
-			const enabled = tools.get("subagents_enable").execute("id", {}, new AbortController().signal, undefined, ctx);
+			const enabled = before({ systemPrompt: "base", systemPromptOptions: { selectedTools: ["subagent"] } }, ctx);
 			const firstExecution = tools.get("subagent").execute("immediate", { agent: "global-specialist", task: "Probe", async: false }, new AbortController().signal, undefined, ctx)
 				.then((result) => JSON.stringify(result), (error) => error.message);
 			const firstList = tools.get("subagent").execute("list", { action: "list" }, new AbortController().signal, undefined, ctx);
@@ -91,7 +91,7 @@ setTimeout(() => { if (phase === "old") fs.writeFileSync(${JSON.stringify(oldDon
 			assert.match(firstRun, /global-specialist/);
 			assert.doesNotMatch(firstRun, /Unknown agent|not found/i);
 			assert.match(JSON.stringify(listed), /global-specialist/);
-			for (const text of [prompt.systemPrompt, loader.content[0].text]) {
+			for (const text of [prompt.systemPrompt, loader.systemPrompt]) {
 				assert.match(text, /<name>global-specialist<\/name>/);
 				assert.match(text, /<name>local-specialist<\/name>/);
 			}
@@ -101,7 +101,7 @@ setTimeout(() => { if (phase === "old") fs.writeFileSync(${JSON.stringify(oldDon
 			start({ reason: "reload" }, ctx);
 			await new Promise((resolve) => setTimeout(resolve, 50));
 			const waitingOnOld = before({ systemPrompt: "base", systemPromptOptions: { selectedTools: ["subagent"] } }, ctx);
-			const waitingLoader = tools.get("subagents_enable").execute("reload", {}, new AbortController().signal, undefined, ctx);
+			const waitingLoader = before({ systemPrompt: "base", systemPromptOptions: { selectedTools: ["subagent"] } }, ctx);
 			const registration = registerRuntimeAgent({ pi, name: "runtime-test", definition: { description: "Test", systemPrompt: "Test" } });
 			process.env.TEST_NPM_PHASE = "latest";
 			start({ reason: "reload" }, ctx);
@@ -110,7 +110,7 @@ setTimeout(() => { if (phase === "old") fs.writeFileSync(${JSON.stringify(oldDon
 			const [latest, reloadedLoader] = await Promise.all([waitingOnOld, waitingLoader]);
 			assert.equal(fs.existsSync(process.env.TEST_OLD_DONE), false, "old lookup held the new session's prompt");
 			assert.match(latest.systemPrompt, /<name>new-specialist<\/name>/);
-			assert.match(reloadedLoader.content[0].text, /<name>new-specialist<\/name>/);
+			assert.match(reloadedLoader.systemPrompt, /<name>new-specialist<\/name>/);
 			assert.doesNotMatch(latest.systemPrompt, /<name>global-specialist<\/name>/);
 			const currentList = await tools.get("subagent").execute("list-b", { action: "list" }, new AbortController().signal, undefined, ctx);
 			assert.match(JSON.stringify(currentList), /new-specialist/);
