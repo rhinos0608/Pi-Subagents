@@ -75,7 +75,6 @@ import { resolveRequiredChildExtensions } from "../../shared/required-child-exte
 import { finalizeSingleOutput, injectSingleOutputInstruction, normalizeSingleOutputOverride, outputPathMappingFromTask, resolveSingleOutputPath, validateFileOnlyOutputMode } from "../shared/single-output.ts";
 import { assertJsonSchemaObject, cleanupStructuredOutputRuntime, createStructuredOutputRuntime } from "../shared/structured-output.ts";
 import { compactForegroundDetails, getSingleResultOutput, readStatus, resolveChildCwd, sumResultsCost, sumResultsUsage, toAgentToolUsage } from "../../shared/utils.ts";
-import { createTaskMutationArbiter } from "../shared/llm-intent-arbiter.ts";
 import { discardPreservedWorktrees, formatParallelHandoffError, formatParallelHandoffReference, formatStoredParallelHandoffCleanup, parallelHandoffPath, readParallelHandoffManifest, recordParallelHandoffMerge, recordParallelHandoffSupersession, writeParallelHandoffGroup, writeWorktreeSetupHandoff } from "../shared/parallel-handoff.ts";
 import { summarizeContextModes, type ContextMode, type ContextSummary } from "../shared/context-mode.ts";
 import {
@@ -4039,7 +4038,6 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 			hostAvailableTools: getHostAvailableTools(deps.pi),
 			parentSessionId: ctx.sessionManager.getSessionId() ?? undefined,
 			requiredExtensions,
-			llmIntentArbiter: createTaskMutationArbiter({ model: ctx.model, modelRegistry: ctx.modelRegistry, sessionId: ctx.sessionManager.getSessionId() }),
 			childRuntime: deps.childRuntime,
 			onChildSession: (controls) => { childSessionControls = controls; },
 			context: data.contextPolicy.contextForAgent(params.agent!),

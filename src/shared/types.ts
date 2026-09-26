@@ -382,7 +382,7 @@ export interface ControlEvent {
 	nestedRunId?: string;
 	nestingPath?: NestedRunAddress["path"];
 	message: string;
-	reason?: "idle" | "completion_guard" | "active_long_running" | "tool_failures" | "supervisor_request" | "time_threshold" | "turn_threshold" | "token_threshold" | "tool_open_threshold";
+	reason?: "idle" | "active_long_running" | "tool_failures" | "supervisor_request" | "time_threshold" | "turn_threshold" | "token_threshold" | "tool_open_threshold";
 	turns?: number;
 	tokens?: number;
 	toolCount?: number;
@@ -556,18 +556,14 @@ export interface ReviewProjection {
 }
 
 export interface FileMutationEffect {
-	status: "not-requested" | "not-applicable" | "observed" | "missing" | "blocked";
-	expected: boolean;
-	attempted: boolean;
-	message?: string;
-	resolvedBy?: "llm-intent-arbiter";
+	status: "observed";
+	attempted: true;
 	evidence?: TrackedMutationEvidence;
 }
 
 export interface SettlementDiagnostic {
 	finalTextPresent: boolean;
 	mutation: {
-		expected: boolean;
 		attempted: boolean;
 		observed: boolean;
 	};
@@ -847,7 +843,6 @@ export interface SteeringRecoveryDescriptor {
 	skills?: string[];
 	skillPath?: string[];
 	agentFilePath?: string;
-	completionGuard?: boolean;
 	memory?: { scope: "project" | "user"; path: string };
 	outputPath?: string;
 	outputMode: "inline" | "file-only";
@@ -2523,8 +2518,6 @@ export interface RunSyncOptions {
 	modelResolutionRequested?: string;
 	/** How the launch model was selected: explicit per-call, configured agent primary, or inherited parent. */
 	modelOrigin?: "explicit" | "inherited" | "configured";
-	/** LLM intent arbiter for the completion mutation guard (rescues read-only review runs). */
-	llmIntentArbiter?: import("../runs/shared/llm-intent-arbiter.ts").TaskMutationArbiter;
 	/** Override the agent's default thinking level for this run */
 	thinkingOverride?: AgentConfig["thinking"];
 	thinkingCeiling?: ThinkingLevel;

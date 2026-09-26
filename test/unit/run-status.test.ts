@@ -1376,7 +1376,7 @@ describe("async run status inspection", () => {
 		}
 	});
 
-	it("shows direct run-id recovery for workflow children", () => {
+	it("shows resolved child models and direct run-id recovery for workflow children", () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-run-status-workflow-resume-"));
 		try {
 			const asyncRoot = path.join(root, "runs");
@@ -1394,12 +1394,25 @@ describe("async run status inspection", () => {
 				lastUpdate: 200,
 				steps: [
 					{ agent: "reviewer", workflowKey: "review", runId: "child-review", status: "failed", sessionFile: firstSession },
-					{ agent: "worker", workflowKey: "write", runId: "child-write", status: "paused", sessionFile: secondSession },
+					{ agent: "worker", workflowKey: "write", runId: "child-write", status: "paused", sessionFile: secondSession, model: "anthropic/claude-sonnet-5" },
 				],
+				workflowChildren: {
+					version: 1,
+					parentToolCallId: "tool-call",
+					workflowRunId: "workflow-parent",
+					inventoryComplete: true,
+					workflowState: "failed",
+					children: [
+						{ childId: "review", runId: "child-review", state: "failed", model: "openai-codex/gpt-5.5", thinking: "high" },
+						{ childId: "write", runId: "child-write", state: "paused", model: "ignored/model", thinking: "low" },
+					],
+				},
 			}, null, 2), "utf-8");
 
 			const result = inspectSubagentStatus({ id: "workflow-parent" }, { asyncDirRoot: asyncRoot, resultsDir: path.join(root, "results") });
 			const text = textContent(result);
+			assert.match(text, /Workflow child review: reviewer failed \(gpt-5\.5 · thinking high\)/);
+			assert.match(text, /Workflow child write: worker paused \(claude-sonnet-5 · thinking low\)/);
 			assert.match(text, /Revive workflow child 'review': subagent\(\{ action: "resume", id: "child-review", message: "\.\.\." \}\)/);
 			assert.match(text, /Revive workflow child 'write': subagent\(\{ action: "resume", id: "child-write", message: "\.\.\." \}\)/);
 			assert.doesNotMatch(text, /id: "workflow-parent", index:/);

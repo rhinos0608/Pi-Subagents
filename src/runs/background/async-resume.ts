@@ -341,7 +341,7 @@ export function readAsyncRecoveryDescriptor(asyncDir: string | undefined): Steer
 	const allowedFields = new Set([
 		"modelResponseAliases", "version", "launchContractDigest", "sourceRunId", "agentContract", "agent", "sessionFile", "cwd", "model", "modelCandidates", "modelHealthScope", "modelProvider", "modelOverrideFromParent", "modelOrigin", "fallbackModels", "fast", "thinking", "thinkingCeiling", "tools", "allowNestedSubagents", "allowedAgents", "extensions",
 		"subagentOnlyExtensions", "mcpDirectTools", "excludeTools", "mutationTools", "systemPrompt", "systemPromptMode", "inheritProjectContext", "inheritGlobalContext", "inheritSkills", "skills",
-		"skillPath", "agentFilePath", "completionGuard", "memory", "outputPath", "outputMode", "structuredOutputSchema", "acceptance", "sessionDir", "artifactConfig",
+		"skillPath", "agentFilePath", "memory", "outputPath", "outputMode", "structuredOutputSchema", "acceptance", "sessionDir", "artifactConfig",
 		"artifactsDir", "maxOutput", "controlConfig", "context", "intercomBridge", "absoluteDeadlineAt", "initialTurnBudget", "initialToolBudget", "maxSubagentDepth", "share", "capabilityCeiling",
 		"launchResolvedExtensions", "runFanoutBudget", "lane", "baseRef",
 		"extensionBindings",
@@ -408,7 +408,6 @@ export function readAsyncRecoveryDescriptor(asyncDir: string | undefined): Steer
 			throw new Error(`Invalid async recovery descriptor '${descriptorPath}': ${error instanceof Error ? error.message : String(error)}`);
 		}
 	}
-	if (parsed.completionGuard !== undefined && typeof parsed.completionGuard !== "boolean") throw new Error(`Invalid async recovery descriptor '${descriptorPath}': completionGuard must be a boolean.`);
 	if (parsed.structuredOutputSchema !== undefined && (!parsed.structuredOutputSchema || typeof parsed.structuredOutputSchema !== "object" || Array.isArray(parsed.structuredOutputSchema))) throw new Error(`Invalid async recovery descriptor '${descriptorPath}': structuredOutputSchema must be an object.`);
 	if (parsed.memory !== undefined) {
 		if (!parsed.memory || typeof parsed.memory !== "object" || Array.isArray(parsed.memory)) throw new Error(`Invalid async recovery descriptor '${descriptorPath}': memory must be an object.`);
@@ -652,7 +651,6 @@ export function applySteeringRecoveryAgentConfig(agentConfig: AgentConfig, descr
 		skills: descriptor.skills ? [...descriptor.skills] : undefined,
 		skillPath: descriptor.skillPath ? [...descriptor.skillPath] : undefined,
 		filePath: descriptor.agentFilePath as string,
-		completionGuard: descriptor.completionGuard,
 		memory: descriptor.memory ? { ...descriptor.memory } : undefined,
 		output: undefined,
 		toolBudget: descriptor.initialToolBudget,

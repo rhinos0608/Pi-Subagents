@@ -16,10 +16,6 @@ async function hostB(sessionFile: string, params: object, label: string, policy 
 	return JSON.parse(fs.readFileSync(output, "utf8"));
 }
 
-async function hostBatch(sessionFile: string, requests: Array<{ params: object; policy?: string }>, label: string): Promise<any[]> {
-	return hostB(sessionFile, requests, label);
-}
-
 describe("foreign workflow tool steering (separate processes)", () => {
 	installAsyncExecutionHooks();
 	it("delivers ID and directory requests with file-preferred identity; refuses wrong sessions and terminal runs", { timeout: 60000 }, async () => {
@@ -31,7 +27,7 @@ describe("foreign workflow tool steering (separate processes)", () => {
 		ctx.sessionManager.getSessionFile = () => sessionFile;
 		ctx.sessionManager.getSessionId = () => "different-runtime-id-in-owner";
 		const state: any = { baseCwd: tempDir, currentSessionId: null, asyncJobs: new Map(), foregroundControls: new Map(), lastForegroundControlId: null };
-		const executor = createSubagentExecutor({ pi: { events: createEventBus(), getSessionName: () => undefined }, state, config: {}, asyncByDefault: false, tempArtifactsDir: tempDir, getSubagentSessionRoot: () => tempDir, expandTilde: p => p, discoverAgents: () => ({ agents: [makeAgent("worker", { completionGuard: false })] }) });
+		const executor = createSubagentExecutor({ pi: { events: createEventBus(), getSessionName: () => undefined }, state, config: {}, asyncByDefault: false, tempArtifactsDir: tempDir, getSubagentSessionRoot: () => tempDir, expandTilde: p => p, discoverAgents: () => ({ agents: [makeAgent("worker")] }) });
 		const launch = await executor.execute("owner", { workflowScript: 'return await runs.run("A", { agent: "worker", task: "Wait" });', async: true, mission: false }, new AbortController().signal, undefined, ctx);
 		assert.notEqual(launch.isError, true, JSON.stringify(launch));
 		const runId = launch.details.asyncId!;
@@ -74,7 +70,7 @@ describe("foreign workflow tool steering (separate processes)", () => {
 		const sessionFile = path.join(tempDir, "parent.jsonl");
 		const status = JSON.stringify({ runId, mode: "workflow", state: "running", sessionId: sessionFile, completionOwnerId: "unavailable-owner", pid: 99999999, updatedAt: 1, steps: [{ status: "running", workflowKey: "A" }, { status: "running", workflowKey: "B" }] });
 		fs.writeFileSync(path.join(dir, "status.json"), status);
-		const [forbidden, confirmation, mismatch, b] = await hostBatch(sessionFile, [
+		const [forbidden, confirmation, mismatch, b] = await hostB(sessionFile, [
 			{ params: { dir }, policy: "forbid" },
 			{ params: { dir }, policy: "confirm" },
 			{ params: { dir, id: "another-workflow" } },

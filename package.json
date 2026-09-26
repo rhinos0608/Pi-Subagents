@@ -1,6 +1,6 @@
 {
   "name": "pi-subagents",
-  "version": "0.70.0",
+  "version": "0.70.1",
   "private": true,
   "description": "Pi extension for single-agent delegation and scripted multi-agent workflows",
   "author": "Nico Bailon",
@@ -103,13 +103,13 @@
     "yaml": "2.8.3"
   },
   "devDependencies": {
-    "@earendil-works/pi-agent-core": "0.86.0",
-    "@earendil-works/pi-ai": "0.86.0",
-    "@earendil-works/pi-tui": "0.86.0",
+    "@earendil-works/pi-agent-core": "0.86.1",
+    "@earendil-works/pi-ai": "0.86.1",
+    "@earendil-works/pi-tui": "0.86.1",
     "@oxlint/plugins": "1.80.0",
     "@types/node": "24.13.3",
     "oxlint": "1.80.0",
     "typescript": "5.9.3",
-    "@earendil-works/pi-coding-agent": "0.86.0"
+    "@earendil-works/pi-coding-agent": "0.86.1"
   }
 }
