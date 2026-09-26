@@ -97,6 +97,16 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		assert.equal(updates.length, count, "no trailing timer after settlement");
 	});
 
+	it("names the workflow child that has no agent", async () => {
+		const result = await makeExecutor([makeAgent("worker")]).execute("wf-missing-agent", {
+			workflowScript: `const [child] = await runs.all([{ key: "r1", task: "Review", async: false }]); return child.ok ? "ok" : child.error;`,
+			async: false,
+		}, undefined, undefined, makeMinimalCtx(tempDir));
+		const text = JSON.stringify(result.content);
+		assert.match(text, /Workflow child 'r1' has no agent\. Pass \{ key, agent, task \}\. Agents: worker/);
+		assert.doesNotMatch(text, /Provide exactly one mode/);
+	});
+
 	it("emits successful async workflow child settlements without provider turns", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
 		mockPi.onCall({ matchArgIncludes: "Child A", output: "A done" });
 		mockPi.onCall({ matchArgIncludes: "Child B", output: "B done" });
@@ -151,6 +161,17 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		assert.equal(result.sessionName, "echo: Say hello to the world");
 		assert.equal(result.progressSummary?.sessionName, "echo: Say hello to the world");
 		assert.equal(readCall().runtime?.sessionName, "echo: Say hello to the world");
+	});
+
+	it("addresses a nested child's supervisor by the parent child's intercom route, not its session name", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		mockPi.onCall({ output: "ok" });
+		const parentChild = { intercomSessionName: "subagent-planner-run1-1" } as ChildRuntimeConfig;
+		const executor = makeExecutor([makeAgent("echo")], {}, false, undefined, true, new Map(), undefined, undefined, createEventBus(), undefined, parentChild);
+
+		const result = await executor.execute("nested-route", { agent: "echo", task: "Hi", intercomBridge: { mode: "always" } }, new AbortController().signal, undefined, makeMinimalCtx(tempDir));
+
+		assert.equal(result.isError, undefined, result.content[0]?.text);
+		assert.equal(readCall().runtime?.orchestratorTarget, "subagent-planner-run1-1");
 	});
 
 	it("rejects invalid foreground cwd before spawning Pi", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
