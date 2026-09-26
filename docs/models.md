@@ -8,10 +8,9 @@ Builtin agents inherit your current Pi default model. This keeps new installs fr
 - `subagents.defaultProvider` — a provider preference for bare model ids, such as `llama-3`, when multiple providers expose the same id.
 - `subagents.agentOverrides.<name>.model` — pin one role.
 - `subagents.agentOverrides.<name>.defaultProvider` — choose or clear the provider preference for one role.
-- `subagents.agentOverridesByProvider.<provider>.<name>` — layer role fields for the active parent provider.
 - Per-run overrides — for one launch only.
 
-Precedence, strongest first: per-run override → provider-scoped role override → `agentOverrides.<name>.model` → agent frontmatter `model` → `subagents.defaultModel` → the parent session model. A provider preference does not replace this order; it only resolves bare model ids when the active registry has more than one match. Fully qualified `provider/model` strings still win exactly.
+Precedence, strongest first: per-run override → `agentOverrides.<name>.model` → agent frontmatter `model` → `subagents.defaultModel` → the parent session model. A provider preference does not replace this order; it only resolves bare model ids when the active registry has more than one match. Fully qualified `provider/model` strings still win exactly.
 
 Each launch resolves one model. Provider errors, including HTTP 429 responses, are returned from that model rather than selecting another one. Separately, a verified compaction abort after useful progress may continue the retained child session once on the same resolved model; this lifecycle recovery preserves work and is not model fallback.
 
@@ -38,28 +37,6 @@ In `~/.pi/agent/settings.json` (user) or the project config settings file (`.pi/
   }
 }
 ```
-
-To keep one role definition but configure it differently for work and personal providers, add the unambiguous provider map beside `agentOverrides`:
-
-```json
-{
-  "subagents": {
-    "agentOverrides": {
-      "worker": { "thinking": "medium" }
-    },
-    "agentOverridesByProvider": {
-      "github-copilot": {
-        "worker": { "model": "github-copilot/gpt-5-mini" }
-      },
-      "openrouter": {
-        "worker": { "model": "openrouter/openai/gpt-5-mini" }
-      }
-    }
-  }
-}
-```
-
-The provider key comes from the active parent session model (or an explicit host `preferredProvider`). Provider-scoped fields layer over the ordinary override in the same settings file; project settings still win over user settings.
 
 For one run, put the override in the command:
 
