@@ -83,7 +83,6 @@ interface ResolveIntercomBridgeInput {
 	config: ExtensionConfig["intercomBridge"];
 	/** Per-run config replaces the global config when supplied. */
 	override?: IntercomBridgeConfig;
-	context: "fresh" | "fork" | undefined;
 	orchestratorTarget?: string;
 	cwd?: string;
 	settingsDir?: string;
@@ -152,7 +151,7 @@ function buildIntercomBridgeInstruction(orchestratorTarget: string, template: st
 	return `${INTERCOM_BRIDGE_MARKER}\n${instruction}`;
 }
 
-function inactiveReason(mode: IntercomBridgeMode, context: "fresh" | "fork" | undefined, orchestratorTarget: string | undefined): string | undefined {
+function inactiveReason(mode: IntercomBridgeMode, orchestratorTarget: string | undefined): string | undefined {
 	if (mode === "off") return "bridge mode is off";
 	if (!orchestratorTarget) return "orchestrator target is not available";
 	return undefined;
@@ -163,7 +162,7 @@ export function diagnoseIntercomBridge(input: ResolveIntercomBridgeInput): Inter
 	const mode = config.mode;
 	const orchestratorTarget = input.orchestratorTarget?.trim();
 	const wantsIntercom = mode !== "off";
-	const reason = inactiveReason(mode, input.context, orchestratorTarget);
+	const reason = inactiveReason(mode, orchestratorTarget);
 	return {
 		active: reason === undefined,
 		mode,
@@ -181,7 +180,7 @@ export function resolveIntercomBridge(input: ResolveIntercomBridgeInput): Interc
 	const orchestratorTarget = input.orchestratorTarget?.trim();
 	const agentDir = path.resolve(input.agentDir ?? defaultAgentDir());
 	const settingsDir = path.resolve(input.settingsDir ?? defaultSubagentConfigDir(agentDir));
-	const reason = inactiveReason(mode, input.context, orchestratorTarget);
+	const reason = inactiveReason(mode, orchestratorTarget);
 	if (reason || !orchestratorTarget) {
 		return {
 			active: false,
