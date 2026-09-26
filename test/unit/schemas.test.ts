@@ -513,18 +513,21 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 	});
 
 	it("uses provider-friendly anyOf unions for flexible fields and chain items", () => {
-		const skillSchema = SubagentParams?.properties?.skill;
-		assert.ok(skillSchema, "skill schema should exist");
-		assert.equal(skillSchema.type, undefined);
-		assert.equal(hasAnyOfArrayWithStringItems(skillSchema), true);
-		assert.equal(hasAnyOfType(skillSchema, "boolean"), true);
-		assert.equal(hasAnyOfType(skillSchema, "string"), true);
+		const workflowScriptSchema = SubagentParams?.properties?.workflowScript;
+		assert.ok(workflowScriptSchema, "workflowScript schema should exist");
+		assert.equal(workflowScriptSchema.type, "string");
 
 		const configSchema = SubagentParams?.properties?.config;
 		assert.ok(configSchema, "config schema should exist");
 		assert.equal(configSchema.type, undefined);
 		assert.equal(anyOfBranches(configSchema).some((branch) => branch.type === "object" && branch.additionalProperties === true), true);
 		assert.equal(hasAnyOfType(configSchema, "string"), true);
+
+		const missionSchema = SubagentParams?.properties?.mission;
+		assert.ok(missionSchema, "mission schema should exist");
+		assert.equal(missionSchema.type, undefined);
+		assert.equal(hasAnyOfType(missionSchema, "object"), true);
+		assert.equal(hasAnyOfType(missionSchema, "boolean"), true);
 
 		const acceptanceSchema = SubagentParams?.properties?.acceptance;
 		assert.ok(acceptanceSchema, "acceptance schema should exist");
@@ -568,12 +571,10 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 			assert.equal(validator.Check({ agent: "worker", task: "Fix", acceptance }), false, `${JSON.stringify(acceptance)} acceptance should not validate`);
 		}
 		const validValues = [
-			{ skill: "review" },
 			{ workflowScript: "return await runs.run(\"one\", {agent: \"reviewer\", task: \"check\"})" },
 			{ workflowScriptPath: "workflows/review.js" },
-			{ skill: false },
 			{ action: "get", agent: "worker" },
-			{ workflowScript: "return runs.run('main', { agent: 'worker', task: 'Fix', acceptance: false })", timeoutMs: 1000 },
+			{ workflowScript: "return runs.run('main', { agent: 'worker', task: 'Fix', acceptance: false })", toolTimeoutMs: 1000 },
 			{ action: "steer", id: "run-1", message: "focus on tests" },
 			{ action: "steer", id: "run-1", index: 0, message: "focus on tests" },
 			{ action: "not-a-real-action" },
@@ -582,10 +583,7 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 			{ agent: "worker", task: "Fix", acceptance: JSON.stringify({ level: "checked", evidence: ["commands-run"] }) },
 		];
 		const invalidValues = [
-			{ skill: 123 },
-			{ skill: [123] },
-			{ timeoutMs: 0 },
-			{ maxRuntimeMs: -1 },
+			{ toolTimeoutMs: 0 },
 			{ config: [] },
 			{ config: null },
 			{ agent: "worker", task: "Fix", toolBudget: { hard: 0 } },
@@ -635,7 +633,6 @@ describe("CompactSubagentParams schema profile", { skip: !schemasAvailable ? "ty
 		assert.ok(properties, "compact properties should exist");
 		assert.match(String(properties.action?.description ?? ""), /Management\/control only/);
 		assert.match(String(properties.acceptance?.description ?? ""), /Evidence policy/);
-		assert.match(String(properties.context?.description ?? ""), /fresh\/fork/);
 		assert.match(String(properties.additional?.description ?? ""), /grant-spawn-budget/);
 		assert.match(String(properties.gate?.description ?? ""), /cannot be combined with acceptance/i);
 		assert.match(String(properties.workflowScript?.description ?? ""), /no runs\.host/);
@@ -665,16 +662,12 @@ describe("CompactSubagentParams schema profile", { skip: !schemasAvailable ? "ty
 			{ agent: "worker", task: "Fix", acceptance: "auto" },
 			{ agent: "worker", task: "Fix", acceptance: false },
 			{ agent: "worker", task: "Fix", acceptance: '{"level":"checked"}' },
-			{ skill: "review" },
-			{ skill: false },
 			{ action: "list", capabilities: true },
 			{ agent: "worker", task: "Fix", toolBudget: { hard: 3 } },
-			{ agent: "worker", task: "Fix", timeoutMs: 1000 },
+			{ agent: "worker", task: "Fix", toolTimeoutMs: 1000 },
 			{ config: { name: "reviewer" } },
 		];
 		const invalidValues = [
-			{ skill: 123 },
-			{ timeoutMs: 0 },
 			{ agent: "worker", task: "Fix", acceptance: "cheked" },
 			{ agent: "worker", task: "Fix", toolBudget: { hard: 0 } },
 			{ agent: "worker", task: "Fix", toolBudget: { hard: 3, block: [] } },

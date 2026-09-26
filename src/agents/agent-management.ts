@@ -614,7 +614,7 @@ function applyAgentConfig(target: AgentConfig, cfg: Record<string, unknown>): st
 		else {
 			const validation = validateToolBudgetConfig(cfg.toolBudget, "config.toolBudget");
 			if (validation.error) return validation.error;
-			target.toolBudget = cfg.toolBudget as ToolBudgetConfig;
+			if (validation.budget) target.toolBudget = validation.budget;
 		}
 	}
 	if (target.runner?.type === "external-cli" || target.runner?.type === "external-job") {

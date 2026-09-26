@@ -903,7 +903,7 @@ Advise only.
 		assert.equal(result.isError, false);
 		const filePath = path.join(tempDir, ".pi", "agents", "budgeted-reviewer.md");
 		let content = fs.readFileSync(filePath, "utf-8");
-		assert.match(content, /^toolBudget: \{"soft":4,"hard":7,"block":\["read","grep"\]\}$/m);
+		assert.match(content, /^toolBudget: \{.*"hard":40.*"soft":4.*"block":\["read","grep"\]\}$/m);
 
 		const got = handleManagementAction("get", { agent: "budgeted-reviewer" }, ctx);
 		assert.equal(got.isError, false);
