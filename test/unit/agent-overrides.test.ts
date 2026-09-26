@@ -57,7 +57,7 @@ describe("builtin agent overrides", () => {
 		assert.ok(builtins.length > 0);
 		assert.deepEqual(
 			builtins
-				.filter((agent) => agent.model !== undefined)
+				.filter((agent) => agent.model !== undefined || agent.fallbackModels !== undefined)
 				.map((agent) => agent.name),
 			[],
 		);
@@ -131,18 +131,23 @@ describe("builtin agent overrides", () => {
 		assert.deepEqual(discoverAgents(tempProject, "both").agents.find((agent) => agent.name === "coordinator")?.allowedAgents, ["reviewer", "worker"]);
 	});
 
-	it("rejects removed fallbackModels in user agent overrides", () => {
+	it("accepts fallbackModels in user agent overrides", () => {
 		writeJson(path.join(tempHome, ".pi", "agent", "settings.json"), {
-			subagents: { agentOverrides: { worker: { fallbackModels: ["model/backup"] } } },
+			subagents: { agentOverrides: { worker: { fallbackModels: ["model/user-backup"] } } },
 		});
-		assert.throws(() => discoverAgentsAll(tempProject), /removed field 'fallbackModels'; configure one model instead/u);
+		const worker = discoverAgentsAll(tempProject).builtin.find((agent) => agent.name === "worker");
+		assert.deepEqual(worker?.fallbackModels, ["model/user-backup"]);
 	});
 
-	it("rejects removed fallbackModels in project agent overrides", () => {
-		writeJson(path.join(tempProject, ".pi", "settings.json"), {
-			subagents: { agentOverrides: { worker: { fallbackModels: ["model/backup"] } } },
+	it("lets project fallbackModels override the user fallback chain", () => {
+		writeJson(path.join(tempHome, ".pi", "agent", "settings.json"), {
+			subagents: { agentOverrides: { worker: { fallbackModels: ["model/user-backup"] } } },
 		});
-		assert.throws(() => discoverAgentsAll(tempProject), /removed field 'fallbackModels'; configure one model instead/u);
+		writeJson(path.join(tempProject, ".pi", "settings.json"), {
+			subagents: { agentOverrides: { worker: { fallbackModels: ["model/project-backup"] } } },
+		});
+		const worker = discoverAgentsAll(tempProject).builtin.find((agent) => agent.name === "worker");
+		assert.deepEqual(worker?.fallbackModels, ["model/project-backup"]);
 	});
 
 	it("lets a builtin agent inherit Pi's normal tools from an override", () => {
@@ -553,6 +558,42 @@ describe("builtin agent overrides", () => {
 		assert.equal(reviewer.override?.path, path.join(tempProject, ".pi", "settings.json"));
 	});
 
+	it("layers a project builtin override on top of a user builtin override instead of discarding it", () => {
+		fs.mkdirSync(path.join(tempProject, ".pi"), { recursive: true });
+		writeJson(path.join(tempHome, ".pi", "agent", "settings.json"), {
+			subagents: { agentOverrides: { reviewer: { model: "openai/gpt-5.4", thinking: "low" } } },
+		});
+		writeJson(path.join(tempProject, ".pi", "settings.json"), {
+			subagents: { agentOverrides: { reviewer: { thinking: "high" } } },
+		});
+
+		const reviewer = discoverAgents(tempProject, "both").agents.find((agent) => agent.name === "reviewer");
+		assert.ok(reviewer);
+		assert.equal(reviewer.model, "openai/gpt-5.4");
+		assert.equal(reviewer.thinking, "high");
+		assert.equal(reviewer.override?.scope, "project");
+		assert.deepEqual(reviewer.override?.fieldScopes?.model, ["user"]);
+		assert.deepEqual(reviewer.override?.fieldScopes?.thinking, ["project", "user"]);
+	});
+
+	it("rejects invalid thinking values in builtin overrides and defaultThinking", () => {
+		writeJson(path.join(tempHome, ".pi", "agent", "settings.json"), {
+			subagents: { agentOverrides: { reviewer: { thinking: "ultra" } } },
+		});
+		assert.throws(
+			() => discoverAgents(tempProject, "both"),
+			(error: unknown) => error instanceof Error && error.message.includes("'thinking'") && error.message.includes("off, minimal, low"),
+		);
+
+		writeJson(path.join(tempHome, ".pi", "agent", "settings.json"), {
+			subagents: { defaultThinking: "ultra" },
+		});
+		assert.throws(
+			() => discoverAgents(tempProject, "both"),
+			(error: unknown) => error instanceof Error && error.message.includes("defaultThinking"),
+		);
+	});
+
 	it("layers active-provider overrides over default agentOverrides", () => {
 		writeJson(path.join(tempHome, ".pi", "agent", "settings.json"), {
 			subagents: {
@@ -625,18 +666,19 @@ describe("builtin agent overrides", () => {
 
 	it("layers a project override on top of a user override for a custom agent instead of discarding it", () => {
 		// Regression test: a custom agent (e.g. a reviewer persona shipped as a .md
-		// file with no model/thinking in frontmatter) that gets its
+		// file with no model/thinking/fallbackModels in frontmatter) that gets its
 		// model pin exclusively from a *user*-scope agentOverrides entry must keep
 		// that pin when a *project*-scope override adds an unrelated field (here:
 		// subagentOnlyExtensions). Previously the project override for this agent
 		// name replaced the user override wholesale, silently dropping model /
-		// thinking with no error.
+		// thinking / fallbackModels with no error.
 		writeJson(path.join(tempHome, ".pi", "agent", "settings.json"), {
 			subagents: {
 				agentOverrides: {
 					"persona-reviewer": {
 						model: "anthropic/claude-opus-4-8",
 						thinking: "high",
+						fallbackModels: ["anthropic/claude-sonnet-4-6"],
 					},
 				},
 			},
@@ -657,6 +699,7 @@ describe("builtin agent overrides", () => {
 		assert.ok(reviewer);
 		assert.equal(reviewer.model, "anthropic/claude-opus-4-8");
 		assert.equal(reviewer.thinking, "high");
+		assert.deepEqual(reviewer.fallbackModels, ["anthropic/claude-sonnet-4-6"]);
 		assert.deepEqual(reviewer.subagentOnlyExtensions, ["./tools/child-only.ts"]);
 		assert.equal(reviewer.override?.scope, "project");
 	});
@@ -791,10 +834,9 @@ describe("builtin agent overrides", () => {
 			subagents: {
 				agentOverrides: {
 					implementer: {
-						output: "artifacts/implementer.md",
-						outputMode: "file-only",
 						defaultReads: ["CONTEXT.md", "docs/spec.md"],
 						model: "anthropic/claude-sonnet-4-6",
+						fallbackModels: ["openai/gpt-5-mini"],
 						fast: true,
 						thinking: "high",
 						systemPromptMode: "append",
@@ -814,10 +856,9 @@ describe("builtin agent overrides", () => {
 		const implementer = discoverAgents(tempProject, "both").agents.find((agent) => agent.name === "implementer");
 		assert.ok(implementer);
 		assert.equal(implementer.source, "project");
-		assert.equal(implementer.output, "artifacts/implementer.md");
-		assert.equal(implementer.outputMode, "file-only");
 		assert.deepEqual(implementer.defaultReads, ["CONTEXT.md", "docs/spec.md"]);
 		assert.equal(implementer.model, "anthropic/claude-sonnet-4-6");
+		assert.deepEqual(implementer.fallbackModels, ["openai/gpt-5-mini"]);
 		assert.equal(implementer.fast, true);
 		assert.equal(implementer.thinking, "high");
 		assert.equal(implementer.systemPromptMode, "append");
@@ -862,17 +903,16 @@ describe("builtin agent overrides", () => {
 	it("prefers project agentOverrides over user agentOverrides on a custom project agent", () => {
 		fs.mkdirSync(path.join(tempProject, ".pi"), { recursive: true });
 		writeJson(path.join(tempHome, ".pi", "agent", "settings.json"), {
-			subagents: { agentOverrides: { implementer: { model: "anthropic/claude-sonnet-4-6", output: "user.md", defaultReads: ["user.md"] } } },
+			subagents: { agentOverrides: { implementer: { model: "anthropic/claude-sonnet-4-6", defaultReads: ["user.md"] } } },
 		});
 		writeJson(path.join(tempProject, ".pi", "settings.json"), {
-			subagents: { agentOverrides: { implementer: { model: "openai/gpt-5.4", output: "project.md", defaultReads: ["project.md"] } } },
+			subagents: { agentOverrides: { implementer: { model: "openai/gpt-5.4", defaultReads: ["project.md"] } } },
 		});
 		writeProjectAgent(tempProject, "implementer", `---\nname: implementer\ndescription: TDD implementer\n---\n\nDrive the failing test first.\n`);
 
 		const implementer = discoverAgents(tempProject, "both").agents.find((agent) => agent.name === "implementer");
 		assert.ok(implementer);
 		assert.equal(implementer.model, "openai/gpt-5.4");
-		assert.equal(implementer.output, "project.md");
 		assert.deepEqual(implementer.defaultReads, ["project.md"]);
 		assert.equal(implementer.override?.scope, "project");
 	});
@@ -883,8 +923,6 @@ describe("builtin agent overrides", () => {
 			subagents: {
 				agentOverrides: {
 					implementer: {
-						output: "artifacts/override.md",
-						outputMode: "file-only",
 						defaultReads: ["override.md"],
 						model: "anthropic/claude-sonnet-4-6",
 						fast: true,
@@ -903,8 +941,6 @@ describe("builtin agent overrides", () => {
 
 		const implementer = discoverAgents(tempProject, "both").agents.find((agent) => agent.name === "implementer");
 		assert.ok(implementer);
-		assert.equal(implementer.output, "artifacts/override.md");
-		assert.equal(implementer.outputMode, "file-only");
 		assert.deepEqual(implementer.defaultReads, ["override.md"]);
 		assert.equal(implementer.model, "anthropic/claude-sonnet-4-6");
 		assert.equal(implementer.fast, true);
@@ -1088,32 +1124,27 @@ describe("builtin agent overrides", () => {
 		const packageRoot = path.join(tempProject, "package-agents");
 		fs.mkdirSync(path.join(packageRoot, "agents"), { recursive: true });
 		writeJson(path.join(packageRoot, "package.json"), { "pi-subagents": { agents: ["agents"] } });
-		fs.writeFileSync(path.join(packageRoot, "agents", "package-scout.md"), `---\nname: package-scout\ndescription: Package scout\noutput: package-frontmatter.md\ndefaultReads: PACKAGE-FRONTMATTER.md\n---\n\nScout the package.\n`, "utf-8");
+		fs.writeFileSync(path.join(packageRoot, "agents", "package-scout.md"), `---\nname: package-scout\ndescription: Package scout\n---\n\nScout the package.\n`, "utf-8");
 		writeJson(path.join(tempProject, ".pi", "settings.json"), {
 			packages: [packageRoot],
-			subagents: { agentOverrides: { "package-scout": { output: "package.md", defaultReads: ["PACKAGE.md"] } } },
+			subagents: { agentOverrides: { "package-scout": { defaultReads: ["PACKAGE.md"] } } },
 		});
 		writeJson(path.join(tempHome, ".pi", "agent", "settings.json"), {
 			subagents: {
-				agentOverrides: {
-					scout: { output: "research-scout-results.md", defaultReads: ["AGENTS.md"] },
-					reviewer: { output: false, defaultReads: false },
+				agentOverrides: { scout: { defaultReads: ["AGENTS.md"] }, reviewer: { defaultReads: false }
 				},
 			},
 		});
 
 		const agents = discoverAgents(tempProject, "both").agents;
-		assert.equal(agents.find((agent) => agent.name === "scout")?.output, "research-scout-results.md");
 		assert.deepEqual(agents.find((agent) => agent.name === "scout")?.defaultReads, ["AGENTS.md"]);
-		assert.equal(agents.find((agent) => agent.name === "reviewer")?.output, undefined);
 		assert.equal(agents.find((agent) => agent.name === "reviewer")?.defaultReads, undefined);
-		assert.equal(agents.find((agent) => agent.name === "package-scout")?.output, "package.md");
 		assert.deepEqual(agents.find((agent) => agent.name === "package-scout")?.defaultReads, ["PACKAGE.md"]);
 	});
 
-	it("surfaces malformed output and defaultReads override values", () => {
+	it("surfaces malformed defaultReads override values", () => {
 		const settingsPath = path.join(tempHome, ".pi", "agent", "settings.json");
-		for (const [field, value] of [["output", 42], ["output", ""], ["output", "  "], ["defaultReads", ["ok", 42]]] as const) {
+		for (const [field, value] of [["defaultReads", ["ok", 42]]] as const) {
 			writeJson(settingsPath, { subagents: { agentOverrides: { reviewer: { [field]: value } } } });
 			assert.throws(
 				() => discoverAgents(tempProject, "both"),
@@ -1126,9 +1157,9 @@ describe("builtin agent overrides", () => {
 		const override = buildBuiltinOverrideConfig(
 			{
 				description: "Base description",
-				output: "base-output.md",
 				defaultReads: ["base-read.md"],
 				model: "openai-codex/gpt-5.4-mini",
+				fallbackModels: ["openai/gpt-5-mini"],
 				thinking: "high",
 				systemPromptMode: "append",
 				inheritProjectContext: true,
@@ -1144,9 +1175,9 @@ describe("builtin agent overrides", () => {
 			},
 			{
 				description: "Override description",
-				output: undefined,
 				defaultReads: undefined,
 				model: undefined,
+				fallbackModels: undefined,
 				thinking: undefined,
 				systemPromptMode: "replace",
 				inheritProjectContext: false,
@@ -1164,9 +1195,9 @@ describe("builtin agent overrides", () => {
 
 		assert.deepEqual(override, {
 			description: "Override description",
-			output: false,
 			defaultReads: false,
 			model: false,
+			fallbackModels: false,
 			thinking: false,
 			systemPromptMode: "replace",
 			inheritProjectContext: false,
@@ -1181,13 +1212,11 @@ describe("builtin agent overrides", () => {
 		fs.mkdirSync(path.join(tempProject, ".pi"), { recursive: true });
 		saveBuiltinAgentOverride(tempProject, "reviewer", "project", override);
 		const savedOverride = JSON.parse(fs.readFileSync(path.join(tempProject, ".pi", "settings.json"), "utf-8"));
-		assert.equal(savedOverride.subagents.agentOverrides.reviewer.output, false);
 		assert.equal(savedOverride.subagents.agentOverrides.reviewer.defaultReads, false);
 		assert.equal(discoverAgents(tempProject, "both").agents.find((agent) => agent.name === "reviewer")?.description, "Override description");
 
-		saveBuiltinAgentOverride(tempProject, "scout", "project", { output: "research.md", defaultReads: ["CONTEXT.md"] });
+		saveBuiltinAgentOverride(tempProject, "scout", "project", { defaultReads: ["CONTEXT.md"] });
 		const scout = discoverAgents(tempProject, "both").agents.find((agent) => agent.name === "scout");
-		assert.equal(scout?.output, "research.md");
 		assert.deepEqual(scout?.defaultReads, ["CONTEXT.md"]);
 
 		const whitespaceDescription = buildBuiltinOverrideConfig(

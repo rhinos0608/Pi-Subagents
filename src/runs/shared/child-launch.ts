@@ -33,7 +33,7 @@ import {
 	type PiLaunchToolPlan,
 } from "./child-tool-plan.ts";
 import type { ChildRuntimeConfig } from "./child-runtime-config.ts";
-import { createCapturedChildHooks, withChildSessionErrorReporting } from "./child-hooks.ts";
+import { createCapturedChildHooks, withChildSessionErrorReporting, type CapturedChildModelContext } from "./child-hooks.ts";
 import type { ChildTranscriptWriter } from "../../shared/child-transcript.ts";
 import type { ChildSessionLaunch, ChildSessionStorage } from "./child-session.ts";
 import { resolveRequiredChildExtensions, type RequiredChildExtensionSnapshot } from "../../shared/required-child-extensions.ts";
@@ -133,6 +133,7 @@ export interface BuildInProcessChildLaunchInput {
 }
 
 export interface InProcessChildCapture {
+	completionIntentContext?(): CapturedChildModelContext | undefined;
 	structuredOutput(): { called: boolean; value?: unknown; acceptanceReport?: unknown; acceptanceReportProvided: boolean };
 	toolDiagnostic(): ChildToolDiagnostic | undefined;
 	runtimeAcknowledgedExtensions(): RuntimeAcknowledgedChildExtensions | undefined;
@@ -309,7 +310,7 @@ export function buildInProcessChildLaunch(input: BuildInProcessChildLaunchInput)
 		...(toolPlan.effectiveMcpTools.length > 0 ? { mcpDirectTools: toolPlan.effectiveMcpTools } : {}),
 		fast: input.fast === true,
 	};
-	const capturedHooks = createCapturedChildHooks(config);
+	const capturedHooks = createCapturedChildHooks(config, input.host === "runner");
 
 	const extensionPaths = toolPlan.extensionArgs.filter((extensionPath) => !isSubagentRuntimeExtensionPath(extensionPath));
 	const ambientExtensions = input.host === "runner" && !toolPlan.disableAmbientExtensions;

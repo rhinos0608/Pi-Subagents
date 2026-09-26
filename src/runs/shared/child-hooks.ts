@@ -1,4 +1,4 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { listBackgroundWorkProviders } from "../../api/background-work.ts";
 import { ReadonlyDrainObservation } from "./readonly-drain-observation.ts";
 import registerFanoutChildSubagentExtension, { createChildSafeState } from "../../extension/fanout-child.ts";
@@ -126,10 +126,15 @@ export function createChildHooks(config: ChildRuntimeConfig): ChildHookExtension
 	return childHooks(config);
 }
 
+export type CapturedChildModelContext = Pick<ExtensionContext, "model" | "modelRegistry"> & {
+	sessionId?: string;
+};
+
 /** Launch-owned bookkeeping, paired with the same private hook certificate (no callback registration API). */
-export function createCapturedChildHooks(config: ChildRuntimeConfig) {
+export function createCapturedChildHooks(config: ChildRuntimeConfig, runner = false) {
 	let diagnostic: ChildToolDiagnostic | undefined;
 	let acknowledgedIds: string[] | undefined;
+	let completionIntentContext: CapturedChildModelContext | undefined;
 	let finalDrainHeld = false;
 	const capture: OwnedCapture = {
 		toolDiagnostic: (value) => { diagnostic = value; },
@@ -137,8 +142,20 @@ export function createCapturedChildHooks(config: ChildRuntimeConfig) {
 	};
 	Object.assign(config, capture);
 	const hooks = childHooks(config, capture, (held) => { finalDrainHeld = held; });
+	if (runner) {
+		hooks.push({ name: "pi-subagents:completion-intent", factory: (pi) => pi.on("session_start", (_event, childCtx) => {
+			completionIntentContext = {
+				model: childCtx.model,
+				modelRegistry: childCtx.modelRegistry,
+				sessionId: childCtx.sessionManager.getSessionId(),
+			};
+		}) });
+		const proof = promptProofs.get(hooks[0]!.factory);
+		if (proof) proof.factories = hooks.map((hook) => hook.factory);
+	}
 	return {
 		hooks,
+		completionIntentContext: () => completionIntentContext,
 		toolDiagnostic: () => diagnostic,
 		runtimeAcknowledgedExtensions: () => acknowledgedIds ? projectRuntimeAcknowledgedExtensions(acknowledgedIds) : undefined,
 		finalDrainHeld: () => finalDrainHeld,

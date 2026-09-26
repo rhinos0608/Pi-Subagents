@@ -276,12 +276,26 @@ describe("subagent prompt runtime", () => {
 		assert.equal(outsideTools.has("contact_supervisor"), false);
 
 		const missingHandlers = new Map<string, Function>();
+		const missingDiagnostics: Array<ChildToolDiagnostic | undefined> = [];
+		const warnings: string[] = [];
+		const originalWarn = console.warn;
 		registerSubagentPromptRuntime({
 			on: (event: string, handler: Function) => missingHandlers.set(event, handler),
 			registerTool: (tool: { name: string }) => outsideTools.set(tool.name, tool),
 			getAllTools: () => [...outsideTools.keys()].map((name) => ({ name })),
-		} as never, childConfig({ cwd: outside, requiredTools: ["watchdog_diff", "fixture_search"] }));
-		assert.throws(() => missingHandlers.get("agent_start")?.({}), /requested unavailable child tools: fixture_search/);
+		} as never, childConfig({
+			cwd: outside,
+			requiredTools: ["watchdog_diff", "fixture_search"],
+			toolDiagnostic: (value) => missingDiagnostics.push(value),
+		}));
+		console.warn = (...args: unknown[]) => { warnings.push(args.map(String).join(" ")); };
+		try {
+			assert.doesNotThrow(() => missingHandlers.get("agent_start")?.({}));
+		} finally {
+			console.warn = originalWarn;
+		}
+		assert.deepEqual(missingDiagnostics.at(-1)?.disabled, ["fixture_search"]);
+		assert.ok(warnings.some((warning) => warning.includes("fixture_search") && warning.includes("continues without unavailable child tools")));
 	});
 
 	it("registers no permission hook by default and routes ask only to the watchdog arbiter", async () => {

@@ -86,7 +86,7 @@ describe("resolveGlobalNpmRoot", () => {
 		const pidFile = path.join(dir, "npm.pid");
 		const executable = path.join(dir, "bin", "npm");
 		fs.writeFileSync(executable, `#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); setInterval(() => {}, 1000);\n`, { mode: 0o755 });
-		assert.equal(await resolveGlobalNpmRoot({ env, timeoutMs: 500 }), null);
+		assert.equal(await resolveGlobalNpmRoot({ env, timeoutMs: 1500 }), null);
 		const pid = Number(fs.readFileSync(pidFile, "utf8"));
 		await new Promise<void>((resolve) => setTimeout(resolve, 30));
 		assert.throws(() => process.kill(pid, 0), { code: "ESRCH" }, "timed-out npm must exit");

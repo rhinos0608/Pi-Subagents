@@ -1,6 +1,6 @@
 /**
- * Legacy regression: `subagents:rpc:v1` constants and behavior stay
- * byte-for-byte unchanged by the runtime namespace addition.
+ * Legacy regression: the `subagents:rpc:v1` event namespace and protocol
+ * version stay stable while compatible methods are added.
  */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
@@ -21,7 +21,7 @@ describe("legacy RPC namespace preserved", () => {
 		assert.equal(SUBAGENT_RPC_READY_EVENT, "subagents:rpc:v1:ready");
 		assert.equal(SUBAGENT_RPC_REPLY_EVENT_PREFIX, "subagents:rpc:v1:reply:");
 		assert.equal(subagentRpcReplyEvent("abc"), "subagents:rpc:v1:reply:abc");
-		assert.deepEqual([...SUBAGENT_RPC_METHODS], ["ping", "status", "manage", "spawn", "steer", "interrupt", "stop", "resume", "result"]);
+		assert.deepEqual([...SUBAGENT_RPC_METHODS], ["ping", "status", "manage", "spawn", "steer", "interrupt", "stop", "resume", "result", "cost"]);
 	});
 
 	it("runtime namespace never collides with legacy", () => {

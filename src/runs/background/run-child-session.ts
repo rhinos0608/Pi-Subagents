@@ -26,6 +26,7 @@ import { effectiveToolTimeoutMs, formatToolTimeoutMessage, toolTimeoutCallKey } 
 import { createReportedChildSessionInput, type InProcessChildLaunch } from "../shared/child-launch.ts";
 import { childSessionHasQueuedMessages, projectChildSessionEventForJson, type ChildSession, type ChildSessionEvent, type ChildSessionFactory } from "../shared/child-session.ts";
 import { reconcileAttemptUsage } from "../shared/usage-reconciliation.ts";
+import { getReadonlySessionEvidence, requestReadonlySessionEvidence, type SettledReadonlyEvidence } from "../shared/readonly-session-evidence.ts";
 import { formatSteerMessage } from "../shared/subagent-prompt-runtime.ts";
 import type { SteerDeliveryStatus, SteerRequest } from "./control-channel.ts";
 import { takeMatchingAcceptedSteer, unconsumedSteerReason } from "./steering.ts";
@@ -101,6 +102,16 @@ export interface RunChildSessionInput {
 	modelVerificationRegistry?: Array<{ provider: string; id: string; fullId: string }>;
 	modelResponseAliases?: Record<string, string[]>;
 	mutationTools?: readonly string[];
+	/** Internal guarded continuation handoff; never part of persisted results. */
+	readonlyContinuation?: { source: ChildSession; expected: SettledReadonlyEvidence; modelId: string };
+	collectReadonlyEvidence?: boolean;
+	canContinue?: () => boolean;
+}
+
+const settledChildren = new WeakMap<RunChildSessionResult, ChildSession>();
+export function getSettledReadonlyChild(result: RunChildSessionResult): ChildSession | undefined {
+	const child = settledChildren.get(result);
+	return child && getReadonlySessionEvidence(child) ? child : undefined;
 }
 
 export interface RunChildSessionResult {
@@ -626,6 +637,7 @@ export function runChildSession(input: RunChildSessionInput): Promise<RunChildSe
 					currentPath,
 					afterCompactionSettlement: afterCompactionSettlement || undefined,
 				});
+				if (session && !forced && !forcedTermination && !interrupted && !timedOut && !stopped && getReadonlySessionEvidence(session)) settledChildren.set(result, session);
 				resolve(result);
 			});
 		};
@@ -647,13 +659,25 @@ export function runChildSession(input: RunChildSessionInput): Promise<RunChildSe
 
 		void (async () => {
 			try {
+				const continuation = input.readonlyContinuation;
+				const checkContinuation = () => {
+					if (!continuation) return;
+					if (interrupted || timedOut || stopped || input.canContinue?.() !== true
+						|| (input.runDeadlineAt !== undefined && Date.now() >= input.runDeadlineAt)
+						|| getReadonlySessionEvidence(continuation.source) !== continuation.expected
+						|| continuation.source.detached || continuation.source.shutDown) throw new Error("Read-only continuation handoff vetoed");
+				};
+				checkContinuation();
 				const createInput = createReportedChildSessionInput(input.launch, input.transcriptWriter);
+				if (input.collectReadonlyEvidence || continuation) requestReadonlySessionEvidence(createInput, continuation?.expected);
 				const created = await input.factory.create(createInput);
 				if (settled) {
 					await created.dispose().catch(() => undefined);
 					return;
 				}
 				session = created;
+				checkContinuation();
+				if (continuation && (created.modelId !== continuation.modelId || input.launch.capture.completionIntentContext?.()?.model?.api !== continuation.expected.api)) throw new Error("Read-only continuation model changed");
 				if (created.contextWindow !== undefined) input.onContextWindow?.(created.contextWindow);
 				const steer = created.steer.bind(created);
 				const followUp = created.followUp.bind(created);
@@ -688,6 +712,7 @@ export function runChildSession(input: RunChildSessionInput): Promise<RunChildSe
 					return queued;
 				});
 				if (interrupted || timedOut || stopped) abortChild();
+				checkContinuation();
 				messageBaseline = created.messages.length;
 				await created.prompt(input.prompt);
 				promptSettled = true;

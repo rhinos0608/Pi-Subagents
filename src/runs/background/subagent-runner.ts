@@ -12,7 +12,7 @@ import { createCapacityResilientJsonWriter } from "../../shared/capacity-resilie
 import { isStorageCapacityError } from "../../shared/file-system-retry.ts";
 import { updateActiveRunIndex } from "./active-run-index.ts";
 import { createChildTranscriptWriter, type ChildTranscriptWriter } from "../../shared/child-transcript.ts";
-import { closeSteerInbox, consumeInterruptRequest, consumeSteerRequests, consumeStopRequestPayloads, deliverInterruptRequest, deliverStopRequest, deliverTimeoutRequest, watchAsyncControlInbox, type SteerRequest, type StopRequest } from "./control-channel.ts";
+import { closeSteerInbox, consumeInterruptRequest, consumeSteerRequests, consumeStopRequestPayloads, deliverInterruptRequest, deliverStopRequest, deliverTimeoutRequest, drainTerminalControlInbox, watchAsyncControlInbox, type SteerRequest, type StopRequest } from "./control-channel.ts";
 import { appendJsonl as appendRawJsonl, formatOutputArtifactContent, getArtifactPaths, writeArtifact, writeMetadata } from "../../shared/artifacts.ts";
 import { PI_CODING_AGENT_PACKAGE, resolveInstalledPiPackageRoot } from "../shared/pi-spawn.ts";
 import { preflightLaunchCwd } from "../shared/launch-cwd.ts";
@@ -31,6 +31,7 @@ import {
 	type ChainOutputMap,
 	type CostSummary,
 	type LaunchResolvedChildExtensions,
+	type ModelAttempt,
 	type RuntimeAcknowledgedChildExtensions,
 	type PiWriterProcessInstanceExit,
 	type NestedRouteInfo,
@@ -80,7 +81,9 @@ import type { InheritedChildRuntime } from "../shared/child-launch.ts";
 import { buildRunnerChildLaunch } from "./runner-child-launch.ts";
 import { normalizeExtensionBindings } from "../shared/extension-bindings.ts";
 import type { ChildSessionFactory, DefaultChildSessionFactoryOptions } from "../shared/child-session.ts";
-import { runChildSession, type ChildEvent, type RunChildSessionInput, type RunChildSessionResult, type SteerDelivery, type StepSteerHandler } from "./run-child-session.ts";
+import { getSettledReadonlyChild, runChildSession, type ChildEvent, type RunChildSessionInput, type RunChildSessionResult, type SteerDelivery, type StepSteerHandler } from "./run-child-session.ts";
+import { planReadonlyModelContinuation, READONLY_CONTINUATION_PROMPT, type LogicalRecoveryState } from "../shared/readonly-model-continuation.ts";
+import { getReadonlySessionEvidence } from "../shared/readonly-session-evidence.ts";
 import { loadRunnerChildSessionFactory } from "./runner-child-sessions.ts";
 import { SUBAGENT_CHILD_ENV } from "../shared/child-runtime-config.ts";
 import { deriveChildSessionName } from "../../shared/child-session-name.ts";
@@ -88,13 +91,14 @@ import { alignForkedSessionCwd } from "../../shared/fork-session-cwd.ts";
 import { outputEntryFromAsyncResult, resolveOutputReferences } from "../shared/chain-outputs.ts";
 import { clearStructuredOutputCaptures, createStructuredOutputFileCapture, createStructuredOutputRuntime, formatStructuredOutputRejectionError, MISSING_STRUCTURED_OUTPUT_CALL_ERROR, readStructuredOutput, readStructuredOutputAcceptanceReport } from "../shared/structured-output.ts";
 import { formatMidToolExitError, isOrdinaryToolForMidToolExit, isUnexplainedProcessSignal } from "../shared/process-signal.ts";
-import { formatChildToolDiagnostic } from "../shared/tool-availability.ts";
+import { formatChildToolDiagnostic, formatChildToolDisabledWarning, hasFatalMissingTools } from "../shared/tool-availability.ts";
 import { buildTimeoutRecoverySummary, collectTrackedMutationEvidence, snapshotTrackedMutations } from "../shared/mutation-evidence.ts";
 import { collectDynamicResults, DynamicFanoutError, materializeDynamicParallelStep, validateDynamicCollection } from "../shared/dynamic-fanout.ts";
 import { claimRunFanoutBatch, getRunFanoutBudgetSnapshot } from "../shared/run-fanout-budget.ts";
 import { nestedSummaryFromAsyncStatus, projectNestedEvents, resolveNestedAsyncDir, writeNestedEvent } from "../shared/nested-events.ts";
 import { formatSubagentModelVerificationError, isContextOverflow } from "../shared/model-resolution.ts";
-import { processTerminalPath, writeProcessTerminalCandidate, type ProcessTerminalCandidate } from "./process-terminal.ts";
+import { formatModelAttemptNote, isRetryableModelFailureAttempt, recordRetryableModelFailure } from "../shared/model-fallback.ts";
+import { markProcessTerminalCandidateLeaseRelease, processTerminalPath, writeProcessTerminalCandidate, type ProcessTerminalCandidate } from "./process-terminal.ts";
 import { persistRunnerStartupFailure } from "./runner-startup-failure.ts";
 import { createSteeringStatus, recordSteeringRequest, steeringStatus, terminalSteeringNoticeState, unconsumedSteerReason, updateSteeringTarget } from "./steering.ts";
 import { PROMPT_REDACTED, detectSubagentError, extractTextFromContent, extractToolArgsPreview, formatEmptyTerminalAssistantResponseError, getAgentDir, getFinalOutput, hasEmptyTerminalAssistantResponse, readStatus } from "../../shared/utils.ts";
@@ -217,6 +221,9 @@ export interface SubagentRunConfig {
 	capabilityCeiling?: ResolvedSubagentCapabilityCeiling;
 	runFanoutBudget?: RunFanoutBudgetDescriptor;
 	/** Builtin tool names the host runtime provides; used to intersect agent-declared tools. */
+	hostAvailableBuiltins?: readonly string[];
+	/** `{ name, label }` identities from the host registry; display labels in tool allowlists resolve to internal names. */
+	hostAvailableTools?: Array<{ name: string; label?: string }>;
 	launchContractDigest?: string;
 	launchResolvedExtensions?: LaunchResolvedChildExtensions;
 	runtimeAcknowledgedExtensions?: RuntimeAcknowledgedChildExtensions;
@@ -255,9 +262,12 @@ interface StepResult {
 	sessionFile?: string;
 	intercomTarget?: string;
 	model?: string;
+	modelResolution?: import("../../shared/types.ts").ModelResolutionMetadata;
 	nativeMachine?: import("../../shared/types.ts").SingleResult["nativeMachine"];
 	thinking?: string;
 	requestedModel?: string;
+	attemptedModels?: string[];
+	modelAttempts?: ModelAttempt[];
 	/** True when the dispatch failed because the input exceeded the model's context window. */
 	contextOverflow?: boolean;
 	totalCost?: CostSummary;
@@ -407,9 +417,14 @@ function emptyUsage(): Usage {
 	return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 };
 }
 
-function tokenUsageFromUsage(usage: Usage | undefined): TokenUsage | null {
-	const input = usage?.input ?? 0;
-	const output = usage?.output ?? 0;
+function tokenUsageFromAttempts(attempts: ModelAttempt[] | undefined): TokenUsage | null {
+	if (!attempts || attempts.length === 0) return null;
+	let input = 0;
+	let output = 0;
+	for (const attempt of attempts) {
+		input += attempt.usage?.input ?? 0;
+		output += attempt.usage?.output ?? 0;
+	}
 	const total = input + output;
 	return total > 0 ? { input, output, total } : null;
 }
@@ -420,6 +435,38 @@ function costSummaryFromUsage(usage: Usage | undefined): CostSummary | undefined
 	const costUsd = usage?.cost ?? 0;
 	return inputTokens > 0 || outputTokens > 0 || costUsd > 0
 		? { inputTokens, outputTokens, costUsd }
+		: undefined;
+}
+
+function costSummaryFromAttempts(attempts: ModelAttempt[] | undefined): CostSummary | undefined {
+	if (!attempts || attempts.length === 0) return undefined;
+	let inputTokens = 0;
+	let outputTokens = 0;
+	let costUsd = 0;
+	for (const attempt of attempts) {
+		inputTokens += attempt.usage?.input ?? 0;
+		outputTokens += attempt.usage?.output ?? 0;
+		costUsd += attempt.usage?.cost ?? 0;
+	}
+	return inputTokens > 0 || outputTokens > 0 || costUsd > 0
+		? { inputTokens, outputTokens, costUsd }
+		: undefined;
+}
+
+function usageFromAttempts(attempts: ModelAttempt[] | undefined): Usage | undefined {
+	if (!attempts || attempts.length === 0) return undefined;
+	const usage = emptyUsage();
+	for (const attempt of attempts) {
+		if (!attempt.usage) continue;
+		usage.input += attempt.usage.input;
+		usage.output += attempt.usage.output;
+		usage.cacheRead += attempt.usage.cacheRead;
+		usage.cacheWrite += attempt.usage.cacheWrite;
+		usage.cost += attempt.usage.cost;
+		usage.turns += attempt.usage.turns;
+	}
+	return usage.input !== 0 || usage.output !== 0 || usage.cacheRead !== 0 || usage.cacheWrite !== 0 || usage.cost !== 0 || usage.turns !== 0
+		? usage
 		: undefined;
 }
 
@@ -688,6 +735,8 @@ interface SingleStepContext {
 	nestedRoute?: NestedRouteInfo;
 	capabilityCeiling?: ResolvedSubagentCapabilityCeiling;
 	runFanoutBudget?: RunFanoutBudgetDescriptor;
+	hostAvailableBuiltins?: readonly string[];
+	hostAvailableTools?: Array<{ name: string; label?: string }>;
 	onAttemptStart?: (attempt: { model?: string; thinking?: string; contextLimit?: number }) => void;
 	onChildEvent?: (event: ChildEvent) => void;
 	onExternalProcess?: (process: ExternalProcessStatus) => void;
@@ -780,7 +829,10 @@ export async function runSingleStepInner(
 				sessionFile: imported.sessionFile,
 				intercomTarget: imported.intercomTarget,
 				model: imported.model,
+				modelResolution: imported.modelResolution,
 				requestedModel: imported.requestedModel,
+				attemptedModels: imported.attemptedModels,
+				modelAttempts: imported.modelAttempts,
 				contextOverflow: imported.contextOverflow,
 				totalCost: imported.totalCost,
 				usage: imported.usage,
@@ -813,6 +865,7 @@ export async function runSingleStepInner(
 			subagentOnlyExtensions: step.subagentOnlyExtensions,
 			fast: step.fast,
 			model: step.model,
+			modelCandidates: step.modelCandidates,
 			mcpDirectTools: step.mcpDirectTools,
 			cwd: step.cwd ?? ctx.cwd,
 			requireReadTool: Boolean(step.skills?.length),
@@ -821,6 +874,8 @@ export async function runSingleStepInner(
 			inheritedCapabilityCeiling: ctx.inheritedChildRuntime?.capabilityCeiling,
 			requiredExtensions: step.requiredExtensions ?? ctx.inheritedChildRuntime?.requiredExtensions,
 			permissionRules: step.permissionRules,
+			hostAvailableBuiltins: ctx.hostAvailableBuiltins,
+			hostAvailableTools: ctx.hostAvailableTools,
 		}));
 	}
 	// Derive from the pre-acceptance task so internal acceptance/recovery
@@ -1064,9 +1119,16 @@ export async function runSingleStepInner(
 		alignForkedSessionCwd(step.sessionFile, effectiveCwd);
 	}
 
-	const candidate = step.model;
+	const candidates = step.modelCandidates !== undefined
+		? step.modelCandidates.length > 0 ? step.modelCandidates : [undefined]
+		: step.model
+			? [step.model]
+			: [undefined];
+	const attemptedModels: string[] = [];
 	let capabilityAudit: import("../shared/capability-ceiling.ts").SubagentCapabilityAudit | undefined;
 	let launchResolvedExtensions = step.launchResolvedExtensions;
+	const modelAttempts: ModelAttempt[] = [];
+	const attemptNotes: string[] = [];
 	let finalRequiredOutputMissing: boolean | undefined;
 	const eventsPath = path.join(path.dirname(ctx.outputFile), "events.jsonl");
 	let finalResult: RunChildSessionResult | undefined;
@@ -1078,20 +1140,57 @@ export async function runSingleStepInner(
 	let actualLaunchContractDigest = step.launchContractDigest;
 	const mutationSnapshot = step.machine ? { source: "tracked-files" as const, trackedOnly: true as const, cwd: step.cwd ?? ctx.cwd, dirtyFiles: [], fingerprints: {}, unavailable: "Local Git evidence is not authoritative for a pane-native remote run." } : snapshotTrackedMutations(step.cwd ?? ctx.cwd);
 	let finalMutationEvidence = collectTrackedMutationEvidence(mutationSnapshot, step.cwd ?? ctx.cwd);
-
-	let contextOverflow = false;
-	let launchWarningsEmitted = false;
 	const aggregateUsage = emptyUsage();
 	let launched = false;
-	let recoveryTask = task;
 	let stagedIndexBaseline: string | undefined;
-	singleLaunch: for (let attemptIndex = 0; attemptIndex < 2; attemptIndex++) {
-		if (ctx.timeoutSignal?.aborted || ctx.stopSignal?.aborted || ctx.skipAcceptance?.()) break singleLaunch;
-		const expectedModelForVerification = candidate && !step.skipPrimaryModelVerification ? candidate : undefined;
+	if (step.effectiveAcceptance?.preserveStagedIndex) {
+		try {
+			stagedIndexBaseline = captureStagedIndexBaseline(step.cwd ?? ctx.cwd);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			return { agent: step.agent, output: message, error: message, exitCode: 1, context: step.context };
+		}
+	}
+
+	let modelIndex = 0;
+	let contextOverflow = false;
+	let launchWarningsEmitted = false;
+	let recoveryState: LogicalRecoveryState = "unused";
+	let readonlyContinuation: RunChildSessionInput["readonlyContinuation"];
+	const continuationBudget = () => {
+		if (step.toolBudget) return "tool-budget-configured" as const;
+		// Refresh the authoritative run ledger, already fed synchronously by onChildEvent.
+		const exhausted = ctx.usageBudgetExhausted?.();
+		if (exhausted === true) return "exhausted" as const;
+		if (!ctx.usageBudget) return "unconfigured" as const;
+		if (ctx.usageBudget.costUsd || !ctx.onChildEvent || exhausted !== false) return "unknown" as const;
+		return "available" as const;
+	};
+	const lifecycleAllowsContinuation = () => !ctx.timeoutSignal?.aborted && !ctx.stopSignal?.aborted
+		&& !ctx.skipAcceptance?.() && (ctx.deadlineAt === undefined || Date.now() < ctx.deadlineAt);
+	const canContinue = () => lifecycleAllowsContinuation() && ["available", "unconfigured"].includes(continuationBudget());
+	const failContinuationLaunch = (candidate: string | undefined, error: unknown) => {
+		const message = error instanceof Error ? error.message : String(error);
+		modelAttempts.push({ model: candidate ?? "default", success: false, exitCode: 1, error: message });
+		if (candidate) attemptedModels.push(candidate);
+		if (finalResult) finalResult = { ...finalResult, exitCode: 1, error: message };
+	};
+	let nextAttemptTask = task;
+	modelAttemptsLoop: while (modelIndex < candidates.length) {
+		if (ctx.timeoutSignal?.aborted || ctx.stopSignal?.aborted || ctx.skipAcceptance?.()) break;
+		if (readonlyContinuation && !canContinue()) break;
+		const recoveringAbort = recoveryState === "abort-recovery";
+		const attemptTask = nextAttemptTask;
+		const candidate = candidates[modelIndex];
+		const expectedModelForVerification = candidate && !(step.skipPrimaryModelVerification && modelIndex === 0) ? candidate : undefined;
 		try {
 			assertThinkingWithinCeiling({ model: candidate, configThinking: step.thinking, ceiling: step.thinkingCeiling, agent: step.agent, runId: ctx.id });
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
+			if (readonlyContinuation) {
+				failContinuationLaunch(candidate, error);
+				break modelAttemptsLoop;
+			}
 			return omitUndefinedProperties({ agent: step.agent, output: message, error: message, exitCode: 1, context: step.context, thinkingCeiling: step.thinkingCeiling });
 		}
 		const attemptModel = omitUndefinedProperties({ model: candidate, thinking: resolveEffectiveThinking(candidate, step.thinking) });
@@ -1128,7 +1227,11 @@ export async function runSingleStepInner(
 				childWatchdog,
 				watchdogStatus: (event) => watchdogSink?.(event),
 			});
-		} catch (error) { throw error; }
+		} catch (error) {
+			if (!readonlyContinuation) throw error;
+			failContinuationLaunch(candidate, error);
+			break modelAttemptsLoop;
+		}
 		if (effectiveStructuredOutput && launch.config.structuredOutput) {
 			// The runner reads the value back from the runtime's files after the run.
 			launch.config.structuredOutput.capture = createStructuredOutputFileCapture(effectiveStructuredOutput);
@@ -1147,6 +1250,7 @@ export async function runSingleStepInner(
 				subagentOnlyExtensions: step.subagentOnlyExtensions,
 				fast: step.fast,
 				model: step.model,
+				modelCandidates: step.modelCandidates,
 				mcpDirectTools: step.mcpDirectTools,
 				cwd: step.cwd ?? ctx.cwd,
 				requireReadTool: Boolean(step.skills?.length),
@@ -1155,6 +1259,8 @@ export async function runSingleStepInner(
 				inheritedCapabilityCeiling: ctx.inheritedChildRuntime?.capabilityCeiling,
 				requiredExtensions: step.requiredExtensions ?? ctx.inheritedChildRuntime?.requiredExtensions,
 				permissionRules: step.permissionRules,
+				hostAvailableBuiltins: ctx.hostAvailableBuiltins,
+				hostAvailableTools: ctx.hostAvailableTools,
 			}));
 			launchResolvedExtensions = projectLaunchResolvedChildExtensions(toolPlan);
 			actualLaunchContractDigest = resolveLaunchBinding({
@@ -1164,7 +1270,7 @@ export async function runSingleStepInner(
 				inheritGlobalContext: step.inheritGlobalContext,
 				inheritSkills: step.inheritSkills,
 				task: step.launchBindingTask ?? task,
-				model: candidate,
+				modelCandidates: candidates as string[],
 				fast: step.fast,
 				thinking: resolveEffectiveThinking(candidate, step.thinking),
 				systemPrompt: step.systemPrompt ?? "",
@@ -1174,24 +1280,20 @@ export async function runSingleStepInner(
 				outputMode: step.outputMode,
 				structuredOutputSchema: step.structuredOutputSchema,
 				extensionBindings,
+				...(step.permissionRules ? { permissionRules: step.permissionRules } : {}),
 			}).launchContractDigest;
 		}
 		capabilityAudit = attemptCapabilityAudit;
 		// Each attempt rewrites the step output log; synchronous appends keep a
 		// retried attempt from interleaving with the previous attempt's flush.
 		fs.writeFileSync(ctx.outputFile, "", "utf-8");
-		if (step.effectiveAcceptance?.preserveStagedIndex && stagedIndexBaseline === undefined) {
-			try {
-				stagedIndexBaseline = captureStagedIndexBaseline(step.cwd ?? ctx.cwd);
-			} catch (error) {
-				const message = error instanceof Error ? error.message : String(error);
-				return { agent: step.agent, output: message, error: message, exitCode: 1, context: step.context };
-			}
-		}
 		const run = await runChildSession(omitUndefinedProperties({
 			factory: ctx.childSessions,
 			launch,
-			prompt: `Task: ${recoveryTask}`,
+			collectReadonlyEvidence: true,
+			readonlyContinuation,
+			canContinue,
+			prompt: `Task: ${attemptTask}`,
 			childWatchdog,
 			childEventContext: { runId: ctx.id, stepIndex: ctx.flatIndex, agent: step.agent },
 			appendChildEvent: (event) => appendDiagnosticJsonl(eventsPath, JSON.stringify(event), typeof event.type === "string" ? event.type : undefined),
@@ -1232,7 +1334,11 @@ export async function runSingleStepInner(
 		// Stopped/timedOut runs already have terminal failures, so terminal output diagnostics are deferred.
 		const terminalDiagnosticsEligible = !run.interrupted && !run.stopped && !run.timedOut;
 		const toolDiagnostic = run.exitCode === 0 && !run.error ? launch.capture.toolDiagnostic() : undefined;
-		const toolAvailabilityError = toolDiagnostic ? formatChildToolDiagnostic(toolDiagnostic) : undefined;
+		const toolAvailabilityError = toolDiagnostic && hasFatalMissingTools(toolDiagnostic)
+			? formatChildToolDiagnostic(toolDiagnostic)
+			: undefined;
+		const disabledWarning = toolDiagnostic && !toolAvailabilityError ? formatChildToolDisabledWarning(toolDiagnostic) : undefined;
+		if (disabledWarning) console.warn(`[pi-subagents] ${disabledWarning}`);
 		const runtimeAcknowledgedExtensions = launch.capture.runtimeAcknowledgedExtensions();
 		const midToolExitError = run.currentTool
 			&& isOrdinaryToolForMidToolExit(run.currentTool)
@@ -1322,6 +1428,15 @@ export async function runSingleStepInner(
 					: `${hiddenError.errorType} failed with exit code ${effectiveExitCode}`
 				: undefined);
 		const error = underlyingError ?? missingRequiredOutputError;
+		const attempt: ModelAttempt = omitUndefinedProperties({
+			model: candidate ?? run.model ?? step.model ?? "default",
+			success: effectiveExitCode === 0 && !error,
+			exitCode: effectiveExitCode,
+			error,
+			usage: run.usage,
+		});
+		modelAttempts.push(attempt);
+		if (!recoveringAbort && candidate) attemptedModels.push(candidate);
 		finalOutputSnapshot = outputSnapshot;
 		if (step.toolBudget) {
 			const toolMessages = run.messages.filter((message) => message.role === "toolResult");
@@ -1337,13 +1452,11 @@ export async function runSingleStepInner(
 		} : undefined;
 		const fileMutationEffect = missingRequiredOutputAfterMutation ? { status: "observed" as const, attempted: true as const, evidence: mutationEvidence } : undefined;
 		finalResult = { ...run, exitCode: effectiveExitCode, model: candidate ?? run.model, error, structuredOutput, structuredOutputFailed: structuredError ? true : undefined, runtimeAcknowledgedExtensions, ...(step.agentContract ? { agentContract: step.agentContract } : {}), ...(fileMutationEffect || settlementDiagnostic ? { effects: { ...(fileMutationEffect ? { fileMutation: fileMutationEffect } : {}), ...(settlementDiagnostic ? { settlementDiagnostic } : {}) } } : {}) } as RunChildSessionResult;
-		if (run.stopped || run.timedOut || ctx.timeoutSignal?.aborted || ctx.stopSignal?.aborted || ctx.skipAcceptance?.()) break singleLaunch;
-		if (effectiveExitCode === 0 && !error) break singleLaunch;
-		const recovery = planAbortRecovery({
+		const abortRecovery = !attempt.success ? planAbortRecovery({
 			messages: run.messages,
 			error,
 			sessionAvailable: Boolean(step.sessionFile && fs.existsSync(step.sessionFile)),
-			alreadyResumed: attemptIndex > 0,
+			alreadyResumed: recoveryState !== "unused",
 			stopped: run.stopped || ctx.stopSignal?.aborted || ctx.skipAcceptance?.(),
 			interrupted: run.interrupted,
 			timedOut: run.timedOut || ctx.timeoutSignal?.aborted,
@@ -1353,20 +1466,78 @@ export async function runSingleStepInner(
 			acceptanceFailed: false,
 			currentTool: run.currentTool,
 			afterCompactionSettlement: run.afterCompactionSettlement,
-		});
-		if (recovery.action === "resume") {
-			recoveryTask = recovery.prompt;
-			continue singleLaunch;
+		}) : undefined;
+		if (abortRecovery?.action === "settle" && abortRecovery.diagnostic) {
+			attempt.error = attempt.error
+				? `${abortRecovery.diagnostic}\n${attempt.error.slice(0, 8_000)}`
+				: abortRecovery.diagnostic;
+			if (finalResult) finalResult.abortRecoveryDiagnostic = abortRecovery.diagnostic;
 		}
-		if (recovery.diagnostic) {
-			finalResult.abortRecoveryDiagnostic = recovery.diagnostic;
+		if (run.stopped || run.timedOut || ctx.timeoutSignal?.aborted || ctx.stopSignal?.aborted || ctx.skipAcceptance?.()) break modelAttemptsLoop;
+		if (abortRecovery?.action === "settle" && abortRecovery.diagnostic) break modelAttemptsLoop;
+		if (attempt.success) break modelAttemptsLoop;
+		// The shared token is consumed before sibling creation; no third dispatch of any kind.
+		if (recoveryState === "readonly-continuation") break modelAttemptsLoop;
+		if (recoveringAbort) break modelAttemptsLoop;
+		if (abortRecovery?.action === "resume") {
+			recoveryState = "abort-recovery";
+			nextAttemptTask = abortRecovery.prompt;
+			attemptNotes.push("[abort-recovery] provider/transport abort after useful progress; resuming the retained child session once.");
+			continue;
 		}
 
+		const source = getSettledReadonlyChild(run);
+		if (source) {
+			const captured = launch.capture.completionIntentContext?.();
+			const sourceModel = captured?.model;
+			const retained = getReadonlySessionEvidence(source)!;
+			// Modality/capacity assessment, not another history/provenance validator.
+			// Images and unknown content have no certified token bound in this host slice.
+			const textOnly = (JSON.parse(retained.contextJson) as Message[]).every((message) => typeof message.content === "string"
+				|| (Array.isArray(message.content) && message.content.every((block) => ["text", "thinking", "toolCall"].includes(block.type))));
+			const retainedBytes = Buffer.byteLength(retained.contextJson, "utf8");
+			const resolvedCandidates = candidates.map((reference, index) => {
+				// Only exact registry identities qualify; aliases/default guesses remain ineligible.
+				const base = reference ? splitKnownThinkingSuffix(reference).baseModel : "";
+				const slash = base.indexOf("/");
+				const model = slash > 0 ? captured?.modelRegistry.find(base.slice(0, slash), base.slice(slash + 1)) : undefined;
+				// Reserve the source window for runtime/system/tool overhead, plus a conservative
+				// byte bound for the complete retained text and new prompt; never assume a fit
+				// merely because a 429 request was sent. Equal/smaller windows remain denied.
+				const compatible = textOnly && model && sourceModel && model.input?.includes("text")
+					&& Number.isFinite(sourceModel.contextWindow) && sourceModel.contextWindow > 0
+					&& model.contextWindow >= sourceModel.contextWindow + retainedBytes + Buffer.byteLength(READONLY_CONTINUATION_PROMPT, "utf8")
+					&& model.maxTokens > 0 && model.maxTokens <= sourceModel.maxTokens;
+				return { resolved: model ? { provider: model.provider, model: model.id, api: model.api } : undefined,
+					tried: index <= modelIndex, compatibility: compatible ? "compatible" as const : "unknown" as const };
+			});
+			const plan = planReadonlyModelContinuation({ source, recoveryState, candidates: resolvedCandidates, currentIndex: modelIndex,
+				lifecycleAllowsContinuation: lifecycleAllowsContinuation() && !run.interrupted && !run.stopped && !run.timedOut,
+				effectsAllowContinuation: !run.currentTool && !run.observedMutationAttempt && !mutationEvidence.attemptedMutation
+					&& !structuredError && !effectiveStructuredOutput && !missingRequiredOutputError && !toolAvailabilityError
+					&& !midToolExitError && !hiddenError?.hasError,
+				budget: continuationBudget(), knownContextOverflow: isContextOverflow(error) });
+			if (plan.kind === "continue" && canContinue()) {
+				recoveryState = plan.recoveryState;
+				const selected = resolvedCandidates[plan.candidateIndex]!.resolved!;
+				readonlyContinuation = { source, expected: plan.expected, modelId: `${selected.provider}/${selected.model}` };
+				nextAttemptTask = plan.prompt;
+				modelIndex = plan.candidateIndex;
+				attemptNotes.push(`[readonly-continuation] ${attempt.model} returned HTTP 429 after read-only progress; continuing the retained session once with ${candidates[modelIndex]}.`);
+				continue;
+			}
+		}
+
+		const retryableModelFailure = isRetryableModelFailureAttempt({ error, messages: run.messages, toolCount: run.toolCount });
+		if (retryableModelFailure) recordRetryableModelFailure(candidate ?? run.model ?? step.model, error, step.modelHealthScope);
 		if (isContextOverflow(error)) {
 			contextOverflow = true;
-			break singleLaunch;
+			attemptNotes.push(`[fallback] ${attempt.model} failed: context overflow — the input exceeds this model's context window. Reduce the task input or use a model with a larger context window.`);
+			break modelAttemptsLoop;
 		}
-		break singleLaunch;
+		if (!retryableModelFailure || modelIndex === candidates.length - 1) break modelAttemptsLoop;
+		attemptNotes.push(formatModelAttemptNote(attempt, candidates[modelIndex + 1]));
+		modelIndex += 1;
 	}
 
 	const rawOutput = finalResult?.finalOutput ?? "";
@@ -1385,6 +1556,9 @@ export async function runSingleStepInner(
 	const output = stripAcceptanceReport(resolvedOutput.fullOutput);
 	const outputReference = resolvedOutput.savedPath ? formatSavedOutputReference(resolvedOutput.savedPath, output) : undefined;
 	let outputForSummary = output;
+	if (attemptNotes.length > 0) {
+		outputForSummary = `${attemptNotes.join("\n")}\n\n${outputForSummary}`.trim();
+	}
 	if (finalResult?.stopped && !outputForSummary.trim()) {
 		outputForSummary = ctx.stopMessage ?? "Subagent stopped by user.";
 	}
@@ -1456,8 +1630,7 @@ export async function runSingleStepInner(
 	const acceptanceFailure = effectiveAcceptance ? acceptanceFailureMessage(effectiveAcceptance) : undefined;
 	const acceptanceCanFailRun = acceptanceFailure && effectiveAcceptance?.explicit && (finalResult?.exitCode ?? 1) === 0 && !finalResult?.interrupted && !timedOutAfterAcceptance && !stoppedAfterAcceptance && !isAgentContract(step.agentContract);
 	const effectiveFinalExitCode = timedOutAfterAcceptance || stoppedAfterAcceptance ? 1 : acceptanceCanFailRun ? 1 : finalResult?.exitCode ?? 1;
-	// A passing typed gate supplies the structured output for runs that have no
-	// outputSchema of their own; preflight rejects the combination.
+	// A passing typed gate supplies structured output for runs without outputSchema.
 	const typedGate = typedVerifyOutput(effectiveAcceptance);
 	if (typedGate && finalResult && finalResult.structuredOutput === undefined && effectiveFinalExitCode === 0) {
 		finalResult = { ...finalResult, structuredOutput: typedGate.value };
@@ -1476,7 +1649,7 @@ export async function runSingleStepInner(
 		abortRecoveryDiagnostic: effectiveFinalExitCode !== 0 ? finalResult?.abortRecoveryDiagnostic : undefined,
 		requiredOutput: effectiveFinalExitCode !== 0 ? finalResult?.effects?.settlementDiagnostic?.requiredOutput : undefined,
 	});
-	const usage = launched ? aggregateUsage : undefined;
+	const usage = usageFromAttempts(modelAttempts);
 
 	const artifactErrors = artifactPaths && ctx.artifactConfig?.enabled !== false
 		? persistStepArtifacts({
@@ -1496,6 +1669,9 @@ export async function runSingleStepInner(
 				model: finalResult?.model,
 				nativeMachine: finalResult?.nativeMachine,
 				requestedModel: step.requestedModel,
+				modelResolution: step.modelResolution ? { ...step.modelResolution, ...(finalResult?.model ? { resolved: finalResult.model } : {}), ...(attemptedModels.length > 1 ? { fallbackReason: "retryable-model-failure" as const } : {}) } : undefined,
+				attemptedModels: attemptedModels.length > 0 ? attemptedModels : undefined,
+				modelAttempts,
 				usage,
 				error: effectiveFinalError,
 				acceptance: effectiveAcceptance,
@@ -1524,11 +1700,14 @@ export async function runSingleStepInner(
 		sessionFile: step.sessionFile,
 		intercomTarget: ctx.childIntercomTarget,
 		model: finalResult?.model,
+		modelResolution: step.modelResolution ? { ...step.modelResolution, ...(finalResult?.model ? { resolved: finalResult.model } : {}), ...(attemptedModels.length > 1 ? { fallbackReason: "retryable-model-failure" as const } : {}) } : undefined,
 		nativeMachine: finalResult?.nativeMachine,
 		thinking: resolveEffectiveThinking(finalResult?.model, step.thinking),
 		requestedModel: step.requestedModel,
+		attemptedModels: attemptedModels.length > 0 ? attemptedModels : undefined,
+		modelAttempts,
 		contextOverflow: contextOverflow || undefined,
-		totalCost: costSummaryFromUsage(usage),
+		totalCost: costSummaryFromAttempts(modelAttempts),
 		usage,
 		artifactPaths,
 		savedOutputPath: finalizedOutput.savedPath,
@@ -2218,6 +2397,8 @@ export async function runSubagent(
 				model: step.model,
 				thinking: step.thinking,
 				requestedModel: step.requestedModel,
+				attemptedModels: step.attemptedModels,
+				modelAttempts: step.modelAttempts,
 				contextOverflow: step.contextOverflow,
 			})),
 			exitCode: state === "complete" || state === "paused" ? 0 : 1,
@@ -3583,6 +3764,10 @@ export async function runSubagent(
 					...(thinkingOverride ? {
 						...(model ? { model } : {}),
 						...(thinking ? { thinking } : {}),
+						...(step.parallel.modelCandidates ? { modelCandidates: step.parallel.modelCandidates.flatMap((candidate) => {
+							const resolved = applyThinkingSuffix(candidate, thinkingOverride, true);
+							return resolved ? [resolved] : [];
+						}) } : {}),
 					} : {}),
 					structuredOutputSchema: step.parallel.structuredOutputSchema ?? step.parallel.structuredOutput?.schema,
 				});
@@ -3723,6 +3908,8 @@ export async function runSubagent(
 					nestedRoute: config.nestedRoute,
 					capabilityCeiling: config.capabilityCeiling,
 					runFanoutBudget: config.runFanoutBudget,
+										hostAvailableBuiltins: config.hostAvailableBuiltins,
+					hostAvailableTools: config.hostAvailableTools,
 					registerInterrupt: (interrupt) => registerStepInterrupt(fi, interrupt),
 					registerTimeout: (interrupt) => registerStepTimeout(fi, interrupt),
 					registerStop: (stop) => registerStepStop(fi, stop),
@@ -3761,6 +3948,8 @@ export async function runSubagent(
 				setOptionalProperty(requiredStatusStep(statusPayload, fi), "model", singleResult.model);
 				setOptionalProperty(requiredStatusStep(statusPayload, fi), "thinking", resolveEffectiveThinking(singleResult.model, requiredStatusStep(statusPayload, fi).thinking));
 				setOptionalProperty(requiredStatusStep(statusPayload, fi), "requestedModel", singleResult.requestedModel);
+				setOptionalProperty(requiredStatusStep(statusPayload, fi), "attemptedModels", singleResult.attemptedModels);
+				setOptionalProperty(requiredStatusStep(statusPayload, fi), "modelAttempts", singleResult.modelAttempts);
 				setOptionalProperty(requiredStatusStep(statusPayload, fi), "contextOverflow", singleResult.contextOverflow);
 				setOptionalProperty(requiredStatusStep(statusPayload, fi), "totalCost", singleResult.totalCost);
 				if (singleResult.totalCost) {
@@ -3830,6 +4019,8 @@ export async function runSubagent(
 					model: pr.model,
 					thinking: pr.thinking,
 					requestedModel: pr.requestedModel,
+					attemptedModels: pr.attemptedModels,
+					modelAttempts: pr.modelAttempts,
 					contextOverflow: pr.contextOverflow,
 					totalCost: pr.totalCost,
 					usage: pr.usage,
@@ -4136,6 +4327,8 @@ export async function runSubagent(
 							nestedRoute: config.nestedRoute,
 							capabilityCeiling: config.capabilityCeiling,
 							runFanoutBudget: config.runFanoutBudget,
+														hostAvailableBuiltins: config.hostAvailableBuiltins,
+							hostAvailableTools: config.hostAvailableTools,
 							registerInterrupt: (interrupt) => registerStepInterrupt(fi, interrupt),
 							registerTimeout: (interrupt) => registerStepTimeout(fi, interrupt),
 							registerStop: (stop) => registerStepStop(fi, stop),
@@ -4180,6 +4373,8 @@ export async function runSubagent(
 						setOptionalProperty(requiredStatusStep(statusPayload, fi), "model", singleResult.model);
 						setOptionalProperty(requiredStatusStep(statusPayload, fi), "thinking", resolveEffectiveThinking(singleResult.model, requiredStatusStep(statusPayload, fi).thinking));
 						setOptionalProperty(requiredStatusStep(statusPayload, fi), "requestedModel", singleResult.requestedModel);
+						setOptionalProperty(requiredStatusStep(statusPayload, fi), "attemptedModels", singleResult.attemptedModels);
+						setOptionalProperty(requiredStatusStep(statusPayload, fi), "modelAttempts", singleResult.modelAttempts);
 						setOptionalProperty(requiredStatusStep(statusPayload, fi), "contextOverflow", singleResult.contextOverflow);
 						setOptionalProperty(requiredStatusStep(statusPayload, fi), "totalCost", singleResult.totalCost);
 						if (singleResult.totalCost) {
@@ -4232,7 +4427,7 @@ export async function runSubagent(
 					const sessionTokens = config.sessionDir
 						? parseSessionTokens(path.join(config.sessionDir, `parallel-${t}`))
 						: null;
-					const fallbackTokens = tokenUsageFromUsage(parallelResults[t]?.usage);
+					const fallbackTokens = tokenUsageFromAttempts(parallelResults[t]?.modelAttempts);
 					const observedTokens = requiredStatusStep(statusPayload, fi).tokens;
 					const taskTokens = sessionTokens ?? (fallbackTokens
 						? { ...fallbackTokens, ...(observedTokens?.window !== undefined ? { window: observedTokens.window } : {}), ...(observedTokens?.windowPeak !== undefined ? { windowPeak: observedTokens.windowPeak } : {}) }
@@ -4276,6 +4471,8 @@ export async function runSubagent(
 						model: pr.model,
 						thinking: pr.thinking,
 						requestedModel: pr.requestedModel,
+						attemptedModels: pr.attemptedModels,
+						modelAttempts: pr.modelAttempts,
 						contextOverflow: pr.contextOverflow,
 						totalCost: pr.totalCost,
 						usage: pr.usage,
@@ -4525,6 +4722,8 @@ export async function runSubagent(
 				nestedRoute: config.nestedRoute,
 				capabilityCeiling: config.capabilityCeiling,
 				runFanoutBudget: config.runFanoutBudget,
+								hostAvailableBuiltins: config.hostAvailableBuiltins,
+				hostAvailableTools: config.hostAvailableTools,
 				registerInterrupt: (interrupt) => registerStepInterrupt(flatIndex, interrupt),
 				registerTimeout: (interrupt) => registerStepTimeout(flatIndex, interrupt),
 				registerStop: (stop) => registerStepStop(flatIndex, stop),
@@ -4574,6 +4773,8 @@ export async function runSubagent(
 				model: singleResult.model,
 				thinking: singleResult.thinking,
 				requestedModel: singleResult.requestedModel,
+				attemptedModels: singleResult.attemptedModels,
+				modelAttempts: singleResult.modelAttempts,
 				contextOverflow: singleResult.contextOverflow,
 				totalCost: singleResult.totalCost,
 				usage: singleResult.usage,
@@ -4626,7 +4827,7 @@ export async function runSubagent(
 			if (cumulativeTokens) {
 				previousCumulativeTokens = cumulativeTokens;
 			} else {
-				const fallbackTokens = tokenUsageFromUsage(singleResult.usage);
+				const fallbackTokens = tokenUsageFromAttempts(singleResult.modelAttempts);
 				const observedTokens = requiredStatusStep(statusPayload, flatIndex).tokens;
 				stepTokens = fallbackTokens
 					? { ...fallbackTokens, ...(observedTokens?.window !== undefined ? { window: observedTokens.window } : {}), ...(observedTokens?.windowPeak !== undefined ? { windowPeak: observedTokens.windowPeak } : {}) }
@@ -4660,6 +4861,8 @@ export async function runSubagent(
 			setOptionalProperty(requiredStatusStep(statusPayload, flatIndex), "model", singleResult.model);
 			setOptionalProperty(requiredStatusStep(statusPayload, flatIndex), "thinking", resolveEffectiveThinking(singleResult.model, requiredStatusStep(statusPayload, flatIndex).thinking));
 			setOptionalProperty(requiredStatusStep(statusPayload, flatIndex), "requestedModel", singleResult.requestedModel);
+			setOptionalProperty(requiredStatusStep(statusPayload, flatIndex), "attemptedModels", singleResult.attemptedModels);
+			setOptionalProperty(requiredStatusStep(statusPayload, flatIndex), "modelAttempts", singleResult.modelAttempts);
 			setOptionalProperty(requiredStatusStep(statusPayload, flatIndex), "contextOverflow", singleResult.contextOverflow);
 			setOptionalProperty(requiredStatusStep(statusPayload, flatIndex), "totalCost", singleResult.totalCost);
 			setOptionalProperty(requiredStatusStep(statusPayload, flatIndex), "error", stopped || childStopped ? stopMessage : timedOut ? (timeoutMessage ?? "Subagent timed out.") : singleResult.error);
@@ -4861,7 +5064,13 @@ export async function runSubagent(
 		timedOut = true;
 	}
 	disposeControlInbox();
-	for (const request of consumeStopRequestPayloads(asyncDir)) stopChildStep(request);
+	// Pre-terminal drain: the live watcher is dead, so route every pending control
+	// kind through the handlers while the status is still nonterminal.
+	const preTerminalDrain = drainTerminalControlInbox(asyncDir);
+	for (const request of preTerminalDrain.stops) stopChildStep(request);
+	if (preTerminalDrain.timeout) timeoutRunner();
+	if (preTerminalDrain.interrupt) interruptRunner();
+	for (const request of preTerminalDrain.steers) deliverSteerRequest(request);
 	const signalTerminated = !stopped && !timedOut && !interrupted && results.some((result) => result.exitCode !== 0 && isUnexplainedProcessSignal(omitUndefinedProperties({
 		processSignal: result.processSignal,
 		interrupted: result.interrupted,
@@ -5041,7 +5250,275 @@ export async function runSubagent(
 	} finally {
 		finalResultPublication = undefined;
 	}
+	// Final synchronized drain: control requests landing between the pre-terminal
+	// drain and terminal persistence must not strand while status still reads
+	// running. Consume everything; a late whole-run stop or timeout reopens the
+	// terminal outcome (and the already-written result file) before it persists.
+	const lateDrain = drainTerminalControlInbox(asyncDir);
+	for (const request of lateDrain.stops) {
+		if (request.targetIndex !== undefined) {
+			appendJsonl(eventsPath, JSON.stringify({
+				type: "subagent.stop.late",
+				ts: Date.now(),
+				runId: id,
+				targetIndex: request.targetIndex,
+				childId: request.childId,
+				source: request.source,
+				detail: "Stop arrived after terminal result; target step already terminal.",
+			}));
+		}
+	}
+	for (const request of lateDrain.steers) {
+		appendJsonl(eventsPath, JSON.stringify({
+			type: "subagent.steer.failed",
+			ts: Date.now(),
+			runId: id,
+			steerId: request.id,
+			detail: "Steer arrived after the control inbox closed; run already terminal.",
+		}));
+	}
+	if (lateDrain.interrupt && !stopped && !timedOut && !interrupted) {
+		appendJsonl(eventsPath, JSON.stringify({
+			type: "subagent.interrupt.late",
+			ts: Date.now(),
+			runId: id,
+			source: "interrupt-action",
+			detail: "Interrupt arrived after terminal result; run already terminal.",
+		}));
+	}
+	const lateWholeRunStop = lateDrain.stops.some((request) => request.targetIndex === undefined);
+	if (lateWholeRunStop || lateDrain.timeout) {
+		const lateError = lateWholeRunStop ? stopMessage : (timeoutMessage ?? "Subagent timed out.");
+		const now = Date.now();
+		stopped = lateWholeRunStop ? true : stopped;
+		timedOut = lateWholeRunStop ? timedOut : true;
+		statusPayload.state = lateWholeRunStop ? "stopped" : "failed";
+		if (lateWholeRunStop) statusPayload.stopped = true;
+		else statusPayload.timedOut = true;
+		statusPayload.error = lateError;
+		statusPayload.lastUpdate = now;
+		statusPayload.endedAt = statusPayload.endedAt ?? now;
+		for (const step of statusPayload.steps ?? []) {
+			if (step.status !== "pending" && step.status !== "running" && step.status !== "paused") continue;
+			step.status = lateWholeRunStop ? "stopped" : "failed";
+			step.error = lateError;
+			step.exitCode = 1;
+			if (lateWholeRunStop) step.stopped = true;
+			else step.timedOut = true;
+			step.endedAt = now;
+			step.lastActivityAt = now;
+		}
+		for (const [index, result] of results.entries()) {
+			const stepState = statusPayload.steps?.[index]?.status;
+			if (stepState !== "stopped" && stepState !== "failed") continue;
+			result.output = lateError;
+			result.error = lateError;
+			result.success = false;
+			result.exitCode = 1;
+			result.stopped = lateWholeRunStop ? true : result.stopped;
+			result.timedOut = lateWholeRunStop ? result.timedOut : true;
+		}
+		appendJsonl(eventsPath, JSON.stringify({
+			type: lateWholeRunStop ? "subagent.stopped" : "subagent.timeout",
+			ts: now,
+			runId: id,
+			source: "terminal-drain",
+			detail: "Late control request settled the terminal outcome before persistence.",
+		}));
+		try {
+			const patchResultFile = (filePath: string): void => {
+				const parsed: unknown = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+				if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return;
+				const record = parsed as Record<string, unknown>;
+				record.success = false;
+				record.state = statusPayload.state;
+				record.summary = lateError;
+				record.error = lateError;
+				record.exitCode = 1;
+				record.timestamp = now;
+				if (lateWholeRunStop) record.stopped = true;
+				else record.timedOut = true;
+				record.results = results.map((r) => omitUndefinedProperties({
+					agent: r.agent,
+					...(r.sessionName ? { sessionName: r.sessionName } : {}),
+					context: r.context,
+					output: r.output,
+					outputState: r.outputState,
+					error: r.error,
+					success: r.success,
+					skipped: r.skipped || undefined,
+					interrupted: r.interrupted || undefined,
+					timedOut: r.timedOut || undefined,
+					stopped: r.stopped || undefined,
+					processSignal: r.processSignal || undefined,
+					toolBudget: r.toolBudget,
+					toolBudgetBlocked: r.toolBudgetBlocked || undefined,
+					sessionFile: r.sessionFile,
+					intercomTarget: r.intercomTarget,
+					model: r.model,
+					thinking: r.thinking,
+					attemptedModels: r.attemptedModels,
+					modelAttempts: r.modelAttempts,
+					contextOverflow: r.contextOverflow,
+					totalCost: r.totalCost,
+					usage: r.usage,
+					artifactPaths: r.artifactPaths,
+					savedOutputPath: r.savedOutputPath,
+					outputSaveError: r.outputSaveError,
+					artifactOutputSaveFailed: r.artifactOutputSaveFailed,
+					metadataSaveError: r.metadataSaveError,
+					truncated: r.truncated,
+					transcriptPath: r.transcriptPath,
+					transcriptError: r.transcriptError,
+					agentContract: r.agentContract,
+					launchContractDigest: r.launchContractDigest,
+					launchResolvedExtensions: r.launchResolvedExtensions,
+					runtimeAcknowledgedExtensions: r.runtimeAcknowledgedExtensions,
+					runner: r.runner,
+					externalProcess: r.externalProcess,
+					externalJob: r.externalJob,
+					execution: r.execution,
+					review: r.review,
+					effects: r.effects,
+					structuredOutput: r.structuredOutput,
+					structuredOutputPath: r.structuredOutputPath,
+					structuredOutputSchemaPath: r.structuredOutputSchemaPath,
+					acceptance: r.acceptance,
+					watchdog: r.watchdog,
+					timeoutRecovery: r.timeoutRecovery,
+					capabilityCeiling: r.capabilityCeiling,
+					capabilityAudit: r.capabilityAudit,
+				}));
+				writeAsyncResultFile(filePath, record);
+			};
+			patchResultFile(resultPath);
+			if (effectiveSessionFile && effectiveSessionFile !== resultPath) patchResultFile(effectiveSessionFile);
+		} catch {
+			// The corrected status below is authoritative; a result-patch failure
+			// surfaces through reconciliation against the persisted status.
+		}
+	}
 	writeStatusPayload();
+	// Bounded re-drain (one extra pass only): closes the late window between the
+	// terminal drain above and status persistence — a stop/timeout landing in
+	// that gap would otherwise strand while status reads terminal. Residual
+	// theoretical window remains (persist + re-drain are not atomic), narrowed
+	// to whatever lands after this single pass; stragglers surface via
+	// reconciliation against persisted status.
+	const postPersistDrain = drainTerminalControlInbox(asyncDir);
+	const postPersistWholeRunStop = postPersistDrain.stops.some((request) => request.targetIndex === undefined);
+	if (postPersistWholeRunStop || postPersistDrain.timeout) {
+		const postPersistError = postPersistWholeRunStop ? stopMessage : (timeoutMessage ?? "Subagent timed out.");
+		const now = Date.now();
+		stopped = postPersistWholeRunStop ? true : stopped;
+		timedOut = postPersistWholeRunStop ? timedOut : true;
+		statusPayload.state = postPersistWholeRunStop ? "stopped" : "failed";
+		if (postPersistWholeRunStop) statusPayload.stopped = true;
+		else statusPayload.timedOut = true;
+		statusPayload.error = postPersistError;
+		statusPayload.lastUpdate = now;
+		statusPayload.endedAt = statusPayload.endedAt ?? now;
+		for (const step of statusPayload.steps ?? []) {
+			if (step.status !== "pending" && step.status !== "running" && step.status !== "paused") continue;
+			step.status = postPersistWholeRunStop ? "stopped" : "failed";
+			step.error = postPersistError;
+			step.exitCode = 1;
+			if (postPersistWholeRunStop) step.stopped = true;
+			else step.timedOut = true;
+			step.endedAt = now;
+			step.lastActivityAt = now;
+		}
+		for (const [index, result] of results.entries()) {
+			const stepState = statusPayload.steps?.[index]?.status;
+			if (stepState !== "stopped" && stepState !== "failed") continue;
+			result.output = postPersistError;
+			result.error = postPersistError;
+			result.success = false;
+			result.exitCode = 1;
+			result.stopped = postPersistWholeRunStop ? true : result.stopped;
+			result.timedOut = postPersistWholeRunStop ? result.timedOut : true;
+		}
+		appendJsonl(eventsPath, JSON.stringify({
+			type: postPersistWholeRunStop ? "subagent.stopped" : "subagent.timeout",
+			ts: now,
+			runId: id,
+			source: "post-persist-drain",
+			detail: "Late control request settled the terminal outcome after persistence; status rewritten once more.",
+		}));
+		try {
+			const patchResultFile = (filePath: string): void => {
+				const parsed: unknown = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+				if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return;
+				const record = parsed as Record<string, unknown>;
+				record.success = false;
+				record.state = statusPayload.state;
+				record.summary = postPersistError;
+				record.error = postPersistError;
+				record.exitCode = 1;
+				record.timestamp = now;
+				if (postPersistWholeRunStop) record.stopped = true;
+				else record.timedOut = true;
+				record.results = results.map((r) => omitUndefinedProperties({
+					agent: r.agent,
+					...(r.sessionName ? { sessionName: r.sessionName } : {}),
+					context: r.context,
+					output: r.output,
+					outputState: r.outputState,
+					error: r.error,
+					success: r.success,
+					skipped: r.skipped || undefined,
+					interrupted: r.interrupted || undefined,
+					timedOut: r.timedOut || undefined,
+					stopped: r.stopped || undefined,
+					processSignal: r.processSignal || undefined,
+					toolBudget: r.toolBudget,
+					toolBudgetBlocked: r.toolBudgetBlocked || undefined,
+					sessionFile: r.sessionFile,
+					intercomTarget: r.intercomTarget,
+					model: r.model,
+					thinking: r.thinking,
+					attemptedModels: r.attemptedModels,
+					modelAttempts: r.modelAttempts,
+					contextOverflow: r.contextOverflow,
+					totalCost: r.totalCost,
+					usage: r.usage,
+					artifactPaths: r.artifactPaths,
+					savedOutputPath: r.savedOutputPath,
+					outputSaveError: r.outputSaveError,
+					artifactOutputSaveFailed: r.artifactOutputSaveFailed,
+					metadataSaveError: r.metadataSaveError,
+					truncated: r.truncated,
+					transcriptPath: r.transcriptPath,
+					transcriptError: r.transcriptError,
+					agentContract: r.agentContract,
+					launchContractDigest: r.launchContractDigest,
+					launchResolvedExtensions: r.launchResolvedExtensions,
+					runtimeAcknowledgedExtensions: r.runtimeAcknowledgedExtensions,
+					runner: r.runner,
+					externalProcess: r.externalProcess,
+					externalJob: r.externalJob,
+					execution: r.execution,
+					review: r.review,
+					effects: r.effects,
+					structuredOutput: r.structuredOutput,
+					structuredOutputPath: r.structuredOutputPath,
+					structuredOutputSchemaPath: r.structuredOutputSchemaPath,
+					acceptance: r.acceptance,
+					watchdog: r.watchdog,
+					timeoutRecovery: r.timeoutRecovery,
+					capabilityCeiling: r.capabilityCeiling,
+					capabilityAudit: r.capabilityAudit,
+				}));
+				writeAsyncResultFile(filePath, record);
+			};
+			patchResultFile(resultPath);
+			if (effectiveSessionFile && effectiveSessionFile !== resultPath) patchResultFile(effectiveSessionFile);
+		} catch {
+			// The rewritten status below stays authoritative; a result-patch failure
+			// surfaces through reconciliation against the persisted status.
+		}
+		writeStatusPayload();
+	}
 	await orcaProgressTab?.finish(statusPayload.state === "complete" ? "completed" : statusPayload.state === "stopped" ? "stopped" : "failed", effectiveSessionFile);
 	appendJsonl(
 		eventsPath,

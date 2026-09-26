@@ -1168,7 +1168,7 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		assert.deepEqual(readMockPiRequiredTools(mockPi, 1), tools);
 	});
 
-	it("fails background chains when requested extension tools are unavailable", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
+	it("continues background chains when requested extension tools are unavailable", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
 		mockPi.onCall({ output: "Model incorrectly claimed success", missingTools: ["fixture_search"] });
 		const id = `async-missing-extension-tool-${Date.now().toString(36)}`;
 
@@ -1183,13 +1183,16 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 
 		const resultPath = await waitForAsyncResultFile(id, 10_000);
 		const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8")) as AsyncResultPayload;
-		assert.equal(payload.success, false);
-		assert.equal(payload.state, "failed");
-		assert.match(payload.results[0]?.error ?? "", /requested unavailable child tools: fixture_search/);
-		assert.match(payload.results[0]?.error ?? "", /subagentOnlyExtensions/);
+		assert.equal(payload.success, true);
+		assert.equal(payload.results[0]?.error, undefined);
+		assert.match(payload.results[0]?.output ?? "", /Model incorrectly claimed success/);
+		// The disabled-tool warning must actually be emitted; success alone would pass if warning emission were deleted.
+		const runnerStderr = fs.readFileSync(path.join(ASYNC_DIR, id, "runner.stderr.log"), "utf-8");
+		assert.match(runnerStderr, /fixture_search/);
+		assert.match(runnerStderr, /continues without unavailable child tools/);
 	});
 
-	it("preserves missing background child-tool failures without mutation inference", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
+	it("warns and continues when background implementation tools are unavailable", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
 		mockPi.onCall({ output: "I cannot edit because fixture_search is missing", missingTools: ["fixture_search"] });
 		const id = `async-missing-implementation-tool-${Date.now().toString(36)}`;
 
@@ -1207,13 +1210,12 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 
 		const resultPath = await waitForAsyncResultFile(id, 10_000);
 		const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8")) as AsyncResultPayload;
-		const statusPayload = await waitForAsyncState(id, (candidate) => candidate.state === "failed");
-
-		assert.equal(payload.success, false);
-		assert.equal(payload.state, "failed");
-		assert.match(payload.results[0]?.error ?? "", /requested unavailable child tools: fixture_search/);
+		assert.equal(payload.success, true);
+		assert.equal(payload.results[0]?.error, undefined);
 		assert.equal(payload.results[0]?.effects?.fileMutation, undefined);
-		assert.equal(statusPayload.steps?.[0]?.effects?.fileMutation, undefined);
+		const runnerStderr = fs.readFileSync(path.join(ASYNC_DIR, id, "runner.stderr.log"), "utf-8");
+		assert.match(runnerStderr, /fixture_search/);
+		assert.match(runnerStderr, /continues without unavailable child tools/);
 	});
 
 	it("applies agent acceptance roles to inferred async acceptance", { skip: !isAsyncAvailable() || !createSubagentExecutor ? "jiti or executor not available" : undefined }, async () => {

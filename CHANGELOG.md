@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fork-preserved
+
+- Preserve the fork's internal leaf-model runtime RPC, terminal-result RPC projection, ordered model fallback/exclusion behavior, and disabled-extension-tool warning semantics while integrating upstream 0.71.x changes.
+
 ### Fixed
 
 - Session startup no longer blocks the JavaScript event loop while locating globally installed agents; the first agent prompt and `subagents_enable` still wait for complete discovery. Thanks to [@trading-bl](https://github.com/trading-bl) for [#2474](https://github.com/nicobailon/pi-subagents/issues/2474).

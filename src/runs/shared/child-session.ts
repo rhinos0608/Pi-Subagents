@@ -14,11 +14,18 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { pinChildCacheRetention } from "../../shared/child-cache-retention.ts";
 import { getAgentDir, PI_CODING_AGENT_PACKAGE_ROOT_ENV } from "../../shared/utils.ts";
+import { prepareReadonlySessionEvidence, recordReadonlyProviderInheritance } from "./readonly-session-evidence.ts";
+import { toModelInfo, type ModelInfo } from "../../shared/model-info.ts";
 import { resolvePackageSubpath } from "../background/runner-aliases.ts";
 import { PI_CODING_AGENT_PACKAGE, resolveInstalledPiPackageRoot, resolvePiPackageRoot } from "./pi-spawn.ts";
 import type { ChildRuntimeConfig } from "./child-runtime-config.ts";
 import type { RequiredChildExtensionSnapshot } from "../../shared/required-child-extensions.ts";
 import type { HerdrMachineReference, HerdrRemoteGitStatus } from "../../shared/types.ts";
+
+const readonlyModels = new WeakMap<ChildSession, { current: ModelInfo; resolve(reference: string): ModelInfo | undefined; requestBytes: number }>();
+export function getReadonlyChildModels(child: ChildSession) {
+	return readonlyModels.get(child);
+}
 
 export interface ChildSessionEvent {
 	type: string;
@@ -161,9 +168,15 @@ function inheritParentProviders(modelRuntime: ModelRuntimeInstance, parentProvid
 		try {
 			const native = parentProviders.getRegisteredNativeProvider(providerId);
 			const config = native ? undefined : parentProviders.getRegisteredProviderConfig(providerId);
-			if (native) modelRuntime.registerNativeProvider(native);
-			else if (config) modelRuntime.registerProvider(providerId, config);
-			else throw new Error(`Parent provider '${providerId}' has no registered native provider or config.`);
+			if (native) {
+				modelRuntime.registerNativeProvider(native);
+				recordReadonlyProviderInheritance(modelRuntime, parentProviders, providerId, { kind: "native", value: native });
+			} else if (config) {
+				modelRuntime.registerProvider(providerId, config);
+				const registeredConfig = modelRuntime.getRegisteredProviderConfig(providerId);
+				if (!registeredConfig) throw new Error(`Parent provider '${providerId}' registration was not retained by the child runtime.`);
+				recordReadonlyProviderInheritance(modelRuntime, parentProviders, providerId, { kind: "config", sourceConfig: config, registeredConfig });
+			} else throw new Error(`Parent provider '${providerId}' has no registered native provider or config.`);
 			registered = true;
 		} catch (error) {
 			onError?.({ extensionPath: `<parent-provider:${providerId}>`, event: "inherit_provider", error });
@@ -305,6 +318,7 @@ export function createDefaultChildSessionFactory(options: DefaultChildSessionFac
 	};
 	return {
 		async create(launch) {
+			const observeReadonly = prepareReadonlySessionEvidence(launch);
 			const pi = await loadPiCodingAgent();
 			const modelRuntime = launch.parentProviderRegistry
 				? await pi.ModelRuntime.create()
@@ -336,7 +350,8 @@ export function createDefaultChildSessionFactory(options: DefaultChildSessionFac
 				const requiredPaths = new Set((launch.requiredExtensions ?? []).map(({ path }) => path));
 				applyProcessEnv(launch.processEnv);
 				if (!resetExtensionCacheOnReload(loader) && (launch.ambientExtensions || launch.extensionPaths.length)) launch.onExtensionError?.({ extensionPath: "<loader>", event: "load", error: new Error("pi's extension cache reset is unavailable; extensions loaded into this child share module state with other sessions in this process.") });
-				await loader.reload();
+				observeReadonly?.loadingHooks(true);
+				try { await loader.reload(); } finally { observeReadonly?.loadingHooks(false); }
 				const loadErrors = requiredPaths.size > 0
 					? loader.getExtensions().errors.filter(({ path }) => requiredPaths.has(path)) : [];
 				if (loadErrors.length > 0) throw new Error(`Required child extension failed to load: ${loadErrors.map(({ path, error }) => `${path}: ${error}`).join("; ")}`);
@@ -352,6 +367,7 @@ export function createDefaultChildSessionFactory(options: DefaultChildSessionFac
 						throw new Error(`Failed to refresh child providers: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
 					}
 				}
+				observeReadonly?.beforeOpen();
 				const sessionManager = launch.storage.kind === "file"
 					? pi.SessionManager.open(launch.storage.sessionFile, undefined, launch.cwd)
 					: launch.storage.kind === "dir"
@@ -359,6 +375,7 @@ export function createDefaultChildSessionFactory(options: DefaultChildSessionFac
 						: launch.storage.kind === "memory"
 							? pi.SessionManager.inMemory(launch.cwd)
 							: pi.SessionManager.create(launch.cwd);
+				observeReadonly?.opened(sessionManager);
 				const resolvedModel = launch.model
 					? pi.resolveCliModel({ cliModel: launch.model, modelRuntime })
 					: undefined;
@@ -391,6 +408,9 @@ export function createDefaultChildSessionFactory(options: DefaultChildSessionFac
 			const opened = loading.catch(() => {}).then(open);
 			loading = opened;
 			const session = await opened;
+			let evidence: ReturnType<NonNullable<typeof observeReadonly>["observe"]>;
+			try { evidence = observeReadonly?.observe(pi, modelRuntime, session); }
+			catch (error) { session.dispose(); throw error; }
 			let pending: Promise<void> | undefined;
 			// pi's own hosts emit `session_shutdown` before disposing a session so the
 			// extensions loaded into it (ambient extensions included) release their
@@ -399,20 +419,28 @@ export function createDefaultChildSessionFactory(options: DefaultChildSessionFac
 				try {
 					const runner = session.extensionRunner;
 					if (runner.hasHandlers("session_shutdown")) {
-						await Promise.race([runner.emit({ type: "session_shutdown", reason: "quit" }), new Promise<void>((resolve) => setTimeout(resolve, shutdownTimeoutMs).unref?.())]);
+						evidence?.beforeShutdown();
+						const settled = await Promise.race([runner.emit({ type: "session_shutdown", reason: "quit" }).then(() => true), new Promise<false>((resolve) => setTimeout(() => resolve(false), shutdownTimeoutMs).unref?.())]);
+						if (!settled) evidence?.invalidate();
 					}
 				} catch (error) {
+					evidence?.invalidate();
 					launch.onExtensionError?.({ extensionPath: "<session>", event: "session_shutdown", error });
 				} finally {
 					session.dispose();
+					evidence?.finish(child);
 				}
 			};
 			const child: ChildSession = {
 				subscribe: (listener) => session.subscribe((event) => listener(event as unknown as ChildSessionEvent)),
-				prompt: (text) => session.prompt(text),
-				steer: (text) => session.steer(text),
-				followUp: (text) => session.followUp(text),
-				abort: () => session.abort(),
+				prompt: (text) => {
+					if (!evidence) return session.prompt(text);
+					try { evidence.start(); } catch (error) { return Promise.reject(error); }
+					return session.prompt(text).then(() => evidence?.settled(), (error) => { evidence?.invalidate(); throw error; });
+				},
+				steer: (text) => { evidence?.invalidate(); return session.steer(text); },
+				followUp: (text) => { evidence?.invalidate(); return session.followUp(text); },
+				abort: () => { evidence?.invalidate(); return session.abort(); },
 				hasQueuedMessages: () => session.agent?.hasQueuedMessages?.() === true,
 				dispose: () => {
 					if (!pending) {
@@ -430,6 +458,16 @@ export function createDefaultChildSessionFactory(options: DefaultChildSessionFac
 				get modelId() { return session.model ? `${session.model.provider}/${session.model.id}` : undefined; },
 				get contextWindow() { return session.model?.contextWindow; },
 			};
+			if (evidence && session.model) readonlyModels.set(child, {
+				current: toModelInfo(session.model),
+				requestBytes: Buffer.byteLength(session.systemPrompt) + Buffer.byteLength(JSON.stringify(session.agent.state.tools)),
+				resolve(reference) {
+					try {
+						const resolved = pi.resolveCliModel({ cliModel: reference, modelRuntime });
+						return !resolved.error && resolved.model ? toModelInfo(resolved.model) : undefined;
+					} catch { return undefined; }
+				},
+			});
 			live.add(child);
 			return child;
 		},
