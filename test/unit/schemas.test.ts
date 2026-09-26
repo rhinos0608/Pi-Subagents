@@ -193,20 +193,9 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 		assert.equal(CompileSchema!(collectSchema).Check({ as: "all", outputSchema: false }), false);
 	});
 
-	it("includes context field and default precedence for fresh/fork execution mode", () => {
+	it("context field is deleted: launch context is always fresh", () => {
 		const contextSchema = SubagentParams?.properties?.context;
-		assert.ok(contextSchema, "context schema should exist");
-		assert.equal(contextSchema.type, "string");
-		assert.deepEqual(contextSchema.enum, ["fresh", "fork", "profile"]);
-		const description = String(contextSchema.description ?? "");
-		assert.match(description, /fresh/);
-		assert.match(description, /fork/);
-		assert.match(description, /profile/);
-		assert.match(description, /declared defaultContext/);
-		assert.match(description, /defaultSubagentContext wins over each agent defaultContext/);
-		assert.match(description, /overrides every child/);
-		assert.match(description, /implicit fork/);
-		assert.match(description, /else fresh/);
+		assert.equal(contextSchema, undefined, "context should not be public");
 	});
 
 	it("exposes named resources plus raw inline and file workflow script modes", () => {
@@ -316,41 +305,19 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 		assert.equal(version.enum, undefined);
 	});
 
-	it("documents workflow timeout aliases and omits removed turn budgets", () => {
-		const timeoutSchema = SubagentParams?.properties?.timeoutMs;
-		const maxRuntimeSchema = SubagentParams?.properties?.maxRuntimeMs;
-		const removedBudgetSchema = SubagentParams?.properties?.turnBudget;
+	it("omits removed timeout aliases and per-call timeout/runtime budget fields", () => {
+		for (const name of ["timeoutMs", "maxRuntimeMs", "turnBudget", "usageBudget"]) {
+			assert.equal((SubagentParams?.properties as Record<string, unknown> | undefined)?.[name], undefined, `${name} should not be public`);
+		}
 		const toolBudgetSchema = SubagentParams?.properties?.toolBudget;
-		assert.ok(timeoutSchema, "timeoutMs schema should exist");
-		assert.ok(maxRuntimeSchema, "maxRuntimeMs schema should exist");
-		assert.equal(timeoutSchema.minimum, 1);
-		assert.equal(maxRuntimeSchema.minimum, 1);
-		assert.match(String(timeoutSchema.description ?? ""), /foreground and single async runs/i);
-		assert.match(String(timeoutSchema.description ?? ""), /use config timeoutMs, else 30m/i);
-		assert.match(String(timeoutSchema.description ?? ""), /async composites have no default parent deadline/i);
-		assert.doesNotMatch(String(timeoutSchema.description ?? ""), /foreground-only/i);
-		assert.match(String(maxRuntimeSchema.description ?? ""), /timeoutMs/i);
-		assert.match(String(maxRuntimeSchema.description ?? ""), /Alias timeoutMs \(same defaults\)/);
-		assert.equal(removedBudgetSchema, undefined);
 		assert.equal(toolBudgetSchema?.properties?.soft?.minimum, 1);
 		assert.equal(toolBudgetSchema?.properties?.hard?.minimum, 1);
 	});
 
-	it("includes root-only reported usage budget", () => {
+	it("omits per-call usage budget (backend-only tracking)", () => {
 		const usageBudgetSchema = SubagentParams?.properties?.usageBudget;
-		assert.ok(usageBudgetSchema, "usageBudget schema should exist");
-		assert.equal(usageBudgetSchema.minProperties, 1);
-		assert.ok(CompileSchema);
-		const validator = CompileSchema!(SubagentParams);
-		assert.equal(validator.Check({ usageBudget: {} }), false);
-		assert.equal(validator.Check({ usageBudget: { tokens: { hard: 1 } } }), true);
-		assert.equal(usageBudgetSchema.properties?.tokens?.properties?.soft?.exclusiveMinimum, 0);
-		assert.equal(usageBudgetSchema.properties?.tokens?.properties?.hard?.exclusiveMinimum, 0);
-		assert.equal(usageBudgetSchema.properties?.costUsd?.properties?.soft?.exclusiveMinimum, 0);
-		assert.equal(usageBudgetSchema.properties?.costUsd?.properties?.hard?.exclusiveMinimum, 0);
-		assert.match(String(usageBudgetSchema.description ?? ""), /root-only/i);
-		assert.match(String(usageBudgetSchema.description ?? ""), /running children are not stopped/i);
-	});
+		assert.equal(usageBudgetSchema, undefined, "usageBudget should not be public");
+		});
 
 	it("includes subagent control fields", () => {
 		const idSchema = SubagentParams?.properties?.id;

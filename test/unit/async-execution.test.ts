@@ -169,8 +169,8 @@ describe("async runner execution", () => {
 		});
 
 		assert.ok("steps" in result, "expected successful step build");
-		assert.deepEqual(result.steps[0]?.toolBudget, { hard: 3, block: ["find"] });
-		assert.deepEqual(result.steps[1]?.toolBudget, { hard: 2, block: ["grep"] });
+		assert.deepEqual(result.steps[0]?.toolBudget, { hard: 40, block: ["find"] });
+		assert.deepEqual(result.steps[1]?.toolBudget, { hard: 40, block: ["grep"] });
 	});
 	it("carries the resolved model context window into async runner steps", () => {
 		const result = buildAsyncRunnerSteps("context-limit-run", {
@@ -233,7 +233,7 @@ describe("async runner execution", () => {
 		});
 
 		assert.ok("steps" in result, "expected successful step build");
-		assert.deepEqual(result.steps[0]?.toolBudget, { hard: 4, block: ["read"] });
+		assert.deepEqual(result.steps[0]?.toolBudget, { hard: 40, block: ["read"] });
 	});
 
 	it("attaches external runner config and rejects unsupported Pi-only overrides", (t) => {
@@ -274,7 +274,7 @@ describe("async runner execution", () => {
 		});
 
 		assert.ok("steps" in result, "expected successful step build");
-		assert.deepEqual(result.steps[0]?.toolBudget, { hard: 5, block: ["ls"] });
+		assert.deepEqual(result.steps[0]?.toolBudget, { hard: 40, block: ["ls"] });
 	});
 });
 
