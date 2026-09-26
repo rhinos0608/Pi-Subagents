@@ -2201,7 +2201,6 @@ async function resumeAsyncRun(input: {
 		context: recoveryContext,
 		modelOverride: recoveryDescriptor?.model ?? target.model,
 		...(recoveryDescriptor?.modelCandidates?.length ? { modelCandidatesOverride: [...recoveryDescriptor.modelCandidates] } : {}),
-		...(recoveryDescriptor?.modelHealthScope ? { modelHealthScopeOverride: recoveryDescriptor.modelHealthScope } : {}),
 		fast: recoveryDescriptor?.fast,
 		modelOverrideFromParent: recoveryDescriptor?.modelOverrideFromParent,
 		modelOrigin: recoveryDescriptor?.modelOrigin ?? (recoveryDescriptor?.modelOverrideFromParent ? "inherited" : undefined),

@@ -69,7 +69,6 @@ import { formatChildToolDiagnostic, formatChildToolDisabledWarning, hasFatalMiss
 import { formatChildModelResolutionDiagnostic, isChildModelResolutionFailure } from "../shared/model-resolution-diagnostic.ts";
 import { planAbortRecovery } from "../shared/abort-recovery.ts";
 import { planReadonlyModelContinuation, type LogicalRecoveryState } from "../shared/readonly-model-continuation.ts";
-import { modelExclusionScopeForCwd } from "../shared/model-exclusions.ts";
 import { getReadonlySessionEvidence, requestReadonlySessionEvidence, type SettledReadonlyEvidence } from "../shared/readonly-session-evidence.ts";
 import { buildTimeoutRecoverySummary, collectTrackedMutationEvidence, snapshotTrackedMutations } from "../shared/mutation-evidence.ts";
 import { captureSingleOutputSnapshot, extractChildWrittenOutput, finalizeSingleOutput, formatSavedOutputReference, hasSingleOutputChangedSinceSnapshot, resolveSingleOutput, validateFileOnlyOutputMode, type SingleOutputSnapshot } from "../shared/single-output.ts";
@@ -81,9 +80,12 @@ import {
 	buildModelCandidates,
 	buildModelResolutionMetadata,
 	resolveModelResolutionSource,
+	formatExhaustedCandidatesDiagnostic,
 	formatModelAttemptNote,
 	isRetryableModelFailureAttempt,
-	recordRetryableModelFailure,
+	MODEL_MAX_ATTEMPTS_PER_CANDIDATE,
+	modelRetryBackoffMs,
+	sleepMs,
 } from "../shared/model-fallback.ts";
 import {
 	createMutatingFailureState,
@@ -1776,7 +1778,6 @@ async function runSyncCompletionInner(
 	const systemPrompt = buildEffectiveSystemPrompt({ agent, resolvedSkills, cwd: skillCwd, ...(options.outputPath ? { outputPath: options.outputPath } : {}) });
 
 	const requestedModel = options.modelOverrideFromParent ? undefined : (options.modelOverride ?? agent.model);
-	const modelHealthScope = modelExclusionScopeForCwd(options.cwd ?? runtimeCwd);
 	const candidates = buildModelCandidates(
 		options.modelOverride ?? agent.model,
 		agent.fallbackModels,
@@ -1784,7 +1785,6 @@ async function runSyncCompletionInner(
 		agent.modelProvider ?? options.preferredModelProvider,
 		{
 			scope: options.modelScope,
-			healthScope: modelHealthScope,
 			primaryModelFromParent: options.modelOverrideFromParent,
 			origin: options.modelOrigin ?? (options.modelOverrideFromParent ? "inherited" : "configured"),
 		},
@@ -1920,6 +1920,11 @@ async function runSyncCompletionInner(
 		&& (!readonlySource || getReadonlySessionEvidence(readonlySource) === readonlyExpected)
 		&& !readonlySource?.detached && !readonlySource?.shutDown;
 	let nextAttemptTask = task;
+	// Stateless bounded retry bookkeeping: per-candidate consecutive retryable
+	// startup-failure counts and per-candidate dispatch counts. Both reset on
+	// every fresh launch; nothing survives between launches.
+	const failuresForCandidate: number[] = modelsToTry.map(() => 0);
+	const attemptsPerCandidate: number[] = modelsToTry.map(() => 0);
 	modelAttemptsLoop: for (let modelIndex = 0; modelIndex < modelsToTry.length; modelIndex++) {
 		const candidate = modelsToTry[modelIndex];
 		// The inner loop re-runs the same candidate at most once, for abort recovery.
@@ -1952,6 +1957,7 @@ async function runSyncCompletionInner(
 				readonlyHandoffAllowed: readonlyExpected ? readonlyHandoffAllowed : undefined,
 			});
 			lastResult = result;
+			attemptsPerCandidate[modelIndex] = (attemptsPerCandidate[modelIndex] ?? 0) + 1;
 			if (!recoveringAbort) {
 				if (result.model) attemptedModels.push(result.model);
 				else if (candidate) attemptedModels.push(candidate);
@@ -2047,13 +2053,27 @@ async function runSyncCompletionInner(
 			if (attemptSucceeded) break modelAttemptsLoop;
 
 			const retryableModelFailure = isRetryableModelFailureAttempt({ error: result.error, messages: result.messages, toolCount: result.progressSummary?.toolCount });
-			if (retryableModelFailure) recordRetryableModelFailure(result.model ?? candidate, result.error, modelHealthScope);
 			if (isContextOverflow(result.error)) {
 				result.contextOverflow = true;
 				attemptNotes.push(`[fallback] ${attempt.model} failed: context overflow — the input exceeds this model's context window. Reduce the task input or use a model with a larger context window.`);
 				break modelAttemptsLoop;
 			}
-			if (!retryableModelFailure || modelIndex === modelsToTry.length - 1) break modelAttemptsLoop;
+			if (!retryableModelFailure) break modelAttemptsLoop;
+			// Retryable startup/availability failure: same candidate again until it
+			// has been attempted three times, then advance. Task-execution
+			// outcomes never reach here.
+			failuresForCandidate[modelIndex] = (failuresForCandidate[modelIndex] ?? 0) + 1;
+			const backoffMs = modelRetryBackoffMs(failuresForCandidate[modelIndex] ?? 0);
+			if (backoffMs !== undefined) {
+				attemptNotes.push(`[retry] ${attempt.model} failed (attempt ${failuresForCandidate[modelIndex]}/${MODEL_MAX_ATTEMPTS_PER_CANDIDATE}) with a retryable startup failure; backing off ${backoffMs}ms before retrying the same candidate.`);
+				await sleepMs(backoffMs);
+				continue;
+			}
+			if (modelIndex === modelsToTry.length - 1) {
+				attemptNotes.push(`[exhausted] ${formatExhaustedCandidatesDiagnostic({ candidates: modelsToTry, attemptsPerCandidate, lastError: result.error })}`);
+				break modelAttemptsLoop;
+			}
+			failuresForCandidate[modelIndex] = 0;
 			attemptNotes.push(formatModelAttemptNote(attempt, modelsToTry[modelIndex + 1]));
 			break;
 		}

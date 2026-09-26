@@ -23,7 +23,6 @@ import { encodeInspectReply, handleInspectRpcArgs, INSPECT_WIDGET_KEY } from "..
 import { listScheduledRunSummaries } from "../runs/background/scheduled-runs.ts";
 import { resolveAsyncStatusChild } from "../runs/shared/child-identity.ts";
 import { readStatus } from "../shared/utils.ts";
-import { clearExclusions, flushPersist, getExcludedCount } from "../runs/shared/model-exclusions.ts";
 import type { SlashSubagentResponse, SlashSubagentUpdate } from "./slash-bridge.ts";
 import { registerPromptWorkflowCommands } from "./prompt-workflows.ts";
 import { collectSubagentCost, formatSubagentCostReport } from "./subagent-cost.ts";
@@ -683,16 +682,6 @@ export function registerSlashCommands(
 		description: "Show subagent diagnostics",
 		handler: async (_args, ctx) => {
 			await runCommand(ctx, { action: "doctor" });
-		},
-	});
-
-	pi.registerCommand("subagents-clear-model-exclusions", {
-		description: "Clear cached subagent model exclusions (e.g. after fixing quota or credentials)",
-		handler: async (_args, ctx) => {
-			const cleared = getExcludedCount();
-			clearExclusions();
-			flushPersist();
-			ctx.ui.notify(`Cleared ${cleared} cached model exclusion${cleared === 1 ? "" : "s"}.`, "info");
 		},
 	});
 

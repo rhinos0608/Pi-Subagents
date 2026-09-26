@@ -830,8 +830,6 @@ export interface SteeringRecoveryDescriptor {
 	model?: string;
 	/** Frozen ordered, resolved model allowlist captured at launch. */
 	modelCandidates?: string[];
-	/** Opaque project-local model-health scope captured at launch. */
-	modelHealthScope?: string;
 	modelProvider?: string;
 	modelOverrideFromParent?: boolean;
 	modelOrigin?: "explicit" | "inherited" | "configured";

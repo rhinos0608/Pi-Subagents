@@ -97,7 +97,7 @@ import { collectDynamicResults, DynamicFanoutError, materializeDynamicParallelSt
 import { claimRunFanoutBatch, getRunFanoutBudgetSnapshot } from "../shared/run-fanout-budget.ts";
 import { nestedSummaryFromAsyncStatus, projectNestedEvents, resolveNestedAsyncDir, writeNestedEvent } from "../shared/nested-events.ts";
 import { formatSubagentModelVerificationError, isContextOverflow } from "../shared/model-resolution.ts";
-import { formatModelAttemptNote, isRetryableModelFailureAttempt, recordRetryableModelFailure } from "../shared/model-fallback.ts";
+import { formatExhaustedCandidatesDiagnostic, formatModelAttemptNote, isRetryableModelFailureAttempt, MODEL_MAX_ATTEMPTS_PER_CANDIDATE, modelRetryBackoffMs, sleepMs } from "../shared/model-fallback.ts";
 import { markProcessTerminalCandidateLeaseRelease, processTerminalPath, writeProcessTerminalCandidate, type ProcessTerminalCandidate } from "./process-terminal.ts";
 import { persistRunnerStartupFailure } from "./runner-startup-failure.ts";
 import { createSteeringStatus, recordSteeringRequest, steeringStatus, terminalSteeringNoticeState, unconsumedSteerReason, updateSteeringTarget } from "./steering.ts";
@@ -1153,6 +1153,11 @@ export async function runSingleStepInner(
 	}
 
 	let modelIndex = 0;
+	// Stateless bounded retry bookkeeping: per-candidate consecutive retryable
+	// startup-failure counts and per-candidate dispatch counts. Both start at
+	// zero on every fresh launch; nothing survives between launches.
+	const failuresForCandidate: number[] = candidates.map(() => 0);
+	const attemptsPerCandidate: number[] = candidates.map(() => 0);
 	let contextOverflow = false;
 	let launchWarningsEmitted = false;
 	let recoveryState: LogicalRecoveryState = "unused";
@@ -1324,6 +1329,7 @@ export async function runSingleStepInner(
 			mutationTools: step.mutationTools,
 		}));
 		launched = true;
+		attemptsPerCandidate[modelIndex] = (attemptsPerCandidate[modelIndex] ?? 0) + 1;
 		aggregateUsage.input += run.usage.input;
 		aggregateUsage.output += run.usage.output;
 		aggregateUsage.cacheRead += run.usage.cacheRead;
@@ -1529,13 +1535,27 @@ export async function runSingleStepInner(
 		}
 
 		const retryableModelFailure = isRetryableModelFailureAttempt({ error, messages: run.messages, toolCount: run.toolCount });
-		if (retryableModelFailure) recordRetryableModelFailure(candidate ?? run.model ?? step.model, error, step.modelHealthScope);
 		if (isContextOverflow(error)) {
 			contextOverflow = true;
 			attemptNotes.push(`[fallback] ${attempt.model} failed: context overflow — the input exceeds this model's context window. Reduce the task input or use a model with a larger context window.`);
 			break modelAttemptsLoop;
 		}
-		if (!retryableModelFailure || modelIndex === candidates.length - 1) break modelAttemptsLoop;
+		if (!retryableModelFailure) break modelAttemptsLoop;
+		// Retryable startup/availability failure: same candidate again until it
+		// has been attempted three times, then advance. Task-execution
+		// outcomes never reach here.
+		failuresForCandidate[modelIndex] = (failuresForCandidate[modelIndex] ?? 0) + 1;
+		const backoffMs = modelRetryBackoffMs(failuresForCandidate[modelIndex] ?? 0);
+		if (backoffMs !== undefined) {
+			attemptNotes.push(`[retry] ${attempt.model} failed (attempt ${failuresForCandidate[modelIndex]}/${MODEL_MAX_ATTEMPTS_PER_CANDIDATE}) with a retryable startup failure; backing off ${backoffMs}ms before retrying the same candidate.`);
+			await sleepMs(backoffMs);
+			continue modelAttemptsLoop;
+		}
+		failuresForCandidate[modelIndex] = 0;
+		if (modelIndex === candidates.length - 1) {
+			attemptNotes.push(`[exhausted] ${formatExhaustedCandidatesDiagnostic({ candidates, attemptsPerCandidate, lastError: error })}`);
+			break modelAttemptsLoop;
+		}
 		attemptNotes.push(formatModelAttemptNote(attempt, candidates[modelIndex + 1]));
 		modelIndex += 1;
 	}
