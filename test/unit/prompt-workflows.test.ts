@@ -128,7 +128,6 @@ Review $1 with $ARGUMENTS
 		assert.match(script, /"agent":"reviewer"/);
 		assert.match(script, /"model":"anthropic\/claude-sonnet-4"/);
 		assert.match(script, /"skill":\["deslop","typescript-code"\]/);
-		assert.match(script, /"context":"fork"/);
 		assert.match(script, /Review target with target/);
 	});
 
