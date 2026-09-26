@@ -520,7 +520,6 @@ interface ExecutionContextData {
 	toolBudget?: ResolvedToolBudget;
 	allowZeroToolBudget?: boolean;
 	configToolBudget?: ResolvedToolBudget;
-	contextPolicy: AgentDefaultContextPolicy;
 	modelScope?: ModelScopeConfig;
 	parentModel?: ParentModel;
 	parentSessionId: string | null;
@@ -2357,10 +2356,10 @@ function formatFailedSingleRunOutput(result: SingleResult, displayOutput: string
 	return lines.join("\n");
 }
 
-function createForegroundControlNotifier(data: Pick<ExecutionContextData, "controlConfig" | "contextPolicy" | "intercomBridge" | "params">, deps: Pick<ExecutorDeps, "pi" | "state">): (event: ControlEvent) => void {
+function createForegroundControlNotifier(data: Pick<ExecutionContextData, "controlConfig" | "intercomBridge" | "params">, deps: Pick<ExecutorDeps, "pi" | "state">): (event: ControlEvent) => void {
 	return (event) => {
 		applyControlEventToRememberedForegroundRun(deps.state, event);
-		const eventBridge = intercomBridgeAppliesToAgent(data.intercomBridge, data.contextPolicy, event.agent)
+		const eventBridge = data.intercomBridge.active && data.intercomBridge.mode !== "fork-only"
 			? data.intercomBridge
 			: { ...data.intercomBridge, active: false };
 		const parentWorkflowRunId = data.params.workflowParentRunId;
@@ -3394,7 +3393,6 @@ async function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 		controlConfig,
 		intercomBridge,
 		nestedRoute,
-		contextPolicy,
 		unknownAgentDiagnosticContext,
 	} = data;
 	const hasChain = (params.chain?.length ?? 0) > 0;
@@ -3428,8 +3426,8 @@ async function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 	const availableModels: ModelInfo[] = ctx.modelRegistry.getAvailable().map(toModelInfo);
 	const currentMaxSubagentDepth = resolveCurrentMaxSubagentDepth(deps.config.maxSubagentDepth, deps.childRuntime);
 	const currentProvider = parentModel?.provider;
-	const controlIntercomTarget = resolveRunLevelIntercomTarget(intercomBridge, contextPolicy);
-	const childIntercomTarget = resolveChildIntercomTargetFactory(intercomBridge, contextPolicy, id);
+	const controlIntercomTarget = intercomBridge.active && intercomBridge.mode !== "fork-only" ? intercomBridge.orchestratorTarget : undefined;
+		const childIntercomTarget = intercomBridge.active && intercomBridge.mode !== "fork-only" ? ((agent: string, index: number) => resolveSubagentIntercomTarget(id, agent, index)) : undefined;
 
 
 	if (hasSingle) {
@@ -3468,10 +3466,10 @@ async function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 			});
 		const modelOverrideFromParent = modelOrigin === "inherited";
 		const launchRuleError = applyWatchdogLaunchRules({ cwd: effectiveCwd, agent: a.name, model: modelOverride ?? (parentModel && `${parentModel.provider}/${parentModel.id}`), warn: (violation) => deps.watchdog?.displayRuleWarning(violation) });
-		if (launchRuleError) return toExecutionErrorResult(params, new Error(launchRuleError), data.contextPolicy.contextSummary);
+		if (launchRuleError) return toExecutionErrorResult(params, new Error(launchRuleError), "fresh");
 		const asyncResult = await executeAsyncSingle(id, compactOptional<Parameters<typeof executeAsyncSingle>[1]>({
 			agent: params.agent!,
-			task: shouldForkAgent(contextPolicy, params.agent!) ? wrapForkTask(params.task ?? "") : (params.task ?? ""),
+			task: params.task ?? "",
 			goal: params.task ?? "",
 			agentConfig: a,
 			recoveryAgentConfig: data.recoveryAgents.find((agent) => agent.name === params.agent),
@@ -3488,7 +3486,7 @@ async function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 			activeAsyncCapacity: data.activeAsyncCapacity,
 			sessionRoot,
 			sessionFile: sessionFileForTask(params.agent!, 0, modelOverride, modelOverrideFromParent, modelOrigin),
-			context: contextPolicy.contextForAgent(params.agent!),
+			context: "fresh",
 			skills,
 			output: effectiveOutput,
 			outputMode: effectiveOutputMode,
@@ -3895,7 +3893,6 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 		artifactsDir,
 		onUpdate,
 		controlConfig,
-		contextPolicy,
 		suppressUnchangedDelegationUpdates,
 	} = data;
 	let lane: import("../../shared/types.ts").WorkflowLaneMetadata | undefined;
@@ -3906,7 +3903,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 		return { content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }], isError: true, details: { mode: "single", results: [] } };
 	}
 	const onControlEvent = createForegroundControlNotifier(data, deps);
-	const childBridgeActive = intercomBridgeAppliesToAgent(data.intercomBridge, contextPolicy, params.agent!);
+	const childBridgeActive = data.intercomBridge.active && data.intercomBridge.mode !== "fork-only";
 	const childIntercomTarget = childBridgeActive ? resolveSubagentIntercomTarget(runId, params.agent!, 0) : undefined;
 	const allProgress: AgentProgress[] = [];
 	const allArtifactPaths: ArtifactPaths[] = [];
@@ -3922,10 +3919,10 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 	const requestedMachine = params.machine ?? agentConfig.machine;
 	if (requestedMachine) {
 		try { foregroundMachine = resolveHerdrMachinePlacement({ machine: requestedMachine, cwd: ctx.cwd, stepCwd: params.machineCwd }).machine; }
-		catch (error) { return toExecutionErrorResult(params, error instanceof Error ? error : new Error(String(error)), data.contextPolicy.contextSummary); }
+		catch (error) { return toExecutionErrorResult(params, error instanceof Error ? error : new Error(String(error)), "fresh"); }
 	}
 	const effectiveToolBudget = resolveEffectiveToolBudget(omitUndefinedProperties({ runBudget: data.toolBudget, agentBudget: agentConfig.toolBudget, configBudget: data.configToolBudget }));
-	if (effectiveToolBudget.error) return toExecutionErrorResult(params, new Error(effectiveToolBudget.error), data.contextPolicy.contextSummary);
+	if (effectiveToolBudget.error) return toExecutionErrorResult(params, new Error(effectiveToolBudget.error), "fresh");
 
 	const parentModel = data.parentModel;
 	const currentProvider = parentModel?.provider;
@@ -3951,7 +3948,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 	);
 	const modelOverrideFromParent = modelOrigin === "inherited";
 	const launchRuleError = applyWatchdogLaunchRules({ cwd: effectiveCwd, agent: agentConfig.name, model: modelOverride ?? (parentModel && `${parentModel.provider}/${parentModel.id}`), warn: (violation) => deps.watchdog?.displayRuleWarning(violation) });
-	if (launchRuleError) return toExecutionErrorResult(params, new Error(launchRuleError), data.contextPolicy.contextSummary);
+	if (launchRuleError) return toExecutionErrorResult(params, new Error(launchRuleError), "fresh");
 	let skillOverride: string[] | false | undefined = normalizeSkillInput(params.skill);
 	let readsOverride: string[] | false | undefined = params.reads;
 	const rawOutput = params.output ?? agentConfig.output;
@@ -4022,9 +4019,6 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 	}
 
 	const authoredTask = task;
-	if (shouldForkAgent(contextPolicy, params.agent!)) {
-		task = wrapForkTask(task);
-	}
 	const cleanTask = task;
 	const outputPath = resolveSingleOutputPath(effectiveOutput, ctx.cwd, singleCwd, resolveSingleRunOutputBaseDir(deps, artifactsDir, runId));
 	const validationError = validateFileOnlyOutputMode(effectiveOutputMode, outputPath, `Single run (${params.agent})`);
@@ -4120,7 +4114,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 			requiredExtensions,
 			childRuntime: deps.childRuntime,
 			onChildSession: (controls) => { childSessionControls = controls; },
-			context: data.contextPolicy.contextForAgent(params.agent!),
+			context: "fresh",
 			unknownAgentDiagnosticContext: data.unknownAgentDiagnosticContext,
 			runFanoutBudget: params.runFanoutAdmitted ? data.runFanoutBudget : { ...data.runFanoutBudget, parentPath: `${data.runFanoutBudget.parentPath ? `${data.runFanoutBudget.parentPath}/` : ""}single` },
 			cwd: singleCwd,
