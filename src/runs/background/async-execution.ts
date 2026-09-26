@@ -21,7 +21,6 @@ import { injectSingleOutputInstruction, normalizeSingleOutputOverride, resolveSi
 import { applyWatchdogLaunchRules, sendRuleViolationWarning } from "../../watchdog/rules.ts";
 import { buildChainInstructions, isDynamicParallelStep, isParallelStep, resolveExistingReadInstructionPaths, resolveExistingReadPaths, writeInitialProgressFile, type ChainStep, type SequentialStep, type StepOverrides } from "../../shared/settings.ts";
 import { isDynamicRunnerGroup, isParallelGroup, type RunnerStep } from "../shared/parallel-utils.ts";
-import type { ContextMode } from "../shared/context-mode.ts";
 import { PI_CODING_AGENT_PACKAGE, resolveBunPiExecutable, resolveInstalledPiPackageRoot, resolvePiPackageRoot } from "../shared/pi-spawn.ts";
 import { JITI_ALIAS_ENV, resolveHostPeerAliases } from "./runner-aliases.ts";
 import { preflightLaunchCwd } from "../shared/launch-cwd.ts";
@@ -213,7 +212,6 @@ interface AsyncChainParams {
 	chainSkills?: string[];
 	sessionFilesByFlatIndex?: (string | undefined)[];
 	thinkingOverridesByFlatIndex?: (AgentConfig["thinking"] | undefined)[];
-	contextForAgent?: (agentName: string) => ContextMode;
 	progressDir?: string;
 	dynamicFanoutMaxItems?: number;
 	maxSubagentDepth: number;
@@ -273,7 +271,6 @@ interface AsyncSingleParams {
 	sessionDir?: string;
 	sessionFile?: string;
 	revivalLease?: SessionLeaseRequest;
-	context?: ContextMode;
 	skills?: string[];
 	output?: string | boolean;
 	reads?: string[] | false;
@@ -360,7 +357,6 @@ export interface AsyncRunnerStepBuildParams {
 	chainSkills?: string[];
 	sessionFilesByFlatIndex?: (string | undefined)[];
 	thinkingOverridesByFlatIndex?: (AgentConfig["thinking"] | undefined)[];
-	contextForAgent?: (agentName: string) => ContextMode;
 	progressDir?: string;
 	agentContract?: AgentContract;
 	dynamicFanoutMaxItems?: number;
@@ -988,7 +984,6 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 			if (s.acceptance !== undefined || params.agentContract !== undefined || s.agentContract !== undefined) unsupported.push("acceptance/agent contract");
 			if (s.toolBudget !== undefined || params.toolBudget !== undefined || a.toolBudget !== undefined || params.configToolBudget !== undefined) unsupported.push("tool budget");
 			if ((s.fast ?? params.fast ?? a.fast) === true) unsupported.push("fast mode");
-			if (params.contextForAgent?.(s.agent) === "fork") unsupported.push("fork context");
 			if (unsupported.length > 0) throw new AsyncStartValidationError(`Agent '${a.name}' uses runner.type='${externalRunnerType}' and does not support: ${unsupported.join(", ")}.`);
 		}
 		try {
@@ -1141,7 +1136,6 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 			...(a.runner ? { runner: a.runner } : {}),
 			...(machine ? { machine } : {}),
 			...(machineEnv ? { machineEnv } : {}),
-			...(params.contextForAgent ? { context: params.contextForAgent(s.agent) } : {}),
 			...(agentContract ? { agentContract } : {}),
 			phase: s.phase,
 			label: s.label,
@@ -1414,7 +1408,6 @@ export function executeAsyncChain(
 		machineCwd: params.machineCwd,
 		sessionFilesByFlatIndex,
 		thinkingOverridesByFlatIndex,
-		contextForAgent: params.contextForAgent,
 		progressDir: params.progressDir ?? (artifactsDir ? path.join(artifactsDir, "progress", id) : resultMode === "parallel" ? path.join(asyncDir, "progress") : undefined),
 		agentContract: params.agentContract,
 		outputBaseDir: artifactsDir ? path.join(artifactsDir, "outputs", id) : undefined,
@@ -1738,7 +1731,6 @@ export function executeAsyncSingle(
 		if (params.structuredOutputSchema !== undefined) unsupported.push("structured output");
 		if (params.acceptance !== undefined || params.agentContract !== undefined) unsupported.push("acceptance/agent contract");
 		if (params.toolBudget !== undefined || agentConfig.toolBudget !== undefined || params.configToolBudget !== undefined) unsupported.push("tool budget");
-		if (params.context === "fork") unsupported.push("fork context");
 		if ((params.skills?.length ?? 0) > 0) unsupported.push("skills");
 		if (permissionRules) unsupported.push("native Pi child permissions");
 		if (extensionBindings !== undefined) unsupported.push("extension bindings");
@@ -2021,7 +2013,6 @@ export function executeAsyncSingle(
 		...(params.structuredOutputSchema ? { structuredOutputSchema: params.structuredOutputSchema } : {}),
 		...(params.acceptance !== undefined ? { acceptance: params.acceptance } : {}),
 		...(controlConfig ? { controlConfig } : {}),
-		...(params.context ? { context: params.context } : {}),
 		...(params.intercomBridge !== undefined ? { intercomBridge: params.intercomBridge } : {}),
 		...(params.baseRef !== undefined ? { baseRef: params.baseRef } : {}),
 		...(deadlineAt !== undefined ? { absoluteDeadlineAt: deadlineAt } : {}),
@@ -2061,8 +2052,7 @@ export function executeAsyncSingle(
 						...(!externalRunner && machine && params.reads !== undefined ? { remoteReads: params.reads } : {}),
 						...(machineEnv ? { machineEnv } : {}),
 						...(params.externalJobFollowUp ? { externalJobFollowUp: params.externalJobFollowUp } : {}),
-						...(params.context ? { context: params.context } : {}),
-						cwd: machine?.cwd ?? runnerCwd,
+										cwd: machine?.cwd ?? runnerCwd,
 						requestedCwd: machine?.cwd ?? params.requestedCwd ?? runnerCwd,
 						model: selectedModel,
 						modelCandidates,
@@ -2265,7 +2255,7 @@ export function executeAsyncSingle(
 
 	return {
 		content: [{ type: "text", text: formatAsyncStartedMessage(`Async: ${agent} [${id}]`, ctx.interactive === true) }],
-		details: { mode: "single", runId: id, results: [], asyncId: id, asyncDir, launchContractDigest, launchResolvedExtensions, ...(capabilityCeiling ? { capabilityCeiling } : {}), ...(params.context ? { context: params.context } : {}), ...(timeoutMs !== undefined ? { timeoutMs, deadlineAt } : {}), ...(params.toolBudget ? { toolBudget: resolvedToolBudget.budget ?? params.toolBudget } : {}), ...(initialUsageBudget ? { usageBudget: initialUsageBudget } : {}) } as Details,
+		details: { mode: "single", runId: id, results: [], asyncId: id, asyncDir, launchContractDigest, launchResolvedExtensions, ...(capabilityCeiling ? { capabilityCeiling } : {}), ...(timeoutMs !== undefined ? { timeoutMs, deadlineAt } : {}), ...(params.toolBudget ? { toolBudget: resolvedToolBudget.budget ?? params.toolBudget } : {}), ...(initialUsageBudget ? { usageBudget: initialUsageBudget } : {}) } as Details,
 	};
 	};
 	return spawnResultOrPromise instanceof Promise ? spawnResultOrPromise.then(finishSpawnResult) : finishSpawnResult(spawnResultOrPromise);

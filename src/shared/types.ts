@@ -2436,8 +2436,6 @@ export interface RunSyncOptions {
 	permissions?: import("../runs/shared/permissions.ts").PermissionConfig;
 	/** Session id of the direct parent session for permission-system ask forwarding. */
 	parentSessionId?: string;
-	/** Resolved launch context for this child. */
-	context?: "fresh" | "fork";
 	cwd?: string;
 	/** Resolved pane-native saved-machine placement. */
 	machine?: HerdrMachineReference;
