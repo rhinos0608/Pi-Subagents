@@ -1915,7 +1915,7 @@ async function runSyncCompletionInner(
 	const continuationDeadline = options.deadlineAt ?? (options.timeoutMs === undefined ? undefined : Date.now() + options.timeoutMs);
 	const readonlyHandoffAllowed = () => !options.signal?.aborted && !options.interruptSignal?.aborted
 		&& !intercomDetached && !detachedReason && !options.workflowChildPermitLaunch
-		&& options.usageBudget === undefined && options.toolBudget === undefined
+		&& options.toolBudget === undefined
 		&& (continuationDeadline === undefined || Date.now() < continuationDeadline)
 		&& (!readonlySource || getReadonlySessionEvidence(readonlySource) === readonlyExpected)
 		&& !readonlySource?.detached && !readonlySource?.shutDown;
@@ -2001,7 +2001,7 @@ async function runSyncCompletionInner(
 				lifecycleAllowsContinuation: !attemptSucceeded && readonlyHandoffAllowed() && !result.stopped && !result.detached && !result.interrupted && !result.timedOut,
 				effectsAllowContinuation: !result.structuredOutputFailed && !result.toolBudgetBlocked && !result.progress?.currentTool
 					&& !result.outputSaveError && !result.effects?.fileMutation,
-				budget: options.toolBudget ? "tool-budget-configured" : options.usageBudget ? "unknown" : "unconfigured",
+				budget: options.toolBudget ? "tool-budget-configured" : "unconfigured",
 				knownContextOverflow: Boolean(result.contextOverflow || isContextOverflow(result.error)),
 			});
 			if (continuation.kind === "continue") {
@@ -2026,7 +2026,6 @@ async function runSyncCompletionInner(
 					interrupted: result.interrupted || intercomDetached || options.interruptSignal?.aborted,
 					timedOut: result.timedOut,
 					toolBudgetExhausted: result.toolBudgetBlocked,
-					usageBudgetExhausted: false,
 					structuredOutputFailed: result.structuredOutputFailed,
 					acceptanceFailed: false,
 					currentTool: result.progress?.currentTool,

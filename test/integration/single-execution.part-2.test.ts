@@ -391,35 +391,6 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		for (const worktreePath of worktreePaths) assert.equal(fs.existsSync(worktreePath), false);
 	});
 
-	it("applies a workflow usage budget across scripted child launches", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
-		mockPi.onCall({ output: "first result" });
-		const executor = makeExecutor([makeAgent("echo")]);
-
-		const result = await executor.execute(
-			"scripted-workflow-usage-budget",
-			{
-				async: false,
-				workflowScript: `
-					await runs.run("first", { agent: "echo", task: "First task" });
-					await runs.run("second", { agent: "echo", task: "Second task" });
-				`,
-				usageBudget: { tokens: { hard: 10 } },
-			},
-			new AbortController().signal,
-			undefined,
-			makeMinimalCtx(tempDir),
-		);
-
-		assert.equal(result.isError, true);
-		assert.match(result.content[0]?.text ?? "", /Usage budget exhausted/);
-		assert.equal(result.details.mode, "workflow");
-		assert.equal(mockPi.callCount(), 1);
-		assert.equal(result.details.usageBudget?.exhausted, true);
-		assert.deepEqual(result.details.workflow?.receipt?.terminalOutcome, { state: "partial", reason: "budget_exhausted" });
-		assert.equal(result.details.workflow?.receipt?.entries.first?.terminalOutcome, undefined);
-		assert.deepEqual(result.details.workflow?.receipt?.entries.second?.terminalOutcome, { state: "partial", reason: "budget_exhausted" });
-	});
-
 	it("admits a zero run-level tool budget only for marked structured delegated execution", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
 		const zeroBudget = { hard: 0, block: "*" as const };
 		const params = { agent: "echo", task: "Answer without tools", toolBudget: zeroBudget };

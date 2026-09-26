@@ -66,14 +66,7 @@ interface SubagentParamsSchema {
 			minimum?: number;
 			description?: string;
 		};
-		usageBudget?: {
-			properties?: {
-				tokens?: { properties?: { soft?: { exclusiveMinimum?: number }; hard?: { exclusiveMinimum?: number } } };
-				costUsd?: { properties?: { soft?: { exclusiveMinimum?: number }; hard?: { exclusiveMinimum?: number } } };
-			};
-			description?: string;
-		};
-		id?: {
+	id?: {
 			type?: string;
 			description?: string;
 		};

@@ -1222,31 +1222,6 @@ export interface RuntimeAcknowledgedChildExtensions {
 	omitted: number;
 }
 
-export interface UsageBudgetLimitConfig {
-	soft?: number;
-	hard: number;
-}
-
-export interface UsageBudgetConfig {
-	tokens?: UsageBudgetLimitConfig;
-	costUsd?: UsageBudgetLimitConfig;
-}
-
-export interface UsageBudgetMetricState extends UsageBudgetLimitConfig {
-	used: number;
-	outcome: "within-budget" | "soft-exceeded" | "hard-exceeded";
-}
-
-export interface UsageBudgetState {
-	version: 1;
-	/** Enforced from usage reported by completed or streaming child runs; no reservation estimates. */
-	source: "reported";
-	tokens?: UsageBudgetMetricState;
-	costUsd?: UsageBudgetMetricState;
-	exhausted: boolean;
-	reason?: "tokens" | "costUsd";
-}
-
 export type ModelResolutionSource = "explicit-child" | "agent-config" | "parent-session" | "default";
 
 export interface ModelResolutionMetadata {
@@ -1460,7 +1435,6 @@ export interface Details {
 	timedOut?: boolean;
 	stopped?: boolean;
 	toolBudget?: ResolvedToolBudget;
-	usageBudget?: UsageBudgetState;
 	progress?: AgentProgress[];
 	progressSummary?: ProgressSummary;
 	artifacts?: {
@@ -1717,7 +1691,6 @@ export interface AsyncStartedEvent {
 	launchContractDigest?: string;
 	launchResolvedExtensions?: LaunchResolvedChildExtensions;
 	runtimeAcknowledgedExtensions?: RuntimeAcknowledgedChildExtensions;
-	usageBudget?: UsageBudgetState;
 	timeoutMs?: number;
 	deadlineAt?: number;
 	nestedRoute?: NestedRouteInfo;
@@ -1893,7 +1866,6 @@ export interface AsyncStatus {
 	wrapUpRequested?: boolean;
 	toolBudget?: ToolBudgetState;
 	toolBudgetBlocked?: boolean;
-	usageBudget?: UsageBudgetState;
 	pid?: number;
 	cwd?: string;
 	/** Parent-resolved child session root retained for trusted restored transcript lookup. */
@@ -2080,7 +2052,6 @@ export interface AsyncJobState {
 	outputFile?: string;
 	totalTokens?: TokenUsage;
 	totalCost?: CostSummary;
-	usageBudget?: UsageBudgetState;
 	sessionFile?: string;
 	controlEventCursor?: number;
 	nestedRoute?: NestedRouteInfo;
@@ -2453,7 +2424,6 @@ export interface RunSyncOptions {
 	toolTimeoutMs?: number;
 	/** Raw global config.toolTimeoutMs, used by the per-child resolver. */
 	configToolTimeoutMs?: number;
-	usageBudget?: UsageBudgetConfig;
 	toolBudget?: ResolvedToolBudget;
 	allowZeroToolBudget?: boolean;
 	allowIntercomDetach?: boolean;
@@ -2694,7 +2664,6 @@ export interface ExtensionConfig {
 	toolBudget?: ToolBudgetConfig;
 	/** Opt-in native tool permissions. Bash remains outside this policy. */
 	permissions?: import("../runs/shared/permissions.ts").PermissionConfig;
-	usageBudget?: UsageBudgetConfig;
 	parallel?: TopLevelParallelConfig;
 	chain?: ExtensionChainConfig;
 	worktreeSetupHook?: string;

@@ -35,19 +35,10 @@ interface RuntimeAcknowledgedExtensions {
 	omitted?: number;
 }
 
-interface UsageBudgetState {
-	version?: number;
-	source?: string;
-	exhausted?: boolean;
-	reason?: string;
-	tokens?: { used?: number; hard?: number; exhausted?: boolean };
-	costUsd?: { used?: number; hard?: number; exhausted?: boolean };
-}
-
 interface AsyncExecutionResult {
 	content: Array<{ text?: string }>;
 	isError?: boolean;
-	details: { asyncId?: string; asyncDir?: string; launchContractDigest?: string; launchResolvedExtensions?: LaunchResolvedExtensions; runtimeAcknowledgedExtensions?: RuntimeAcknowledgedExtensions; usageBudget?: UsageBudgetState };
+	details: { asyncId?: string; asyncDir?: string; launchContractDigest?: string; launchResolvedExtensions?: LaunchResolvedExtensions; runtimeAcknowledgedExtensions?: RuntimeAcknowledgedExtensions };
 }
 
 interface AsyncResultPayload {
@@ -69,7 +60,6 @@ interface AsyncResultPayload {
 	wrapUpRequested?: boolean;
 	totalTokens?: { input: number; output: number; total: number };
 	totalCost?: { inputTokens: number; outputTokens: number; costUsd: number };
-	usageBudget?: UsageBudgetState;
 	results: Array<{ agent?: string; sessionName?: string; launchContractDigest?: string; launchResolvedExtensions?: LaunchResolvedExtensions; runtimeAcknowledgedExtensions?: RuntimeAcknowledgedExtensions; output?: string; outputState?: "present" | "absent" | "unknown"; success?: boolean; error?: string; timedOut?: boolean; timeoutRecovery?: { changedFiles?: string[]; message?: string; warning?: string; recoveryNeeded?: boolean; reason?: string; reportStatus?: string }; stopped?: boolean; wrapUpRequested?: boolean; model?: string; thinking?: string; totalCost?: { inputTokens: number; outputTokens: number; costUsd: number }; usage?: { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number; turns: number }; structuredOutput?: unknown; agentContract?: { version: 1 }; execution?: { status?: string; success?: boolean; exitCode?: number }; effects?: { fileMutation?: { status?: string; attempted?: boolean }; settlementDiagnostic?: { finalTextPresent?: boolean; mutation?: { attempted?: boolean; observed?: boolean }; requiredOutput?: { kind?: string; path?: string; missing?: boolean }; afterCompactionSettlement?: boolean } }; intercomTarget?: string; acceptance?: { status?: string; effectiveAcceptance?: { level?: string }; childReport?: unknown; runtimeChecks?: Array<{ id?: string; status?: string; message?: string }> }; artifactPaths?: { outputPath?: string; inputPath?: string; metadataPath?: string; transcriptPath?: string }; outputSaveError?: string; artifactOutputSaveFailed?: true; metadataSaveError?: string; capabilityCeiling?: { version?: number; allowedTools?: string[]; denyExtensions?: boolean; sources?: string[] }; capabilityAudit?: { effectiveTools?: string[]; removedTools?: string[]; extensionsDenied?: boolean } }>;
 	outputs?: Record<string, { text?: string; structured?: unknown }>;
 	workflowGraph?: { nodes?: Array<{ kind?: string; label?: string; phase?: string; status?: string; acceptanceStatus?: string; error?: string; outputName?: string; structured?: boolean; children?: Array<{ label?: string; outputName?: string; itemKey?: string; status?: string; acceptanceStatus?: string; error?: string }> }> };
@@ -98,7 +88,6 @@ interface AsyncStatusPayload {
 	wrapUpRequested?: boolean;
 	totalTokens?: { total: number };
 	totalCost?: { inputTokens: number; outputTokens: number; costUsd: number };
-	usageBudget?: UsageBudgetState;
 	parallelGroups?: Array<{ start: number; count: number; stepIndex: number }>;
 	parallelHandoff?: { version?: number; path?: string; groupCount?: number; childCount?: number; changedPatches?: number; cleanupState?: string };
 	capabilityCeiling?: { version?: number; allowedTools?: string[]; denyExtensions?: boolean; sources?: string[] };
