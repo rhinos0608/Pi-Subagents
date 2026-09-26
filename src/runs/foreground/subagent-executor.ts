@@ -792,7 +792,6 @@ function rememberForegroundRun(state: SubagentState, input: { modelResponseAlias
 					processSignal: result.processSignal,
 					timedOut: result.timedOut,
 					stopped: result.stopped,
-					turnBudgetExceeded: result.turnBudgetExceeded,
 				})),
 				...foregroundChildActivityFromProgress(result.progress),
 				updatedAt,
@@ -868,7 +867,6 @@ function updateRememberedForegroundChild(state: SubagentState, input: { runId: s
 		processSignal: input.result.processSignal,
 		timedOut: input.result.timedOut,
 		stopped: input.result.stopped,
-		turnBudgetExceeded: input.result.turnBudgetExceeded,
 	}));
 	const child = run.children[input.index] ?? { agent: input.result.agent, index: input.index, status: "detached" as const };
 	run.children[input.index] = omitUndefinedProperties({
@@ -924,7 +922,6 @@ function updateRememberedForegroundChild(state: SubagentState, input: { runId: s
 		...(input.result.stopped !== undefined ? { stopped: input.result.stopped } : {}),
 		...(input.result.processSignal !== undefined ? { processSignal: input.result.processSignal } : {}),
 		...(input.result.timedOut !== undefined ? { timedOut: input.result.timedOut } : {}),
-		...(input.result.turnBudgetExceeded !== undefined ? { turnBudgetExceeded: input.result.turnBudgetExceeded } : {}),
 		timestamp: updatedAt,
 		cwd: input.cwd,
 		sessionFile: input.result.sessionFile,
