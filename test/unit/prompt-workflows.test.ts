@@ -99,6 +99,8 @@ skill: deslop,typescript-code
 ---
 Review $1 with $ARGUMENTS
 `);
+		// Per-call skill overrides are removed: a workflow frontmatter skill
+		// line is ignored and the child uses agent-declared skills instead.
 		const commands = new Map<string, { handler: (args: string, ctx: never) => Promise<void> }>();
 		const sent: unknown[] = [];
 		const runs: SubagentParamsLike[] = [];
@@ -127,7 +129,7 @@ Review $1 with $ARGUMENTS
 		assert.match(script, /runs\.run\("prompt-1-native-run"/);
 		assert.match(script, /"agent":"reviewer"/);
 		assert.match(script, /"model":"anthropic\/claude-sonnet-4"/);
-		assert.match(script, /"skill":\["deslop","typescript-code"\]/);
+		assert.doesNotMatch(script, /"skill"/);
 		assert.match(script, /Review target with target/);
 	});
 

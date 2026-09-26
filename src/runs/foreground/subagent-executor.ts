@@ -47,7 +47,6 @@ import {
 	type ParallelTaskItem,
 	type SequentialStep,
 } from "../../shared/settings.ts";
-import { normalizeSkillInput } from "../../agents/skills.ts";
 import { buildAsyncRunnerSteps, executeAsyncChain, executeAsyncSingle, formatAsyncStartedMessage, isAsyncAvailable, workflowAwaitedAsyncResultPath } from "../background/async-execution.ts";
 import { updateActiveRunIndex } from "../background/active-run-index.ts";
 import { steeringReceipt } from "../background/steering.ts";
@@ -302,7 +301,6 @@ interface TaskParam {
 	progress?: boolean;
 	model?: string;
 	fast?: boolean;
-	skill?: string | string[] | boolean;
 	outputSchema?: JsonSchemaObject | false;
 	acceptance?: AcceptanceInput;
 	agentContract?: AgentContract;
@@ -401,7 +399,6 @@ export interface SubagentParamsLike {
 	scope?: string;
 	target?: string;
 	focus?: boolean;
-	skill?: string | string[] | boolean;
 	output?: string | boolean;
 	/** Internal-only; not part of the public tool schema. Wired for single-run reads (chain steps use their own field). */
 	reads?: string[] | false;
@@ -1338,8 +1335,6 @@ function appendStepToAsyncChain(input: {
 			details: { mode: "management", results: [] },
 		};
 	}
-	const chainSkillInput = normalizeSkillInput(input.params.skill);
-	const chainSkills = chainSkillInput === false ? [] : (chainSkillInput ?? []);
 	const parentModel = input.parentModel;
 	const asyncCtx = compactOptional<Parameters<typeof executeAsyncSingle>[1]["ctx"]>({
 		pi: input.deps.pi,
@@ -1363,7 +1358,6 @@ function appendStepToAsyncChain(input: {
 		availableModels: input.ctx.modelRegistry.getAvailable().map(toModelInfo),
 		unknownAgentDiagnosticContext: diagnosticContextFromDiscovery(discoveredForAppend, input.requestCwd, scope),
 		cwd: status.cwd ?? input.requestCwd,
-		chainSkills,
 		dynamicFanoutMaxItems: input.deps.config.chain?.dynamicFanout?.maxItems,
 		maxSubagentDepth: resolveCurrentMaxSubagentDepth(input.deps.config.maxSubagentDepth, input.deps.childRuntime),
 		worktreeBaseDir: input.deps.config.worktreeBaseDir,
@@ -2008,7 +2002,6 @@ async function resumeAsyncRun(input: {
 	const workflowTask = (input.params.task ?? followUp) || undefined;
 	const goal = resolveAsyncEventGoal(workflowTask, attachChain);
 	const chain = attachChain;
-		const normalized = normalizeSkillInput(input.params.skill);
 		const parentModel = input.parentModel;
 		const result = executeAsyncChain(runId, compactOptional<Parameters<typeof executeAsyncChain>[1]>({
 			chain,
@@ -2044,7 +2037,6 @@ async function resumeAsyncRun(input: {
 			artifactConfig,
 			shareEnabled: input.params.share === true,
 			sessionRoot: input.deps.getSubagentSessionRoot(parentSessionFile),
-			chainSkills: normalized === false ? [] : (normalized ?? []),
 			agentContract: input.params.agentContract,
 			fast: input.params.fast,
 			dynamicFanoutMaxItems: input.deps.config.chain?.dynamicFanout?.maxItems,
@@ -3206,8 +3198,6 @@ async function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 		const rawOutput = params.output ?? a.output;
 		const effectiveOutput = normalizeSingleOutputOverride(rawOutput, undefined);
 		const effectiveOutputMode = params.outputMode ?? a.outputMode ?? "inline";
-		const normalizedSkills = normalizeSkillInput(params.skill);
-		const skills = normalizedSkills === false ? [] : normalizedSkills;
 		const maxSubagentDepth = resolveChildMaxSubagentDepth(currentMaxSubagentDepth, a.maxSubagentDepth);
 		const externalRunnerWithoutExplicitModel = (a.runner?.type === "external-cli" || a.runner?.type === "external-job")
 			&& params.model === undefined
@@ -3251,7 +3241,6 @@ async function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 			sessionRoot,
 			sessionFile: sessionFileForTask(params.agent!, 0, modelOverride, modelOverrideFromParent, modelOrigin),
 			context: "fresh",
-			skills,
 			output: effectiveOutput,
 			outputMode: effectiveOutputMode,
 			outputClaimPath: params.workflowOutputClaimPath,
@@ -3712,7 +3701,6 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 	const modelOverrideFromParent = modelOrigin === "inherited";
 	const launchRuleError = applyWatchdogLaunchRules({ cwd: effectiveCwd, agent: agentConfig.name, model: modelOverride ?? (parentModel && `${parentModel.provider}/${parentModel.id}`), warn: (violation) => deps.watchdog?.displayRuleWarning(violation) });
 	if (launchRuleError) return toExecutionErrorResult(params, new Error(launchRuleError), "fresh");
-	let skillOverride: string[] | false | undefined = normalizeSkillInput(params.skill);
 	let readsOverride: string[] | false | undefined = params.reads;
 	const rawOutput = params.output ?? agentConfig.output;
 	let effectiveOutput = normalizeSingleOutputOverride(rawOutput, undefined);
@@ -3802,12 +3790,6 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 	task = readsInstruction + task;
 	task = injectSingleOutputInstruction(task, outputPath, agentConfig);
 
-	let effectiveSkills: string[] | undefined;
-	if (skillOverride === false) {
-		effectiveSkills = [];
-	} else {
-		effectiveSkills = skillOverride;
-	}
 	const interruptController = new AbortController();
 	let detachForeground: ((reason?: string) => boolean) | undefined;
 	let childSessionControls: ForegroundChildSessionControls | undefined;
@@ -3916,7 +3898,6 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 			modelResponseAliases,
 			preferredModelProvider: currentProvider,
 			modelScope: modelScopes,
-			skills: effectiveSkills,
 			structuredOutput: structuredRuntime,
 			agentContract: params.agentContract,
 			acceptance: params.acceptance,
