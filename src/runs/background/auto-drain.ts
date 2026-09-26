@@ -79,7 +79,7 @@ export async function drainOutstandingWork(deps: AutoDrainDeps, observation?: Re
 				},
 			);
 			if (waitResult.isError) {
-				throw new Error(`Auto-drain failed for session '${sessionId}': ${resultText(waitResult) || "bg_wait returned an error without details"}.`);
+				throw new Error(`Auto-drain failed for session '${sessionId}': ${resultText(waitResult) || "internal wait returned an error without details"}.`);
 			}
 			if (waitResult.details.wait?.reason === "supervisor_request") break;
 			if (deps.hasPendingSupervisorRequest?.()) break;

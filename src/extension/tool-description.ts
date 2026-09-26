@@ -13,7 +13,7 @@ const FULL_SAFETY_GUIDANCE = `SAFETY-CRITICAL SUBAGENT GUIDANCE:
 • ${AGENT_SELECTION_GUIDANCE}
 • ${SUBAGENT_FAILURE_RECOVERY_GUIDANCE}
 • Omit action for execution. For an authorized delegated multi-step/parallel workflow: exactly one top-level subagent workflow call with async:true; children launch only inside it.
-• Async follows asyncByDefault (normally true); async:false only to block the parent, not for final reviews/gates. Consume results at dependency barriers. Native async completion wakes this session: return control, no sleep/poll or bg_wait merely for a wake. bg_wait is for provider/detached work without native notification needing a same-turn result.
+• Async follows asyncByDefault (normally true); async:false only to block the parent, not for final reviews/gates. Consume results at dependency barriers. Native async completion wakes this session: return control, no sleep/poll merely for a wake. There is no wait or polling tool.
 • Ordinary child subagents are not orchestrators; only configured fanout within depth/session limits. For an authorized delegated workflow, keep one writer per cwd/worktree and isolate concurrent writers. Use fresh-context read-only reviewers when independent review was requested, then parent synthesis/fixes. Oracle/advisor unknowns use supervisor dialogue; one-shot only when requested.
 • Bind durable output on runs.run/runs.all, not task filename prose; return actual outputReference/outputPathMapping/artifactPaths, evidence and residual risks.
 • children.list is workflow-only, not an exhaustive list of direct native children: resume only resumable rows. When an intended child's exact run id is known, inspect it with {action:"status",id}; if status identifies the candidate, attempt {action:"resume",id,message}. Resume authoritatively checks eligibility, may reject it, and otherwise detaches a follow-up/challenge with the stored agent/model/tool contract. Use a labeled same-role fallback only when no known candidate exists or resume rejects eligibility. Scripts await runs.run(newKey,{resume:runId,task}); continue from latest returned runId. Each distinct resume pass needs a new stable key; same-key reuse requires identical launch parameters.
@@ -25,7 +25,7 @@ export const SUBAGENT_SAFETY_GUIDANCE = `SAFETY KERNEL (authoritative):
 - Direct parent execution is the default. Invoke subagents only when delegation is authorized by the operator's current request or applicable user/project instructions; task size, complexity, risk, tool-call count, or recipe fit do not independently authorize delegation.
 - Authoritative preflight: {action:"list",capabilities:true}; executable, non-disabled only; PATH is not proof.
 - No silent fallback on infra failure (lane infrastructure blocker): stop/report evidence; alternate execution needs owner approval.
-- One writer per cwd/worktree; ordinary child subagents are not orchestrators. Async completion wakes session; do not sleep, poll, or bg_wait.
+- One writer per cwd/worktree; ordinary child subagents are not orchestrators. Async completion wakes session; do not sleep or poll.
 - Bind durable output to runs.run/runs.all; return references, artifacts, evidence, risks.
 - Raw workflow resources own authority; no runs.host; relative I/O uses workflow cwd.
 - Evidence: asyncId/asyncDir status.json/logs. Read guide tool-reference for controls/gates.`;

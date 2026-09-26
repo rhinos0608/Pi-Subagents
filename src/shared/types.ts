@@ -363,14 +363,6 @@ export interface CompletionBatchConfig {
 	stragglerWindowMs?: number;
 }
 
-export interface WaitToolConfigObject {
-	enabled?: boolean;
-	/** Default blocking window for bg_wait calls that omit timeoutMs. */
-	defaultTimeoutMs?: number;
-}
-
-export type WaitToolConfig = boolean | WaitToolConfigObject;
-
 export interface ControlEvent {
 	type: ControlEventType;
 	from?: ActivityState;
@@ -1416,7 +1408,7 @@ export interface WaitCompletionChild {
 }
 
 /**
- * Terminal completion observed for a run a bg_wait call covered. Carries run
+ * Terminal completion observed for a run an internal wait covered. Carries run
  * identity and the artifact trail; output text stays in the tool result content.
  */
 export interface WaitCompletion {
@@ -1466,7 +1458,7 @@ export interface Details {
 	workflowChildren?: WorkflowChildSummary;
 	workflowTerminalProof?: WorkflowTerminalProof;
 	/**
-	 * Terminal completion payloads for runs this bg_wait call observed
+	 * Terminal completion payloads for runs this internal wait observed
 	 * finishing. Async completions travel as result files that are consumed and
 	 * deleted after text delivery, so without this field their run and artifact
 	 * identity never reaches tool_result details.
@@ -2528,10 +2520,6 @@ export interface RunSyncOptions {
 	outputClaimPath?: string;
 	outputMode?: OutputMode;
 	maxSubagentDepth?: number;
-	/** Effective parent wait-tool setting propagated to the child runtime. */
-	waitToolEnabled?: boolean;
-	/** Effective parent default wait window propagated to the child runtime. */
-	waitToolDefaultTimeoutMs?: number;
 	capabilityCeiling?: ResolvedSubagentCapabilityCeiling;
 	runFanoutBudget?: RunFanoutBudgetDescriptor;
 	nestedRoute?: NestedRouteInfo;
@@ -2700,7 +2688,6 @@ export interface ExtensionConfig {
 	/** Experimental observer: mirror each native subagent's progress into a new Orca tab. */
 	orcaProgressTabs?: OrcaProgressTabsConfig;
 	forceTopLevelAsync?: boolean;
-	waitTool?: WaitToolConfig;
 	defaultSessionDir?: string;
 	singleRunOutputBaseDir?: string;
 	maxSubagentDepth?: number;

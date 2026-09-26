@@ -5,7 +5,7 @@ import { buildInProcessChildLaunch } from "../../src/runs/shared/child-launch.ts
 import { childSupervisorMetadata, evaluateChildToolDiagnostic, type ChildRuntimeConfig } from "../../src/runs/shared/child-runtime-config.ts";
 
 function baseConfig(overrides: Partial<ChildRuntimeConfig> = {}): ChildRuntimeConfig {
-	return { fanoutChild: false, depth: 1, waitTool: { enabled: true }, fast: false, ...overrides };
+	return { fanoutChild: false, depth: 1, fast: false, ...overrides };
 }
 
 interface FakePi {
@@ -77,7 +77,7 @@ describe("child runtime config", () => {
 
 		// Absent external tools disable with a warning instead of failing the child.
 		pi.handlers.get("agent_start")?.[0]?.({});
-		assert.deepEqual(diagnostics, [{ agent: "config-agent", required: ["read", "fixture_search"], available: ["read", "bg_wait", "structured_output"], missing: [], disabled: ["fixture_search"] }]);
+		assert.deepEqual(diagnostics, [{ agent: "config-agent", required: ["read", "fixture_search"], available: ["read", "structured_output"], missing: [], disabled: ["fixture_search"] }]);
 
 		const structured = pi.tools.find((tool) => tool.name === "structured_output") as { execute: (id: string, params: { value: unknown }) => Promise<unknown> } | undefined;
 		assert.ok(structured, "structured_output tool registered from config");
@@ -106,11 +106,11 @@ describe("child runtime config", () => {
 	it("requires exact registered names for internal coordination tools", () => {
 		// A display label on an unrelated tool must not prove the primitive exists.
 		assert.deepEqual(
-			evaluateChildToolDiagnostic(baseConfig({ agent: "worker", requiredTools: ["bg_wait"] }), [{ name: "bash", label: "bg_wait" }]),
-			{ agent: "worker", required: ["bg_wait"], available: ["bash"], missing: ["bg_wait"] },
+			evaluateChildToolDiagnostic(baseConfig({ agent: "worker", requiredTools: ["contact_supervisor"] }), [{ name: "bash", label: "contact_supervisor" }]),
+			{ agent: "worker", required: ["contact_supervisor"], available: ["bash"], missing: ["contact_supervisor"] },
 		);
 		assert.equal(
-			evaluateChildToolDiagnostic(baseConfig({ requiredTools: ["bg_wait"] }), [{ name: "bg_wait", label: "Background Wait" }]),
+			evaluateChildToolDiagnostic(baseConfig({ requiredTools: ["contact_supervisor"] }), [{ name: "contact_supervisor", label: "Contact Supervisor" }]),
 			undefined,
 		);
 	});

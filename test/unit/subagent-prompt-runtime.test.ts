@@ -29,7 +29,7 @@ import registerSubagentPromptRuntime, {
 } from "../../src/runs/shared/subagent-prompt-runtime.ts";
 
 function childConfig(overrides: Partial<ChildRuntimeConfig> = {}): ChildRuntimeConfig {
-	return { fanoutChild: false, depth: 1, waitTool: { enabled: true }, fast: false, ...overrides };
+	return { fanoutChild: false, depth: 1, fast: false, ...overrides };
 }
 
 it("does not skip drain for in-process child sessions when hasUI is true", async () => {
@@ -100,26 +100,8 @@ it("reads a late-installed owner barrier for each final drain and balances the h
 	assert.deepEqual(held, [true, false, true, false]);
 });
 
-it("does not grant nested wait access for an invalid inherited route", async (t) => {
-	const route = createNestedRoute(randomUUID());
-	const runId = randomUUID();
-	const root = path.join(TEMP_ROOT_DIR, "nested-subagent-runs", route.rootRunId);
-	const dir = path.join(root, runId);
-	t.after(() => { for (const entry of [root, path.dirname(route.eventSink)]) fs.rmSync(entry, { recursive: true, force: true }); });
-	t.mock.method(console, "error", () => {});
-	fs.mkdirSync(dir, { recursive: true });
-	fs.writeFileSync(path.join(dir, "status.json"), JSON.stringify({ runId, sessionId: "owner", mode: "single", state: "running", pid: process.pid, startedAt: Date.now(), steps: [] }));
-	updateActiveRunIndex(dir, "running");
-	const tools = new Map<string, { execute: Function }>();
-	// SAFETY: this fixture supplies the registration API and session identity used by the empty wait path.
-	registerSubagentPromptRuntime({
-		on: () => {}, registerTool: (tool: { name: string; execute: Function }) => tools.set(tool.name, tool),
-	} as never, childConfig({ runtimeState: { currentSessionId: "owner" } as SubagentState, nestedRoute: { ...route, capabilityToken: "invalid" } }));
-	const result = await tools.get("bg_wait")!.execute("wait", { id: runId, timeoutMs: 1 });
-	assert.match(result.content[0].text, /No active run matched/);
-});
 
-it("registered child bg_wait discovers nested personas and agent_end drains the same scope", async () => {
+it("agent_end drains nested personas without a wait tool", async () => {
 	const route = createNestedRoute(randomUUID());
 	const runId = randomUUID();
 	const asyncRoot = path.join(TEMP_ROOT_DIR, "nested-subagent-runs", route.rootRunId);
@@ -141,7 +123,7 @@ it("registered child bg_wait discovers nested personas and agent_end drains the 
 		updateActiveRunIndex(asyncDir, state);
 	};
 	try {
-		// SAFETY: this fixture supplies the registration/event APIs exercised by the wait and drain hooks.
+		// SAFETY: this fixture supplies the registration/event APIs exercised by the drain hooks.
 		registerSubagentPromptRuntime({
 			on: (event: string, fn: Function) => handlers.set(event, [...(handlers.get(event) ?? []), fn]),
 			registerTool: (tool: { name: string; execute: Function }) => tools.set(tool.name, tool),
@@ -149,9 +131,6 @@ it("registered child bg_wait discovers nested personas and agent_end drains the 
 		} as never, childConfig({ fanoutChild: true, nestedRoute: route, holdFinalDrain: (value) => { held.push(value); } }));
 		await emit("session_start");
 		writeStatus("running");
-		const wait = tools.get("bg_wait")!;
-		const timed = await wait.execute("wait", { id: runId, timeoutMs: 1 }, undefined, undefined, ctx);
-		assert.deepEqual(timed.details.wait?.activeRunIds, [runId], "registered wait must discover its nested persona");
 
 		let settled = false;
 		const draining = emit("agent_end").then(() => { settled = true; });
@@ -164,9 +143,6 @@ it("registered child bg_wait discovers nested personas and agent_end drains the 
 		events.emit(SUBAGENT_ASYNC_COMPLETE_EVENT, undefined);
 		await draining;
 		assert.deepEqual(held, [true, false]);
-		const terminal = await wait.execute("collect", { id: runId }, undefined, undefined, ctx);
-		assert.equal(terminal.details.completions?.[0]?.runId, runId);
-		assert.ok(terminal.content.some((part: { text?: string }) => part.text?.includes(resultPath)), "model receives a readable result reference, not details alone");
 		assert.equal(JSON.parse(fs.readFileSync(resultPath, "utf8")).results[0].output, "PERSONA_EVIDENCE");
 	} finally {
 		fs.rmSync(asyncRoot, { recursive: true, force: true });
@@ -879,10 +855,10 @@ describe("subagent prompt runtime", () => {
 			},
 		} as { on(event: string, handler: (payload?: unknown) => unknown): void; getAllTools(): Array<{ name: string }>; registerTool(tool: { name: string }): void }, supervisorConfig());
 
-		assert.deepEqual(registered, ["bg_wait"]);
+		assert.deepEqual(registered, []);
 		handlers.get("session_start")?.({});
 		await handlers.get("before_agent_start")?.({ systemPrompt: BASE_PROMPT });
-		assert.deepEqual(registered, ["bg_wait"]);
+		assert.deepEqual(registered, []);
 	});
 
 	it("does not satisfy strict allowlists with native generic intercom", () => {
@@ -906,12 +882,12 @@ describe("subagent prompt runtime", () => {
 			}));
 
 			handlers.get("session_start")?.({});
-			assert.deepEqual(registered, ["bg_wait", "contact_supervisor"]);
+			assert.deepEqual(registered, ["contact_supervisor"]);
 			handlers.get("agent_start")?.({});
 			assert.deepEqual(diagnostics, [{
 				agent: "scout",
 				required: ["read", "grep", "find", "ls", "bash", "edit", "write", "intercom"],
-				available: ["bg_wait", "contact_supervisor"],
+				available: ["contact_supervisor"],
 				missing: [],
 				disabled: ["read", "grep", "find", "ls", "bash", "edit", "write", "intercom"],
 			}]);
@@ -963,7 +939,7 @@ describe("subagent prompt runtime", () => {
 		handlers.get("session_start")?.({});
 		await handlers.get("before_agent_start")?.({ systemPrompt: BASE_PROMPT });
 
-		assert.deepEqual(registered, ["bg_wait", "contact_supervisor"]);
+		assert.deepEqual(registered, ["contact_supervisor"]);
 	});
 
 	it("registers only native supervisor tools at runtime when pi-intercom is absent", async () => {
@@ -982,10 +958,10 @@ describe("subagent prompt runtime", () => {
 			} as { on(event: string, handler: (payload?: unknown) => unknown): void; getAllTools(): Array<{ name: string }>; registerTool(tool: { name: string }): void }, supervisorConfig());
 
 			handlers.get("session_start")?.({});
-			assert.deepEqual(registered, ["bg_wait", "contact_supervisor"]);
+			assert.deepEqual(registered, ["contact_supervisor"]);
 
 			await handlers.get("before_agent_start")?.({ systemPrompt: BASE_PROMPT });
-			assert.deepEqual(registered, ["bg_wait", "contact_supervisor"]);
+			assert.deepEqual(registered, ["contact_supervisor"]);
 		}
 	});
 
@@ -1057,7 +1033,7 @@ describe("subagent prompt runtime", () => {
 			assert.match(formatChildToolDiagnostic(diagnostic!), /must match what the host or pi-mcp-adapter registers/);
 			assert.match(formatChildToolDiagnostic(diagnostic!), /fixture_search/);
 			assert.match(
-				formatChildToolDiagnostic({ required: ["bg_wait"], available: [], missing: ["bg_wait"] }),
+				formatChildToolDiagnostic({ required: ["contact_supervisor"], available: [], missing: ["contact_supervisor"] }),
 				/registered by the child runtime itself/,
 			);
 			assert.doesNotMatch(

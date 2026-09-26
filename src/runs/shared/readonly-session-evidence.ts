@@ -163,7 +163,7 @@ function eligibleLaunch(launch: ChildSessionLaunch): boolean {
 		&& (!launch.hooks.length || (launch.storage.kind === "file" && isReadonlyChildHookProfile(launch.hooks, r)))
 		&& launch.tools !== undefined && launch.tools.every((tool) => tool === "read" || tool === "ls")
 		&& !r.toolBudget && !r.permissions && !r.childWatchdog && !r.watchdogStatus && !r.structuredOutput
-		&& !r.waitTool.enabled && !r.fanoutChild && !r.fast && !r.nestedRoute && !r.nestedParent && !r.runFanoutBudget
+		&& !r.fanoutChild && !r.fast && !r.nestedRoute && !r.nestedParent && !r.runFanoutBudget
 		&& !r.supervisorChannelDir && !r.mcpDirectTools?.length;
 }
 

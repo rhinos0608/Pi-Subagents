@@ -45,7 +45,7 @@ describe("default factory queued-message probe", () => {
 				resolveCliModel: () => { modelResolved = true; return {}; },
 			} as unknown as PiCodingAgentModule),
 		});
-		await assert.rejects(() => factory.create({ cwd: process.cwd(), storage: { kind: "memory" }, model: "provider/model", extensionPaths: [requiredPath], requiredExtensions: [{ id: "provider", path: requiredPath }], ambientExtensions: false, hooks: [], noSkills: true, noContextFiles: true, runtime: { fanoutChild: false, depth: 1, waitTool: { enabled: false }, fast: false } as ChildSessionLaunch["runtime"] }), /Required child extension failed to load/);
+		await assert.rejects(() => factory.create({ cwd: process.cwd(), storage: { kind: "memory" }, model: "provider/model", extensionPaths: [requiredPath], requiredExtensions: [{ id: "provider", path: requiredPath }], ambientExtensions: false, hooks: [], noSkills: true, noContextFiles: true, runtime: { fanoutChild: false, depth: 1, fast: false } as ChildSessionLaunch["runtime"] }), /Required child extension failed to load/);
 		assert.equal(modelResolved, false);
 	});
 
@@ -58,7 +58,7 @@ describe("default factory queued-message probe", () => {
 			DefaultResourceLoader: class { async reload() {} getExtensions() { return { extensions: [], errors: [], runtime: { pendingProviderRegistrations: [{ name: "required", config: {}, extensionPath: requiredPath }], pendingNativeProviderRegistrations: [] } }; } },
 			resolveCliModel: () => { modelResolved = true; return {}; },
 		} as unknown as PiCodingAgentModule) });
-		await assert.rejects(() => factory.create({ cwd: process.cwd(), storage: { kind: "memory" }, model: "provider/model", extensionPaths: [requiredPath], requiredExtensions: [{ id: "provider", path: requiredPath }], ambientExtensions: false, hooks: [], noSkills: true, noContextFiles: true, runtime: { fanoutChild: false, depth: 1, waitTool: { enabled: false }, fast: false } as ChildSessionLaunch["runtime"] }), /provider registration failed.*bad provider/);
+		await assert.rejects(() => factory.create({ cwd: process.cwd(), storage: { kind: "memory" }, model: "provider/model", extensionPaths: [requiredPath], requiredExtensions: [{ id: "provider", path: requiredPath }], ambientExtensions: false, hooks: [], noSkills: true, noContextFiles: true, runtime: { fanoutChild: false, depth: 1, fast: false } as ChildSessionLaunch["runtime"] }), /provider registration failed.*bad provider/);
 		assert.equal(modelResolved, false);
 	});
 
@@ -94,7 +94,7 @@ describe("default factory queued-message probe", () => {
 			hooks: [],
 			noSkills: true,
 			noContextFiles: true,
-			runtime: { fanoutChild: false, depth: 1, waitTool: { enabled: false }, fast: false } as ChildSessionLaunch["runtime"],
+			runtime: { fanoutChild: false, depth: 1, fast: false } as ChildSessionLaunch["runtime"],
 		});
 		assert.equal(child.hasQueuedMessages?.(), false);
 		assert.equal(childSessionHasQueuedMessages(child), false);
@@ -133,7 +133,7 @@ describe("default factory queued-message probe", () => {
 			hooks: [],
 			noSkills: true,
 			noContextFiles: true,
-			runtime: { fanoutChild: false, depth: 1, waitTool: { enabled: false }, fast: false } as ChildSessionLaunch["runtime"],
+			runtime: { fanoutChild: false, depth: 1, fast: false } as ChildSessionLaunch["runtime"],
 		});
 		assert.equal(child.hasQueuedMessages?.(), true);
 		assert.equal(childSessionHasQueuedMessages(child), true);

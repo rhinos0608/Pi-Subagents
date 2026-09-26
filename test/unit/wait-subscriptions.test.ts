@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
 import { waitForSubagents } from "../../src/runs/background/subagent-wait.ts";
-import { registerWaitTool } from "../../src/runs/background/wait-tool.ts";
+import { registerBackgroundWorkProvider } from "../../src/api/background-work.ts";
 import { createWaitSubscriptionManager } from "../../src/runs/background/wait-subscriptions.ts";
 import { recordWaitCompletion } from "../../src/runs/background/wait-completions.ts";
 import { inspectSubagentStatus } from "../../src/runs/background/run-status.ts";
@@ -107,34 +107,6 @@ describe("non-blocking wait subscriptions", () => {
 		}
 	});
 
-	it("registers bg_wait and rejects non-blocking subscriptions from headless tool calls", async () => {
-		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-wait-subscribe-headless-"));
-		try {
-			const state = makeState();
-			state.foregroundRuns = new Map([["run-headless", {
-				runId: "run-headless",
-				mode: "single",
-				cwd: root,
-				sessionId: "session-a",
-				updatedAt: Date.now(),
-				children: [{ agent: "worker", index: 0, status: "detached" }],
-			}]]);
-			const registered: Array<{ name: string; description: string; execute: (...args: unknown[]) => Promise<{ content: Array<{ text?: string }>; isError?: boolean }> }> = [];
-			registerWaitTool({
-				events: new TestBus(),
-				registerTool(value: unknown) { registered.push(value as typeof registered[number]); },
-			} as never, state, true, {
-				arm() { throw new Error("headless calls must not arm subscriptions"); },
-			});
-			assert.deepEqual(registered.map((entry) => entry.name), ["bg_wait"]);
-			await assert.rejects(
-				registered[0]!.execute("wait", { id: "run-headless", nonBlocking: true }, undefined, undefined, { hasUI: false }),
-				/long-lived interactive subagent runtime/,
-			);
-		} finally {
-			fs.rmSync(root, { recursive: true, force: true });
-		}
-	});
 
 	it("restores durable registrations and wakes on exact completion", () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-wait-subscribe-restore-"));
@@ -284,7 +256,7 @@ describe("non-blocking wait subscriptions", () => {
 
 			const message = sent[0] ?? "";
 			assert.match(message, /Reply to the supervisor request first/);
-			assert.match(message, /wait with bg_wait/);
+			assert.match(message, /end your turn/);
 			assert.match(message, /do not resume or launch a replacement/);
 			assert.doesNotMatch(message, /Resume-first/);
 		} finally {
@@ -659,6 +631,99 @@ describe("wait subscriptions armed by another session", () => {
 				resumed.dispose();
 			}
 		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("wakes the owning session once when a background-work item goes inactive, with no polling", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-wait-subscribe-bgwork-"));
+		const asyncRoot = path.join(root, "runs");
+		const subscriptionsDir = path.join(root, "subscriptions");
+		let active = [{ id: "job-1", sessionId: "session-a" }];
+		const disposeProvider = registerBackgroundWorkProvider({
+			name: "test-bg-wait-provider",
+			wakeChannels: ["test-bg-wait:job-finished"],
+			listActiveWork: () => active,
+		});
+		try {
+			const delivered: Array<{ message: { content?: unknown }; options?: { triggerTurn?: boolean } }> = [];
+			const bus = new TestBus();
+			const pi = {
+				events: bus,
+				sendMessage(message: { content?: unknown }, options?: { triggerTurn?: boolean }) { delivered.push({ message, options }); },
+			};
+			const manager = createWaitSubscriptionManager(pi as never, makeState("session-a"), {
+				asyncDirRoot: asyncRoot,
+				subscriptionsDir,
+				pollIntervalMs: 60_000,
+				now: Date.now,
+				kill: () => true,
+			});
+			try {
+				manager.restore();
+				manager.reconcile(); // first reconcile baselines the active item, no wake
+				assert.deepEqual(delivered, []);
+				active = []; // provider item finishes between reconciliations
+				bus.emit("test-bg-wait:job-finished"); // provider wake channel triggers reconcile
+				assert.equal(delivered.length, 1, "exactly one native wake for the finished provider item");
+				assert.equal(delivered[0]!.options?.triggerTurn, true);
+				assert.match(String(delivered[0]!.message.content), /test-bg-wait-provider\/job-1/);
+				bus.emit("test-bg-wait:job-finished"); // already baselined: no second wake
+				assert.equal(delivered.length, 1, "no duplicate wake once the item is baselined");
+			} finally {
+				manager.dispose();
+			}
+		} finally {
+			disposeProvider();
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("wakes for an item active at first discovery that finishes before any periodic tick", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-wait-subscribe-bgwork-first-sight-"));
+		const asyncRoot = path.join(root, "runs");
+		const subscriptionsDir = path.join(root, "subscriptions");
+		// Item is already active when this brand-new channel is first seen.
+		let active = [{ id: "job-early", sessionId: "session-a" }];
+		const disposeProvider = registerBackgroundWorkProvider({
+			name: "test-bg-wait-first-sight-provider",
+			wakeChannels: ["test-bg-wait:first-sight-finished"],
+			listActiveWork: () => active,
+		});
+		try {
+			const delivered: Array<{ message: { content?: unknown }; options?: { triggerTurn?: boolean } }> = [];
+			const bus = new TestBus();
+			const pi = {
+				events: bus,
+				sendMessage(message: { content?: unknown }, options?: { triggerTurn?: boolean }) { delivered.push({ message, options }); },
+			};
+			const manager = createWaitSubscriptionManager(pi as never, makeState("session-a"), {
+				asyncDirRoot: asyncRoot,
+				subscriptionsDir,
+				// Far-future tick: it must never fire during this test, proving
+				// the wake comes from subscribe-plus-baseline plus the channel
+				// event alone, with no polling.
+				pollIntervalMs: 3_600_000,
+				now: Date.now,
+				kill: () => true,
+			});
+			try {
+				// start() must subscribe AND baseline synchronously: the channel
+				// has never been seen before and the tick never runs.
+				manager.start();
+				assert.deepEqual(delivered, [], "baselining an active item is not a wake");
+				active = []; // item finishes before any periodic tick could run
+				bus.emit("test-bg-wait:first-sight-finished");
+				assert.equal(delivered.length, 1, "exactly one native wake for the never-before-baselined item");
+				assert.equal(delivered[0]!.options?.triggerTurn, true);
+				assert.match(String(delivered[0]!.message.content), /test-bg-wait-first-sight-provider\/job-early/);
+				bus.emit("test-bg-wait:first-sight-finished");
+				assert.equal(delivered.length, 1, "no duplicate wake");
+			} finally {
+				manager.dispose();
+			}
+		} finally {
+			disposeProvider();
 			fs.rmSync(root, { recursive: true, force: true });
 		}
 	});

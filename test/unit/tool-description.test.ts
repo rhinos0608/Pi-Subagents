@@ -71,7 +71,7 @@ describe("registered subagent tool description", () => {
 	it("keeps compact safety kernel and full execution contracts", () => {
 		for (const description of [DEFAULT_SUBAGENT_TOOL_DESCRIPTION, COMPACT_SUBAGENT_TOOL_DESCRIPTION]) {
 			assert.ok(description.length <= 1_200);
-			for (const contract of [/authoritative.*preflight/i, /no silent.*fallback/i, /one writer per cwd\/worktree/i, /async completion wakes.*do not sleep, poll/i, /durable output.*evidence/i, /raw workflow resources own authority/i, /guide.*tool-reference/i]) assert.match(description, contract);
+			for (const contract of [/authoritative.*preflight/i, /no silent.*fallback/i, /one writer per cwd\/worktree/i, /async completion wakes.*do not sleep/i, /durable output.*evidence/i, /raw workflow resources own authority/i, /guide.*tool-reference/i]) assert.match(description, contract);
 			assert.equal(description.split("SAFETY KERNEL").length - 1, 1);
 		}
 		for (const description of [FULL_SUBAGENT_TOOL_DESCRIPTION]) {
@@ -91,7 +91,7 @@ describe("registered subagent tool description", () => {
 				/every stored run promise with direct await, Promise.race or Promise.all/,
 				/Await\/return runs.steer\(key,message,options\?\) for a prior key, never raw run ids/,
 				/Consume results at dependency barriers/,
-				/Native async completion wakes this session.*return control.*bg_wait merely for a wake/,
+				/Native async completion wakes this session.*return control.*merely for a wake/,
 				/not for final reviews\/gates/,
 				/one writer per cwd\/worktree.*fresh-context read-only reviewers/i,
 				/output on runs.run\/runs.all, not task filename prose.*outputReference.*outputPathMapping.*artifactPaths/,

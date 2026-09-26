@@ -46,7 +46,7 @@ it("plans only from a real settled receipt: ordered siblings, vetoes, one-cap tr
 	};
 	const factory = createDefaultChildSessionFactory({ loadPiCodingAgent: async () => pi });
 	function launch(file: string): ChildSessionLaunch {
-		const runtime = { fanoutChild: false, fast: false, depth: 1, waitTool: { enabled: false } };
+		const runtime = { fanoutChild: false, fast: false, depth: 1 };
 		return { cwd, storage: { kind: "file", sessionFile: join(cwd, file) }, model: "baseten/model-a", tools: ["read"], extensionPaths: [], ambientExtensions: false, hooks: createChildHooks(runtime), noSkills: true, noContextFiles: true, runtime };
 	}
 	try {

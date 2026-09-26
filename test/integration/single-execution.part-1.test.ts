@@ -868,9 +868,9 @@ Answer only from the supplied synthetic text.
 		const text = result.content.map((part) => part.type === "text" ? part.text : "").join("\n");
 		assert.equal(result.details.results[0]?.detachedReason, "user request");
 		assert.match(text, /Detached at user request/);
-		assert.match(text, /bg_wait\(\{ id: "[^"]+", nonBlocking: true \}\)/);
-		assert.doesNotMatch(text, /intercom coordination|supervisor request|Wait with bg_wait/);
-		assert.doesNotMatch(text, /bg_wait\(\{ id: "[^"]+" \}\)/);
+		assert.match(text, /end your turn/);
+		assert.doesNotMatch(text, /intercom coordination|supervisor request|Wait with/);
+		assert.doesNotMatch(text, /nonBlocking/);
 
 		let terminalChild = state.foregroundRuns?.get(control.runId)?.children[0];
 		for (let attempt = 0; attempt < 250 && terminalChild?.status !== "completed"; attempt++) {

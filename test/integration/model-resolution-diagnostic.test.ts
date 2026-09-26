@@ -44,7 +44,6 @@ describe("child model resolution diagnostic", () => {
 		const factory = createDefaultChildSessionFactory({ loadPiCodingAgent: async () => unresolvedModelPi() });
 		const result = await runSync(tempDir, [makeAgent("provider-model-worker", { model: MODEL })], "provider-model-worker", "Task", {
 			runId: "foreground-model-resolution",
-			waitToolEnabled: false,
 			childSessionFactory: factory,
 		});
 
@@ -62,7 +61,6 @@ describe("child model resolution diagnostic", () => {
 		const factory = createDefaultChildSessionFactory({ loadPiCodingAgent: async () => unresolvedModelPi() });
 		const result = await runSync(tempDir, [makeAgent("provider-model-worker", { model: MODEL })], "provider-model-worker", "Task", {
 			runId: "foreground-model-policy",
-			waitToolEnabled: false,
 			childSessionFactory: factory,
 			capabilityCeiling: { version: 1, denyExtensions: true, sources: ["policy-fixture"] },
 		});

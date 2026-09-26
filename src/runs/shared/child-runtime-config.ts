@@ -3,7 +3,6 @@ import type { ThinkingLevel } from "../../shared/model-info.ts";
 import type { NestedPathEntry } from "./nested-path.ts";
 import type { PermissionRules } from "./permissions.ts";
 import type { ChildWatchdogConfig, ChildWatchdogStatusEvent } from "../../watchdog/child-status.ts";
-import type { ResolvedWaitToolConfig } from "../background/wait-config.ts";
 import type { ChildToolDiagnostic } from "./tool-availability.ts";
 import { isInternalChildTool } from "./tool-availability.ts";
 import type { ResolvedSubagentCapabilityCeiling } from "./capability-ceiling.ts";
@@ -92,7 +91,6 @@ export interface ChildRuntimeConfig {
 	childWatchdog?: ChildWatchdogConfig;
 	/** Receives child watchdog status events. */
 	watchdogStatus?: (event: ChildWatchdogStatusEvent) => void;
-	waitTool: ResolvedWaitToolConfig;
 	runtimeState?: SubagentState;
 	holdFinalDrain?: (held: boolean) => void;
 	/** Installation-local downward owner-channel barrier; never inherited or serialized into descendants. */
@@ -132,8 +130,8 @@ function normalizeAvailableTools(availableTools: readonly (string | { name: stri
 
 function isToolAvailable(identities: readonly { name: string; label?: string }[], required: string): boolean {
 	// Internal plumbing must match the exact registered name: a display label
-	// on an unrelated tool (e.g. `{ name: "bash", label: "bg_wait" }`) must
-	// never prove the primitive exists.
+	// on an unrelated tool (e.g. `{ name: "bash", label: "contact_supervisor" }`)
+	// must never prove the primitive exists.
 	const identityStrict = isInternalChildTool(required) || isInternalChildTool(required.toLowerCase());
 	for (const identity of identities) {
 		if (identity.name === required) return true;

@@ -515,7 +515,7 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 			assert.deepEqual(readCall().runtime?.toolBudget, toolBudget);
 			assert.equal(mockPi.callCount(), 1);
 		} finally {
-			// bg_wait completes at the logical result, not the parent's process-close publication.
+			// The internal wait completes at the logical result, not the parent's process-close publication.
 			// Await that publication even on assertion failure, before reading proof or deleting artifacts.
 			if (asyncDir) {
 				const eventsPath = path.join(asyncDir, "events.jsonl");
@@ -1096,7 +1096,6 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 			const executor = makeExecutor([makeAgent("echo")], {}, false, undefined, true, new Map(), undefined, undefined, createEventBus(), undefined, {
 				fanoutChild: true,
 				depth: 1,
-				waitTool: { enabled: true },
 				fast: false,
 				runFanoutBudget: { ...descriptor, parentPath: "tasks[0]" },
 			});
@@ -1461,7 +1460,6 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 			const executor = makeExecutor([makeAgent("echo", { model: "openai/gpt-5-mini", thinking: "high" })], {}, false, undefined, true, new Map(), undefined, undefined, createEventBus(), undefined, {
 				fanoutChild: true,
 				depth: 1,
-				waitTool: { enabled: true },
 				fast: false,
 				nestedRoute: route,
 				nestedParent: { parentRunId: "parent-run", parentChildIndex: 2, depth: 1, path: [] },
@@ -4125,16 +4123,6 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 			if (prevMaxDepth === undefined) delete process.env.PI_SUBAGENT_MAX_DEPTH;
 			else process.env.PI_SUBAGENT_MAX_DEPTH = prevMaxDepth;
 		}
-	});
-
-	it("passes the effective wait-tool setting through to child execution", async () => {
-		mockPi.onCall({ output: "ok" });
-		const result = await runSync(tempDir, makeAgentConfigs(["echo"]), "echo", "Task", {
-			runId: "wait-tool-env",
-			waitToolEnabled: false,
-		});
-		assert.equal(result.exitCode, 0);
-		assert.deepEqual(readCall().runtime?.waitTool, { enabled: false });
 	});
 
 	it("passes prompt inheritance flags through to child execution", async () => {

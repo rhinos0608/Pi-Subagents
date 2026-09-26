@@ -62,7 +62,7 @@ const FAST_MODE_PROVIDER_PREFIX = "openai-codex/";
 const OPENAI_PROMPT_CACHE_KEY_MAX_LENGTH = 64;
 const PI_BUILTIN_TOOL_NAMES = new Set(["read", "bash", "powershell", "edit", "write", "grep", "find", "ls"]);
 /** Native coordination tools the plan recognizes regardless of host availability. */
-const NATIVE_CHILD_TOOL_NAMES = new Set(["subagent", "contact_supervisor", "intercom", "subagent_supervisor", "bg_wait", "structured_output"]);
+const NATIVE_CHILD_TOOL_NAMES = new Set(["subagent", "contact_supervisor", "intercom", "subagent_supervisor", "structured_output"]);
 const REPOSITORY_INSPECTION_TOOLS = new Set(["read", "grep", "find", "ls", "bash", "powershell"]);
 const REVIEW_OR_SCOUT_AGENT_PATTERN = /\b(?:reviewer|scout)\b/i;
 

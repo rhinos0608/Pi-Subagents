@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { listBackgroundWorkWakeChannels, snapshotBackgroundWork } from "../../api/background-work.ts";
 import { listAsyncRuns, type AsyncRunSummary } from "./async-status.ts";
 import { formatResumeFirstFailedRunDetail } from "./resume-guidance.ts";
 import { readCompletionReplay } from "./completion-replay.ts";
@@ -112,6 +113,20 @@ export function createWaitSubscriptionManager(
 	let disposed = false;
 	let interval: ReturnType<typeof setInterval> | undefined;
 	let lastForeignSweepAt = 0;
+	/**
+	 * Baseline of background-work provider items seen active for the current
+	 * session, keyed by `provider\0sessionId\0id`. Reconcile diffs the fresh
+	 * snapshot against this baseline: an item present before but absent now
+	 * has finished (or otherwise needs attention) and earns exactly one
+	 * native wake delivery. Provider items never fit the runId-based arm()
+	 * shape, so this parallel baseline lives beside the armed records and
+	 * reuses the same channel-subscription and sendMessage/triggerTurn
+	 * delivery pattern.
+	 */
+	let knownProviderItems = new Map<string, { provider: string; id: string }>();
+	let knownProviderSession: string | null = null;
+	const subscribedProviderChannels = new Set<string>();
+	let providerUnsubscribes: Array<() => void> = [];
 
 	/**
 	 * Remove expired records armed by another session.
@@ -260,12 +275,70 @@ export function createWaitSubscriptionManager(
 		}
 	};
 
+	const deliverBackgroundWorkWake = (finished: Array<{ provider: string; id: string }>) => {
+		if (disposed || !state.currentSessionId) return;
+		const summary = finished.map((item) => `${item.provider}/${item.id}`).join(", ");
+		try {
+			pi.sendMessage({
+				customType: "subagent-background-work",
+				content: `Background work finished for this session: ${summary}. Inspect subagent status for results.`,
+				display: true,
+				details: {
+					finished: finished.map((item) => ({ provider: item.provider, id: item.id })),
+				},
+			}, { triggerTurn: true });
+		} catch (error) {
+			console.error(`Failed to deliver background-work wake for '${summary}':`, error);
+		}
+	};
+
+	const reconcileBackgroundWork = () => {
+		const sessionId = state.currentSessionId;
+		if (!sessionId) return;
+		// Subscribe lazily: providers can register after this manager starts.
+		// Subscription and baseline snapshot happen in this same pass, so a
+		// newly-discovered channel is never subscribed now and baselined
+		// later: the first pass that sees the channel also records what is
+		// active on it. start() runs one such pass synchronously so the
+		// baseline exists before the first periodic tick.
+		try {
+			for (const channel of listBackgroundWorkWakeChannels()) {
+				if (subscribedProviderChannels.has(channel)) continue;
+				subscribedProviderChannels.add(channel);
+				try {
+					providerUnsubscribes.push(pi.events.on(channel, reconcile));
+				} catch (error) {
+					console.error(`Failed to subscribe to background-work wake channel '${channel}':`, error);
+				}
+			}
+		} catch (error) {
+			console.error("Failed to list background-work wake channels:", error);
+		}
+		let snapshot;
+		try {
+			snapshot = snapshotBackgroundWork(sessionId, now());
+		} catch (error) {
+			console.error(`Failed to snapshot background work for session '${sessionId}':`, error);
+			return;
+		}
+		if (knownProviderSession !== sessionId) {
+			knownProviderSession = sessionId;
+			knownProviderItems = new Map(snapshot.items.map((item) => [`${item.provider}\0${item.sessionId}\0${item.id}`, { provider: item.provider, id: item.id }]));
+			return;
+		}
+		const current = new Set(snapshot.items.map((item) => `${item.provider}\0${item.sessionId}\0${item.id}`));
+		const finished = [...knownProviderItems.entries()].filter(([identity]) => !current.has(identity)).map(([, item]) => item);
+		knownProviderItems = new Map(snapshot.items.map((item) => [`${item.provider}\0${item.sessionId}\0${item.id}`, { provider: item.provider, id: item.id }]));
+		if (finished.length > 0) deliverBackgroundWorkWake(finished);
+	};
+
 	const reconcile = () => {
 		if (disposed) return;
 		// Before the session check: with no current session every record is
 		// foreign, and expired ones should still be cleaned up.
 		sweepExpiredForeignSubscriptions();
 		if (!state.currentSessionId) return;
+		reconcileBackgroundWork();
 		for (const record of [...subscriptions.values()]) {
 			try {
 				reconcileRecord(record);
@@ -289,6 +362,11 @@ export function createWaitSubscriptionManager(
 	return {
 		start() {
 			if (disposed || interval) return;
+			// Synchronous first pass: subscribe provider channels AND snapshot
+			// the baseline together. Without this, an item that is already
+			// active at startup and finishes before the first periodic tick
+			// would never be baselined, and its wake would be silently lost.
+			reconcile();
 			interval = setInterval(reconcile, options.pollIntervalMs ?? RECONCILE_INTERVAL_MS);
 			interval.unref?.();
 		},
@@ -317,6 +395,10 @@ export function createWaitSubscriptionManager(
 			// Unconditional: a process that starts without a session identity should
 			// still clear records nobody can act on.
 			sweepExpiredForeignSubscriptions(true);
+			// Always baseline provider items, even when no subscription files
+			// exist yet (fresh directory): otherwise the first tick would
+			// subscribe and baseline too late for already-finishing items.
+			reconcileBackgroundWork();
 			if (!state.currentSessionId) return;
 			let files: string[];
 			try {
@@ -345,10 +427,13 @@ export function createWaitSubscriptionManager(
 			disposed = true;
 			if (interval) clearInterval(interval);
 			interval = undefined;
-			for (const unsubscribe of unsubscribes) {
+			for (const unsubscribe of [...unsubscribes, ...providerUnsubscribes]) {
 				try { unsubscribe(); } catch { /* best effort */ }
 			}
+			providerUnsubscribes = [];
 			subscriptions.clear();
+			knownProviderItems.clear();
+			knownProviderSession = null;
 		},
 	};
 }
