@@ -355,7 +355,7 @@ subagent({ action: "doctor" })
 
 - Multi-child async runs and remembered foreground single, parallel, or chain runs can be revived by passing `index` to choose the child.
 - Nested runs can be resumed by nested id when their live route or persisted nested session metadata is available.
-- Completed external-job runs can use the same `resume` action as a provider follow-up when the registered provider exposes `followUp(input)`. Running external-job parents fail closed with guidance to wait for completion. Unsupported providers fail with an update/reload message.
+- Completed external-job runs, including nested runs, can use the same `resume` action as a provider follow-up when the registered provider exposes `followUp(input)`. Running external-job parents fail closed with guidance to wait for completion. Unsupported providers fail with an update/reload message.
 - Revive starts a new child session from the old session context; it does not resume the live session, and it requires the chosen child to have a persisted `.jsonl` session file.
 - Direct revival takes an exclusive cross-process lease on the canonical session file until the new child finishes. A concurrent attempt fails before Pi is spawned and identifies the owning revived run; dead-owner leases are reclaimed only when staleness can be proved.
 

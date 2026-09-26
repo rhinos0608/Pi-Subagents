@@ -4,10 +4,13 @@
 
 ### Fixed
 
+- A child session can now follow up the external-job runs it launched with `resume`. The nested resume path always needed a Pi session file, which an external-job run does not have, so the provider's `followUp` never ran. A repeated resume from a child also no longer calls `followUp` a second time. Thanks to [@juanpprieto](https://github.com/juanpprieto) for [#2465](https://github.com/nicobailon/pi-subagents/issues/2465).
+- `subagent_supervisor` `pending` now shows each request's question text, so a parent that missed the request notice can still read and answer it ([#2460](https://github.com/nicobailon/pi-subagents/issues/2460)).
 - Awaited workflow children now emit `subagent:async-complete` without sending a separate child notification. Thanks to [@mmarabel](https://github.com/mmarabel) for [#2456](https://github.com/nicobailon/pi-subagents/issues/2456).
 - Async status now reports a subagent's actual context limit once its session starts, including a window raised by an extension, instead of the parent registry's value. Thanks to [@johnhenaot](https://github.com/johnhenaot) for [#2448](https://github.com/nicobailon/pi-subagents/pull/2448).
 - TypeBox is now a host-provided peer instead of a bundled dependency, so Pi no longer warns about the manifest and the extension, children, and background runners all use Pi's TypeBox copy. Thanks to [@felipemm](https://github.com/felipemm) for [#2454](https://github.com/nicobailon/pi-subagents/issues/2454) and [#2455](https://github.com/nicobailon/pi-subagents/pull/2455).
 - `fast: true` now accepts any native `openai-codex/*` model instead of a fixed list of two model IDs, so newer Codex models no longer fail before launch. Other providers are still rejected. Thanks to [@jtabke](https://github.com/jtabke) for [#2452](https://github.com/nicobailon/pi-subagents/issues/2452).
+- External-job agents that a child session launches no longer stay queued. Only the root session serviced external-job bridge requests, so a child's own external-job run never started. A child session now services the bridges of the external-job runs it launches. Thanks to [@juanpprieto](https://github.com/juanpprieto) for [#2449](https://github.com/nicobailon/pi-subagents/issues/2449).
 - Worktree naming labels stay within the 256-byte limit when truncated at a multi-byte UTF-8 boundary, so async status remains readable. Thanks to [@chenhaoxiang](https://github.com/chenhaoxiang) for [#2446](https://github.com/nicobailon/pi-subagents/pull/2446).
 
 ## [0.71.0] - 2026-09-23

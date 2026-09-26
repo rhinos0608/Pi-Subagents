@@ -1523,6 +1523,51 @@ function resolveNestedResumeTarget(match: ResolvedSubagentRunId & { kind: "neste
 	});
 }
 
+function resolveNestedExternalJobResumeTarget(match: ResolvedSubagentRunId & { kind: "nested" }, params: SubagentParamsLike, deps: ExecutorDeps): AsyncResumeSourceTarget | undefined {
+	const run = match.match.run;
+	if (run.state === "stopped") return undefined;
+	const asyncDir = resolveNestedAsyncDir(match.match.rootRunId, run);
+	if (!asyncDir) return undefined;
+	const status = readNestedRunStatus(asyncDir, run);
+	const steps = status?.steps ?? [];
+	const step = steps[params.index ?? 0];
+	if (!step) {
+		// An index outside an external-job run gets the async resolver's index error instead of a Pi revive.
+		if (params.index === undefined || !steps.some((candidate) => candidate.runner?.type === "external-job")) return undefined;
+	} else if (!step.runner) {
+		// Pi steps record no runner, and neither does a launch status before the runner starts.
+		// A session file means a Pi run; otherwise the agent definition says what the step runs.
+		if (nestedRunSessionFile(run)) return undefined;
+		const agent = deps.discoverAgents(status?.cwd ?? deps.state.baseCwd, resolveExecutionAgentScope(params.agentScope)).agents.find((candidate) => candidate.name === step.agent);
+		if (agent?.runner?.type === "external-job") throw new Error(externalJobWithoutMetadataMessage(run.id));
+		return undefined;
+	} else if (step.runner.type !== "external-job") {
+		return undefined;
+	}
+	// External-job runs have no Pi session, so resume them as a provider follow-up from their own run directory.
+	const target = resolveAsyncResumeTarget(compactOptional<Parameters<typeof resolveAsyncResumeTarget>[0]>({ dir: asyncDir, index: params.index }), nestedRunScope(match.match.rootRunId), { requireSessionFile: false });
+	if (target.kind === "live") throw new Error(externalJobStillRunningMessage(target.runId));
+	return { source: "async", ...target };
+}
+
+function readNestedRunStatus(asyncDir: string, run: NestedRunSummary): AsyncStatus | null {
+	try {
+		return readStatus(asyncDir);
+	} catch (error) {
+		// A nested Pi run revives from its session file, so its unreadable status file must not block it.
+		if (nestedRunSessionFile(run)) return null;
+		throw error;
+	}
+}
+
+function externalJobStillRunningMessage(runId: string): string {
+	return `External-job run '${runId}' is still running. Wait for completion, then use subagent({ action: "resume", id: "${runId}", message: "..." }).`;
+}
+
+function externalJobWithoutMetadataMessage(runId: string): string {
+	return `External-job run '${runId}' has no persisted provider metadata. Cannot follow up without the parent provider job id.`;
+}
+
 async function waitForNestedControlResult(target: ResolvedSubagentRunId & { kind: "nested" }, requestId: string, ignoredFiles: ReadonlySet<string>, timeoutMs = 1_000) {
 	const deadline = Date.now() + timeoutMs;
 	while (Date.now() < deadline) {
@@ -1685,12 +1730,12 @@ async function resumeExternalJobFollowUp(input: {
 	absoluteDeadlineAt?: number;
 }): Promise<AgentToolResult<Details>> {
 	if (input.target.kind === "live" || input.target.state === "running" || input.target.state === "queued") {
-		return { content: [{ type: "text", text: `External-job run '${input.target.runId}' is still running. Wait for completion, then use subagent({ action: "resume", id: "${input.target.runId}", message: "..." }).` }], isError: true, details: { mode: "management", results: [] } };
+		return { content: [{ type: "text", text: externalJobStillRunningMessage(input.target.runId) }], isError: true, details: { mode: "management", results: [] } };
 	}
 	const runner = input.target.runner;
 	const externalJob = input.target.externalJob;
 	if (runner?.type !== "external-job") return { content: [{ type: "text", text: "Internal error: external-job follow-up was requested for a non-external-job runner." }], isError: true, details: { mode: "management", results: [] } };
-	if (!externalJob) return { content: [{ type: "text", text: `External-job run '${input.target.runId}' has no persisted provider metadata. Cannot follow up without the parent provider job id.` }], isError: true, details: { mode: "management", results: [] } };
+	if (!externalJob) return { content: [{ type: "text", text: externalJobWithoutMetadataMessage(input.target.runId) }], isError: true, details: { mode: "management", results: [] } };
 	if (externalJob.provider !== runner.provider) return { content: [{ type: "text", text: `External-job run '${input.target.runId}' has mismatched provider metadata. Refusing to follow up.` }], isError: true, details: { mode: "management", results: [] } };
 	if (!externalJobOptionsEqual(externalJob.options, runner.options)) return { content: [{ type: "text", text: `External-job run '${input.target.runId}' has mismatched provider options. Refusing to follow up.` }], isError: true, details: { mode: "management", results: [] } };
 	if (!externalJob.providerJobId) return { content: [{ type: "text", text: `External-job run '${input.target.runId}' has no parent provider job id. Cannot follow up without reopening or redispatching, so this fails closed.` }], isError: true, details: { mode: "management", results: [] } };
@@ -1702,10 +1747,13 @@ async function resumeExternalJobFollowUp(input: {
 	const requestDigest = externalJobFollowUpRequestDigest({ provider: runner.provider, parentProviderJobId: externalJob.providerJobId, promptDigest, options: runner.options });
 	const requestId = externalJobFollowUpRequestId(requestDigest);
 	const runId = externalJobFollowUpRunId(requestDigest);
-	const asyncDir = path.join(DIRS.async, runId);
+	// A child launches the follow-up under its nested route, so look for an earlier one where it would be.
+	const nestedRoute = inheritedNestedRoute(input.deps);
+	const runRoots = nestedRoute ? nestedRunScope(nestedRoute.rootRunId) : { asyncDirRoot: DIRS.async, resultsDir: DIRS.results };
+	const asyncDir = path.join(runRoots.asyncDirRoot, runId);
 	const currentSessionId = input.deps.state.currentSessionId;
 	if (!currentSessionId) return { content: [{ type: "text", text: "External-job follow-up requires an active parent session." }], isError: true, details: { mode: "management", results: [] } };
-	if (fs.existsSync(asyncDir) || fs.existsSync(resultFilePath(DIRS.results, runId))) {
+	if (fs.existsSync(asyncDir) || fs.existsSync(resultFilePath(runRoots.resultsDir, runId))) {
 		return externalJobFollowUpStarted({ sourceRunId: input.target.runId, runId, asyncDir, duplicate: true, interactive: input.ctx.hasUI });
 	}
 
@@ -1798,6 +1846,8 @@ function resolveRequestedResumeTarget(params: SubagentParamsLike, deps: Executor
 	if (resolved?.kind === "nested") {
 		if (params.chain?.length) throw new Error("Attaching a running subagent as a chain root is currently available for top-level async runs only.");
 		if (resolved.match.run.state === "running" || resolved.match.run.state === "queued") return { kind: "live-nested", target: resolved };
+		const externalJobTarget = resolveNestedExternalJobResumeTarget(resolved, params, deps);
+		if (externalJobTarget) return externalJobTarget;
 		const trustedSessionRoots = [
 			...(deps.config.defaultSessionDir ? [path.resolve(deps.expandTilde(deps.config.defaultSessionDir))] : []),
 			...(parentSessionFile ? [deps.getSubagentSessionRoot(parentSessionFile)] : []),
