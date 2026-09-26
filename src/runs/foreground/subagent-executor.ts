@@ -372,15 +372,10 @@ export interface SubagentParamsLike {
 	worktree?: boolean;
 	/** Git ref used as the managed worktree base. */
 	baseRef?: string;
-	context?: "fresh" | "fork" | "profile";
 	/** Per-run intercom bridge config. It replaces the global config for this launch only. */
 	intercomBridge?: IntercomBridgeConfig;
 	async?: boolean;
 	foregroundOnly?: boolean;
-	timeoutMs?: number;
-	maxRuntimeMs?: number;
-	/** Async runs only: steer the child to checkpoint and stop this many ms before the run deadline. */
-	checkpointBeforeDeadlineMs?: number;
 	/** Optional hard per-tool-call timeout (ms). Known-fast tools also have a default. */
 	toolTimeoutMs?: number;
 	toolBudget?: ToolBudgetConfig;
@@ -513,7 +508,6 @@ interface ExecutionContextData {
 	suppressUnchangedDelegationUpdates?: boolean;
 	intercomBridge: IntercomBridgeState;
 	nestedRoute?: NestedRouteInfo;
-	timeoutMs?: number;
 	deadlineAt?: number;
 	/** Raw global config.toolTimeoutMs, for per-step resolution in async runners. */
 	configToolTimeoutMs?: number;
@@ -1919,11 +1913,9 @@ async function resumeAsyncRun(input: {
 	const modelScope = discovered.modelScope;
 	const sessionName = resolveIntercomSessionTarget(input.deps.childRuntime?.intercomSessionName ?? input.deps.pi.getSessionName(), input.ctx.sessionManager.getSessionId());
 	const recoveryDescriptor = "recoveryDescriptor" in target ? target.recoveryDescriptor : undefined;
-	const recoveryContext = recoveryDescriptor?.context ?? (input.params.context === "profile" ? undefined : input.params.context);
 	const intercomBridge = resolveIntercomBridge({
 		config: input.deps.config.intercomBridge,
 		override: input.params.intercomBridge ?? recoveryDescriptor?.intercomBridge,
-		context: recoveryContext,
 		orchestratorTarget: sessionName,
 	});
 	const agents = intercomBridge.active
@@ -2185,7 +2177,6 @@ async function resumeAsyncRun(input: {
 			sourceRunId: target.runId,
 			...(input.deps.state.currentSessionId ? { parentSessionId: input.deps.state.currentSessionId } : {}),
 		},
-		context: recoveryContext,
 		modelOverride: recoveryDescriptor?.model ?? target.model,
 		...(recoveryDescriptor?.modelCandidates?.length ? { modelCandidatesOverride: [...recoveryDescriptor.modelCandidates] } : {}),
 		fast: recoveryDescriptor?.fast,
@@ -2219,7 +2210,6 @@ async function resumeAsyncRun(input: {
 		...(outputSchema ? { structuredOutputSchema: outputSchema } : {}),
 		...(recoveryDescriptor?.skills ? { skills: [...recoveryDescriptor.skills] } : {}),
 		...(acceptance !== undefined ? { acceptance } : {}),
-		...(input.params.timeoutMs !== undefined ? { timeoutMs: input.params.timeoutMs } : {}),
 		...(input.absoluteDeadlineAt !== undefined ? { absoluteDeadlineAt: input.absoluteDeadlineAt } : {}),
 		...(input.params.toolBudget !== undefined ? { toolBudget: input.params.toolBudget } : {}),
 		// Recovery descriptors, remembered foreground runs, and current workflow roots
@@ -2746,7 +2736,7 @@ function buildRequestedModeError(params: SubagentParamsLike, message: string): A
 			isError: true,
 			details: { mode: getRequestedModeLabel(params), results: [] },
 		},
-		params.context === "profile" ? undefined : params.context,
+		undefined,
 	);
 }
 
@@ -2767,17 +2757,14 @@ function applySingleAgentLaunchDefaults(params: SubagentParamsLike, agents: Agen
 	if ((params.chain?.length ?? 0) > 0 || (params.tasks?.length ?? 0) > 0 || !params.agent) return params;
 	const agent = agents.find((candidate) => candidate.name === params.agent);
 	if (!agent) return params;
-	const parentTimeoutMs = params.timeoutMs === undefined && params.maxRuntimeMs === undefined && agent.defaultTimeoutMs === undefined && params.workflowParentDeadlineAt !== undefined
+	const parentDeadlineAt = params.workflowParentDeadlineAt !== undefined
 		? Math.max(1, params.workflowParentDeadlineAt - Date.now())
 		: undefined;
 	const outputSchema = params.outputSchema === false ? false : resolveEffectiveOutputSchema(agent, params.outputSchema);
 	return {
 		...params,
 		...(params.async === undefined && agent.defaultAsync !== undefined ? { async: agent.defaultAsync } : {}),
-		...(params.timeoutMs === undefined && params.maxRuntimeMs === undefined && agent.defaultTimeoutMs !== undefined
-			? { timeoutMs: agent.defaultTimeoutMs }
-			: {}),
-		...(parentTimeoutMs !== undefined ? { timeoutMs: parentTimeoutMs } : {}),
+		...(parentDeadlineAt !== undefined ? { workflowParentDeadlineAt: Date.now() + parentDeadlineAt } : {}),
 		...(params.acceptance === undefined && agent.defaultAcceptance !== undefined
 			? { acceptance: agent.defaultAcceptance }
 			: {}),
@@ -2804,7 +2791,7 @@ function validateLaunchOutputSchemaOverrides(params: SubagentParamsLike): string
 }
 
 
-const FALLBACK_TIMEOUT_MS = 30 * 60 * 1000;
+const FALLBACK_TIMEOUT_MS = 3_600_000;
 
 /**
  * Maximum delay a Node.js timer accepts. Values above the 32-bit signed integer
@@ -3293,11 +3280,10 @@ async function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 			structuredOutputSchema: params.outputSchema || undefined,
 			extensionBindings: params.extensionBindings,
 			acceptance: params.acceptance,
-			timeoutMs: data.timeoutMs,
 			toolBudget: data.toolBudget,
 			configToolBudget: data.configToolBudget,
 			toolTimeoutMs: data.params?.toolTimeoutMs,
-			checkpointBeforeDeadlineMs: data.params?.checkpointBeforeDeadlineMs ?? deps.config.checkpointBeforeDeadlineMs,
+			checkpointBeforeDeadlineMs: deps.config.checkpointBeforeDeadlineMs,
 			configToolTimeoutMs: data.configToolTimeoutMs,
 			capabilityCeiling: data.capabilityCeiling,
 			runFanoutBudget: data.runFanoutBudget,
@@ -3871,7 +3857,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 		}
 		: undefined;
 
-	const deadlineAt = data.deadlineAt ?? (data.timeoutMs !== undefined ? Date.now() + data.timeoutMs : undefined);
+	const deadlineAt = data.deadlineAt;
 	const requiredExtensions = deps.childRuntime?.requiredExtensions ?? resolveRequiredChildExtensions(data.parentPiSessionId);
 	let r: Awaited<ReturnType<typeof runSync>> | undefined;
 	let resolveDetachedWorkflowChild: ((result: Awaited<ReturnType<typeof runSync>>) => void) | undefined;
@@ -3978,7 +3964,6 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 				}
 				recordRun(params.agent!, cleanTask, result.exitCode, result.progressSummary?.durationMs ?? 0, result);
 			},
-			timeoutMs: data.timeoutMs,
 			deadlineAt,
 			toolTimeoutMs: params.toolTimeoutMs,
 			configToolTimeoutMs: data.configToolTimeoutMs,
@@ -4034,7 +4019,6 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 	const details = compactForegroundDetails(compactOptional<Details>({
 		mode: "single",
 		runId,
-		timeoutMs: data.timeoutMs,
 		results: [r],
 		...(effectiveToolBudget.toolBudget ? { toolBudget: effectiveToolBudget.toolBudget } : {}),
 		progress: params.includeProgress ? allProgress : undefined,
@@ -4245,7 +4229,6 @@ function workflowChildResult(
 			resumability = { state: "not-resumable", reason: error instanceof Error ? error.message : String(error) };
 		}
 	}
-	const requestedContext = childParams.context === "fresh" || childParams.context === "fork" ? childParams.context : undefined;
 	const resolvedContext = result.details.context ?? (resolvedContexts.length === 1 ? resolvedContexts[0] : resolvedContexts.length > 1 ? "mixed" : undefined);
 	const outputReference = result.details.results.find((child) => child.savedOutputPath)?.savedOutputPath
 		?? result.details.results.find((child) => child.outputReference?.path)?.outputReference?.path;
@@ -4276,7 +4259,6 @@ function workflowChildResult(
 		...(interrupted ? { interrupted: true } : {}),
 		...(stopped ? { stopped: true } : {}),
 		...(structured.length === 1 ? { structuredOutput: structured[0] } : structured.length > 1 ? { structuredOutput: structured } : {}),
-		...(requestedContext ? { requestedContext } : {}),
 		...(resolvedContext ? { resolvedContext } : {}),
 		...(outputReference ? { outputReference } : {}),
 		...(outputArtifactPath ? { outputArtifactPath } : {}),
@@ -4591,13 +4573,7 @@ export function prepareWorkflowLaunchParams(
 	const capabilityCeiling = intersectSubagentCapabilityCeilings(workflowDefaults.capabilityCeiling, options.capabilityCeiling);
 	const lane = normalizeWorkflowLaneMetadata(Object.hasOwn(childParams, "lane") ? childParams.lane : workflowDefaults.lane, `workflow child '${workflowKey}'.lane`);
 	assertWorkflowLaneKey(lane, workflowKey, `workflow child '${workflowKey}'.lane`);
-	const parentTimeoutMs = options.parentDeadlineAt === undefined
-		|| childParams.timeoutMs !== undefined
-		|| childParams.maxRuntimeMs !== undefined
-		|| workflowDefaults.timeoutMs !== undefined
-		|| workflowDefaults.maxRuntimeMs !== undefined
-		? undefined
-		: Math.max(1, options.parentDeadlineAt - Date.now());
+	const parentTimeoutMs = options.parentDeadlineAt === undefined ? undefined : Math.max(1, options.parentDeadlineAt - Date.now());
 	if (typeof childParams.resume === "string") {
 		if (childParams.extensionBindings !== undefined || workflowDefaults.extensionBindings !== undefined) {
 			throw new Error("extensionBindings is not supported with retained resume; resume uses the original retained child binding.");
@@ -4605,7 +4581,7 @@ export function prepareWorkflowLaunchParams(
 		if (childParams.gate !== undefined || workflowDefaults.gate !== undefined) {
 			throw new Error("gate is not supported with retained resume; resume uses the retained child contract.");
 		}
-		const timeoutMs = childParams.timeoutMs ?? childParams.maxRuntimeMs ?? workflowDefaults.timeoutMs ?? workflowDefaults.maxRuntimeMs;
+		const timeoutMs = undefined;
 		const toolBudget = childParams.toolBudget ?? workflowDefaults.toolBudget;
 		const intercomBridge = childParams.intercomBridge ?? workflowDefaults.intercomBridge;
 		const worktree = childParams.worktree ?? workflowDefaults.worktree;
@@ -4994,7 +4970,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 				}
 			}
 			const parentCwd = ctx.cwd;
-			const timeout = requestParams.timeoutMs ?? requestParams.maxRuntimeMs ?? (requestParams.async === false ? resolveConfigTimeoutMs(deps.config.timeoutMs) ?? FALLBACK_TIMEOUT_MS : undefined);
+			const timeout = requestParams.async === false ? resolveConfigTimeoutMs(deps.config.timeoutMs) ?? FALLBACK_TIMEOUT_MS : undefined;
 			const workflowCwd = resolveRequestedCwd(parentCwd, requestParams.cwd);
 			const discoverWorkflowAgents = (cwd: string, scope: AgentScope) => deps.discoverAgents(cwd, scope, workflowParentModel?.provider);
 			const workflowAgents = discoverWorkflowAgents(workflowCwd, resolveExecutionAgentScope(requestParams.agentScope)).agents;
@@ -5486,7 +5462,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 					const workflowDeadlineAt = timeout === undefined ? undefined : Date.now() + timeout;
 					const workflowResults: SingleResult[] = [];
 					const workflowChildRunIds = new Map<string, string>();
-					const { args: _args, action: _action, agent: _agent, task: _task, resume: _resume, tasks: _tasks, chain: _chain, concurrency: _concurrency, foregroundOnly: _foregroundOnly, clarify: _clarify, timeoutMs: _timeoutMs, maxRuntimeMs: _maxRuntimeMs, missionId: _missionId, mission: _mission, preflight: _preflight, globalConcurrencyLimit: _globalConcurrencyLimit, maxSubagentSpawnsPerRun: _maxSubagentSpawnsPerRun, ...workflowChildDefaults } = workflowRequest;
+					const { args: _args, action: _action, agent: _agent, task: _task, resume: _resume, tasks: _tasks, chain: _chain, concurrency: _concurrency, foregroundOnly: _foregroundOnly, clarify: _clarify, missionId: _missionId, mission: _mission, preflight: _preflight, globalConcurrencyLimit: _globalConcurrencyLimit, maxSubagentSpawnsPerRun: _maxSubagentSpawnsPerRun, ...workflowChildDefaults } = workflowRequest;
 					const workflowOutput = typeof workflowChildDefaults.output === "string" || typeof workflowChildDefaults.output === "boolean" ? workflowChildDefaults.output : undefined;
 					const configuredOutputBaseDir = resolveConfiguredSingleRunOutputBaseDir(deps);
 					const workflowAggregateOutputPath = resolveSingleOutputPath(workflowOutput, parentCwd, workflowCwd, resolveSingleRunOutputBaseDir(deps, workflowArtifactsDir, workflowRunId));
@@ -5904,7 +5880,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 					details: { mode: "workflow", runId: workflowRunId, toolCallId, asyncId: workflowRunId, asyncDir, results: [], ...(workflowPreflight ? { preflight: workflowPreflight } : {}), workflow: status.workflow, workflowChildren: status.workflowChildren, chatProgress, ...(deps.state.activeAsyncCapacity ? { activeAsyncCapacity: deps.state.activeAsyncCapacity } : {}) },
 				}, workflowFanoutBudget));
 			}
-			const { workflowScript: _workflowScript, args: _args, action: _action, agent: _agent, task: _task, resume: _resume, tasks: _tasks, chain: _chain, concurrency: _concurrency, async: _async, foregroundOnly: _foregroundOnly, clarify: _clarify, timeoutMs: _timeoutMs, maxRuntimeMs: _maxRuntimeMs, chatProgress: _chatProgress, missionId: _missionId, mission: _mission, preflight: _preflight, globalConcurrencyLimit: _globalConcurrencyLimit, maxSubagentSpawnsPerRun: _maxSubagentSpawnsPerRun, ...workflowChildDefaults } = requestParams;
+			const { workflowScript: _workflowScript, args: _args, action: _action, agent: _agent, task: _task, resume: _resume, tasks: _tasks, chain: _chain, concurrency: _concurrency, async: _async, foregroundOnly: _foregroundOnly, clarify: _clarify, chatProgress: _chatProgress, missionId: _missionId, mission: _mission, preflight: _preflight, globalConcurrencyLimit: _globalConcurrencyLimit, maxSubagentSpawnsPerRun: _maxSubagentSpawnsPerRun, ...workflowChildDefaults } = requestParams;
 			const workflowOutput = typeof workflowChildDefaults.output === "string" || typeof workflowChildDefaults.output === "boolean" ? workflowChildDefaults.output : undefined;
 			const configuredOutputBaseDir = resolveConfiguredSingleRunOutputBaseDir(deps);
 			const workflowAggregateOutputPath = resolveSingleOutputPath(workflowOutput, ctx.cwd, workflowCwd, resolveSingleRunOutputBaseDir(deps, workflowArtifactsDir, foregroundWorkflowRunId));
@@ -6312,8 +6288,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 					launchProposalChild: (task, outputSchema, proposalSignal) => execute(randomUUID(), {
 						agent: "reviewer",
 						task,
-						context: "fresh",
-						async: false,
+							async: false,
 						artifacts: false,
 						outputSchema,
 						toolBudget: { hard: 1, block: ["write", "edit", "bash"] },
@@ -6442,8 +6417,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 							cwd: requestCwd,
 							config: deps.config,
 							state: deps.state,
-							context: paramsWithResolvedCwd.context === "profile" ? undefined : paramsWithResolvedCwd.context,
-							requestedSessionDir: paramsWithResolvedCwd.sessionDir,
+								requestedSessionDir: paramsWithResolvedCwd.sessionDir,
 							currentSessionFile,
 							currentSessionId,
 							orchestratorTarget,
@@ -6850,9 +6824,6 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		const intercomBridge = resolveIntercomBridge({
 			config: deps.config.intercomBridge,
 			override: effectiveParams.intercomBridge,
-			context: effectiveParams.context === "fresh" || effectiveParams.context === "fork"
-				? effectiveParams.context
-				: undefined,
 			orchestratorTarget: sessionName,
 		});
 		const agents = applyScopedIntercomBridgeToAgents(discoveredAgents, intercomBridge);
@@ -6913,11 +6884,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			}
 		}
 		const runId = randomUUID();
-		const resolvedTimeoutMs = effectiveParams.timeoutMs ?? effectiveParams.maxRuntimeMs ?? (resolveConfigTimeoutMs(deps.config.timeoutMs) ?? FALLBACK_TIMEOUT_MS);
-		if (typeof resolvedTimeoutMs === "number") {
-			if (!Number.isInteger(resolvedTimeoutMs) || resolvedTimeoutMs <= 0) return buildRequestedModeError(effectiveParams, "timeoutMs must be a positive integer.");
-			if (effectiveParams.timeoutMs !== undefined && effectiveParams.maxRuntimeMs !== undefined && effectiveParams.timeoutMs !== effectiveParams.maxRuntimeMs) return buildRequestedModeError(effectiveParams, "timeoutMs and maxRuntimeMs are aliases; provide only one value or use the same value for both.");
-		}
+		const resolvedTimeoutMs = resolveConfigTimeoutMs(deps.config.timeoutMs) ?? FALLBACK_TIMEOUT_MS;
 		const foregroundTimeout = { timeoutMs: resolvedTimeoutMs };
 		const controlConfig = resolveControlConfig(deps.config.control, effectiveParams.control);
 		const requestedWorkflowChildAsyncId = typeof effectiveParams.workflowChildAsyncId === "string" ? effectiveParams.workflowChildAsyncId.trim() : "";

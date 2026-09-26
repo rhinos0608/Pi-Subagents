@@ -840,8 +840,6 @@ export interface SteeringRecoveryDescriptor {
 	structuredOutputSchema?: JsonSchemaObject;
 	acceptance?: AcceptanceInput;
 	controlConfig?: ResolvedControlConfig;
-	/** Resolved launch context for this async child. */
-	context?: "fresh" | "fork";
 	/** Raw per-run bridge override. Omitted descriptors continue to use global config. */
 	intercomBridge?: IntercomBridgeConfig;
 	lane?: WorkflowLaneMetadata;
