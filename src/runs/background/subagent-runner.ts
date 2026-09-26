@@ -2013,44 +2013,13 @@ async function runSingleStepWithTimeout(
 	ctx: SingleStepContext,
 	parentDeadlineAt?: number,
 ): Promise<SingleStepResult> {
-	if (step.timeoutMs === undefined) return runSingleStep(step, parentDeadlineAt === undefined ? ctx : {
+	// Flat run deadline only: per-step timeouts are gone. The run-level
+	// deadline (derived from the flat operator timeout default) bounds every
+	// step; enforcement lives in the run-level timeout wiring, not here.
+	return runSingleStep(step, parentDeadlineAt === undefined ? ctx : {
 		...ctx,
 		deadlineAt: ctx.deadlineAt === undefined ? parentDeadlineAt : Math.min(ctx.deadlineAt, parentDeadlineAt),
 	});
-
-	const parentRemainingMs = parentDeadlineAt === undefined ? undefined : Math.max(0, parentDeadlineAt - Date.now());
-	const timeoutMs = parentRemainingMs === undefined ? step.timeoutMs : Math.min(step.timeoutMs, parentRemainingMs);
-	const timeoutMessage = parentRemainingMs !== undefined && parentRemainingMs <= step.timeoutMs
-		? ctx.timeoutMessage
-		: `Subagent timed out after ${step.timeoutMs}ms.`;
-	const timeoutController = new AbortController();
-	let timeoutAction: (() => void) | undefined;
-	let timeoutTriggered = false;
-	const triggerTimeout = (): void => {
-		if (timeoutTriggered) return;
-		timeoutTriggered = true;
-		timeoutController.abort();
-		timeoutAction?.();
-	};
-	const registerTimeout = (action: (() => void) | undefined): void => {
-		timeoutAction = action;
-		ctx.registerTimeout?.(action ? triggerTimeout : undefined);
-		if (action && timeoutTriggered) action();
-	};
-	const timer = setTimeout(triggerTimeout, timeoutMs);
-	timer.unref?.();
-	try {
-		return await runSingleStep(step, {
-			...ctx,
-			registerTimeout,
-			deadlineAt: Date.now() + timeoutMs,
-			timeoutSignal: combinedAbortSignal([ctx.timeoutSignal, timeoutController.signal]),
-			timeoutMessage,
-		});
-	} finally {
-		clearTimeout(timer);
-		ctx.registerTimeout?.(undefined);
-	}
 }
 
 export async function runSubagent(

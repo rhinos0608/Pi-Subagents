@@ -574,12 +574,12 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		}
 	});
 
-	it("enforces an agent-level timeout on an async serial child without a composite deadline", { skip: !isAsyncAvailable() ? "jiti not available" : process.platform === "win32" ? "timeout signal delivery intermittent on Windows CI" : undefined }, async () => {
+	it("enforces the flat run-level timeout on an async serial child (agent defaultTimeoutMs is ignored)", { skip: !isAsyncAvailable() ? "jiti not available" : process.platform === "win32" ? "timeout signal delivery intermittent on Windows CI" : undefined }, async () => {
 		mockPi.onCall({ delay: 5_000, output: "too late" });
 		const id = `async-child-timeout-chain-${Date.now().toString(36)}`;
 		executeAsyncChain(id, {
 			chain: [{ agent: "slow", task: "Wait" }],
-			agents: [makeAgent("slow", { defaultTimeoutMs: 150 })],
+			agents: [makeAgent("slow", { defaultTimeoutMs: 30_000 })],
 			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
 			artifactConfig: {
 				enabled: false,
@@ -591,10 +591,11 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 			},
 			shareEnabled: false,
 			maxSubagentDepth: 2,
+			timeoutMs: 150,
 		});
 
 		const payload = await readAsyncPayload(id);
-		assert.equal(payload.timeoutMs, undefined, "composite parent must remain unbounded by default");
+		assert.equal(payload.timeoutMs, 150, "flat run deadline owns the timeout");
 		assert.equal(payload.state, "failed");
 		assert.equal(payload.results[0]?.timedOut, true);
 		assert.equal(payload.results[0]?.error, "Subagent timed out after 150ms.");
@@ -893,7 +894,7 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		}
 	});
 
-	it("enforces child timeouts on async parallel tasks without a composite deadline", { skip: !isAsyncAvailable() ? "jiti not available" : process.platform === "win32" ? "timeout signal delivery intermittent on Windows CI" : undefined }, async () => {
+	it("enforces the flat run-level timeout on async parallel tasks (agent defaults ignored)", { skip: !isAsyncAvailable() ? "jiti not available" : process.platform === "win32" ? "timeout signal delivery intermittent on Windows CI" : undefined }, async () => {
 		mockPi.onCall({ delay: 5_000, output: "one too late" });
 		mockPi.onCall({ delay: 5_000, output: "two too late" });
 		const id = `async-child-timeout-parallel-${Date.now().toString(36)}`;
@@ -907,8 +908,8 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 			}],
 			resultMode: "parallel",
 			agents: [
-				makeAgent("slow-one", { defaultTimeoutMs: 150 }),
-				makeAgent("slow-two", { defaultTimeoutMs: 200 }),
+				makeAgent("slow-one", { defaultTimeoutMs: 30_000 }),
+				makeAgent("slow-two", { defaultTimeoutMs: 30_000 }),
 			],
 			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
 			artifactConfig: {
@@ -921,13 +922,14 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 			},
 			shareEnabled: false,
 			maxSubagentDepth: 2,
+			timeoutMs: 150,
 		});
 
 		const payload = await readAsyncPayload(id);
-		assert.equal(payload.timeoutMs, undefined, "composite parent must remain unbounded by default");
+		assert.equal(payload.timeoutMs, 150, "flat run deadline owns the timeout");
 		assert.equal(payload.state, "failed");
 		assert.deepEqual(payload.results.map((result) => result.timedOut), [true, true]);
-		assert.deepEqual(payload.results.map((result) => result.error), ["Subagent timed out after 150ms.", "Subagent timed out after 200ms."]);
+		assert.deepEqual(payload.results.map((result) => result.error), ["Subagent timed out after 150ms.", "Subagent timed out after 150ms."]);
 	});
 
 	it("hard-kills async children that ignore timeout SIGTERM", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
