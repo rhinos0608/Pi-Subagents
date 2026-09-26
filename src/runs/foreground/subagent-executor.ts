@@ -2356,7 +2356,7 @@ function formatFailedSingleRunOutput(result: SingleResult, displayOutput: string
 function createForegroundControlNotifier(data: Pick<ExecutionContextData, "controlConfig" | "intercomBridge" | "params">, deps: Pick<ExecutorDeps, "pi" | "state">): (event: ControlEvent) => void {
 	return (event) => {
 		applyControlEventToRememberedForegroundRun(deps.state, event);
-		const eventBridge = data.intercomBridge.active && data.intercomBridge.mode !== "fork-only"
+		const eventBridge = data.intercomBridge.active
 			? data.intercomBridge
 			: { ...data.intercomBridge, active: false };
 		const parentWorkflowRunId = data.params.workflowParentRunId;
@@ -3257,8 +3257,8 @@ async function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 	const availableModels: ModelInfo[] = ctx.modelRegistry.getAvailable().map(toModelInfo);
 	const currentMaxSubagentDepth = resolveCurrentMaxSubagentDepth(deps.config.maxSubagentDepth, deps.childRuntime);
 	const currentProvider = parentModel?.provider;
-	const controlIntercomTarget = intercomBridge.active && intercomBridge.mode !== "fork-only" ? intercomBridge.orchestratorTarget : undefined;
-		const childIntercomTarget = intercomBridge.active && intercomBridge.mode !== "fork-only" ? ((agent: string, index: number) => resolveSubagentIntercomTarget(id, agent, index)) : undefined;
+	const controlIntercomTarget = intercomBridge.active ? intercomBridge.orchestratorTarget : undefined;
+		const childIntercomTarget = intercomBridge.active ? ((agent: string, index: number) => resolveSubagentIntercomTarget(id, agent, index)) : undefined;
 
 
 	if (hasSingle) {
@@ -3734,7 +3734,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 		return { content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }], isError: true, details: { mode: "single", results: [] } };
 	}
 	const onControlEvent = createForegroundControlNotifier(data, deps);
-	const childBridgeActive = data.intercomBridge.active && data.intercomBridge.mode !== "fork-only";
+	const childBridgeActive = data.intercomBridge.active;
 	const childIntercomTarget = childBridgeActive ? resolveSubagentIntercomTarget(runId, params.agent!, 0) : undefined;
 	const allProgress: AgentProgress[] = [];
 	const allArtifactPaths: ArtifactPaths[] = [];

@@ -2543,7 +2543,7 @@ export interface RunSyncOptions {
 	onOrcaProgressTabCreated?: (tab: import("../runs/shared/orca-progress-tabs.ts").OrcaProgressTab) => void;
 }
 
-export type IntercomBridgeMode = "off" | "fork-only" | "always";
+export type IntercomBridgeMode = "off" | "always";
 
 export interface IntercomBridgeConfig {
 	mode?: IntercomBridgeMode;
