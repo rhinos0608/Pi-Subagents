@@ -30,7 +30,6 @@ import { backgroundProcessOptions } from "../shared/background-process-options.t
 import { normalizeSkillInput, resolveSkillsWithFallback } from "../../agents/skills.ts";
 import { PI_CODING_AGENT_PACKAGE_ROOT_ENV, PROMPT_REDACTED, resolveChildCwd } from "../../shared/utils.ts";
 import { buildModelCandidates, buildModelResolutionMetadata, resolveEffectiveSubagentModel, resolveModelOrigin, resolveModelResolutionSource, resolveSubagentModelOverride, type AvailableModelInfo, type ModelOrigin, type ParentModel } from "../shared/model-fallback.ts";
-import { modelExclusionScopeForCwd } from "../shared/model-exclusions.ts";
 import { resolveModelSelection } from "../shared/model-resolution.ts";
 import { resolveToolTimeoutMs, toolTimeoutFromEnv } from "../shared/tool-timeout.ts";
 import { resolveModelScopesForAgent, type ModelScopeConfig } from "../shared/model-scope.ts";
@@ -286,10 +285,8 @@ interface AsyncSingleParams {
 	agentContract?: AgentContract;
 	structuredOutputSchema?: JsonSchemaObject;
 	modelOverride?: string;
-	/** Revival-only frozen ordered allowlist. When present, do not rebuild from current settings or health cache. */
+	/** Revival-only frozen ordered allowlist. When present, do not rebuild from current settings. */
 	modelCandidatesOverride?: string[];
-	/** Launch-time project health scope paired with modelCandidatesOverride. */
-	modelHealthScopeOverride?: string;
 	modelOverrideFromParent?: boolean;
 	modelOrigin?: ModelOrigin;
 	modelResolutionSource?: import("../../shared/types.ts").ModelResolutionSource;
@@ -1088,7 +1085,6 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 		}
 		const agentContract = s.agentContract ?? params.agentContract;
 		const permissionRules = resolvePermissionRules(ctx.permissions, a.permissions);
-		const modelHealthScope = modelExclusionScopeForCwd(stepCwd);
 		let modelCandidates: string[] = [];
 		let requestedModel: string | undefined;
 		if (!externalRunner) {
@@ -1101,7 +1097,6 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 				requestedModel = modelEvidence.requestedModel;
 				modelCandidates = buildModelCandidates(primaryModel, a.fallbackModels, availableModels, a.modelProvider ?? ctx.currentModelProvider, {
 					scope: modelScopes,
-					healthScope: modelHealthScope,
 					primaryModelFromParent,
 					origin: modelOrigin,
 				}).flatMap((candidate) => {
@@ -1175,7 +1170,6 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 			...(thinkingCeiling ? { thinkingCeiling } : {}),
 			launchResolvedExtensions,
 			modelCandidates: externalRunner ? undefined : modelCandidates,
-			modelHealthScope: externalRunner ? undefined : modelHealthScope,
 			...(requestedModel ? { requestedModel } : {}),
 			...(primaryModelFromParent ? { skipPrimaryModelVerification: true } : {}),
 			...(availableModels && availableModels.length > 0 ? { modelVerificationRegistry: availableModels } : {}),
@@ -1915,7 +1909,6 @@ export function executeAsyncSingle(
 	const structuredOutput = params.structuredOutputSchema
 		? createStructuredOutputRuntime(params.structuredOutputSchema, path.join(asyncDir, "structured-output"), { acceptanceReport: resolveAcceptanceReportMode(params.acceptance) })
 		: undefined;
-	const modelHealthScope = params.modelHealthScopeOverride ?? modelExclusionScopeForCwd(runnerCwd);
 	let modelCandidates: string[] = frozenModelCandidates ? [...frozenModelCandidates] : [];
 	let requestedModel: string | undefined;
 	if (!externalRunner) {
@@ -1931,7 +1924,6 @@ export function executeAsyncSingle(
 				requestedModel = modelEvidence.requestedModel;
 				modelCandidates = buildModelCandidates(primaryModel, agentConfig.fallbackModels, availableModels, agentConfig.modelProvider ?? ctx.currentModelProvider, {
 					scope: modelScopes,
-					healthScope: modelHealthScope,
 					primaryModelFromParent: modelOrigin === "inherited",
 					origin: modelOrigin,
 				}).flatMap((candidate) => {
@@ -2014,7 +2006,6 @@ export function executeAsyncSingle(
 		cwd: runnerCwd,
 		...(selectedModel ? { model: selectedModel } : {}),
 		...(modelCandidates.length > 0 ? { modelCandidates: [...modelCandidates] } : {}),
-		modelHealthScope,
 		...(recoveryAgentConfig.fallbackModels ? { fallbackModels: [...recoveryAgentConfig.fallbackModels] } : {}),
 		...(params.fast ?? recoveryAgentConfig.fast ? { fast: params.fast ?? recoveryAgentConfig.fast } : {}),
 		...(recoveryAgentConfig.modelProvider ? { modelProvider: recoveryAgentConfig.modelProvider } : {}),
@@ -2089,7 +2080,6 @@ export function executeAsyncSingle(
 						requestedCwd: machine?.cwd ?? params.requestedCwd ?? runnerCwd,
 						model: selectedModel,
 						modelCandidates,
-						modelHealthScope,
 						modelResolution: buildModelResolutionMetadata({
 							...(params.modelResolutionRequested !== undefined ? { requested: params.modelResolutionRequested } : params.modelOverrideFromParent ? {} : (params.modelOverride ?? agentConfig.model ? { requested: params.modelOverride ?? agentConfig.model } : {})),
 							...(selectedModel ? { resolved: selectedModel } : {}),

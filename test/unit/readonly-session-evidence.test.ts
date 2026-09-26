@@ -12,7 +12,6 @@ import { createChildHooks, isReadonlyChildHookProfile } from "../../src/runs/sha
 import { buildInProcessChildLaunch, createReportedChildSessionInput } from "../../src/runs/shared/child-launch.ts";
 import { runSync } from "../../src/runs/foreground/execution.ts";
 import { createSubagentExecutor } from "../../src/runs/foreground/subagent-executor.ts";
-import { flushPersist, getExcludedCount, getExclusionsFilePath } from "../../src/runs/shared/model-exclusions.ts";
 import { buildRunnerChildLaunch } from "../../src/runs/background/runner-child-launch.ts";
 import { runChildSession } from "../../src/runs/background/run-child-session.ts";
 import { runSingleStepInner, runSubagent } from "../../src/runs/background/subagent-runner.ts";
@@ -238,10 +237,6 @@ export default function (pi) {
 				const manager = pi.SessionManager.open(file, undefined, cwd);
 				manager.appendMessage({ role: "assistant", content: [{ type: "text", text: "Earlier billed answer" }], api: "openai-completions", provider: "baseten", model: "model-a", stopReason: "stop", timestamp: 3, usage: { ...usage, input: 100, output: 100, totalTokens: 200 } });
 			}
-			const exclusionCount = getExcludedCount();
-			flushPersist();
-			const exclusionFile = getExclusionsFilePath();
-			const exclusionBefore = existsSync(exclusionFile) ? readFileSync(exclusionFile, "utf8") : undefined;
 			if (scenario === "smaller-model") {
 				const config = JSON.parse(readFileSync(join(agentDir, "models.json"), "utf8"));
 				config.providers.baseten.models[1].contextWindow = 100;
@@ -327,9 +322,6 @@ export default function (pi) {
 				assert.equal(captured.length, 2);
 				test.diagnostic(JSON.stringify({ scenario, historyBytes: Buffer.byteLength(readFileSync(file, "utf8")), createMs, shutdownAndValidationMs: disposeMs, logicalMs: Date.now() - start }));
 			} else assert.notEqual(result.exitCode, 0, "negative cannot report success");
-			flushPersist();
-			assert.equal(getExcludedCount(), exclusionCount);
-			assert.equal(existsSync(exclusionFile) ? readFileSync(exclusionFile, "utf8") : undefined, exclusionBefore, "midrun recovery never changes exclusions");
 		}, {}, scenario !== "retained"));
 	}
 
@@ -466,9 +458,6 @@ export default function (pi) {
 	for (const kind of ["success", "fresh success", "second429", "sibling startup", "sibling abort", "model mismatch", "stop after settlement", "deadline after settlement", "stop during create", "changed file", "missing file", "steer", "late shutdown", "fake factory", "ambient", "tool budget", "unknown token budget", "equal window", "retained image", "retained context too large", "no sibling", "false429"] as const) {
 		it(`owned native runner loop: ${kind}`, async () => fixture(async ({ pi, cwd, agentDir, l, factory, captured, requests, setResponses }) => {
 			const success = kind === "success" || kind === "fresh success";
-			flushPersist();
-			const exclusionsPath = getExclusionsFilePath();
-			const exclusionsBefore = existsSync(exclusionsPath) ? readFileSync(exclusionsPath, "utf8") : undefined;
 			if (kind !== "equal window") enlargeRunnerSibling(agentDir);
 			const file = l.storage.sessionFile;
 			const step = ownedRunnerStep(cwd, file);
@@ -522,8 +511,6 @@ export default function (pi) {
 			setResponses([() => sse(true, 7), () => { if (kind === "false429") throw new Error("429: synthetic rate limit"); return http(429); },
 				() => kind === "second429" ? http(429) : sse(false, 11)]);
 			const result = await runSingleStepInner(step, context);
-			flushPersist();
-			assert.equal(existsSync(exclusionsPath) ? readFileSync(exclusionsPath, "utf8") : undefined, exclusionsBefore, "continuation never changes startup exclusions");
 			assert.equal(result.sessionFile, file);
 			assert.ok(inputs.length <= 2, "shared token forbids third creation");
 			assert.ok(requests.length <= 3, "shared token forbids third model dispatch");

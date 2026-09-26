@@ -6,7 +6,6 @@ import { resolveExecutionAgentScope } from "../agents/agent-scope.ts";
 import { normalizeSkillInput, resolveSkillsWithFallback } from "../agents/skills.ts";
 import { inheritsParentModel, resolveEffectiveSubagentModel, resolveModelOrigin, type AvailableModelInfo, type ParentModel } from "../runs/shared/model-resolution.ts";
 import { buildModelCandidates } from "../runs/shared/model-fallback.ts";
-import { modelExclusionScopeForCwd } from "../runs/shared/model-exclusions.ts";
 import { resolveModelScopesForAgent } from "../runs/shared/model-scope.ts";
 import { applyThinkingSuffix, resolvePiLaunchToolPlan, type PiLaunchToolPlan } from "../runs/shared/child-tool-plan.ts";
 import { buildEffectiveSystemPrompt } from "../runs/shared/effective-system-prompt.ts";
@@ -387,12 +386,10 @@ export async function resolveSubagentLaunchContract(input: SubagentLaunchContrac
 		input.thinkingCeiling,
 		input.inheritedThinkingCeiling,
 	);
-	const modelHealthScope = modelExclusionScopeForCwd(effectiveCwd);
 	const modelCandidates = externalRunner
 		? []
 		: buildModelCandidates(primaryModel, agent.fallbackModels, availableModels, preferredProvider, {
 			scope: modelScopes,
-			healthScope: modelHealthScope,
 			primaryModelFromParent: modelOrigin === "inherited" || inheritsParentModel(input.model, agent.model, input.parentModel),
 			origin: modelOrigin,
 		}).map((candidate) => applyThinkingSuffix(candidate, effectiveThinkingConfig, input.thinking !== undefined) ?? candidate);

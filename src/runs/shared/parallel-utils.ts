@@ -39,8 +39,6 @@ export interface RunnerSubagentStep {
 	model?: string;
 	/** Frozen ordered allowlist resolved by the parent at launch. */
 	modelCandidates?: string[];
-	/** Opaque project-local model-health scope captured by the parent. */
-	modelHealthScope?: string;
 	modelResolution?: import("../../shared/types.ts").ModelResolutionMetadata;
 	contextLimit?: number;
 	fast?: boolean;
