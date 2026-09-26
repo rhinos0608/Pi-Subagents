@@ -71,7 +71,6 @@ export interface RunnerSubagentStep {
 	outputMode?: "inline" | "file-only";
 	sessionFile?: string;
 	maxSubagentDepth?: number;
-	timeoutMs?: number;
 	/** Resolved configured hard per-tool-call timeout (ms); fast tools still have a default when undefined. */
 	toolTimeoutMs?: number;
 	structuredOutput?: import("./structured-output.ts").StructuredOutputRuntime;

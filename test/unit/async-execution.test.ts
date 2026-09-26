@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { buildAsyncRunnerSteps, DEFAULT_ASYNC_TIMEOUT_MS, emitProcessTerminalEvent, formatAsyncStartedMessage, resolveAsyncRunnerLogPaths } from "../../src/runs/background/async-execution.ts";
+import { buildAsyncRunnerSteps, emitProcessTerminalEvent, formatAsyncStartedMessage, resolveAsyncRunnerLogPaths } from "../../src/runs/background/async-execution.ts";
 import type { AgentConfig } from "../../src/agents/agents.ts";
 import { SUBAGENT_PROCESS_TERMINAL_EVENT } from "../../src/shared/types.ts";
 import { registerRequiredChildExtensions } from "../../src/api/required-child-extensions.ts";
@@ -198,7 +198,7 @@ describe("async runner execution", () => {
 		assert.equal(result.steps[0]?.allowNestedSubagents, true);
 	});
 
-	it("assigns default and agent-level deadlines to async serial and parallel children", () => {
+	it("async children carry no per-step timeout; the flat run deadline bounds every step", () => {
 		const result = buildAsyncRunnerSteps("timeout-run", {
 			chain: [
 				{ agent: "default-worker", task: "default serial timeout" },
@@ -216,10 +216,10 @@ describe("async runner execution", () => {
 		});
 
 		assert.ok("steps" in result, "expected successful step build");
-		assert.equal(result.steps[0]?.timeoutMs, DEFAULT_ASYNC_TIMEOUT_MS);
+		assert.equal("timeoutMs" in (result.steps[0] ?? {}), false, "serial step must not carry a per-step timeout");
 		const parallel = result.steps[1];
 		assert.ok(parallel && "parallel" in parallel && Array.isArray(parallel.parallel));
-		assert.deepEqual(parallel.parallel.map((step) => step.timeoutMs), [DEFAULT_ASYNC_TIMEOUT_MS, 7_000]);
+		assert.deepEqual(parallel.parallel.map((step) => "timeoutMs" in step), [false, false], "agent defaultTimeoutMs must not leak into steps");
 	});
 
 	it("uses agent tool budget before config default when no run override exists", () => {
