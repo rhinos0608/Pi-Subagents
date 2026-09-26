@@ -11,11 +11,12 @@ import type { ChildRuntimeConfig } from "../../src/runs/shared/child-runtime-con
 import { ASYNC_DIR, RESULTS_DIR, TEMP_ROOT_DIR, type SubagentState } from "../../src/shared/types.ts";
 import { createRunFanoutBudget } from "../../src/runs/shared/run-fanout-budget.ts";
 import { getArtifactPaths, getArtifactsDir } from "../../src/shared/artifacts.ts";
-import { EXTERNAL_JOB_PROVIDER_REGISTRY_KEY, registerExternalJobProvider } from "../../src/api/external-job-provider.ts";
+import { EXTERNAL_JOB_PROVIDER_REGISTRY_KEY, ExternalJobProviderError, registerExternalJobProvider } from "../../src/api/external-job-provider.ts";
 import { makeAgent } from "../support/helpers.ts";
 import { externalJobPromptDigest, runExternalJob } from "../../src/runs/shared/external-job-runner.ts";
-import { serviceExternalJobBridgeRequests } from "../../src/runs/shared/external-job-bridge.ts";
+import { requestExternalJobOperation, serviceExternalJobBridgeRequests } from "../../src/runs/shared/external-job-bridge.ts";
 import { isActiveAsyncState } from "../../src/runs/background/active-run-index.ts";
+import { readProcessTerminal } from "../../src/runs/background/process-terminal.ts";
 import { readStatus } from "../../src/shared/utils.ts";
 
 const routeRoots: string[] = [];
@@ -522,17 +523,21 @@ describe("nested control routing", () => {
 		}
 	});
 
-	it("services the external-job bridge of an async run that the fanout child launched", async () => {
+	it("services only the current session's external-job bridge in a fanout child", async () => {
 		const route = createNestedRoute("root-external-job");
 		routeRoots.push(path.dirname(route.eventSink));
 		const asyncDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-nested-external-job-"));
 		routeRoots.push(asyncDir);
-		const writeStatus = (state: string) => fs.writeFileSync(path.join(asyncDir, "status.json"), JSON.stringify({ state, steps: [{ runner: { type: "external-job" } }] }));
-		writeStatus("running");
+		const foreignDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-nested-foreign-job-"));
+		routeRoots.push(foreignDir);
+		const writeStatus = (dir: string, state: string) => fs.writeFileSync(path.join(dir, "status.json"), JSON.stringify({ state, steps: [{ runner: { type: "external-job" } }] }));
+		writeStatus(asyncDir, "running");
+		writeStatus(foreignDir, "running");
+		const statusCalls: string[] = [];
 		registerExternalJobProvider({
 			name: "surf-oracle",
 			start: () => ({ providerJobId: "job-1", state: "completed" }),
-			status: () => ({ providerJobId: "job-1", state: "completed" }),
+			status: (providerJobId) => { statusCalls.push(providerJobId); return { providerJobId, state: "completed" }; },
 			reattach: () => ({ providerJobId: "job-1", state: "completed" }),
 			result: () => ({ providerJobId: "job-1", state: "completed", output: "advisor result" }),
 		});
@@ -545,17 +550,33 @@ describe("nested control routing", () => {
 			getSessionName() { return "child"; },
 		} as any;
 		let stop: (() => void) | undefined;
+		let cancelForeign = false;
+		let foreignRequest: ReturnType<typeof requestExternalJobOperation> | undefined;
 		try {
-			registerFanoutChildSubagentExtension(pi, fanoutChildRuntime(route, "root-external-job"));
-			listeners.get("subagent:async-started")?.({ id: "run-1", asyncDir });
+			const runtime = fanoutChildRuntime(route, "root-external-job");
+			runtime.runtimeState = createState();
+			runtime.runtimeState.currentSessionId = "session";
+			registerFanoutChildSubagentExtension(pi, runtime);
+			foreignRequest = requestExternalJobOperation(foreignDir, { operation: "status", provider: "surf-oracle", providerJobId: "foreign-job" }, 30_000,
+				() => cancelForeign ? new ExternalJobProviderError("Foreign request canceled", { code: "canceled" }) : undefined);
+			void foreignRequest.catch(() => {});
+			listeners.get("subagent:async-started")?.({ id: "foreign-run", asyncDir: foreignDir, sessionId: "other-session" });
+			const pending = requestExternalJobOperation(asyncDir, { operation: "status", provider: "surf-oracle", providerJobId: "owner-job" }, 30_000);
+			listeners.get("subagent:async-started")?.({ id: "run-1", asyncDir, sessionId: "session" });
+			assert.deepEqual(await pending, { providerJobId: "owner-job", state: "completed" });
+			assert.deepEqual(statusCalls, ["owner-job"], "foreign session must not service provider requests");
+			cancelForeign = true;
+			await assert.rejects(foreignRequest, { code: "canceled" });
 			let output: string | undefined;
 			void runExternalJob({ provider: "surf-oracle", options: {}, cwd: asyncDir, prompt: "prompt text", asyncDir, stepIndex: 0, runId: "run-1", agent: "gpt-pro", registerStop: (handler) => { stop = handler; } })
 				.then((result) => { output = result.output; });
 			await waitFor(() => output !== undefined, 5_000);
 			assert.equal(output, "advisor result");
 		} finally {
+			cancelForeign = true;
+			await foreignRequest?.catch(() => {});
 			stop?.();
-			writeStatus("complete");
+			writeStatus(asyncDir, "complete");
 			lifecycle.get("session_shutdown")?.();
 			delete (globalThis as Record<PropertyKey, unknown>)[Symbol.for(EXTERNAL_JOB_PROVIDER_REGISTRY_KEY)];
 		}
@@ -741,7 +762,9 @@ interface NestedRunOptions {
 }
 
 /** Writes a terminal nested run of the fanout child under `route`, with its own run directory. */
-function writeNestedRun(route: ReturnType<typeof createNestedRoute>, runId: string, cwd: string, options: NestedRunOptions = {}): string {
+function writeNestedRun(route: ReturnType<typeof createNestedRoute>, runId: string, options: NestedRunOptions = {}): string {
+	// A follow-up runner starts in the source run's cwd, so record one that per-test teardown never removes.
+	const cwd = os.tmpdir();
 	const asyncDir = path.join(TEMP_ROOT_DIR, "nested-subagent-runs", route.rootRunId, runId);
 	fs.mkdirSync(asyncDir, { recursive: true });
 	if (options.statusText !== null) {
@@ -757,16 +780,6 @@ function writeNestedRun(route: ReturnType<typeof createNestedRoute>, runId: stri
 		child: { id: runId, parentRunId: route.rootRunId, parentStepIndex: 0, depth: 1, path: [{ runId: route.rootRunId, stepIndex: 0 }], state: "complete", agent: "advisor", ownerState: "gone", asyncDir, ...options.summary },
 	});
 	return asyncDir;
-}
-
-function processExists(pid: number | undefined): boolean {
-	if (pid === undefined) return false;
-	try {
-		process.kill(pid, 0);
-		return true;
-	} catch {
-		return false;
-	}
 }
 
 describe("nested external-job follow-up", () => {
@@ -809,10 +822,13 @@ describe("nested external-job follow-up", () => {
 		for (;;) {
 			serviceExternalJobBridgeRequests(followUpDir);
 			const status = readStatus(followUpDir);
-			if (followUps.length > 0 && status && !isActiveAsyncState(status.state) && !processExists(status.pid)) return;
+			const runnerId = status?.processTerminal?.runnerProcessInstanceId;
+			const terminal = runnerId ? readProcessTerminal(followUpDir, { runId: followUpId, runnerProcessInstanceId: runnerId }) : undefined;
+			if (followUps.length > 0 && status && !isActiveAsyncState(status.state) && terminal?.state === "observed"
+				&& terminal.instances?.some((instance) => instance.kind === "runner" && instance.processInstanceId === runnerId && instance.exitCode === 0)) return;
 			if (Date.now() >= deadline) {
 				const stderrPath = path.join(followUpDir, "runner.stderr.log");
-				assert.fail(`Timed out waiting for the external-job follow-up to finish; status=${JSON.stringify(status)}; stderr=${fs.existsSync(stderrPath) ? fs.readFileSync(stderrPath, "utf-8") : "missing"}`);
+				assert.fail(`Timed out waiting for the external-job follow-up to finish; status=${JSON.stringify(status)}; terminal=${JSON.stringify(terminal)}; stderr=${fs.existsSync(stderrPath) ? fs.readFileSync(stderrPath, "utf-8") : "missing"}`);
 			}
 			await new Promise((resolve) => setTimeout(resolve, 25));
 		}
@@ -835,7 +851,7 @@ describe("nested external-job follow-up", () => {
 
 	it("follows up a completed external-job run that the child launched", async () => {
 		registerAdvisor();
-		writeNestedRun(route, runId, root);
+		writeNestedRun(route, runId);
 
 		const result = await resume();
 
@@ -849,7 +865,7 @@ describe("nested external-job follow-up", () => {
 
 	it("reports a repeated child follow-up as existing instead of calling the provider again", async () => {
 		registerAdvisor();
-		writeNestedRun(route, runId, root);
+		writeNestedRun(route, runId);
 		const first = await resume();
 		await runFollowUp(String(first.details?.asyncDir));
 
@@ -863,7 +879,7 @@ describe("nested external-job follow-up", () => {
 
 	it("follows up the indexed external-job step of a multi-step nested run", async () => {
 		registerAdvisor();
-		writeNestedRun(route, runId, root, { steps: [{ agent: "worker", status: "complete" }, externalJobStep({ providerJobId: "job-second" })] });
+		writeNestedRun(route, runId, { steps: [{ agent: "worker", status: "complete" }, externalJobStep({ providerJobId: "job-second" })] });
 
 		const result = await resume({ index: 1 });
 
@@ -874,7 +890,7 @@ describe("nested external-job follow-up", () => {
 
 	it("lets the root session follow up an external-job run that its child launched", async () => {
 		registerAdvisor();
-		writeNestedRun(route, runId, root);
+		writeNestedRun(route, runId);
 
 		const result = await resume({}, "root");
 
@@ -899,7 +915,7 @@ describe("nested external-job follow-up", () => {
 	for (const refusal of refusals) {
 		it(`fails closed without a follow-up for ${refusal.name}`, async () => {
 			registerAdvisor(refusal.provider);
-			writeNestedRun(route, runId, root, refusal.run);
+			writeNestedRun(route, runId, refusal.run);
 
 			const result = await resume(refusal.params);
 
@@ -916,7 +932,7 @@ describe("nested external-job follow-up", () => {
 		cleanup.push(outside);
 		fs.mkdirSync(outside, { recursive: true });
 		fs.writeFileSync(path.join(outside, "status.json"), JSON.stringify({ runId, mode: "single", state: "complete", startedAt: 100, lastUpdate: 200, cwd: root, steps: [externalJobStep({ providerJobId: "job-foreign" })] }), "utf-8");
-		writeNestedRun(route, runId, root, { statusText: null, summary: { asyncDir: outside } });
+		writeNestedRun(route, runId, { statusText: null, summary: { asyncDir: outside } });
 
 		const result = await resume();
 
