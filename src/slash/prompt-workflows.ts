@@ -156,18 +156,13 @@ function substituteArgs(template: string, args: string[]): string {
 		.replace(/\$(\d+)/g, (_match, index: string) => args[Number(index) - 1] ?? "");
 }
 
-function parseRuntimeOptions(words: string[]): { args: string[]; agentOverride?: string; fork?: boolean; fresh?: boolean; bg?: boolean } {
+function parseRuntimeOptions(words: string[]): { args: string[]; agentOverride?: string; fresh?: boolean; bg?: boolean } {
 	const args: string[] = [];
 	let agentOverride: string | undefined;
-	let fork = false;
 	let fresh = false;
 	let bg = false;
 	for (let i = 0; i < words.length; i++) {
 		const word = words[i]!;
-		if (word === "--fork") {
-			fork = true;
-			continue;
-		}
 		if (word === "--fresh") {
 			fresh = true;
 			continue;
@@ -187,7 +182,7 @@ function parseRuntimeOptions(words: string[]): { args: string[]; agentOverride?:
 		}
 		args.push(word);
 	}
-	return { args, agentOverride, fork, fresh, bg };
+	return { args, agentOverride, fresh, bg };
 }
 
 

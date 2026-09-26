@@ -27,7 +27,7 @@ import { JITI_ALIAS_ENV, resolveHostPeerAliases } from "./runner-aliases.ts";
 import { preflightLaunchCwd } from "../shared/launch-cwd.ts";
 import { resolveNodeExecutable } from "../../shared/node-executable.ts";
 import { backgroundProcessOptions } from "../shared/background-process-options.ts";
-import { normalizeSkillInput, resolveSkillsWithFallback } from "../../agents/skills.ts";
+import { resolveSkillsWithFallback } from "../../agents/skills.ts";
 import { PI_CODING_AGENT_PACKAGE_ROOT_ENV, PROMPT_REDACTED, resolveChildCwd } from "../../shared/utils.ts";
 import { buildModelCandidates, buildModelResolutionMetadata, resolveEffectiveSubagentModel, resolveModelOrigin, resolveModelResolutionSource, resolveSubagentModelOverride, type AvailableModelInfo, type ModelOrigin, type ParentModel } from "../shared/model-fallback.ts";
 import { resolveModelSelection } from "../shared/model-resolution.ts";
@@ -952,13 +952,11 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 
 	let progressInstructionCreated = false;
 	const buildStepOverrides = (s: SequentialStep): StepOverrides => {
-		const stepSkillInput = normalizeSkillInput(s.skill);
 		return {
 			...(s.output !== undefined ? { output: s.output } : {}),
 			...(s.outputMode !== undefined ? { outputMode: s.outputMode } : {}),
 			...(s.reads !== undefined ? { reads: s.reads } : {}),
 			...(s.progress !== undefined ? { progress: s.progress } : {}),
-			...(stepSkillInput !== undefined ? { skills: stepSkillInput } : {}),
 			...(s.model !== undefined ? { model: s.model } : {}),
 			...(s.fast !== undefined ? { fast: s.fast } : {}),
 			...(s.outputSchema !== undefined ? { outputSchema: s.outputSchema } : {}),

@@ -112,7 +112,7 @@ Review $1 with $ARGUMENTS
 			run: async (params) => { runs.push(params); },
 		});
 
-		await commands.get("prompt-workflow")!.handler('native-run target --fork', makeCtx(cwd));
+		await commands.get("prompt-workflow")!.handler('native-run target', makeCtx(cwd));
 
 		assert.equal(sent.length, 0);
 		assert.equal(runs.length, 1);
