@@ -531,7 +531,6 @@ When the task asks for a structured result, keep field names exactly as requeste
 			task,
 			context: "fresh" as const,
 			outputSchema,
-			skill: false,
 			output: false,
 			artifacts: false,
 			// runSync sits below the executor step that applies the bridge.
@@ -600,7 +599,6 @@ Answer only from the supplied synthetic text.
 				context: "fresh",
 				model: "mock/model",
 				outputSchema,
-				skill: false,
 				output: false,
 				artifacts: false,
 			});
@@ -652,7 +650,7 @@ Answer only from the supplied synthetic text.
 		assert.ok(discovered, "expected temporary agent definition to be discovered");
 		const intercomBridge = { mode: "off" as const };
 
-		const preflight = await resolveSubagentLaunchContract({ agent: agentName, cwd: tempDir, task, context: "fresh", model: "mock/model", skill: false, output: false, artifacts: false, intercomBridge });
+		const preflight = await resolveSubagentLaunchContract({ agent: agentName, cwd: tempDir, task, context: "fresh", model: "mock/model", output: false, artifacts: false, intercomBridge });
 		assert.equal(preflight.ok, true);
 		if (!preflight.ok) return;
 		assert.deepEqual(preflight.contract.intercomBridge, { active: false, mode: "off" });
@@ -697,11 +695,11 @@ Answer only from the supplied synthetic text.
 		const ctx = makeMinimalCtx(tempDir);
 		const orchestratorTarget = resolveIntercomSessionTarget(undefined, ctx.sessionManager.getSessionId());
 
-		const withoutTarget = await resolveSubagentLaunchContract({ agent: agentName, cwd: tempDir, task, context: "fresh", model: "mock/model", skill: false, output: false, artifacts: false, intercomBridge });
+		const withoutTarget = await resolveSubagentLaunchContract({ agent: agentName, cwd: tempDir, task, context: "fresh", model: "mock/model", output: false, artifacts: false, intercomBridge });
 		assert.equal(withoutTarget.ok, true);
 		if (!withoutTarget.ok) return;
 		assert.ok(withoutTarget.contract.diagnostics.some((diagnostic) => diagnostic.code === "host_required" && /orchestratorTarget/.test(diagnostic.message)));
-		const preflight = await resolveSubagentLaunchContract({ agent: agentName, cwd: tempDir, task, context: "fresh", model: "mock/model", skill: false, output: false, artifacts: false, intercomBridge, orchestratorTarget });
+		const preflight = await resolveSubagentLaunchContract({ agent: agentName, cwd: tempDir, task, context: "fresh", model: "mock/model", output: false, artifacts: false, intercomBridge, orchestratorTarget });
 		assert.equal(preflight.ok, true);
 		if (!preflight.ok) return;
 		assert.deepEqual(preflight.contract.intercomBridge, { active: true, mode: "always" });
