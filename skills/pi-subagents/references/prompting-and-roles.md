@@ -209,26 +209,6 @@ For one run, use inline config:
 
 For persistent tweaks, edit `subagents.agentOverrides` in user or project settings. User overrides apply everywhere. Project overrides apply only in that repo and win over user overrides. Use `/subagents-models` or `subagent({ action: "models" })` to inspect the live mapping after settings and overrides load.
 
-Provider-scoped entries can layer on top of the default override for the active parent session provider. The provider is selected once from the parent model. Within each settings file, the provider entry wins per field; project settings still win over user settings.
-
-```json
-{
-  "subagents": {
-    "agentOverrides": {
-      "worker": { "thinking": "medium" }
-    },
-    "agentOverridesByProvider": {
-      "provider-a": {
-        "worker": { "model": "provider-a/fast-worker-model" }
-      },
-      "provider-b": {
-        "worker": { "model": "provider-b/fast-worker-model" }
-      }
-    }
-  }
-}
-```
-
 Model ids do not have to be exact. Separator variations (`fast.worker-v1` vs `fast-worker-v1`), case (`Strong-Review-Model`), and optional trailing date stamps all resolve to the same registry model. Exact `provider/id` wins; a qualified `provider/model` never switches providers. To constrain subagents to a budget or compliance profile, set `subagents.modelScope: { enforce: true, allow: ["approved-provider/*", "second-provider/approved-*"] }` in user or project settings. Out-of-scope models you pass explicitly error and abort; models inherited from frontmatter, `subagents.defaultModel`, agent frontmatter, or the parent session only warn.
 
 For model fleets, use the profile commands instead of hand-editing repeated overrides: `/subagents-refresh-provider-models <provider>`, `/subagents-generate-profiles <provider>`, `/subagents-load-profile <name>`, and `/subagents-check-profile <name>`. Profiles live under `~/.pi/agent/profiles/pi-subagents/` and replace only `settings.subagents` when loaded.

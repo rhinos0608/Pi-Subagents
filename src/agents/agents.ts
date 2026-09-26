@@ -201,7 +201,6 @@ type ProjectRootResolution = "nearest" | "git-root";
 
 interface SubagentSettings {
 	overrides: Record<string, BuiltinAgentOverrideConfig>;
-	providerOverrides: Record<string, Record<string, BuiltinAgentOverrideConfig>>;
 	agentScanDirs?: string[];
 	agentExcludeDirs?: string[];
 	defaultModel?: string;
@@ -215,7 +214,7 @@ interface SubagentSettings {
 	modelScope?: ModelScopeConfig;
 }
 
-const EMPTY_SUBAGENT_SETTINGS: SubagentSettings = { overrides: {}, providerOverrides: {} };
+const EMPTY_SUBAGENT_SETTINGS: SubagentSettings = { overrides: {} };
 const agentFrontmatterFields = new WeakMap<AgentConfig, Set<string>>();
 
 export interface ChainStepConfig {
@@ -1258,12 +1257,9 @@ function readSubagentSettings(filePath: string | null): SubagentSettings {
 	const modelScope = parseModelScopeConfig(subagentsObject.modelScope, { filePath });
 
 	const parsed: Record<string, BuiltinAgentOverrideConfig> = {};
-	const providerOverrides: Record<string, Record<string, BuiltinAgentOverrideConfig>> = {};
 	const agentOverrides = subagentsObject.agentOverrides;
-	const agentOverridesByProvider = subagentsObject.agentOverridesByProvider;
 	const parsedSettings: SubagentSettings = {
 		overrides: parsed,
-		providerOverrides,
 		...(defaultModel !== undefined ? { defaultModel } : {}),
 		...(defaultProvider !== undefined ? { defaultProvider } : {}),
 		...(defaultThinking !== undefined ? { defaultThinking } : {}),
@@ -1282,34 +1278,7 @@ function readSubagentSettings(filePath: string | null): SubagentSettings {
 			if (override) parsed[name] = override;
 		}
 	}
-	if (agentOverridesByProvider !== undefined) {
-		if (!agentOverridesByProvider || typeof agentOverridesByProvider !== "object" || Array.isArray(agentOverridesByProvider)) {
-			throw new Error(`Subagent settings in '${filePath}' have invalid 'agentOverridesByProvider'; expected an object keyed by provider.`);
-		}
-		for (const [provider, value] of Object.entries(agentOverridesByProvider)) {
-			if (!value || typeof value !== "object" || Array.isArray(value)) {
-				throw new Error(`Subagent settings in '${filePath}' have invalid 'agentOverridesByProvider.${provider}'; expected an object keyed by agent.`);
-			}
-			const entries: Record<string, BuiltinAgentOverrideConfig> = {};
-			for (const [agentName, agentValue] of Object.entries(value)) {
-				const override = parseBuiltinOverrideEntry(`agentOverridesByProvider.${provider}.${agentName}`, agentValue, filePath);
-				if (override) entries[agentName] = override;
-			}
-			providerOverrides[provider] = entries;
-		}
-	}
 	return parsedSettings;
-}
-
-function selectProviderOverrides(settings: SubagentSettings, provider: string | undefined): SubagentSettings {
-	if (!provider) return settings;
-	const selected = settings.providerOverrides[provider];
-	if (!selected) return settings;
-	const overrides = { ...settings.overrides };
-	for (const [name, override] of Object.entries(selected)) {
-		overrides[name] = { ...overrides[name], ...override };
-	}
-	return { ...settings, overrides };
 }
 
 function resolveSubagentDefaultProvider(
@@ -1621,8 +1590,8 @@ function runtimeAgentOverrides(settings: SubagentSettings): SubagentSettings {
  * tools, context, budgets, and every other launch field) but follow the same
  * model-tier settings as every other agent: `subagents.defaultModel`,
  * `defaultProvider`, `defaultThinking`, and the `model`, `defaultProvider`,
- * `fast`, and `thinking` fields of `agentOverrides.<name>`, user then project,
- * provider-scoped overrides included. Other override fields are ignored for
+ * `fast`, and `thinking` fields of `agentOverrides.<name>`, user then project.
+ * Other override fields are ignored for
  * runtime agents. A definition `model` still wins over `defaultModel`.
  */
 export function applyRuntimeAgentSettings(agents: AgentConfig[], context: RuntimeAgentSettingsContext): AgentConfig[] {
@@ -2773,14 +2742,14 @@ export function clearAgentDiscoveryCache(): void {
 	agentDiscoveryCache.clear();
 }
 
-function ensureSettingsForScope(sources: AgentDiscoverySources, scope: AgentScope, preferredModelProvider?: string): void {
+function ensureSettingsForScope(sources: AgentDiscoverySources, scope: AgentScope): void {
 	if (scope !== "project" && sources.userSettings === undefined) {
 		if (sources.packageSubagentPaths.settingsErrors.user) throw sources.packageSubagentPaths.settingsErrors.user;
-		sources.userSettings = selectProviderOverrides(readSubagentSettings(sources.userSettingsPath), preferredModelProvider);
+		sources.userSettings = readSubagentSettings(sources.userSettingsPath);
 	}
 	if (scope !== "user" && sources.projectSettings === undefined) {
 		if (sources.packageSubagentPaths.settingsErrors.project) throw sources.packageSubagentPaths.settingsErrors.project;
-		sources.projectSettings = selectProviderOverrides(readSubagentSettings(sources.projectSettingsPath), preferredModelProvider);
+		sources.projectSettings = readSubagentSettings(sources.projectSettingsPath);
 	}
 }
 
@@ -2788,7 +2757,7 @@ function settingsForScope(sources: AgentDiscoverySources, scope: AgentScope): { 
 	// Parse only settings that participate in this projection. The source cache
 	// still retains both source trees, while malformed out-of-scope settings do
 	// not make an otherwise valid scoped projection fail.
-	ensureSettingsForScope(sources, scope, sources.preferredModelProvider);
+	ensureSettingsForScope(sources, scope);
 	return {
 		user: scope === "project" ? EMPTY_SUBAGENT_SETTINGS : sources.userSettings ?? EMPTY_SUBAGENT_SETTINGS,
 		project: scope === "user" ? EMPTY_SUBAGENT_SETTINGS : sources.projectSettings ?? EMPTY_SUBAGENT_SETTINGS,
@@ -2952,8 +2921,8 @@ function discoverAgentsUncached(cwd: string, scope: AgentScope, preferredModelPr
 	const { readDirs: projectAgentDirs, candidateDirs: projectCandidateDirs, preferredDir: projectAgentsDir } = resolveNearestProjectAgentDirs(effectiveCwd);
 	const userSettingsPath = getUserAgentSettingsPath();
 	const projectSettingsPath = getProjectAgentSettingsPath(effectiveCwd);
-	const userSettings = selectProviderOverrides(scope === "project" ? EMPTY_SUBAGENT_SETTINGS : readSubagentSettings(userSettingsPath), preferredModelProvider);
-	const projectSettings = selectProviderOverrides(scope === "user" ? EMPTY_SUBAGENT_SETTINGS : readSubagentSettings(projectSettingsPath), preferredModelProvider);
+	const userSettings = scope === "project" ? EMPTY_SUBAGENT_SETTINGS : readSubagentSettings(userSettingsPath);
+	const projectSettings = scope === "user" ? EMPTY_SUBAGENT_SETTINGS : readSubagentSettings(projectSettingsPath);
 	const defaultProvider = resolveSubagentDefaultProvider(userSettings, projectSettings, projectSettingsPath);
 	const defaultModel = resolveSubagentDefaultModel(userSettings, projectSettings, userSettingsPath, projectSettingsPath, defaultProvider);
 	const defaultThinking = resolveSubagentDefaultThinking(userSettings, projectSettings, projectSettingsPath);
