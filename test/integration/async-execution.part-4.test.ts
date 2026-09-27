@@ -1138,20 +1138,24 @@ setTimeout(() => process.exit(90), 15000).unref();
 	it("keeps concrete sibling failures above partial mutation evidence", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
 		const repo = createRepo("pi-subagents-partial-sibling-failure-");
 		const outputPath = path.join(repo, "missing-report.md");
-		mockPi.onCall({
+		// Transient no-output terminals retry the same candidate (up to three
+		// attempts), so replay the abort once per attempt: every attempt must
+		// end aborted with the report still missing, otherwise a retry falls
+		// through to the synthetic fallback and the mutation evidence is lost.
+		for (let attempt = 0; attempt < 3; attempt++) mockPi.onCall({
 			matchArgIncludes: "Write required report",
 			jsonl: [
 				events.assistantMessage("I changed the file but did not hand off the report."),
 				{
-					type: "message_end",
-					message: {
-						role: "assistant",
-						content: [],
-						model: "mock/test-model",
-						stopReason: "aborted",
-						usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: { total: 0 } },
-					},
+				type: "message_end",
+				message: {
+					role: "assistant",
+					content: [],
+					model: "mock/test-model",
+					stopReason: "aborted",
+					usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: { total: 0 } },
 				},
+			},
 			],
 			writeFiles: [{ path: "input.md", content: "changed before missing report\n" }],
 		});
