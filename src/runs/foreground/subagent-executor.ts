@@ -569,7 +569,7 @@ function rejectRemovedPublicSubagentFields(params: PublicSubagentParamsLike): st
 /** Control actions target a live run, so they require a non-empty run id. Launch mode omits action and id legitimately. */
 const CONTROL_RUN_ID_ACTIONS = new Set(["steer", "resume", "interrupt"]);
 
-function rejectMissingControlRunId(params: PublicSubagentParamsLike): string | undefined {
+export function rejectMissingControlRunId(params: PublicSubagentParamsLike): string | undefined {
 	const action = typeof params.action === "string" ? params.action.trim().toLowerCase() : undefined;
 	if (!action || !CONTROL_RUN_ID_ACTIONS.has(action)) return undefined;
 	if (typeof params.id !== "string" || !params.id.trim()) {

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { resolveSubagentRunId } from "../../src/runs/background/run-id-resolver.ts";
+import { rejectMissingControlRunId } from "../../src/runs/foreground/subagent-executor.ts";
 
 // Phase 1b public-boundary contract tests: prove the INTENDED end state from
 // docs/subagent-tooling-overhaul.md ("Target public tool boundary" + "Schema cleanup").
@@ -180,11 +181,13 @@ describeIfSchemas("public boundary: control uses exact run IDs", () => {
 		assert.equal(resolved?.id, exactId);
 	});
 
-	// Control id is Type.String today, so non-string ids already reject;
-	// empty/missing ids still pass — red until 06b hardens exact-ID semantics.
+	// 06a enforces empty/missing control ids in rejectMissingControlRunId;
+	// schema-level id stays optional, so drive the enforcer directly.
 	it("rejects empty and missing run ids", () => {
-		assert.equal(check({ action: "steer", id: "", message: "hi" }), false);
-		assert.equal(check({ action: "steer", message: "hi" }), false);
+		assert.ok(rejectMissingControlRunId({ action: "steer", id: "", message: "hi" }));
+		assert.ok(rejectMissingControlRunId({ action: "steer", message: "hi" }));
+		assert.equal(rejectMissingControlRunId({ action: "steer", id: "abc", message: "hi" }), undefined);
+		assert.equal(rejectMissingControlRunId({}), undefined);
 	});
 
 	// Type.String already rejects non-string ids today — validates now, not sibling-dependent.
