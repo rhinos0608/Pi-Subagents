@@ -525,8 +525,12 @@ describe("native subagent fleet", () => {
 				models: ["openai-codex/gpt-5.5"],
 				thinking: ["high"],
 			});
+			// WS-A lengthened the run-detail header (cwd, budgets, worktree,
+			// delivery, effective policy); the detail pane tail-follows, so a
+			// 32-row viewport scrolls the model line out of view. Use a tall
+			// viewport so the header metadata stays visible.
 			const component = new SubagentFleetComponent(
-				{ terminal: { rows: 32, columns: 100 }, requestRender() {} } as never,
+				{ terminal: { rows: 60, columns: 100 }, requestRender() {} } as never,
 				theme as never,
 				stateForTest(),
 				() => {},
