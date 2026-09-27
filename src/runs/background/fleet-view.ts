@@ -17,6 +17,8 @@ import {
 import { readStatus } from "../../shared/utils.ts";
 import { formatNestedRunStatusLines } from "../shared/nested-render.ts";
 import { contextModeLabel, summarizeContextModes } from "../shared/context-mode.ts";
+import { formatModelAttemptNote } from "../shared/model-fallback.ts";
+import type { ModelAttempt } from "../../shared/types.ts";
 import { formatAsyncRunOutputPath, formatAsyncRunProgressLabel, listAsyncRuns, type AsyncRunSummary } from "./async-status.ts";
 import { isTrustedRecordedSessionFile } from "../../shared/session-file-trust.ts";
 
@@ -557,6 +559,74 @@ function resolveWorkflowTranscriptChild(status: AsyncStatus, asyncDir: string, o
 	}
 }
 
+export function formatToolBudgetSummary(budget: { soft?: number; hard: number; toolCount: number; outcome: string } | undefined): string | undefined {
+	if (!budget) return undefined;
+	return `Tool budget: ${budget.toolCount}/${budget.hard} used${budget.soft !== undefined ? ` (soft ${budget.soft})` : ""} · ${budget.outcome}`;
+}
+
+export function formatRunTimeoutSummary(input: { timeoutMs?: number; deadlineAt?: number; timedOut?: boolean }): string | undefined {
+	if (input.timeoutMs === undefined && input.deadlineAt === undefined && !input.timedOut) return undefined;
+	const parts = [
+		input.timeoutMs !== undefined ? formatDuration(input.timeoutMs) : undefined,
+		input.deadlineAt !== undefined ? `deadline ${new Date(input.deadlineAt).toISOString()}` : undefined,
+		input.timedOut ? "timed out" : undefined,
+	].filter((part): part is string => part !== undefined);
+	return `Timeout: ${parts.join(" · ")}`;
+}
+
+export function formatWorktreeSummary(steps: Array<{ worktreePath?: string; branch?: string }> | undefined): string | undefined {
+	const entries = [...new Set((steps ?? []).flatMap((step) => step.worktreePath ? [`${step.worktreePath}${step.branch ? ` · branch ${step.branch}` : ""}`] : []))];
+	if (entries.length === 0) return undefined;
+	return `Worktree: ${entries.join(" | ")}`;
+}
+
+export function formatDeliverySummary(input: { pendingAppends?: number; wrapUpRequested?: boolean; stopped?: boolean; toolBudgetBlocked?: boolean }): string | undefined {
+	const parts = [
+		input.pendingAppends ? `${input.pendingAppends} pending append${input.pendingAppends === 1 ? "" : "s"}` : undefined,
+		input.wrapUpRequested ? "wrap-up requested" : undefined,
+		input.stopped ? "stopped" : undefined,
+		input.toolBudgetBlocked ? "tool budget hard-blocked" : undefined,
+	].filter((part): part is string => part !== undefined);
+	if (parts.length === 0) return undefined;
+	return `Delivery: ${parts.join(" · ")}`;
+}
+
+export function formatModelAttemptLines(attempts: ModelAttempt[] | undefined, indent = ""): string[] {
+	if (!attempts || attempts.length === 0) return [`${indent}Model attempts: none recorded`];
+	const lines = [`${indent}Model attempts (${attempts.length}):`];
+	attempts.forEach((attempt, index) => {
+		if (attempt.success) {
+			lines.push(`${indent}  ${index + 1}. ${attempt.model} ok`);
+			return;
+		}
+		const next = attempts.slice(index + 1).find((candidate) => candidate.model !== attempt.model)?.model
+			?? (index + 1 < attempts.length ? attempts[index + 1]!.model : undefined);
+		lines.push(`${indent}  ${index + 1}. ${formatModelAttemptNote(attempt, next)}`);
+	});
+	return lines;
+}
+
+/**
+ * Every reachable effective-policy fragment for a run. No ResolvedRunPolicy type
+ * exists and no compact policy snapshot is persisted (probe: shared/types.ts has
+ * only fragments — launchContractDigest, capabilityCeiling, per-step model/
+ * thinking/timeout/toolBudget fields). Per-attempt backoff delays are likewise
+ * not persisted on ModelAttempt. Missing-snapshot persistence is a follow-up.
+ */
+export function formatEffectivePolicyLines(status: AsyncStatus): string[] {
+	const lines = ["Effective policy (reachable fragments; no persisted policy snapshot):"];
+	const models = [...new Set((status.steps ?? []).flatMap((step) => step.model ? [`${formatModelThinking(step.model, step.thinking)}${step.modelResolution ? ` (${step.modelResolution.source})` : ""}`] : []))];
+	lines.push(`  Model: ${models.length ? models.join(" | ") : "default (no per-step model recorded)"}`);
+	const timeout = formatRunTimeoutSummary(status);
+	lines.push(`  ${timeout ?? "Timeout: not set"}`);
+	const budget = formatToolBudgetSummary(status.toolBudget);
+	lines.push(`  ${budget ?? "Tool budget: not set"}`);
+	const ceiling = status.capabilityCeiling;
+	lines.push(`  Tool ceiling: ${ceiling ? (ceiling.allowedTools === undefined ? "names unrestricted" : ceiling.allowedTools.length === 0 ? "none" : ceiling.allowedTools.join(", ")) : "not recorded"}`);
+	lines.push(`  Launch contract: ${status.launchContractDigest ?? "digest not recorded"}`);
+	return lines;
+}
+
 export function formatAsyncRunTranscript(status: AsyncStatus, asyncDir: string, options: TranscriptOptions = {}): string {
 	const workflowChild = resolveWorkflowTranscriptChild(status, asyncDir, options);
 	if (workflowChild) return formatAsyncRunTranscript(workflowChild.status, workflowChild.asyncDir, { ...options, index: undefined });
@@ -578,7 +648,15 @@ export function formatAsyncRunTranscript(status: AsyncStatus, asyncDir: string, 
 		`Run: ${status.runId}`,
 		`State: ${status.state}`,
 		`Mode: ${status.mode}${context ? ` ${context}` : ""}`,
+		status.cwd ? `Cwd: ${status.cwd}` : undefined,
+		status.turnCount !== undefined || status.toolCount !== undefined ? `Turns: ${status.turnCount ?? "?"} · Tools: ${status.toolCount ?? "?"}` : undefined,
+		formatRunTimeoutSummary(status),
+		formatToolBudgetSummary(status.toolBudget),
+		formatWorktreeSummary(status.steps),
+		formatDeliverySummary({ pendingAppends: status.pendingAppends, wrapUpRequested: status.wrapUpRequested, stopped: status.stopped, toolBudgetBlocked: status.toolBudgetBlocked }),
 		stepStateLine(status.mode, selected.index, selected.step),
+		...formatEffectivePolicyLines(status),
+		...(selected.step?.modelAttempts ? formatModelAttemptLines(selected.step.modelAttempts) : formatModelAttemptLines(undefined)),
 		selected.hint,
 	].filter((line): line is string => Boolean(line));
 	appendKnownArtifacts(lines, { outputPaths: outputPaths.filter((outputPath) => fs.existsSync(outputPath)), sessionFile, eventsPath: fs.existsSync(eventsPath) ? eventsPath : undefined, logPath: fs.existsSync(logPath) ? logPath : undefined });

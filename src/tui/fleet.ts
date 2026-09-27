@@ -407,7 +407,9 @@ function foregroundActiveDetail(item: Extract<FleetItem, { kind: "foreground-act
 		control.sourceRunId ? `Redo source: ${control.sourceRunId}` : undefined,
 		control.supersededByRunId ? `Superseded by: ${control.supersededByRunId}` : undefined,
 		item.index !== undefined ? `Child: ${item.index} (${item.agent})` : `Agent: ${item.agent}`,
+		control.cwd ? `Cwd: ${control.cwd}` : undefined,
 		modelThinking ? `Model: ${modelThinking}` : undefined,
+		live.modelResolution ? `Model resolution: ${live.modelResolution.source}${live.modelResolution.requested ? ` (requested ${live.modelResolution.requested})` : ""}${live.modelResolution.fallbackReason ? ` · ${live.modelResolution.fallbackReason}` : ""}` : undefined,
 		promptSummary ? `Task: ${promptSummary}` : undefined,
 		`Started: ${new Date(live.startedAt).toISOString()}`,
 		live.currentTool ? `Current tool: ${live.currentTool}${live.currentPath ? ` · ${shortenPath(live.currentPath)}` : ""}` : undefined,
@@ -484,6 +486,7 @@ function foregroundRecentDetail(item: Extract<FleetItem, { kind: "foreground-rec
 		`Run: ${item.runId}`,
 		"Source: foreground",
 		`State: ${child.status}`,
+		run.cwd ? `Cwd: ${run.cwd}` : undefined,
 		`Mode: ${run.mode}`,
 		`Child: ${child.index} (${child.agent})${contextModeLabel(child.context) ? ` ${contextModeLabel(child.context)}` : ""}`,
 		modelThinking ? `Model: ${modelThinking}` : undefined,
@@ -576,6 +579,8 @@ function asyncDetail(item: Extract<FleetItem, { kind: "async" }>, state: Subagen
 		`Run: ${item.runId}`,
 		"Source: async",
 		`State: ${item.state}`,
+		item.run.cwd ? `Cwd: ${item.run.cwd}` : undefined,
+		item.run.pendingAppends ? `Pending appends: ${item.run.pendingAppends}` : undefined,
 		`Mode: ${item.run.mode}${contextModeLabel(item.run.context) ? ` ${contextModeLabel(item.run.context)}` : ""}`,
 		item.index !== undefined ? `Child: ${item.index} (${item.agent})${contextModeLabel(item.step?.context) ? ` ${contextModeLabel(item.step?.context)}` : ""}` : `Agent: ${item.agent}${contextModeLabel(item.run.context) ? ` ${contextModeLabel(item.run.context)}` : ""}`,
 		outputPath ? `Output: ${outputPath}` : undefined,
@@ -704,6 +709,17 @@ function itemSource(item: FleetItem): string {
 	return item.kind === "foreground-active" ? "foreground · live" : "foreground · recent";
 }
 
+function itemDeliveryMarkers(item: FleetItem): string[] {
+	if (item.kind !== "async") return [];
+	const markers: string[] = [];
+	if (item.run.pendingAppends) markers.push(`${item.run.pendingAppends} pending append${item.run.pendingAppends === 1 ? "" : "s"}`);
+	if (item.run.wrapUpRequested ?? item.step?.wrapUpRequested) markers.push("wrap-up requested");
+	if (item.run.stopped) markers.push("stopped");
+	if (item.step?.toolBudgetBlocked) markers.push("budget hard-blocked");
+	if (item.step?.stopped) markers.push("child stopped");
+	return markers;
+}
+
 function itemStats(item: FleetItem): string[] {
 	let model: string | undefined;
 	let tokens: number | undefined;
@@ -738,6 +754,7 @@ function itemStats(item: FleetItem): string[] {
 		tokenUsage ? formatTokenUsage(tokenUsage) : tokens !== undefined ? `${formatTokens(tokens)} tok` : undefined,
 		tools !== undefined ? `${tools} tool${tools === 1 ? "" : "s"}` : undefined,
 		durationMs !== undefined ? formatDuration(durationMs) : undefined,
+		...itemDeliveryMarkers(item),
 	].filter((value): value is string => Boolean(value));
 }
 

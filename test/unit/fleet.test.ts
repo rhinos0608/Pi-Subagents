@@ -1829,4 +1829,46 @@ describe("native subagent fleet", () => {
 			fs.rmSync(root, { recursive: true, force: true });
 		}
 	});
+
+	it("renders run-detail gaps, fallback history, and effective policy in the fleet inspector", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-fleet-run-details-"));
+		try {
+			const asyncDir = writeAsyncRun(root, { id: "async-details", output: "DONE" });
+			const statusPath = path.join(asyncDir, "status.json");
+			const status = JSON.parse(fs.readFileSync(statusPath, "utf-8")) as Record<string, unknown>;
+			status.cwd = "/work/repo";
+			status.timeoutMs = 600000;
+			status.toolBudget = { soft: 40, hard: 80, block: ["read"], toolCount: 3, outcome: "within-budget" };
+			status.pendingAppends = 1;
+			status.launchContractDigest = "digest-1";
+			const steps = status.steps as Array<Record<string, unknown>>;
+			steps[0]!.worktreePath = "/work/wt-1";
+			steps[0]!.branch = "feature/x";
+			steps[0]!.modelAttempts = [{ model: "openai/gpt-5", success: false, error: "boom" }];
+			fs.writeFileSync(statusPath, JSON.stringify(status), "utf-8");
+			const component = new SubagentFleetComponent(
+				{ terminal: { rows: 40, columns: 120 }, requestRender() {} } as never,
+				theme as never,
+				stateForTest(),
+				() => {},
+				{ asyncDirRoot: root, resultsDir: path.join(root, "results"), refreshMs: 60_000 },
+			);
+			try {
+				const rendered = component.render(120).join("\n");
+				assert.match(rendered, /Cwd: \/work\/repo/);
+				assert.match(rendered, /Timeout: 10m0s/);
+				assert.match(rendered, /Tool budget: 3\/80 used \(soft 40\) · within-budget/);
+				assert.match(rendered, /Worktree: \/work\/wt-1 · branch feature\/x/);
+				assert.match(rendered, /Delivery: 1 pending append/);
+				assert.match(rendered, /Effective policy \(reachable fragments/);
+				assert.match(rendered, /Launch contract: digest-1/);
+				assert.match(rendered, /Model attempts \(1\):/);
+				assert.match(rendered, /\[fallback\] openai\/gpt-5 failed: boom\./);
+			} finally {
+				component.dispose();
+			}
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
 });
