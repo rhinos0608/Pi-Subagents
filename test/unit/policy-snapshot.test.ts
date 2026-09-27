@@ -59,8 +59,62 @@ describe("resolved policy snapshot", () => {
 		const inherited = buildResolvedRunPolicy({ modelOrigin: "inherited", toolBudgetSource: "none", timeoutSource: "none" });
 		assert.equal(inherited.modelOrigin, "operator");
 		assert.equal(inherited.thinkingOrigin, "operator");
+		const unattributed = buildResolvedRunPolicy({ modelOrigin: "default", toolBudgetSource: "none", timeoutSource: "none" });
+		assert.equal(unattributed.modelOrigin, "default");
+		assert.equal(unattributed.thinkingOrigin, "operator");
+		assert.ok(!("model" in unattributed) && !("thinking" in unattributed));
 	});
 
+	it("persists a compact snapshot for workflow-parent launches", () => {
+		// Mirrors the workflow-parent initial status write in subagent-executor.ts:
+		// the parent inherits the caller model (or nothing), enforces no budget
+		// or timeout of its own, and records its capability-ceiling tools.
+		const parentModel = { provider: "mock", id: "test-model" };
+		const withParent = buildResolvedRunPolicy({
+			model: `${parentModel.provider}/${parentModel.id}`,
+			modelOrigin: "inherited",
+			toolBudgetSource: "none",
+			timeoutSource: "none",
+			worktree: false,
+			allowedTools: ["read", "bash"],
+		});
+		assert.deepEqual(withParent, {
+			version: 1,
+			model: "mock/test-model",
+			modelOrigin: "operator",
+			thinkingOrigin: "operator",
+			toolBudgetSource: "none",
+			timeoutSource: "none",
+			context: "fresh",
+			worktree: false,
+			isolation: "process",
+			allowedTools: ["read", "bash"],
+		});
+		const unattributed = buildResolvedRunPolicy({
+			model: undefined,
+			modelOrigin: "default",
+			toolBudgetSource: "none",
+			timeoutSource: "none",
+			worktree: false,
+			allowedTools: undefined,
+		});
+		assert.deepEqual(unattributed, {
+			version: 1,
+			modelOrigin: "default",
+			thinkingOrigin: "operator",
+			toolBudgetSource: "none",
+			timeoutSource: "none",
+			context: "fresh",
+			worktree: false,
+			isolation: "process",
+		});
+		// Pin the write itself: the workflow-parent status literal must persist the snapshot.
+		const source = fs.readFileSync(new URL("../../src/runs/foreground/subagent-executor.ts", import.meta.url), "utf-8");
+		const statusAt = source.indexOf("workflowChildren: workflowChildSummary({ parentToolCallId");
+		assert.ok(statusAt >= 0, "workflow-parent status literal exists");
+		const statusHunk = source.slice(Math.max(0, statusAt - 1500), statusAt + 1500);
+		assert.match(statusHunk, /policySnapshot: buildResolvedRunPolicy\(/);
+	});
 	it("renders snapshot fields through the effective-policy display", () => {
 		const status = {
 			runId: "policy-render",

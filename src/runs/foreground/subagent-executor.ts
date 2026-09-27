@@ -16,6 +16,7 @@ import {
 	settleForegroundSchedulingOwner,
 	updateForegroundChild,
 } from "./foreground-control.ts";
+import { buildResolvedRunPolicy } from "../../policy/snapshot.ts";
 import { getLivePromptAudit, rewritePromptWithGuidance, updateLiveEffectivePrompt } from "./prompt-audit.ts";
 import { persistForegroundRunHistory, MAX_REMEMBERED_FOREGROUND_RUNS } from "./foreground-history.ts";
 import { resolveExecutionAgentScope } from "../../agents/agent-scope.ts";
@@ -5135,6 +5136,14 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 					workflow: { trace: [], emits: [], console: [], ...(workflowArgsEvidence ?? {}), ...(workflowResource ? { resource: workflowResource.provenance } : {}) },
 					workflowChildren: workflowChildSummary({ parentToolCallId: toolCallId, workflowRunId, workflowState: "running", inventoryComplete: false }),
 					runFanoutBudget: getRunFanoutBudgetSnapshot(workflowFanoutBudget),
+					policySnapshot: buildResolvedRunPolicy({
+						model: workflowParentModel ? `${workflowParentModel.provider}/${workflowParentModel.id}` : undefined,
+						modelOrigin: workflowParentModel ? "inherited" : "default",
+						toolBudgetSource: "none",
+						timeoutSource: "none",
+						worktree: requestParams.worktree === true,
+						allowedTools: workflowCapabilityCeiling?.allowedTools,
+					}),
 				};
 				const appendWorkflowEvent = (event: Record<string, unknown>) => {
 					try {

@@ -1,5 +1,5 @@
 /** Compact resolved-policy snapshot persisted to status.json at launch. */
-export type PolicyOrigin = "explicit" | "agent" | "operator" | "unknown";
+export type PolicyOrigin = "explicit" | "agent" | "operator" | "default" | "unknown";
 export type PolicyValueSource = "call" | "agent" | "config" | "none";
 
 export interface ResolvedRunPolicy {
@@ -68,8 +68,9 @@ function mapOrigin(origin: string | undefined): PolicyOrigin {
 	if (origin === "explicit") return "explicit";
 	if (origin === "configured") return "agent";
 	if (origin === "inherited") return "operator";
-	if (origin === "explicit-child" || origin === "agent-config" || origin === "parent-session" || origin === "default") {
-		return origin === "explicit-child" ? "explicit" : origin === "agent-config" ? "agent" : origin === "parent-session" ? "operator" : "operator";
+	if (origin === "default") return "default";
+	if (origin === "explicit-child" || origin === "agent-config" || origin === "parent-session") {
+		return origin === "explicit-child" ? "explicit" : origin === "agent-config" ? "agent" : "operator";
 	}
 	return "unknown";
 }
