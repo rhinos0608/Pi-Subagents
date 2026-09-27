@@ -1378,7 +1378,7 @@ export default function() {
 			};
 			mockPi.onCall({ jsonl: [events.assistantMessage("Initial work", route)] });
 			const launch = await makeAsyncExecutor(agents, { modelResponseAliases: scenario.original }).execute(
-				`alias-launch-${index}`, { agent: "worker", task: "Do work", async: true, context: "fork", acceptance: false },
+				`alias-launch-${index}`, { agent: "worker", task: "Do work", async: true, acceptance: false },
 				new AbortController().signal, undefined, ctx,
 			) as AsyncExecutionResult;
 			assert.ok(!launch.isError, launch.content[0]?.text);
@@ -1396,9 +1396,17 @@ export default function() {
 			const payload = await readAsyncPayload(resumed.details.asyncId);
 			assert.equal(payload.success, scenario.success, `case ${index}: ${payload.results[0]?.error}`);
 			if (!scenario.success) assert.match(payload.results[0]?.error ?? "", /model_verification_failed/);
-			const args = readMockPiArgs(mockPi, index * 2 + 1);
-			assert.equal(args[args.indexOf("--model") + 1], route);
-			assert.equal(args[args.indexOf("--session") + 1], sessionFile);
+			const launchArgs = readMockPiArgs(mockPi, index * 2);
+			const reviveArgs = readMockPiArgs(mockPi, index * 2 + 1);
+			assert.equal(launchArgs[launchArgs.indexOf("--model") + 1], route);
+			assert.equal(reviveArgs[reviveArgs.indexOf("--model") + 1], route);
+			// Per-call context left the model contract, so launches persist under
+			// the run session root; resume must still target that retained child
+			// identity instead of branching a new session.
+			const launchSession = launchArgs[launchArgs.indexOf("--session") + 1];
+			const reviveSession = reviveArgs[reviveArgs.indexOf("--session") + 1];
+			assert.equal(reviveSession, launchSession);
+			assert.ok(fs.existsSync(reviveSession));
 		}
 	});
 
@@ -1503,7 +1511,7 @@ export default function() {
 		mockPi.onCall({ output: "Initial workflow child complete" });
 		const launch = await executor.execute(
 			"workflow-parent-authority-launch",
-			{ workflowScript: `return await runs.run("planner", { agent: "planner", task: "Plan", acceptance: false })`, async: true, mission: false, capabilityCeiling: parentAuthority },
+			{ workflowScript: `return await runs.run("planner", { agent: "planner", task: "Plan" })`, async: true, mission: false, capabilityCeiling: parentAuthority },
 			new AbortController().signal, undefined, ctx,
 		) as AsyncExecutionResult;
 		assert.ok(!launch.isError, launch.content[0]?.text);
