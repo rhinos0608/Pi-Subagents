@@ -153,9 +153,9 @@ describe("registered subagent tool description", () => {
 		assert.match(FULL_SUBAGENT_TOOL_DESCRIPTION, /mission:false.*state.get.*state.set/);
 		const workflows = fs.readFileSync(path.join(projectRoot, "docs/workflows.md"), "utf8");
 		const reference = fs.readFileSync(path.join(projectRoot, "docs/tool-reference.md"), "utf8");
-		for (const heading of ["Parallel sequential lanes", "Host command steps", "Advanced rolling child runs", "Worktree isolation"]) assert.ok(workflows.includes(heading));
-		for (const heading of ["Acceptance gates", "Retained children", "Management actions", "Workflow steering"]) assert.ok(reference.includes(heading));
-		assert.match(reference, /JSON-encoded object strings/);
+		for (const heading of ["Parallel sequential lanes", "Workflow steering", "Output routing", "Retained children and follow-ups"]) assert.ok(workflows.includes(heading));
+		for (const heading of ["Acceptance gates", "Retained children", "Management lives outside the model tool", "Workflow steering"]) assert.ok(reference.includes(heading));
+		assert.match(reference, /passing command's stdout becomes the child's `structuredOutput`/);
 	});
 
 	it("renders a custom project description with placeholders and mandatory safety guidance", () => {
