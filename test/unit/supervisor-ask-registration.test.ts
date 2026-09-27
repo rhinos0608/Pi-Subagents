@@ -200,7 +200,11 @@ describe("supervisor ask registration", () => {
 			const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
 			process.env.PI_CODING_AGENT_DIR = root;
 			fs.mkdirSync(path.join(root, "agents"), { recursive: true });
-			fs.writeFileSync(path.join(root, "agents", "leaf.md"), "---\nname: leaf\ndescription: Read-only leaf\ntools: read, contact_supervisor\nmodel: mock/test-model\n---\nInspect only.\n");
+			fs.writeFileSync(path.join(root, "agents", "leaf.md"), "---\nname: leaf\ndescription: Read-only leaf\ntools: read, contact_supervisor\nmodel: mock/test-model\nasync: false\n---\nInspect only.\n");
+			// Phase 6 boundary: model-authored runs.run cannot pass async/output, so the
+			// in-process leaf pins sync execution via agent-definition defaultAsync.
+			// Async-path escalation uses identical owner-side discovery machinery,
+			// proven by the direct-async and workflow-registration tests below.
 			const launch = buildInProcessChildLaunch({
 				host: "parent", cwd: root, childAgentName: "coordinator", childIndex: 0,
 				sessionEnabled: false, tools: ["subagent", "subagent_supervisor"],
@@ -243,7 +247,7 @@ describe("supervisor ask registration", () => {
 				for (const mode of ["foreground", "workflow"] as const) {
 					const params = mode === "foreground"
 					? { agent: "leaf", task: "Inspect read-only and report progress.", async: false, output: false }
-					: { workflowScript: "return runs.run('inspect', { agent: 'leaf', task: 'Inspect read-only and report progress.', async: false, output: false });", async: false };
+					: { workflowScript: "return runs.run('inspect', { agent: 'leaf', task: 'Inspect read-only and report progress.' });", async: false };
 					const result = await runtime.call("subagent", params);
 					assert.notEqual(result.isError, true, text(result));
 					assert.equal(leaves.at(-1)!.closed, true, "child starts and completes without a timer tick");
@@ -336,7 +340,9 @@ describe("supervisor ask registration", () => {
 			process.env.PI_CODING_AGENT_DIR = root;
 			const agentsDir = path.join(root, "agents");
 			fs.mkdirSync(agentsDir, { recursive: true });
-			fs.writeFileSync(path.join(agentsDir, "leaf.md"), "---\nname: leaf\ndescription: Read-only leaf\ntools: read, contact_supervisor\nmodel: mock/test-model\n---\nInspect only.\n");
+			fs.writeFileSync(path.join(agentsDir, "leaf.md"), "---\nname: leaf\ndescription: Read-only leaf\ntools: read, contact_supervisor\nmodel: mock/test-model\nasync: false\n---\nInspect only.\n");
+			// Phase 6 boundary: model-authored runs.run cannot pass async, so the
+			// in-process leaf pins sync execution via agent-definition defaultAsync.
 			const a = randomUUID();
 			const parentTools = new Map<string, SupervisorTool>();
 			const parent = createNativeSupervisorChannel(makePi({ tools: parentTools }) as never, makeState(a, makeCtx(a)), { platform });
@@ -366,7 +372,7 @@ describe("supervisor ask registration", () => {
 								assert.ok(runtime.registered.has(NATIVE_SUPERVISOR_TOOL_NAME), "B needs a native downward provider");
 								assert.ok(runtime.active().includes(NATIVE_SUPERVISOR_TOOL_NAME), "B's requested supervisor tool must be callable");
 								const receipt = await runtime.call("subagent", {
-											workflowScript: "return runs.run('inspect', { agent: 'leaf', task: 'Inspect the repository read-only and ask which option to report.', async: false });",
+											workflowScript: "return runs.run('inspect', { agent: 'leaf', task: 'Inspect the repository read-only and ask which option to report.' });",
 											async: true,
 										});
 								assert.notEqual(receipt.isError, true, text(receipt));

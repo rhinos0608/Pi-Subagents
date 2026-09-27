@@ -359,7 +359,7 @@ describe("nested control routing", () => {
 			})();
 
 			const execution = Promise.resolve().then(() => executor.execute("resume", workflow
-				? { async: false, workflowScript: `return runs.run("live", { resume: "nested-live-resume", task: "continue please", output: false });` }
+				? { async: false, workflowScript: `return runs.run("live", { resume: "nested-live-resume", task: "continue please" });` }
 				: { action: "resume", id: "nested-live-resume", message: "continue please" }, new AbortController().signal, undefined, ctx(root)));
 			const [response, executed] = await Promise.allSettled([responder, execution]);
 			if (response.status === "rejected") throw response.reason;
@@ -447,7 +447,7 @@ describe("nested control routing", () => {
 
 			const result = await createExecutor(stateWithNestedRoute(route), [{ name: "worker", description: "Worker", prompt: "Do work" }])
 				.execute("resume", workflow
-					? { async: false, workflowScript: `return runs.run("stopped", { resume: "nested-stopped-resume", task: "continue", output: false });` }
+					? { async: false, workflowScript: `return runs.run("stopped", { resume: "nested-stopped-resume", task: "continue" });` }
 					: { action: "resume", id: "nested-stopped-resume", message: "continue" }, new AbortController().signal, undefined, ctx(root));
 
 			assert.equal(result.isError, true);

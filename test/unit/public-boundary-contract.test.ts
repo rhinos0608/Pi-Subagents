@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
@@ -260,10 +261,12 @@ describe("public boundary: runs.run child params reject unknown keys", () => {
 		}
 	});
 
-	// Phase 6 siblings in flight: siblings are hardening runs.run to a strict
-	// allowlist of { agent, task, cwd, resume }. The static entry point does
-	// not reject unknown keys yet, so these document the intended contract.
-	for (const key of ["model", "toolBudget", "timeoutMs", "worktree", "fast", "action", "workflowScript"]) {
+	// Phase 6 workflow-child boundary (landed): model-authored runs.run/runs.all
+	// children accept exactly { agent, task, cwd, resume, as, phase, label, lane, index }.
+	// Execution tuning (async, output, outputMode, reads, progress) resolves from
+	// agent definitions, workflow defaults, or operator config — never the model.
+	// The static entry point rejects unknown keys offline; these pin the contract.
+	for (const key of ["model", "toolBudget", "timeoutMs", "worktree", "fast", "action", "workflowScript", "async", "output", "outputMode", "reads", "progress"]) {
 		it(`rejects unknown child key: ${key}`, () => {
 			const params =
 				key === "action"
@@ -278,16 +281,70 @@ describe("public boundary: runs.run child params reject unknown keys", () => {
 									? `{ agent: "worker", task: "check", fast: true }`
 									: key === "timeoutMs"
 										? `{ agent: "worker", task: "check", timeoutMs: 1000 }`
-										: `{ agent: "worker", task: "check", model: "anthropic/claude-opus-4-8" }`;
+										: key === "async"
+							? `{ agent: "worker", task: "check", async: true }`
+							: key === "output"
+								? `{ agent: "worker", task: "check", output: "inline" }`
+								: key === "outputMode"
+									? `{ agent: "worker", task: "check", outputMode: "inline" }`
+									: key === "reads"
+										? `{ agent: "worker", task: "check", reads: ["docs/scope.md"] }`
+										: key === "progress"
+											? `{ agent: "worker", task: "check", progress: true }`
+											: `{ agent: "worker", task: "check", model: "anthropic/claude-opus-4-8" }`;
 			const result = staticResult(params);
 			assert.equal(result.ok, false, `runs.run ${key} should fail static validation (${result.messages})`);
 		});
 	}
 
-	// Phase 6 siblings in flight: the static entry point does not reject unknown keys yet.
+	// The static entry point rejects unknown keys offline; this pins the intended contract.
 	it("rejects an unknown child key through the workflow validator", () => {
 		const result = staticResult(`runs.run("one", { agent: "worker", task: "check", bogusKey: true })`);
 		assert.equal(result.ok, false, `runs.run bogusKey should fail static validation (${result.messages})`);
+	});
+
+	// Anti-growth lock: the exact model-authored child set. Any addition or
+	// removal must update this test deliberately — sampling unknown keys is
+	// not enough, since a newly added field would pass the rejection probes.
+	// The source snapshot below fails on any allowlist change; the behavioral
+	// probes confirm each allowed key validates and each removed tuning field
+	// is rejected by name.
+	it("locks the exact model-authored child allowlist", () => {
+		const source = readFileSync(new URL("../../src/workflows/scripted-workflow.ts", import.meta.url), "utf8");
+		const exactSet = `"agent", "task", "cwd", "resume", "as", "phase", "label", "lane", "index"`;
+		const exactMessage = "Supported workflow child fields: agent, task, cwd, resume, as, phase, label, lane, index.";
+		// All three seams carry the exact set: WORKER_SOURCE copy, module
+		// allowlist, and each runtime error message.
+		assert.equal(source.match(/allowedRunFields = new Set\(\[(.*?)\]\)/)?.[1], exactSet);
+		assert.equal(source.match(/WORKFLOW_CHILD_ALLOWED_FIELDS = new Set\(\[(.*?)\]\)/)?.[1], exactSet);
+		const messages = source.match(/Supported workflow child fields: [^.]*\./g) ?? [];
+		assert.ok(messages.length >= 2, `expected runtime allowlist messages, found ${messages.length}`);
+		for (const match of messages) assert.equal(match, exactMessage);
+		// Every allowed key validates in a minimal child.
+		for (const params of [
+			`{ agent: "worker", task: "check" }`,
+			`{ agent: "worker", task: "check", cwd: "/repo/pkg" }`,
+			`{ resume: "retained-run", task: "continue" }`,
+			`{ agent: "worker", task: "check", as: "helper" }`,
+			`{ agent: "worker", task: "check", phase: "build" }`,
+			`{ agent: "worker", task: "check", label: "step one" }`,
+			`{ agent: "worker", task: "check", lane: { version: 1, key: "one" } }`,
+			`{ agent: "worker", task: "check", index: 0 }`,
+		]) {
+			const script = `return await runs.run("one", ${params});`;
+			const result = validateWorkflowScript!(script);
+			assert.equal(result.ok, true, `${params} should validate statically (${JSON.stringify(result.errors)})`);
+		}
+		// Every removed execution-tuning field fails, naming the field.
+		for (const key of ["async", "output", "outputMode", "reads", "progress"]) {
+			const script = `return await runs.run("one", { agent: "worker", task: "check", ${key}: true });`;
+			const result = validateWorkflowScript!(script);
+			assert.equal(result.ok, false, `${key} should fail static validation`);
+			assert.ok(
+				result.errors.some((error) => error.message.includes(`unsupported field '${key}'`)),
+				`${key} rejection should name the field (${JSON.stringify(result.errors)})`,
+			);
+		}
 	});
 });
 
