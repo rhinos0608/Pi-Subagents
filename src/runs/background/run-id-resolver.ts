@@ -17,6 +17,10 @@ export interface ResolveSubagentRunIdDeps {
 	asyncDirRoot?: string;
 	resultsDir?: string;
 	nested?: NestedRunResolutionScope;
+	// Model/Fleet control path sets exactOnly so strict prefixes never resolve.
+	// Human surfaces (supervisor dialogue, Fleet inspector search, internal wait)
+	// omit it and keep prefix convenience.
+	exactOnly?: boolean;
 }
 
 function exactAsyncLocation(id: string, asyncDirRoot: string, resultsDir: string): AsyncRunLocation | undefined {
@@ -161,6 +165,7 @@ export function resolveSubagentRunId(id: string, deps: ResolveSubagentRunIdDeps 
 	if (exactNested.length > 1) throw new Error(`Nested run id '${id}' is ambiguous across authorized registries. Provide the full id after stale registries are cleaned up.`);
 	if (exactNested[0]) return { kind: "nested", id, match: exactNested[0] };
 
+	if (deps.exactOnly) return undefined;
 	const matches: ResolvedSubagentRunId[] = [];
 	for (const foregroundId of foregroundIds(deps.state).filter((candidate) => candidate.startsWith(id))) {
 		matches.push({ kind: "foreground", id: foregroundId });

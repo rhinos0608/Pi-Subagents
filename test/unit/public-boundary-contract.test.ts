@@ -178,8 +178,49 @@ describeIfSchemas("public boundary: control uses exact run IDs", () => {
 		const state = {
 			foregroundControls: new Map([[exactId, { runId: exactId }]]),
 			asyncJobs: new Map(),
+			currentSessionId: "session-test",
 		} as never;
 		const resolved = resolveSubagentRunId(exactId, { state });
+		assert.equal(resolved?.kind, "foreground");
+		assert.equal(resolved?.id, exactId);
+	});
+
+	// Model/Fleet control path is exact-only: a strict prefix must NOT resolve.
+	it("control rejects strict prefixes on the exact-only path", () => {
+		const exactId = "78f659a3";
+		const state = {
+			foregroundControls: new Map([[exactId, { runId: exactId }]]),
+			asyncJobs: new Map(),
+			currentSessionId: "session-test",
+		} as never;
+		assert.equal(resolveSubagentRunId("78f659", { state, exactOnly: true }), undefined);
+		const resolved = resolveSubagentRunId(exactId, { state, exactOnly: true });
+		assert.equal(resolved?.kind, "foreground");
+		assert.equal(resolved?.id, exactId);
+	});
+
+	// Ambiguous prefixes are impossible on the exact path: no throw, no resolution.
+	it("control never reports ambiguous prefixes on the exact-only path", () => {
+		const state = {
+			foregroundControls: new Map([
+				["78f659a3", { runId: "78f659a3" }],
+				["78f659b4", { runId: "78f659b4" }],
+			]),
+			asyncJobs: new Map(),
+			currentSessionId: "session-test",
+		} as never;
+		assert.equal(resolveSubagentRunId("78f659", { state, exactOnly: true }), undefined);
+	});
+
+	// Prefix convenience survives off the exact path (human supervisor/Fleet inspector surfaces).
+	it("prefix convenience remains available off the exact path", () => {
+		const exactId = "78f659a3";
+		const state = {
+			foregroundControls: new Map([[exactId, { runId: exactId }]]),
+			asyncJobs: new Map(),
+			currentSessionId: "session-test",
+		} as never;
+		const resolved = resolveSubagentRunId("78f659", { state });
 		assert.equal(resolved?.kind, "foreground");
 		assert.equal(resolved?.id, exactId);
 	});

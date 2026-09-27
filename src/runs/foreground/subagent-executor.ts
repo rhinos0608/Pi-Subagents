@@ -1861,7 +1861,7 @@ function resolveRequestedResumeTarget(params: SubagentParamsLike, deps: Executor
 	const requestedId = params.id ?? params.runId;
 	let resolved: ResolvedSubagentRunId | undefined;
 	try {
-		resolved = requestedId ? resolveSubagentRunId(requestedId, omitUndefinedProperties({ state: deps.state, nested: nestedResolutionScopeForExecutor(deps) })) : undefined;
+		resolved = requestedId ? resolveSubagentRunId(requestedId, omitUndefinedProperties({ state: deps.state, nested: nestedResolutionScopeForExecutor(deps), exactOnly: true })) : undefined;
 	} catch (error) {
 		const message = error instanceof Error ? error.message : "";
 		const asyncMatches = message.match(/async:/g)?.length ?? 0;
@@ -1878,7 +1878,7 @@ function resolveRequestedResumeTarget(params: SubagentParamsLike, deps: Executor
 		];
 		return resolveNestedResumeTarget(resolved, trustedSessionRoots);
 	}
-	return resolveResumeTarget(params, deps.state, { asyncRequireSessionFile: false });
+	return resolveResumeTarget(params, deps.state, { asyncRequireSessionFile: false, exactOnly: true });
 }
 
 async function resumeAsyncRun(input: {
@@ -6478,14 +6478,14 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 					if (paramsWithResolvedCwd.view) {
 						return withBudget({ content: [{ type: "text", text: "action='debug.run' does not support status views." }], isError: true, details: { mode: "management", results: [] } });
 					}
-					return withBudget(inspectSubagentStatus(paramsWithResolvedCwd, omitUndefinedProperties({ state: deps.state, nested: nestedScope, sessionRoots, abandonedSlotReleaseAfterMs: resolveAbandonedSlotReleaseAfterMs(deps.config.capacity?.abandonedSlotReleaseAfterMs) })));
+					return withBudget(inspectSubagentStatus(paramsWithResolvedCwd, omitUndefinedProperties({ state: deps.state, nested: nestedScope, sessionRoots, exactOnly: true, abandonedSlotReleaseAfterMs: resolveAbandonedSlotReleaseAfterMs(deps.config.capacity?.abandonedSlotReleaseAfterMs) })));
 				}
 				if (paramsWithResolvedCwd.view === "fleet" || paramsWithResolvedCwd.view === "transcript") {
-					return withBudget(inspectSubagentStatus(paramsWithResolvedCwd, omitUndefinedProperties({ state: deps.state, nested: nestedScope, sessionRoots, abandonedSlotReleaseAfterMs: resolveAbandonedSlotReleaseAfterMs(deps.config.capacity?.abandonedSlotReleaseAfterMs) })));
+					return withBudget(inspectSubagentStatus(paramsWithResolvedCwd, omitUndefinedProperties({ state: deps.state, nested: nestedScope, sessionRoots, exactOnly: true, abandonedSlotReleaseAfterMs: resolveAbandonedSlotReleaseAfterMs(deps.config.capacity?.abandonedSlotReleaseAfterMs) })));
 				}
 				if (targetRunId) {
 					try {
-						const resolved = resolveSubagentRunId(targetRunId, omitUndefinedProperties({ state: deps.state, nested: nestedScope }));
+						const resolved = resolveSubagentRunId(targetRunId, omitUndefinedProperties({ state: deps.state, nested: nestedScope, exactOnly: true }));
 						if (resolved?.kind === "foreground") {
 							const foreground = getForegroundControl(deps.state, resolved.id);
 							if (foreground) {
@@ -6500,7 +6500,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 					const foreground = getForegroundControl(deps.state, undefined);
 					if (foreground) return withBudget(foregroundStatusResult(foreground));
 				}
-				return withBudget(inspectSubagentStatus(paramsWithResolvedCwd, omitUndefinedProperties({ state: deps.state, nested: nestedScope, sessionRoots, abandonedSlotReleaseAfterMs: resolveAbandonedSlotReleaseAfterMs(deps.config.capacity?.abandonedSlotReleaseAfterMs) })));
+				return withBudget(inspectSubagentStatus(paramsWithResolvedCwd, omitUndefinedProperties({ state: deps.state, nested: nestedScope, sessionRoots, exactOnly: true, abandonedSlotReleaseAfterMs: resolveAbandonedSlotReleaseAfterMs(deps.config.capacity?.abandonedSlotReleaseAfterMs) })));
 			}
 			if (action === "resume") {
 				return resumeAsyncRun(omitUndefinedProperties({
@@ -6562,7 +6562,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 				if (!targetRunId) return { content: [{ type: "text", text: "action='steer' requires id or dir." }], isError: true, details: { mode: "management", results: [] } };
 				let resolved: ResolvedSubagentRunId | undefined;
 				try {
-					resolved = resolveSubagentRunId(targetRunId, omitUndefinedProperties({ state: deps.state, nested: nestedResolutionScopeForExecutor(deps) }));
+					resolved = resolveSubagentRunId(targetRunId, omitUndefinedProperties({ state: deps.state, nested: nestedResolutionScopeForExecutor(deps), exactOnly: true }));
 				} catch (error) {
 					const text = error instanceof Error ? error.message : String(error);
 					return { content: [{ type: "text", text }], isError: true, details: { mode: "management", results: [] } };
@@ -6736,7 +6736,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 				let resolved: ResolvedSubagentRunId | undefined;
 				if (targetRunId) {
 					try {
-						resolved = resolveSubagentRunId(targetRunId, omitUndefinedProperties({ state: deps.state, nested: nestedResolutionScopeForExecutor(deps) }));
+						resolved = resolveSubagentRunId(targetRunId, omitUndefinedProperties({ state: deps.state, nested: nestedResolutionScopeForExecutor(deps), exactOnly: true }));
 					} catch (error) {
 						const message = error instanceof Error ? error.message : String(error);
 						return { content: [{ type: "text", text: message }], isError: true, details: { mode: "management", results: [] } };
