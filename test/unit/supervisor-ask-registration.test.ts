@@ -568,8 +568,14 @@ describe("supervisor ask registration", () => {
 			kill: () => { probes++; return true; },
 		});
 		const status = { runId, sessionId: ctx.sessionManager.getSessionFile(), state: "running", mode: "single", pid: process.pid, startedAt: Date.now(), updatedAt: Date.now(), steps: [{ agent: "worker", status: "running" }] };
-		fs.writeFileSync(path.join(root, "status.json"), JSON.stringify(status));
-		const invoke = (mode: "steer" | "follow_up") => executor.executePublic(randomUUID(), { action: "steer", dir: root, message: "After this is resolved, update docs.", mode }, new AbortController().signal, undefined, ctx as never);
+		// Phase 6a: control actions require id, and resolveAsyncRunLocation
+		// requires an explicit dir basename to equal the id — so the live run
+		// directory is root/<runId>, not root itself.
+		const asyncDir = path.join(root, runId);
+		fs.mkdirSync(asyncDir, { recursive: true });
+		fs.writeFileSync(path.join(asyncDir, "status.json"), JSON.stringify(status));
+		// Phase 6a: control actions require a non-empty run id (rejectMissingControlRunId).
+		const invoke = (mode: "steer" | "follow_up") => executor.executePublic(randomUUID(), { action: "steer", id: runId, dir: asyncDir, message: "After this is resolved, update docs.", mode }, new AbortController().signal, undefined, ctx as never);
 		try {
 			const first = writeRequest({ sessionId: owner, runId });
 			const second = writeRequest({ sessionId: owner, runId });
@@ -581,8 +587,8 @@ describe("supervisor ask registration", () => {
 				for (const id of [first, second]) assert.ok(text(result).includes(`"replyTo":"${id}"`));
 				assert.equal(result.details?.steering, undefined);
 			}
-			assert.deepEqual(fs.readdirSync(root), ["status.json"]);
-			assert.equal(fs.readFileSync(path.join(root, "status.json"), "utf8"), JSON.stringify(status));
+			assert.deepEqual(fs.readdirSync(root), [runId]);
+			assert.equal(fs.readFileSync(path.join(asyncDir, "status.json"), "utf8"), JSON.stringify(status));
 			assert.equal(channel.pending.size, 0);
 			const dir = resolveSupervisorChannelDir(runId, "worker", 0);
 			assert.deepEqual(fs.readdirSync(path.join(dir, "replies")), []);
@@ -591,7 +597,7 @@ describe("supervisor ask registration", () => {
 			assert.equal(probes, 0, "blocked branch precedes reconciliation/control");
 			fs.rmSync(path.join(dir, "requests", `${first}.json`));
 			status.steps[0]!.status = "pending";
-			fs.writeFileSync(path.join(root, "status.json"), JSON.stringify(status));
+			fs.writeFileSync(path.join(asyncDir, "status.json"), JSON.stringify(status));
 			race = true;
 			const raced = await invoke("follow_up");
 			assert.equal(raced.isError, undefined);

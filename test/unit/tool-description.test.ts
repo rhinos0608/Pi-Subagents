@@ -347,7 +347,7 @@ describe("registered subagent tool description", () => {
 		assert.equal(readRegisteredTool(invalidAgentDir).description, FULL_SUBAGENT_TOOL_DESCRIPTION);
 	});
 
-	it("registers the compact schema for default/compact modes and the full schema for full/custom", () => {
+	it("registers the single 7-field schema for every description mode", () => {
 		const defaultAgentDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-schema-profile-default-"));
 		writeExtensionConfig(defaultAgentDir, {});
 		const compactAgentDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-schema-profile-compact-"));
@@ -366,15 +366,17 @@ describe("registered subagent tool description", () => {
 		const customParams = readRegisteredTool(customAgentDir).parameters as { properties: Record<string, { description?: string }> };
 		const invalidParams = readRegisteredTool(invalidAgentDir).parameters as { properties: Record<string, { description?: string }> };
 
-		assert.deepEqual(withoutDescriptions(defaultParams), withoutDescriptions(fullParams));
-		assert.deepEqual(withoutDescriptions(compactParams), withoutDescriptions(fullParams));
-		assert.ok(JSON.stringify(defaultParams).length <= JSON.stringify(fullParams).length);
-		assert.ok(JSON.stringify(compactParams).length <= JSON.stringify(fullParams).length);
-		assert.equal(defaultParams.properties.agent?.description, undefined);
-		assert.equal(compactParams.properties.agent?.description, undefined);
-		assert.ok(fullParams.properties.agent?.description);
-		assert.match(String(defaultParams.properties.acceptance?.description ?? ""), /Evidence policy/);
-		assert.deepEqual(withoutDescriptions(customParams), withoutDescriptions(fullParams));
-		assert.deepEqual(withoutDescriptions(invalidParams), withoutDescriptions(fullParams));
+		// Phase 6a: every description mode registers the same single 7-field
+		// public schema (SubagentParams); the compact/full schema branching is gone.
+		const expectedKeys = ["action", "agent", "cwd", "id", "message", "task", "workflowScript"];
+		for (const [mode, params] of [["default", defaultParams], ["compact", compactParams], ["full", fullParams], ["custom", customParams], ["invalid", invalidParams]] as const) {
+			assert.deepEqual(Object.keys(params.properties).sort(), expectedKeys, `${mode} mode registers the 7-field vocabulary`);
+		}
+		assert.deepEqual(defaultParams, compactParams);
+		assert.deepEqual(defaultParams, fullParams);
+		assert.deepEqual(defaultParams, customParams);
+		assert.deepEqual(defaultParams, invalidParams);
+		assert.match(String(defaultParams.properties.agent?.description ?? ""), /one-child/i);
+		assert.match(String(defaultParams.properties.workflowScript?.description ?? ""), /no runs\.host/);
 	});
 });
