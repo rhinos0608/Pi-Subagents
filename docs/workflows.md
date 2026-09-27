@@ -12,6 +12,8 @@ clarify → scout → worker → fresh reviewers → worker
 
 Packaged `worker`, `oracle`, and `advisor` all launch with fresh context, so each child starts from its assigned brief instead of the parent's unfinished conversation. Do not hand one subagent a monolithic task; either stage it sequentially (for example scout → worker → reviewer) or fan out across independent seams or files.
 
+Failed workflow details and async `status.json` include `workflow.failureKind` as `validation`, `script`, `child`, `return-serialization`, `timeout`, `detached-child`, or `runtime`. `validation` means the host rejected the script before it ran (syntax or portability) or at completion (unawaited calls); errors thrown into a running script, including rejected `runs.run` parameters and runtime `SyntaxError`s, are `script` because the script could catch them, and failed children are `child`. `runtime` covers host setup and infrastructure failures, such as an unavailable cwd or a crashed worker. A workflow that is stopped or reloaded is not a failure and has no `failureKind`.
+
 ## Prompt shortcuts
 
 The package includes reusable prompt templates for common workflows. You do not need them, but they are handy when you want the same shape every time:
