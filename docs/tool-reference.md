@@ -89,6 +89,8 @@ Output routing is tooling-managed, not a per-child script field: `runs.run` / `r
 
 Child outputs are saved to managed artifacts automatically. A filename mentioned in task text (for example, `Write your findings to exactly this path: report.md`) is only instruction and does not override runtime routing. When a later workflow step or parent needs a durable file, return the child's `outputReference` or `artifactPaths`.
 
+The workflow result text keeps the Return, Emitted, and Console sections, and a failed workflow's error, under 200 KB and 5000 lines. Each call-trace error is shortened to 500 characters. When anything is cut, a `[TRUNCATED: ... - full output at <path>]` line points to the uncut text, which is written to `workflow-results/<run>.md` under the run's artifacts directory. Async completion notices and `action: "status"` show short previews; a cut preview ends in `…` and names the run's `status.json`, which holds the full value.
+
 Child results cross into the script as plain JSON data, including saved-output references.
 
 ### Retained children and resume

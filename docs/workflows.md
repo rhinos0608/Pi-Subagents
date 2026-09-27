@@ -106,6 +106,8 @@ For advanced rolling fanout, keep launched `runs.run` promises only when every p
 
 Output routing is tooling-managed, not a per-child script field: `runs.run` / `runs.all` params do not accept `output` or `outputMode`. Child outputs are saved to managed artifacts automatically. A filename mentioned in task text is only instruction and does not override runtime routing. When a later workflow step or parent needs a durable file, return the child's `outputReference` or `artifactPaths`.
 
+The workflow result text keeps the Return, Emitted, and Console sections, and a failed workflow's error, under 200 KB and 5000 lines. Each call-trace error is shortened to 500 characters. When anything is cut, a `[TRUNCATED: ... - full output at <path>]` line points to the uncut text, which is written to `workflow-results/<run>.md` under the run's artifacts directory. The status line, the rest of each trace line, warnings, and output-path mappings are never cut.
+
 ### Retained children and follow-ups
 
 Completed workflow children stay addressable as retained children with explicit `resumable` or `not resumable` state. A later workflow continues a resumable child by passing `resume` instead of `agent`, with explicit follow-up task text. `resume` and `agent` are mutually exclusive. Use a new stable workflow key for every distinct resume pass.

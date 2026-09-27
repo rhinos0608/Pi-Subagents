@@ -24,6 +24,8 @@ First npm release of the fork: `v0.71.0-fork.1` (published as `@rhinos0608/pi-su
 
 ### Fixed
 
+- Large workflow results no longer flood the parent's context. A foreground workflow now caps its Return, Emitted, and Console sections and its failure error at 200 KB / 5000 lines, shortens each call-trace error to 500 characters, says where it cut them, and saves the full text to a file under the run's artifacts directory. Async completion notices and `action: "status"` show short previews: a cut preview ends in `…` and names the run's `status.json`, which holds the full value. Fixes [#2505](https://github.com/nicobailon/pi-subagents/issues/2505).
+
 - Compaction-triggered child aborts now recover when Pi reports `compaction_start` after `agent_settled`. Thanks to [@jiuai233](https://github.com/jiuai233) for [#2537](https://github.com/nicobailon/pi-subagents/pull/2537).
 - An agent `timeoutMs` or operator `config.timeoutMs` above 2,147,483,647 ms (about 24.8 days), the longest delay Node.js timers support, is now rejected before launch instead of silently overflowing the timer and timing out almost immediately. Thanks to [@quifox](https://github.com/quifox) for [#2517](https://github.com/nicobailon/pi-subagents/pull/2517).
 - The advertised-agent catalog is now sent as Pi's `advertised_subagents` prompt section instead of rewriting the whole system prompt, so mid-session catalog changes no longer throw away the provider prompt cache. Fixes [#2518](https://github.com/nicobailon/pi-subagents/issues/2518). Thanks to [@javapacr](https://github.com/javapacr) for [#2519](https://github.com/nicobailon/pi-subagents/pull/2519).
