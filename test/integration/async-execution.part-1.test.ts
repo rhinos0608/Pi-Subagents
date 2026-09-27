@@ -539,6 +539,18 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		assert.equal(status.sessionId, "session-initial-status");
 		assert.equal(status.pid !== undefined, true);
 		assert.equal(status.steps?.[0]?.contextLimit, 128_000);
+		assert.deepEqual(status.policySnapshot, {
+			version: 1,
+			model: "mock/test-model",
+			modelOrigin: "agent",
+			thinkingOrigin: "operator",
+			toolBudgetSource: "none",
+			timeoutSource: "none",
+			context: "fresh",
+			worktree: false,
+			isolation: "process",
+			modelCandidates: ["mock/test-model"],
+		});
 		await waitForAsyncResultFile(id);
 	});
 
