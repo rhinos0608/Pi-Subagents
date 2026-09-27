@@ -6,7 +6,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { discoverAgents, formatUnknownAgentError, unknownAgentDiagnosticContext, type AgentConfig, type AgentScope, type UnknownAgentDiagnosticContext } from "../agents/agents.ts";
-import type { ResolvedStepBehavior } from "../runs/shared/child-launch-plan.ts";
+import { normalizeOutputOverride, type OutputOverrideInput, type ResolvedStepBehavior } from "../runs/shared/child-launch-plan.ts";
 import { CHAIN_RUNS_DIR, type AcceptanceInput, type AgentContract, type ChainGateLayer, type JsonSchemaObject, type OutputMode } from "./types.ts";
 const CHAIN_DIR_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
 const INITIAL_PROGRESS_CONTENT = "# Progress\n\n## Status\nIn Progress\n\n## Tasks\n\n## Files Changed\n\n## Notes\n";
@@ -24,7 +24,7 @@ export type { ChildLaunchPlan, ChildLaunchPlanInput, OutputOverrideInput, Resolv
 // Chain Step Types
 // =============================================================================
 
-/** Sequential step: single agent execution (orchestration intent only) */
+/** Sequential step: single agent execution (orchestration intent + output routing only) */
 export interface SequentialStep {
 	agent: string;
 	task?: string;
@@ -32,9 +32,14 @@ export interface SequentialStep {
 	label?: string;
 	as?: string;
 	cwd?: string;
+	async?: boolean;
+	output?: OutputOverrideInput;
+	outputMode?: OutputMode;
+	reads?: string[] | false;
+	progress?: boolean;
 }
 
-/** Parallel task item within a parallel step (orchestration intent only) */
+/** Parallel task item within a parallel step (orchestration intent + output routing only) */
 export interface ParallelTaskItem {
 	agent: string;
 	task?: string;
@@ -42,6 +47,11 @@ export interface ParallelTaskItem {
 	label?: string;
 	as?: string;
 	cwd?: string;
+	async?: boolean;
+	output?: OutputOverrideInput;
+	outputMode?: OutputMode;
+	reads?: string[] | false;
+	progress?: boolean;
 }
 
 export interface DynamicExpandSpec {
@@ -313,12 +323,29 @@ export function resolveParallelBehaviors(
 		// Build subdirectory path for this parallel task
 		const subdir = path.join(`parallel-${stepIndex}`, `${taskIndex}-${task.agent}`);
 
-		// Output: agent default only (false). No per-step override.
-		const output: string | false = false;
+		// Output: task override, then false fallback.
+		// Absolute paths pass through unchanged; relative paths get namespaced under subdir
+		let output: string | false = false;
+		const taskOutput = normalizeOutputOverride(task.output);
+		if (taskOutput !== undefined) {
+			if (taskOutput === false) {
+				output = false;
+			} else if (path.isAbsolute(taskOutput)) {
+				output = taskOutput; // Absolute path: use as-is
+			} else {
+				output = path.join(subdir, taskOutput); // Relative: namespace under subdir
+			}
+		}
 
-		// Reads/progress: agent default. No per-step override.
-		const reads = config.defaultReads ?? false;
-		const progress = config.defaultProgress ?? false;
+		// Reads: task override > agent default > false
+		const reads =
+			task.reads !== undefined ? task.reads : config.defaultReads ?? false;
+
+		// Progress: task override > agent default > false
+		const progress =
+			task.progress !== undefined
+				? task.progress
+				: config.defaultProgress ?? false;
 
 		// Skills: agent default (+ chain skills). No per-step override.
 		let skills: string[] | false = config.skills ? [...config.skills] : [];
@@ -326,7 +353,7 @@ export function resolveParallelBehaviors(
 			skills = [...new Set([...skills, ...chainSkills])];
 		}
 
-		const outputMode = config.outputMode ?? "inline";
+		const outputMode = task.outputMode ?? config.outputMode ?? "inline";
 		const model = config.model;
 		return { output, outputMode, reads, progress, skills, model };
 	});

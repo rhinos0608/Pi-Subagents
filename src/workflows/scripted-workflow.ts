@@ -610,9 +610,9 @@ function validateRunCall(key, params, label, fingerprints) {
     throw new Error(label + " accepts one child via { agent, task, cwd, resume } plus naming keys (as, phase, label, lane)" + hint);
   }
   if (Object.prototype.hasOwnProperty.call(params, "clarify")) throw new Error(label + " does not support clarify UI.");
-  const allowedRunFields = new Set(["agent", "task", "cwd", "resume", "as", "phase", "label", "lane", "index"]);
+  const allowedRunFields = new Set(["agent", "task", "cwd", "resume", "as", "phase", "label", "lane", "index", "output", "outputMode", "reads", "progress", "async"]);
   const unknownRunFields = Object.keys(params).filter((field) => !allowedRunFields.has(field));
-  if (unknownRunFields.length > 0) throw new Error(label + " has unsupported fields: " + unknownRunFields.join(", ") + ". Supported workflow child fields: agent, task, cwd, resume, as, phase, label, lane, index.");
+  if (unknownRunFields.length > 0) throw new Error(label + " has unsupported fields: " + unknownRunFields.join(", ") + ". Supported workflow child fields: agent, task, cwd, resume, as, phase, label, lane, index, output, outputMode, reads, progress, async.");
   validateLaneMetadata(params.lane, label + " lane", key);
   if (params.resume !== undefined && typeof params.resume !== "string") {
     const reference = params.resume;
@@ -1876,7 +1876,7 @@ export function validateWorkflowScript(script: string, options: WorkflowScriptVa
 	const unique = errors.filter((error, index) => errors.findIndex((candidate) => candidate.message === error.message && candidate.line === error.line && candidate.column === error.column) === index);
 	return { ok: unique.length === 0, errors: unique, ...(warnings.length > 0 ? { warnings } : {}) };
 }
-const WORKFLOW_CHILD_ALLOWED_FIELDS = new Set(["agent", "task", "cwd", "resume", "as", "phase", "label", "lane", "index"]);
+const WORKFLOW_CHILD_ALLOWED_FIELDS = new Set(["agent", "task", "cwd", "resume", "as", "phase", "label", "lane", "index", "output", "outputMode", "reads", "progress", "async"]);
 
 function workflowStringMetadata(params: Record<string, unknown>): Pick<WorkflowScriptTraceEntry, "phase" | "label" | "agent"> {
 	return {
@@ -2429,7 +2429,7 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 			}
 			const unknownFields = Object.keys(params).filter((field) => !WORKFLOW_CHILD_ALLOWED_FIELDS.has(field));
 			if (unknownFields.length > 0) {
-				return respond(Promise.reject(new Error(`runs.run('${key}') has unsupported fields: ${unknownFields.join(", ")}. Supported workflow child fields: agent, task, cwd, resume, as, phase, label, lane, index.`)));
+				return respond(Promise.reject(new Error(`runs.run('${key}') has unsupported fields: ${unknownFields.join(", ")}. Supported workflow child fields: agent, task, cwd, resume, as, phase, label, lane, index, output, outputMode, reads, progress, async.`)));
 			}
 			let resumeReference: WorkflowReceiptResumeReference | undefined;
 			try {
