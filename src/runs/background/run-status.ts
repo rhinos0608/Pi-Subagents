@@ -116,6 +116,8 @@ interface RunStatusDeps {
 	now?: () => number;
 	state?: SubagentState;
 	nested?: NestedRunResolutionScope;
+	// Model/Fleet control callers set exactOnly; human/debug surfaces omit it.
+	exactOnly?: boolean;
 	sessionRoots?: string[];
 	activeCapacityRoot?: string;
 	abandonedSlotReleaseAfterMs?: number | false;
@@ -409,7 +411,7 @@ export function inspectSubagentStatus(params: RunStatusParams, deps: RunStatusDe
 		if (params.action === "debug.run") {
 			location = resolveAsyncRunLocation(params, asyncDirRoot, resultsDir);
 		} else if (!params.dir && requestedId) {
-			const resolved = resolveSubagentRunId(requestedId, { asyncDirRoot, resultsDir, state: deps.state, nested: deps.nested });
+			const resolved = resolveSubagentRunId(requestedId, { asyncDirRoot, resultsDir, state: deps.state, nested: deps.nested, ...(deps.exactOnly ? { exactOnly: true as const } : {}) });
 			if (resolved?.kind === "foreground") {
 				const control = deps.state?.foregroundControls.get(resolved.id);
 				if (control && deps.state && params.view === "transcript") {
@@ -433,7 +435,7 @@ export function inspectSubagentStatus(params: RunStatusParams, deps: RunStatusDe
 			}
 			if (resolved?.kind === "nested") {
 				reconcileNestedAsyncDescendants(resolved.match.route, { resultsDir, kill: deps.kill, now: deps.now });
-				const refreshed = resolveSubagentRunId(requestedId, { asyncDirRoot, resultsDir, state: deps.state, nested: deps.nested });
+				const refreshed = resolveSubagentRunId(requestedId, { asyncDirRoot, resultsDir, state: deps.state, nested: deps.nested, ...(deps.exactOnly ? { exactOnly: true as const } : {}) });
 				const nested = refreshed?.kind === "nested" ? refreshed : resolved;
 				if (params.view === "transcript") {
 					try {

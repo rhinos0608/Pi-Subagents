@@ -1936,7 +1936,7 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 		}
 	});
 
-	it("resume action reports async ambiguity even when foreground has one prefix match", async () => {
+	it("resume action rejects prefixes on the exact-only control path", async () => {
 		const base = `namespace-ambiguous-${Date.now()}`;
 		const foregroundSession = path.join(tempDir, "foreground-prefix.jsonl");
 		const firstAsyncSession = path.join(tempDir, "async-a.jsonl");
@@ -1979,14 +1979,15 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 			);
 
 			assert.equal(result.isError, true);
-			assert.match(result.content[0]?.text ?? "", /Ambiguous subagent run id prefix/);
+			assert.doesNotMatch(result.content[0]?.text ?? "", /Ambiguous subagent run id prefix/);
+			assert.match(result.content[0]?.text ?? "", /not found/i);
 		} finally {
 			fs.rmSync(firstAsyncDir, { recursive: true, force: true });
 			fs.rmSync(secondAsyncDir, { recursive: true, force: true });
 		}
 	});
 
-	it("resume action reports ambiguous ids across remembered foreground and async runs", async () => {
+	it("resume action rejects ambiguous prefixes on the exact-only control path", async () => {
 		const base = `ambiguous-${Date.now()}`;
 		const foregroundSession = path.join(tempDir, "foreground.jsonl");
 		const asyncSession = path.join(tempDir, "async.jsonl");
@@ -2026,7 +2027,8 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 			);
 
 			assert.equal(result.isError, true);
-			assert.match(result.content[0]?.text ?? "", /ambiguous between foreground run/);
+			assert.doesNotMatch(result.content[0]?.text ?? "", /ambiguous between foreground run/);
+			assert.match(result.content[0]?.text ?? "", /not found/i);
 		} finally {
 			fs.rmSync(asyncDir, { recursive: true, force: true });
 		}
