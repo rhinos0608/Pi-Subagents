@@ -190,13 +190,13 @@ describe("resolveStepBehavior", { skip: !available ? "pi packages not available"
 });
 
 describe("resolveParallelBehaviors", { skip: !available ? "pi packages not available" : undefined }, () => {
-	it("keeps parallel output routing tooling-managed unless a parallel task overrides it", () => {
+	it("honors agent outputMode defaults unless a parallel task overrides them", () => {
 		const [defaultBehavior] = resolveParallelBehaviors(
 			[{ agent: "reviewer", task: "Review" }],
 			[{ name: "reviewer", output: "report.md", outputMode: "file-only" }],
 			0,
 		);
-		assert.equal(defaultBehavior?.outputMode, "inline");
+		assert.equal(defaultBehavior?.outputMode, "file-only");
 
 		const [overrideBehavior] = resolveParallelBehaviors(
 			[{ agent: "reviewer", task: "Review", outputMode: "inline" }],
