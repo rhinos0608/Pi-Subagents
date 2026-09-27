@@ -45,6 +45,8 @@ export const DEFAULT_FLEET_KEYBINDINGS: Record<FleetKeybindingAction, string[]> 
 	steer: ["s"],
 	inspect: ["return", "H"],
 	stop: ["D"],
+	interrupt: ["i"],
+	resume: ["u"],
 	toggleTools: ["x", "X", "ctrl+o"],
 };
 
@@ -111,6 +113,7 @@ export interface FleetViewOptions {
 	initialKey?: string;
 	markdownTheme?: MarkdownTheme;
 	fleetKeybindings?: FleetKeybindingsConfig;
+	resumeRun?: (input: { runId: string; asyncDir: string; index?: number; message: string }) => Promise<AgentToolResult<Details>> | AgentToolResult<Details>;
 	actions?: FleetActionHandlers;
 	copyText?: (text: string) => Promise<void> | void;
 	inspectorPlugins?: readonly InspectorPlugin[];
@@ -823,6 +826,7 @@ export class SubagentFleetComponent implements Component {
 	private promptAuditView: PromptAuditView = "authored";
 	private actionNotice: FleetActionResult | undefined;
 	private steerDraft: string | undefined;
+	private resumeDraft: string | undefined;
 	private redoGuidanceDraft: string | undefined;
 	private steerMode: SteerDeliveryMode = "steer";
 	private stopConfirming = false;
@@ -939,6 +943,7 @@ export class SubagentFleetComponent implements Component {
 
 	private resetActionInput(): void {
 		this.steerDraft = undefined;
+		this.resumeDraft = undefined;
 		this.redoGuidanceDraft = undefined;
 		this.steerMode = "steer";
 		this.stopConfirming = false;
@@ -963,6 +968,14 @@ export class SubagentFleetComponent implements Component {
 		const target = this.selectedAsyncAction();
 		if ("reason" in target) return target;
 		return { runId: target.item.runId, asyncDir: target.item.run.asyncDir, ...(target.item.index !== undefined ? { index: target.item.index } : {}) };
+	}
+
+	private selectedResumeAction(): { runId: string; asyncDir: string; index?: number } | { reason: string } {
+		const item = this.snapshot.items[this.selected];
+		if (!item) return { reason: "No child is selected." };
+		if (item.kind === "external") return { reason: "External jobs are display-only and remain controlled by their owning extension." };
+		if (item.kind !== "async") return { reason: "Fleet resume is available for current-session top-level async runs only." };
+		return { runId: item.runId, asyncDir: item.run.asyncDir, ...(item.index !== undefined ? { index: item.index } : {}) };
 	}
 
 	private selectedInspectAction(): { runId: string; asyncDir: string; index?: number } | { reason: string } {
@@ -991,6 +1004,9 @@ export class SubagentFleetComponent implements Component {
 		if (this.steerDraft !== undefined) {
 			lines.push(this.theme.fg("accent", `Steer message (${this.steerMode}): ${this.steerDraft}${this.theme.fg("dim", "▌")}`));
 			lines.push(this.theme.fg("dim", "Enter sends · Tab changes mode · Esc cancels · Backspace edits"));
+		} else if (this.resumeDraft !== undefined) {
+			lines.push(this.theme.fg("accent", `Resume message: ${this.resumeDraft}${this.theme.fg("dim", "▌")}`));
+			lines.push(this.theme.fg("dim", "Enter resumes with a follow-up · Esc cancels · Backspace edits"));
 		} else if (this.redoGuidanceDraft !== undefined) {
 			lines.push(this.theme.fg("accent", `Redo guidance: ${this.redoGuidanceDraft}${this.theme.fg("dim", "▌")}`));
 			lines.push(this.theme.fg("dim", "Enter rewrites and reruns · Esc cancels · Backspace edits"));
@@ -1153,6 +1169,37 @@ export class SubagentFleetComponent implements Component {
 			}
 			return;
 		}
+		if (this.resumeDraft !== undefined) {
+			if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) {
+				this.resetActionInput();
+				this.tui.requestRender();
+				return;
+			}
+			if (matchesKey(data, "return") || data === "\r" || data === "\n") {
+				const message = this.resumeDraft.trim();
+				if (!message) {
+					this.setActionNotice({ text: "Resume message cannot be empty.", isError: true });
+					return;
+				}
+				const target = this.selectedResumeAction();
+				if ("reason" in target || !this.options.actions?.resume) {
+					this.setActionNotice({ text: "reason" in target ? target.reason : "Resume controls are unavailable in this context.", isError: true });
+					return;
+				}
+				this.runAction(() => Promise.resolve(this.options.actions!.resume!({ ...target, message })));
+				return;
+			}
+			if (matchesKey(data, "backspace") || data === "\x7f") {
+				this.resumeDraft = this.resumeDraft.slice(0, -1);
+				this.tui.requestRender();
+				return;
+			}
+			if (data.length === 1 && data >= " " && data !== "\x7f") {
+				this.resumeDraft += data;
+				this.tui.requestRender();
+			}
+			return;
+		}
 		if (this.stopConfirming) {
 			if (matchesKey(data, "return") || data.toLowerCase() === "y") {
 				const target = this.selectedAsyncAction();
@@ -1218,6 +1265,24 @@ export class SubagentFleetComponent implements Component {
 			else {
 				this.actionNotice = undefined;
 				this.stopConfirming = true;
+				this.detailAutoFollow = false;
+				this.detailScroll = 0;
+				this.tui.requestRender();
+			}
+			return;
+		}
+		if (matchesFleetAction(data, this.keybindings, "interrupt")) {
+			const target = this.selectedAsyncAction();
+			if ("reason" in target || !this.options.actions?.interrupt) this.setActionNotice({ text: "reason" in target ? target.reason : "Interrupt controls are unavailable in this context.", isError: true });
+			else this.runAction(() => Promise.resolve(this.options.actions!.interrupt!({ runId: target.item.runId, asyncDir: target.item.run.asyncDir, ...(target.item.index !== undefined ? { index: target.item.index } : {}) })));
+			return;
+		}
+		if (matchesFleetAction(data, this.keybindings, "resume")) {
+			const target = this.selectedResumeAction();
+			if ("reason" in target || !this.options.actions?.resume) this.setActionNotice({ text: "reason" in target ? target.reason : "Resume controls are unavailable in this context.", isError: true });
+			else {
+				this.actionNotice = undefined;
+				this.resumeDraft = "";
 				this.detailAutoFollow = false;
 				this.detailScroll = 0;
 				this.tui.requestRender();
@@ -1386,7 +1451,7 @@ export class SubagentFleetComponent implements Component {
 			? ` j/k child · 1/2/3 view · g redo with guidance · c copy · Esc close Prompt Audit · ${position}`
 			: selected?.kind === "external"
 				? ` ${bindingLabel(this.keybindings, "selectUp")}/${bindingLabel(this.keybindings, "selectDown")} job · display-only · ${bindingLabel(this.keybindings, "refresh")} refresh · ${bindingLabel(this.keybindings, "close")} close · ${position}`
-				: ` ${bindingLabel(this.keybindings, "selectUp")}/${bindingLabel(this.keybindings, "selectDown")} agent · p Prompt Audit · ${bindingLabel(this.keybindings, "inspect")} Inspect · ${bindingLabel(this.keybindings, "steer")} steer · ${bindingLabel(this.keybindings, "stop")} stop · ${bindingLabel(this.keybindings, "toggleTools")} tools · ${bindingLabel(this.keybindings, "refresh")} refresh · ${bindingLabel(this.keybindings, "close")} close · ${position}`;
+				: ` ${bindingLabel(this.keybindings, "selectUp")}/${bindingLabel(this.keybindings, "selectDown")} agent · p Prompt Audit · ${bindingLabel(this.keybindings, "inspect")} Inspect · ${bindingLabel(this.keybindings, "steer")} steer · ${bindingLabel(this.keybindings, "stop")} stop · ${bindingLabel(this.keybindings, "interrupt")} interrupt · ${bindingLabel(this.keybindings, "resume")} resume · ${bindingLabel(this.keybindings, "toggleTools")} tools · ${bindingLabel(this.keybindings, "refresh")} refresh · ${bindingLabel(this.keybindings, "close")} close · ${position}`;
 		lines.push(this.theme.fg("border", "│") + fit(this.theme.fg("dim", footer), innerWidth) + this.theme.fg("border", "│"));
 		lines.push(this.theme.fg("border", `╰${"─".repeat(innerWidth)}╯`));
 		return lines.map((line) => truncateToWidth(line, width));
@@ -1476,6 +1541,15 @@ export function buildDefaultFleetActions(state: SubagentState, options: FleetVie
 			}
 			return { text: `Interrupt requested for async run ${status.runId || input.runId}.` };
 		},
+		// Resume detaches a follow-up through the executor when a resumeRun delegate is
+		// wired (extension/slash entries). No delegate means no resume slot: never fake it.
+		...(options.resumeRun ? {
+			resume: async (input: { runId: string; asyncDir: string; index?: number; message: string }): Promise<FleetActionResult> =>
+				firstToolResultText(
+					await options.resumeRun!({ runId: input.runId, asyncDir: input.asyncDir, ...(input.index !== undefined ? { index: input.index } : {}), message: input.message }),
+					`Resume started for async run ${input.runId}.`,
+				),
+		} : {}),
 		inspect: async (input: { runId: string; asyncDir: string; index?: number }) => firstToolResultText(await handleInspectorAction("inspector.open", {
 			id: input.runId,
 			dir: input.asyncDir,

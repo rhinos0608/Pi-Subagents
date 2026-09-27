@@ -16,6 +16,7 @@ import {
 	refreshProviderModelCatalog,
 } from "../profiles/profiles.ts";
 import type { SubagentParamsLike } from "../runs/foreground/subagent-executor.ts";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { findModelInfo, toModelInfo } from "../shared/model-info.ts";
 import { shortenPath } from "../shared/formatters.ts";
 import { listAsyncRuns, formatAsyncRunProgressLabel, type AsyncRunSummary } from "../runs/background/async-status.ts";
@@ -587,7 +588,7 @@ function slashRunWorkflowScript(key: string, child: Record<string, unknown>): st
 export function registerSlashCommands(
 	pi: ExtensionAPI,
 	state: SubagentState,
-	options: { fleetKeybindings?: FleetKeybindingsConfig; foregroundDetachShortcut?: string } = {},
+	options: { fleetKeybindings?: FleetKeybindingsConfig; foregroundDetachShortcut?: string; fleetResume?: (input: { runId: string; asyncDir: string; index?: number; message: string }) => Promise<AgentToolResult<Details>> | AgentToolResult<Details> } = {},
 ): { dispose: () => void } {
 	let fleetOpen = false;
 	let disposed = false;
@@ -613,7 +614,7 @@ export function registerSlashCommands(
 		}
 		fleetOpen = true;
 		try {
-			await openSubagentFleet(ctx, state, { asyncDirRoot: DIRS.async, inspectorPlugins: createBuiltinInspectorPlugins(), resultsDir: DIRS.results, fleetKeybindings: options.fleetKeybindings });
+			await openSubagentFleet(ctx, state, { asyncDirRoot: DIRS.async, inspectorPlugins: createBuiltinInspectorPlugins(), resultsDir: DIRS.results, fleetKeybindings: options.fleetKeybindings, ...(options.fleetResume ? { resumeRun: options.fleetResume } : {}) });
 		} finally {
 			fleetOpen = false;
 		}

@@ -7410,3 +7410,14 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 
 	return { execute: executeWithSingleDispatchGuard, executePublic, executeDelegated, executeScheduled, getCurrentSupervisorOwnerStates };
 }
+
+/** Fleet resume delegate: runs the SAME eligibility check the model resume path runs. */
+export type FleetResumeExecutor = Pick<ReturnType<typeof createSubagentExecutor>, "executePublic">;
+
+export async function resumeFleetRun(
+	executor: FleetResumeExecutor,
+	ctx: ExtensionContext,
+	input: { runId: string; message: string },
+): Promise<AgentToolResult<Details>> {
+	return executor.executePublic(randomUUID(), { action: "resume", id: input.runId, message: input.message }, new AbortController().signal, undefined, ctx);
+}
