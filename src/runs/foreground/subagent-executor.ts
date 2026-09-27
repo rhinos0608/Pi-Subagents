@@ -3474,6 +3474,18 @@ function resolveWorkflowChildOutputPath(input: {
 	if (typeof input.params.resume === "string" && (!hasExplicitOutput || rawOutput === true || rawOutput === "true")) {
 		if (!input.state) return { path: undefined, inherited: false };
 		const index = input.params.index;
+		// Retained nested identity owns routing: a resume that targets a nested run
+		// must reach the control inbox regardless of output persistence policy.
+		// resolveResumeTarget only knows foreground/async runs, so without this
+		// check a default-output resume of a live nested run throws "Async run
+		// not found" during output-claim admission and never reaches launch.
+		try {
+			const nested = resolveSubagentRunId(input.params.resume.trim(), omitUndefinedProperties({ state: input.state }));
+			if (nested?.kind === "nested") return { path: undefined, inherited: false };
+		} catch {
+			// Ambiguous/unresolvable ids fall through to the foreground/async
+			// output inheritance below, which reports the authoritative error.
+		}
 		const target = resolveResumeTarget({
 			id: input.params.resume.trim(),
 			...(typeof index === "number" && Number.isInteger(index) ? { index } : {}),
