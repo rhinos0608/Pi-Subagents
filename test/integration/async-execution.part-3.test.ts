@@ -137,9 +137,12 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		});
 
 		const payload = JSON.parse(fs.readFileSync(await waitForAsyncResultFile(id), "utf-8"));
-		assert.equal(payload.success, false);
-		assert.match(payload.results[0]?.error ?? "", /Subagent produced no output after terminal assistant stopReason "aborted"\./u);
-		assert.equal(mockPi.callCount(), 1);
+		// The aborted empty output is a retryable startup failure under bounded
+		// fallback, so the run retries with a fresh launch (not a
+		// compaction-session recovery) and the second queued call succeeds.
+		assert.equal(payload.success, true);
+		assert.match(payload.results[0]?.output ?? "", /Compaction recovery must not run$/);
+		assert.equal(mockPi.callCount(), 2);
 	});
 
 	it("background fails a zero-exit child that stops during a tool after earlier assistant output", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
@@ -205,9 +208,13 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 	});
 
 	for (const terminal of [
-		{ name: "empty text stop", content: [{ type: "text", text: "" }], stopReason: "stop", error: /no output.*empty response/i },
-		{ name: "tool-call-only stop", content: [{ type: "toolCall", id: "read-1", name: "read", arguments: { path: "README.md" } }], stopReason: "toolUse", error: /grep failed.*Path not found/i },
-		{ name: "empty text length limit", content: [{ type: "text", text: "" }], stopReason: "length", error: /grep failed.*Path not found/i },
+		// An empty stop with no tool results looks like a model cold-start, so
+		// bounded fallback retries it (up to 3 attempts) and the terminal
+		// diagnosis carries the exhausted-fallback text instead of the direct
+		// empty-output error. Length-limit stops keep the direct diagnosis.
+		{ name: "empty text stop", content: [{ type: "text", text: "" }], stopReason: "stop", error: /Subagent produced no output.*empty response/, output: /No subagent model could start/ },
+		{ name: "tool-call-only stop", content: [{ type: "toolCall", id: "read-1", name: "read", arguments: { path: "README.md" } }], stopReason: "toolUse", error: /grep failed.*Path not found/i, output: "" },
+		{ name: "empty text length limit", content: [{ type: "text", text: "" }], stopReason: "length", error: /grep failed.*Path not found/i, output: "" },
 	]) {
 		it(`background diagnoses ${terminal.name} after an exploratory tool error`, { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
 			mockPi.onCall({
@@ -243,7 +250,8 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 			assert.equal(payload.success, false);
 			assert.equal(payload.exitCode, 1);
 			assert.match(payload.results[0]?.error ?? "", terminal.error);
-			assert.equal(payload.results[0]?.output, "");
+			if (typeof terminal.output === "string") assert.equal(payload.results[0]?.output, terminal.output);
+			else assert.match(payload.results[0]?.output ?? "", terminal.output);
 			const status = await waitForAsyncState(id, (candidate) => candidate.state === "failed");
 			assert.match(status.steps?.[0]?.error ?? "", terminal.error);
 		});
@@ -886,29 +894,35 @@ export default function() {
 		const agentDir = path.join(tempDir, ".pi", "agents");
 		fs.mkdirSync(agentDir, { recursive: true });
 		fs.writeFileSync(path.join(agentDir, "typed.md"), `---\nname: typed\ndescription: Typed output\noutputSchema: {"type":"object","required":["ok"]}\n---\nReturn data.\n`);
+		fs.writeFileSync(path.join(agentDir, "prose.md"), `---\nname: prose\ndescription: Prose output\n---\nReturn prose.\n`);
 		const executor = makeAsyncExecutor(discoverAgents(tempDir, "project").agents);
 		mockPi.onCall({ output: "ordinary prose" });
+		// Agent-definition schemas apply to workflow children; per-child
+		// outputSchema/acceptance overrides were removed (the runs.run
+		// allowlist is agent, task, cwd, resume, as, phase, label, lane,
+		// index), so the opt-out uses a schema-less agent definition.
 		const inherited = await executor.execute("workflow-schema-default", {
 			async: false,
-			workflowScript: `return runs.run("typed", { agent: "typed", task: "Return data", acceptance: { level: "checked", report: "on" } });`,
+			workflowScript: `return runs.run("typed", { agent: "typed", task: "Return data" });`,
 		}, new AbortController().signal, undefined, makeMinimalCtx(tempDir));
 		assert.equal(inherited.isError, true);
 		assert.match(inherited.content[0]?.type === "text" ? inherited.content[0].text : "", /Missing structured_output call/);
 
+		mockPi.onCall({ output: "plain prose ok" });
 		const disabled = await executor.execute("workflow-schema-disabled", {
 			async: false,
-			workflowScript: `return runs.run("typed", { agent: "typed", task: "Return prose", outputSchema: false, acceptance: { level: "checked", report: "on" } });`,
+			workflowScript: `return runs.run("prose", { agent: "prose", task: "Return prose" });`,
 		}, new AbortController().signal, undefined, makeMinimalCtx(tempDir));
-		assert.equal(disabled.isError, true);
-		assert.match(disabled.content[0]?.type === "text" ? disabled.content[0].text : "", /acceptance\.report requires outputSchema/);
+		assert.equal(disabled.isError, undefined, disabled.content[0]?.type === "text" ? disabled.content[0].text : undefined);
+		assert.match(disabled.content[0]?.type === "text" ? disabled.content[0].text : "", /plain prose ok/);
 
 		mockPi.onCall({ output: "missing structured call" });
 		mockPi.onCall({ output: "false opted out" });
 		const parallel = await executor.execute("workflow-schema-parallel", {
 			async: false,
 			workflowScript: `const children = await runs.all([
-				{ key: "inherited", agent: "typed", task: "Return data", acceptance: false },
-				{ key: "disabled", agent: "typed", task: "Return prose", outputSchema: false, acceptance: false }
+				{ key: "inherited", agent: "typed", task: "Return data" },
+				{ key: "disabled", agent: "prose", task: "Return prose" }
 			]); return children.map(({ key, ok, error, output }) => ({ key, ok, error, output }));`,
 		}, new AbortController().signal, undefined, makeMinimalCtx(tempDir));
 		assert.equal(parallel.isError, undefined, parallel.content[0]?.type === "text" ? parallel.content[0].text : undefined);
@@ -916,7 +930,7 @@ export default function() {
 		assert.equal(children.find(({ key }) => key === "inherited")?.ok, false);
 		assert.match(children.find(({ key }) => key === "inherited")?.error ?? "", /Missing structured_output call/);
 		assert.deepEqual(children.find(({ key }) => key === "disabled"), { key: "disabled", ok: true, output: "false opted out" });
-		assert.equal(mockPi.callCount(), 3);
+		assert.equal(mockPi.callCount(), 4);
 	});
 
 	it("background outputSchema runs fail closed when required acceptanceReport is missing", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
@@ -1271,7 +1285,7 @@ export default function() {
 			tempArtifactsDir: tempDir,
 			getSubagentSessionRoot: () => path.join(tempDir, "sessions"),
 			expandTilde: (p: string) => p,
-			discoverAgents: () => ({ agents: [makeAgent("worker")] }),
+			discoverAgents: () => ({ agents: [makeAgent("worker"), makeAgent("explicit", { model: "openai/gpt-5-mini" })] }),
 		});
 		const context = makeMinimalCtx(tempDir);
 		context.sessionManager.getSessionId = () => "session-workflow-parent-model";
@@ -1283,7 +1297,10 @@ export default function() {
 
 		const launch = await executor.execute(
 			"workflow-parent-model",
-			{ workflowScript: `await runs.run("inherited", { agent: "worker", task: "Do inherited work" }); return runs.run("explicit", { agent: "worker", task: "Do explicit work", model: "openai/gpt-5-mini" });`, async: true },
+			// Per-child model overrides were removed (runs.run allowlist), so the
+			// explicit model resolves from the agent definition while the worker
+			// child still inherits the snapshotted parent model.
+			{ workflowScript: `await runs.run("inherited", { agent: "worker", task: "Do inherited work" }); return runs.run("explicit", { agent: "explicit", task: "Do explicit work" });`, async: true },
 			new AbortController().signal,
 			undefined,
 			context,
@@ -1982,11 +1999,14 @@ syncBuiltinESMExports();
 		assert.equal(args[args.indexOf("--model") + 1], "deepseek/deepseek-v4-flash");
 	});
 
-	it("background chains treat empty step models as parent inheritance", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
+	it("background chains resolve the step model from the agent definition", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
 		mockPi.onCall({ output: "Done asynchronously" });
 
 		const id = `async-chain-empty-model-${Date.now().toString(36)}`;
 		executeAsyncChain(id, {
+			// Per-step chain model overrides were removed: buildStepOverrides only
+			// forwards async/output/outputMode/reads/progress, so the agent
+			// definition model wins even when the step carries an empty model.
 			chain: [{ agent: "worker", task: "Do work", model: "" }],
 			agents: [makeAgent("worker", { model: "anthropic/claude-sonnet-4-5", thinking: "high" })],
 			ctx: {
@@ -2016,9 +2036,9 @@ syncBuiltinESMExports();
 		const resultPath = await waitForAsyncResultFile(id, 10_000);
 		const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8")) as AsyncResultPayload;
 		assert.equal(payload.success, true);
-		assert.equal(payload.results[0].model, "openai/gpt-5-mini:high");
+		assert.equal(payload.results[0].model, "anthropic/claude-sonnet-4-5:high");
 		const args = readMockPiArgs(mockPi, 0);
-		assert.equal(args[args.indexOf("--model") + 1], "openai/gpt-5-mini:high");
+		assert.equal(args[args.indexOf("--model") + 1], "anthropic/claude-sonnet-4-5:high");
 	});
 
 	it("background runs resolve skills from the effective task cwd", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
@@ -2150,8 +2170,11 @@ syncBuiltinESMExports();
 	it("background chains report unavailable pi-subagents skill requests", () => {
 		const id = `async-chain-pi-subagents-skill-${Date.now().toString(36)}`;
 		const result = executeAsyncChain(id, {
-			chain: [{ agent: "worker", task: "Do work", skill: ["pi-subagents"] }],
-			agents: [makeAgent("worker")],
+			// Per-step chain skill overrides were removed (buildStepOverrides
+			// forwards no skill field), so skills resolve from the agent
+			// definition; unavailable agent skills still fail the launch.
+			chain: [{ agent: "worker", task: "Do work" }],
+			agents: [makeAgent("worker", { skills: ["pi-subagents"] })],
 			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
 			cwd: tempDir,
 			artifactConfig: {
@@ -2182,8 +2205,11 @@ syncBuiltinESMExports();
 		try {
 			writePackageSkill(path.join(chainCwd, "packages", "app"), "async-chain-step-skill");
 			executeAsyncChain(id, {
-				chain: [{ agent: "worker", task: "Do work", cwd: "packages/app", skill: ["async-chain-step-skill"] }],
-				agents: [makeAgent("worker")],
+				// Per-step chain skill overrides were removed, so the skill
+				// resolves from the agent definition while the step cwd still
+				// scopes skill discovery to the shared cwd.
+				chain: [{ agent: "worker", task: "Do work", cwd: "packages/app" }],
+				agents: [makeAgent("worker", { skills: ["async-chain-step-skill"] })],
 				ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
 				cwd: chainCwd,
 				artifactConfig: {
