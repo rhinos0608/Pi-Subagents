@@ -155,4 +155,61 @@ describe("workflow nested resume output routing", () => {
 			fs.rmSync(root, { recursive: true, force: true });
 		}
 	});
+
+	/**
+	 * Claim admission enforces the same exactness as launch: a prefix of a
+	 * live nested id must not be admitted by the nested check. Before the
+	 * exactOnly fix the prefix matched admission, skipped output inheritance,
+	 * and failed later with a confusing downstream error. Now the prefix falls
+	 * through to output inheritance and reports the authoritative "Async run
+	 * not found" error, identical to a fully unknown id.
+	 */
+	it(`rejects nested-id prefixes at claim admission with the authoritative not-found error`, async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-nested-resume-prefix-"));
+		try {
+			const route = createNestedRoute("root-control");
+		routeRoots.push(path.dirname(route.eventSink));
+		writeNestedEvent(route, {
+			type: "subagent.nested.updated",
+			ts: 100,
+			parentRunId: "root-control",
+			parentStepIndex: 0,
+			child: { id: "nested-live-prefix-target-abcdef", parentRunId: "root-control", parentStepIndex: 0, depth: 1, path: [{ runId: "root-control", stepIndex: 0 }], state: "running", agent: "worker", ownerState: "live" },
+			});
+		const state = createState();
+		state.foregroundControls.set(route.rootRunId, {
+			runId: route.rootRunId,
+			mode: "single",
+			startedAt: 1,
+			updatedAt: 1,
+			nestedRoute: route,
+			});
+		state.lastForegroundControlId = route.rootRunId;
+		const executor = createSubagentExecutor({
+			pi: { events: { emit() {}, on() { return () => {}; } }, getSessionName() { return "parent"; } } as any,
+			state,
+			config: { maxSubagentDepth: 2, control: {}, intercomBridge: {} } as any,
+			asyncByDefault: false,
+			tempArtifactsDir: os.tmpdir(),
+			getSubagentSessionRoot: (parentSessionFile) => parentSessionFile ? path.join(path.dirname(parentSessionFile), path.basename(parentSessionFile, ".jsonl")) : os.tmpdir(),
+			expandTilde: (value) => value,
+			discoverAgents: () => ({ agents: [{ name: "worker", description: "Worker", prompt: "Do work" }] as any }),
+			allowMutatingManagementActions: true,
+			});
+		const run = (resume: string) => executor.execute("resume", {
+			async: false,
+			workflowScript: `return runs.run("p", { resume: ${JSON.stringify(resume)}, task: "continue" });`,
+		}, new AbortController().signal, undefined, ctx(root));
+		const prefix = await run("nested-live-prefix-target");
+		assert.equal(prefix.isError, true);
+		assert.match(text(prefix), /Async run not found\. Provide id or dir\./);
+		const unknown = await run("no-such-run-anywhere");
+			assert.equal(unknown.isError, true);
+			assert.match(text(unknown), /Async run not found\. Provide id or dir\./);
+				const withoutMission = (value: string) => value.split("\n").filter((line) => !line.startsWith("Mission:")).join("\n");
+			assert.equal(withoutMission(text(prefix)), withoutMission(text(unknown)));
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
 });
