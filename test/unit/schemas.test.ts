@@ -228,7 +228,7 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 		assert.equal(actionSchema.enum, undefined);
 		const description = String(actionSchema.description ?? "");
 		assert.match(description, /Management\/control only; omit for execution/);
-		assert.match(description, /Only steer, resume, and interrupt are exposed to the model/);
+		assert.match(description, /Only steer, resume, interrupt, status, guide, and validate are exposed to the model/);
 	});
 
 	it("capabilities field is deleted: discovery goes through the list action", () => {

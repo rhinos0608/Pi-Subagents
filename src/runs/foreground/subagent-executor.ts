@@ -194,6 +194,7 @@ import {
 	DIRS,
 	DEFAULT_ARTIFACT_CONFIG,
 	DEFAULT_FORK_PREAMBLE,
+	MODEL_VISIBLE_SUBAGENT_ACTIONS,
 	SUBAGENT_ACTIONS,
 	SUBAGENT_ASYNC_STARTED_EVENT,
 	SUBAGENT_CHILD_STATUS_EVENT,
@@ -245,14 +246,14 @@ function hasSingleAdjacentTransposition(left: string, right: string): boolean {
 
 export function unknownSubagentActionMessage(action: string): string {
 	const requested = action.toLowerCase();
-	const suggestion = SUBAGENT_ACTIONS.find((candidate) => {
+	const suggestion = MODEL_VISIBLE_SUBAGENT_ACTIONS.find((candidate) => {
 		const distance = editDistance(requested, candidate);
 		const closeMatch = distance <= Math.max(1, Math.floor(candidate.length / 4)) || hasSingleAdjacentTransposition(requested, candidate);
 		if (DESTRUCTIVE_MANAGEMENT_ACTIONS.has(candidate)) return distance === 1 && requested.length >= candidate.length - 1;
 		return closeMatch;
 	});
-	const nextStep = 'Use subagent({ action: "status" }) to inspect runs or subagent({ action: "list" }) to inspect agents.';
-	const validActions = `Valid: ${SUBAGENT_ACTIONS.join(", ")}.`;
+	const nextStep = 'Use subagent({ action: "status" }) to inspect runs or subagent({ action: "guide" }) to read topic docs.';
+	const validActions = `Valid: ${MODEL_VISIBLE_SUBAGENT_ACTIONS.join(", ")}.`;
 	return suggestion
 		? `Unknown action: ${action}. Did you mean ${suggestion}? ${nextStep} ${validActions}`
 		: `Unknown action: ${action}. ${nextStep} ${validActions}`;
@@ -7345,6 +7346,12 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		const missingControlRunIdError = rejectMissingControlRunId(params);
 		if (missingControlRunIdError) {
 			return Promise.resolve({ content: [{ type: "text", text: missingControlRunIdError }], isError: true, details: { mode: "management", results: [] } });
+		}
+		// Phase 7c: model dispatch keeps steer/resume/interrupt/status/guide/validate only.
+		// Every other management action stays implemented for internal/slash/RPC/Fleet callers.
+		const publicAction = typeof params.action === "string" ? params.action.trim() : undefined;
+		if (publicAction && !(MODEL_VISIBLE_SUBAGENT_ACTIONS as readonly string[]).includes(publicAction.toLowerCase())) {
+			return Promise.resolve({ content: [{ type: "text", text: `${unknownSubagentActionMessage(publicAction)} Management actions (agents, missions, schedules, watchdogs, inspectors, projects, worktrees, lanes, refinements, stop, dismiss) moved to Fleet; the model cannot invoke them.` }], isError: true, details: { mode: "management", results: [] } });
 		}
 		const normalized = normalizePublicSubagentExecution(params as SubagentParamsLike);
 		if (!normalized.ok) {

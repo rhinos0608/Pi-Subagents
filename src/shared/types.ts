@@ -2808,6 +2808,9 @@ export const POLL_INTERVAL_MS = 250;
 export const WIDGET_ANIMATION_INTERVAL_MS = 1000;
 export const MAX_WIDGET_JOBS = 4;
 export const DEFAULT_SUBAGENT_MAX_DEPTH = 2;
+export const MODEL_VISIBLE_SUBAGENT_ACTIONS = ["steer", "resume", "interrupt", "status", "guide", "validate"] as const;
+
+/** Internal registry: every action the internal/slash/RPC/Fleet dispatch can route. Only MODEL_VISIBLE_SUBAGENT_ACTIONS is model-visible (see executePublic gate). */
 export const SUBAGENT_ACTIONS = ["list", "get", "models", "children.list", "guide", "validate", "create", "update", "delete", "eject", "disable", "enable", "reset", "mission.create", "mission.list", "mission.show", "mission.update", "mission.resolve-decision", "mission.attach-run", "mission.close", "worktree.discard", "worktree.cleanup", "lane.status", "lane.recordMerge", "lane.recordSupersession", "refine", "refine.show", "refine.rollback", "inspector.open", "inspector.command", "inspector.status", "inspector.close", "project.open", "project.status", "project.close", "status", "debug.run", "grant-spawn-budget", "interrupt", "resume", "steer", "stop", "dismiss", "doctor", "watchdog.status", "watchdog.check", "watchdog.configure", "watchdog.recommend-model", "schedule.create", "schedule.list", "schedule.show", "schedule.history", "schedule.pause", "schedule.resume", "schedule.run", "schedule.run-due", "schedule.delete"] as const;
 
 export const DEFAULT_FORK_PREAMBLE =

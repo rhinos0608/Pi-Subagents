@@ -12,6 +12,7 @@ import { readStatus } from "../shared/utils.ts";
 import { formatAsyncRunTranscript } from "../runs/background/fleet-view.ts";
 import { listAsyncRuns, type AsyncRunSummary } from "../runs/background/async-status.ts";
 import { steerAsyncRun } from "../runs/foreground/async-steering-action.ts";
+import { deliverInterruptRequest } from "../runs/background/control-channel.ts";
 import type { SteerDeliveryMode } from "../runs/background/control-channel.ts";
 import { stopAsyncRun } from "../runs/foreground/async-stop-action.ts";
 import { resolveWorkflowForegroundSteeringTarget, steerWorkflowForegroundTarget } from "../runs/foreground/workflow-foreground-steering.ts";
@@ -97,6 +98,8 @@ export interface FleetActionResult {
 export interface FleetActionHandlers {
 	steer(input: { runId: string; asyncDir: string; index?: number; message: string; mode: SteerDeliveryMode }): Promise<FleetActionResult>;
 	stop(input: { runId: string; asyncDir: string; index?: number }): Promise<FleetActionResult> | FleetActionResult;
+	interrupt?(input: { runId: string; asyncDir: string; index?: number }): Promise<FleetActionResult> | FleetActionResult;
+	resume?(input: { runId: string; asyncDir: string; index?: number; message: string }): Promise<FleetActionResult> | FleetActionResult;
 	inspect?(input: { runId: string; asyncDir: string; index?: number }): Promise<FleetActionResult>;
 	redoPrompt?(input: { runId: string; index: number; guidance: string; control?: ForegroundRunControl }): Promise<FleetActionResult>;
 }
@@ -1409,9 +1412,24 @@ export async function openSubagentFleet(ctx: ExtensionContext, state: SubagentSt
 		if (!copyToClipboard) throw new Error("Clipboard is unavailable in this Pi version.");
 		await copyToClipboard(text);
 	});
-	const actions = options.actions ?? {
-		steer: async (input: { runId: string; asyncDir: string; index?: number; message: string; mode: SteerDeliveryMode }) => {
-			const status = readStatus(input.asyncDir);
+	const actions = options.actions ?? buildDefaultFleetActions(state, options);
+	try {
+		await ctx.ui.custom<undefined>(
+			(tui, theme, _keybindings, done) => new SubagentFleetComponent(tui, theme, state, done, { ...options, actions, copyText }),
+			{
+				overlay: true,
+				overlayOptions: { anchor: "center", width: "95%", minWidth: 60, maxHeight: "85%", margin: 1 },
+			},
+		);
+	} finally {
+		state.fleetInspectorOpen = wasOpen;
+	}
+}
+
+export function buildDefaultFleetActions(state: SubagentState, options: FleetViewOptions = {}): FleetActionHandlers {
+	return {
+			steer: async (input: { runId: string; asyncDir: string; index?: number; message: string; mode: SteerDeliveryMode }) => {
+				const status = readStatus(input.asyncDir);
 			const liveWorkflowRunId = status?.mode === "workflow" && state.workflowControllers?.has(status.runId || input.runId)
 				? status.runId || input.runId
 				: undefined;
@@ -1432,6 +1450,32 @@ export async function openSubagentFleet(ctx: ExtensionContext, state: SubagentSt
 			}), `Failed to steer async run ${input.runId}.`);
 		},
 		stop: (input: { runId: string; asyncDir: string; index?: number }) => firstToolResultText(stopAsyncRun(state, input.runId, undefined, { asyncDir: input.asyncDir, resolvedId: input.runId }), `Failed to stop async run ${input.runId}.`),
+		// Phase 7c: interrupt-as-pause is distinct from stop (stop ends the run;
+		// interrupt requests a resumable pause via the run control inbox).
+		interrupt: (input: { runId: string; asyncDir: string; index?: number }) => {
+			const status = readStatus(input.asyncDir);
+			if (!status || status.state !== "running" || typeof status.pid !== "number") {
+				return { text: `No running async run with an interrupt-capable pid was found for '${input.runId}'.`, isError: true };
+			}
+			if (status.mode === "workflow") {
+				return { text: `Interrupt is unsupported for async workflow ${status.runId ?? input.runId}; use stop instead.`, isError: true };
+			}
+			const activeSteps = status.steps?.filter((step) => step.status === "running") ?? [];
+			if (activeSteps.length > 0 && activeSteps.every((step) => step.runner?.type === "external-cli" || step.runner?.type === "external-job")) {
+				return { text: `Interrupt is unsupported for external async run ${status.runId ?? input.runId}; use stop instead.`, isError: true };
+			}
+			try {
+				deliverInterruptRequest({ asyncDir: input.asyncDir, source: "fleet-interrupt" });
+			} catch (error) {
+				return { text: `Failed to interrupt async run ${status.runId ?? input.runId}: ${error instanceof Error ? error.message : String(error)}`, isError: true };
+			}
+			const tracked = state.asyncJobs.get(status.runId || input.runId);
+			if (tracked) {
+				delete tracked.activityState;
+				tracked.updatedAt = Date.now();
+			}
+			return { text: `Interrupt requested for async run ${status.runId || input.runId}.` };
+		},
 		inspect: async (input: { runId: string; asyncDir: string; index?: number }) => firstToolResultText(await handleInspectorAction("inspector.open", {
 			id: input.runId,
 			dir: input.asyncDir,
@@ -1452,15 +1496,4 @@ export async function openSubagentFleet(ctx: ExtensionContext, state: SubagentSt
 			return control.promptAuditRedo(input.index, input.guidance);
 		},
 	} satisfies FleetActionHandlers;
-	try {
-		await ctx.ui.custom<undefined>(
-			(tui, theme, _keybindings, done) => new SubagentFleetComponent(tui, theme, state, done, { ...options, actions, copyText }),
-			{
-				overlay: true,
-				overlayOptions: { anchor: "center", width: "95%", minWidth: 60, maxHeight: "85%", margin: 1 },
-			},
-		);
-	} finally {
-		state.fleetInspectorOpen = wasOpen;
-	}
 }

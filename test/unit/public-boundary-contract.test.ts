@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
+import * as os from "node:os";
+import * as path from "node:path";
 import { describe, it } from "node:test";
 import { resolveSubagentRunId } from "../../src/runs/background/run-id-resolver.ts";
-import { rejectMissingControlRunId } from "../../src/runs/foreground/subagent-executor.ts";
+import { createSubagentExecutor, rejectMissingControlRunId, unknownSubagentActionMessage } from "../../src/runs/foreground/subagent-executor.ts";
+import { MODEL_VISIBLE_SUBAGENT_ACTIONS, SUBAGENT_ACTIONS } from "../../src/shared/types.ts";
 
 // Phase 1b public-boundary contract tests: prove the INTENDED end state from
 // docs/subagent-tooling-overhaul.md ("Target public tool boundary" + "Schema cleanup").
@@ -245,4 +248,75 @@ describe("public boundary: runs.run child params reject unknown keys", () => {
 		const result = staticResult(`runs.run("one", { agent: "worker", task: "check", bogusKey: true })`);
 		assert.equal(result.ok, false, `runs.run bogusKey should fail static validation (${result.messages})`);
 	});
+});
+
+describe("public boundary: phase 7c model-visible action surface", () => {
+	it("exposes exactly steer, resume, interrupt, status, guide, validate", () => {
+		assert.deepEqual([...MODEL_VISIBLE_SUBAGENT_ACTIONS], ["steer", "resume", "interrupt", "status", "guide", "validate"]);
+	});
+
+	it("keeps the internal action registry intact for internal/slash/RPC/Fleet callers", () => {
+		for (const action of ["list", "get", "models", "children.list", "create", "stop", "dismiss", "refine", "mission.list", "schedule.list", "doctor", "debug.run", "grant-spawn-budget", "watchdog.status", "inspector.open", "project.open", "worktree.discard", "lane.status"]) {
+			assert.ok((SUBAGENT_ACTIONS as readonly string[]).includes(action), `${action} must stay implemented internally`);
+			assert.ok(!(MODEL_VISIBLE_SUBAGENT_ACTIONS as readonly string[]).includes(action), `${action} must not be model-visible`);
+		}
+	});
+
+	it("unknown-action message suggests kept actions only", () => {
+		for (const action of ["list", "stop", "refine", "bogus"]) {
+			const message = unknownSubagentActionMessage(action);
+			assert.match(message, new RegExp(`Unknown action: ${action}`));
+			assert.match(message, /Valid: steer, resume, interrupt, status, guide, validate/);
+			assert.doesNotMatch(message, /action: "list"/);
+		}
+	});
+
+	function publicExecutor() {
+		return createSubagentExecutor({
+			pi: { events: { emit() {}, on() { return () => {}; } }, getSessionName() { return "parent"; } } as never,
+			state: { asyncJobs: new Map(), foregroundControls: new Map() } as never,
+			config: { maxSubagentDepth: 2, control: {}, intercomBridge: {} } as never,
+			asyncByDefault: false,
+			tempArtifactsDir: os.tmpdir(),
+			getSubagentSessionRoot: (parentSessionFile) => parentSessionFile ? path.join(path.dirname(parentSessionFile), path.basename(parentSessionFile, ".jsonl")) : os.tmpdir(),
+			expandTilde: (value) => value,
+			discoverAgents: () => ({ agents: [] }),
+		});
+	}
+
+	function publicCtx() {
+		return {
+			cwd: os.tmpdir(),
+			hasUI: false,
+			sessionManager: { getSessionId() { return "boundary-test"; }, getSessionFile() { return null; } },
+			modelRegistry: { getAvailable() { return []; } },
+		} as never;
+	}
+
+	const removedActions = ["list", "get", "models", "children.list", "create", "update", "delete", "stop", "dismiss", "refine", "mission.create", "mission.list", "schedule.create", "schedule.list", "doctor", "debug.run", "grant-spawn-budget", "watchdog.status", "watchdog.check", "inspector.open", "project.open", "worktree.discard", "worktree.cleanup", "lane.status", "lane.recordMerge"];
+
+	for (const action of removedActions) {
+		it(`executePublic rejects removed action: ${action}`, async () => {
+			const result = await publicExecutor().executePublic("boundary", { action } as never, new AbortController().signal, undefined, publicCtx());
+			assert.equal(result.isError, true);
+			const text = result.content.find((item) => item.type === "text")?.text ?? "";
+			assert.match(text, new RegExp(`Unknown action: ${action}`));
+			assert.match(text, /Fleet/);
+		});
+	}
+
+	for (const action of ["steer", "resume", "interrupt", "status", "guide", "validate"]) {
+		it(`executePublic does not apply the removal rejection to kept action: ${action}`, async () => {
+			const params = action === "guide"
+				? { action, topic: "definitely-not-a-topic" }
+				: action === "validate"
+					? { action, workflowScript: "return 1" }
+					: { action, id: "deadbeef", message: "probe" };
+			const result = await publicExecutor().executePublic("boundary", params as never, new AbortController().signal, undefined, publicCtx()).then(
+				(resolved) => resolved.content.map((item) => item.type === "text" ? item.text : "").join("\n"),
+				(error) => error instanceof Error ? error.message : String(error),
+			);
+			assert.doesNotMatch(result, /moved to Fleet/);
+		});
+	}
 });

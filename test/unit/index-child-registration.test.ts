@@ -51,7 +51,8 @@ describe("subagent extension child mode", () => {
 				sessionManager: { getSessionId() { return "session-test"; }, getSessionFile() { return null; } },
 				modelRegistry: { getAvailable() { return []; } },
 			};
-			await registeredTool.execute("collapse-check", { action: "list" }, new AbortController().signal, undefined, ctx);
+			// Phase 7c: list left the model tool; collapse is verified with kept action guide.
+			await registeredTool.execute("collapse-check", { action: "guide", topic: "overview" }, new AbortController().signal, undefined, ctx);
 			if (calls[0] !== false) throw new Error("expected setToolsExpanded(false), got " + JSON.stringify(calls));
 		`;
 

@@ -773,11 +773,21 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		return executeSubagentReady(id, params, signal, onUpdate, ctx);
 	};
 
+	const executeSlashCollapsed = (id: string, params: SubagentParamsLike, signal: AbortSignal, onUpdate: ((result: AgentToolResult<Details>) => void) | undefined, ctx: ExtensionContext) => {
+		if (ctx.hasUI) ctx.ui.setToolsExpanded(false);
+		// Phase 7c: slash is an internal caller and rides the internal dispatch,
+		// never the model-visible executePublic gate.
+		return (async () => {
+			await waitForAdvertisement();
+			return executor.execute(id, params, signal, onUpdate, ctx);
+		})();
+	};
+
 	const slashBridge = registerSlashSubagentBridge({
 		events: pi.events,
 		getContext: () => state.lastUiContext,
 		execute: (id, params, signal, onUpdate, ctx) =>
-			executeSubagentCollapsed(id, params, signal, onUpdate, ctx),
+			executeSlashCollapsed(id, params, signal, onUpdate, ctx),
 	});
 
 	const promptTemplateBridge = registerPromptTemplateDelegationBridge({

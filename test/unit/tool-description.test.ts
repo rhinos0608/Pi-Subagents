@@ -83,7 +83,7 @@ describe("registered subagent tool description", () => {
 				/Raw-script sandboxes add deeply frozen args/,
 				/raw-script args persist as evidence, so never include secrets/,
 				/action is management\/control;/,
-				/action:"list",capabilities:true.*executable, non-disabled.*runner.available === true/,
+				/action:"guide",topic:"agents".*executable, non-disabled.*runner.available === true/,
 				/Passive PATH\/PATHEXT\/X_OK.*not authentication\/version\/launch proof/,
 				/exactly one top-level subagent workflow call with async:true/,
 				/explicit return, top-level await.*nested async function\/arrow\/method helpers are rejected/,
@@ -95,7 +95,7 @@ describe("registered subagent tool description", () => {
 				/not for final reviews\/gates/,
 				/one writer per cwd\/worktree.*fresh-context read-only reviewers/i,
 				/output on runs.run\/runs.all, not task filename prose.*outputReference.*outputPathMapping.*artifactPaths/,
-				/children.list is workflow-only, not an exhaustive list of direct native children.*exact run id.*action:"status",id.*status identifies the candidate.*action:"resume",id,message.*authoritatively checks eligibility, may reject it.*labeled same-role fallback only when no known candidate exists or resume rejects eligibility/,
+				/When an intended child's exact run id is known.*action:"status",id.*status identifies the candidate.*action:"resume",id,message.*authoritatively checks eligibility, may reject it.*labeled same-role fallback only when no known candidate exists or resume rejects eligibility/,
 				/latest returned runId.*distinct resume pass needs a new stable key.*identical launch parameters/,
 				/Oracle\/advisor.*supervisor dialogue/,
 				/raw workflowScript cannot use runs.host/,
@@ -121,6 +121,11 @@ describe("registered subagent tool description", () => {
 				/tool budget, fast, fork context/,
 				/subagents_enable/,
 				/bg_wait/,
+				/Management discovery/,
+				/children\.list is workflow-only/,
+				/status\/debug\.run/,
+				/control with interrupt\/stop\/resume\/steer/,
+				/grant-spawn-budget/,
 			]) assert.doesNotMatch(description, stale);
 		}
 	});

@@ -53,7 +53,9 @@ setTimeout(() => { if (phase === "old") fs.writeFileSync(${JSON.stringify(oldDon
 			import fs from "node:fs";
 			import path from "node:path";
 			import register from "./src/extension/index.ts";
-			import { discoverAgents } from "./src/agents/agents.ts";
+			import { discoverAgents, discoverAgentsAll } from "./src/agents/agents.ts";
+			import { handleManagementAction } from "./src/agents/agent-management.ts";
+			import { resolveGlobalNpmRoot } from "./src/agents/global-npm-root.ts";
 			import { registerRuntimeAgent } from "./src/agents/runtime-agent-registry.ts";
 			const hooks = new Map();
 			const tools = new Map();
@@ -72,6 +74,18 @@ setTimeout(() => { if (phase === "old") fs.writeFileSync(${JSON.stringify(oldDon
 				modelRegistry: { getAvailable() { return []; }, getAll() { return []; } },
 				sessionManager: { getSessionId() { return "barrier-test"; }, getSessionFile() { return undefined; }, getBranch() { return []; }, buildSessionContext() { return { messages: [] }; } },
 			};
+			// Phase 7c: list/get left the model-visible tool; drive the internal
+			// management handler directly, mirroring the extension wiring.
+			const manageAgents = async (action, params = {}) => {
+				const globalRoot = await resolveGlobalNpmRoot().catch(() => null);
+				return handleManagementAction(action, { action, ...params }, {
+					cwd: ctx.cwd,
+					modelRegistry: ctx.modelRegistry,
+					model: ctx.model,
+					currentSessionId: "barrier-test",
+					discoverAgentsAll: (dir, provider) => discoverAgentsAll(dir, provider, { globalNpmRoot: globalRoot }),
+				});
+			};
 			const start = hooks.get("session_start").at(-1);
 			const before = hooks.get("before_agent_start").at(-1);
 			start({ reason: "startup" }, ctx);
@@ -81,7 +95,7 @@ setTimeout(() => { if (phase === "old") fs.writeFileSync(${JSON.stringify(oldDon
 			const enabled = before({ systemPrompt: "base", systemPromptOptions: { selectedTools: ["subagent"] } }, ctx);
 			const firstExecution = tools.get("subagent").execute("immediate", { agent: "global-specialist", task: "Probe", async: false }, new AbortController().signal, undefined, ctx)
 				.then((result) => JSON.stringify(result), (error) => error.message);
-			const firstList = tools.get("subagent").execute("list", { action: "list" }, new AbortController().signal, undefined, ctx);
+			const firstList = manageAgents("list");
 			await new Promise((resolve) => setTimeout(resolve, 50));
 			assert.equal(tick, true, "npm did not block event loop");
 			let complete = false;
@@ -112,10 +126,10 @@ setTimeout(() => { if (phase === "old") fs.writeFileSync(${JSON.stringify(oldDon
 			assert.match(latest.systemPrompt, /<name>new-specialist<\/name>/);
 			assert.match(reloadedLoader.systemPrompt, /<name>new-specialist<\/name>/);
 			assert.doesNotMatch(latest.systemPrompt, /<name>global-specialist<\/name>/);
-			const currentList = await tools.get("subagent").execute("list-b", { action: "list" }, new AbortController().signal, undefined, ctx);
+			const currentList = await manageAgents("list");
 			assert.match(JSON.stringify(currentList), /new-specialist/);
 			assert.doesNotMatch(JSON.stringify(currentList), /global-specialist/);
-			const currentGet = await tools.get("subagent").execute("get-b", { action: "get", agent: "new-specialist" }, new AbortController().signal, undefined, ctx);
+			const currentGet = await manageAgents("get", { agent: "new-specialist" });
 			assert.match(JSON.stringify(currentGet), /new-specialist/);
 			const mergedRuntime = await mergedExecution;
 			assert.match(mergedRuntime, /new-specialist/, "runtime registry must retain the advertised package agent");
@@ -140,7 +154,7 @@ setTimeout(() => { if (phase === "old") fs.writeFileSync(${JSON.stringify(oldDon
 			}
 			fs.writeFileSync(path.join(process.env.PI_CODING_AGENT_DIR, "settings.json"), "{");
 			start({ reason: "reload" }, ctx);
-			await assert.rejects(tools.get("subagent").execute("invalid", { action: "list" }, new AbortController().signal, undefined, ctx), /Failed to parse settings file/);
+			await assert.rejects(manageAgents("list"), /Failed to parse settings file/);
 			console.log("responsive session_start; complete first prompt and loader");
 		`], { cwd: repo, env, encoding: "utf8", timeout: 30_000 });
 		assert.match(output, /responsive session_start; complete first prompt and loader/);

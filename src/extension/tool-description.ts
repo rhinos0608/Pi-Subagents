@@ -5,7 +5,7 @@ import { getAgentDir, getProjectConfigDir } from "../shared/utils.ts";
 
 const CUSTOM_TOOL_DESCRIPTION_FILE = "subagent-tool-description.md";
 const CUSTOM_TOOL_DESCRIPTION_MAX_BYTES = 50 * 1024;
-const AGENT_SELECTION_GUIDANCE = 'First call {action:"list",capabilities:true}: executable, non-disabled agents only; external-cli requires runner.available === true. Passive PATH/PATHEXT/X_OK is not authentication/version/launch proof; preflight is authoritative.';
+const AGENT_SELECTION_GUIDANCE = 'First read {action:"guide",topic:"agents"}: executable, non-disabled agents only; external-cli requires runner.available === true. Passive PATH/PATHEXT/X_OK is not authentication/version/launch proof; preflight is authoritative.';
 const SUBAGENT_FAILURE_RECOVERY_GUIDANCE = "Workflow, child launch, prompt runtime, extension load or child tooling failure is a lane infrastructure blocker. Stop; report exact failure, run/status and repo/cwd/worktree/branch/ref; verify clean worktree or capture partial diff before same-protocol retry or asking the owner. Never silently switch to interactive_shell, pi -ne, Codex/Claude/Cursor CLI or foreground/external mode: governed-workflow fallback requires explicit owner approval, not Pi core's generic pi -ne hint. Explicit foreground/CLI requests and work outside that protocol remain valid.";
 
 const FULL_SAFETY_GUIDANCE = `SAFETY-CRITICAL SUBAGENT GUIDANCE:
@@ -16,14 +16,14 @@ const FULL_SAFETY_GUIDANCE = `SAFETY-CRITICAL SUBAGENT GUIDANCE:
 • Async follows asyncByDefault (normally true); async:false only to block the parent, not for final reviews/gates. Consume results at dependency barriers. Native async completion wakes this session: return control, no sleep/poll merely for a wake. There is no wait or polling tool.
 • Ordinary child subagents are not orchestrators; only configured fanout within depth/session limits. For an authorized delegated workflow, keep one writer per cwd/worktree and isolate concurrent writers. Use fresh-context read-only reviewers when independent review was requested, then parent synthesis/fixes. Oracle/advisor unknowns use supervisor dialogue; one-shot only when requested.
 • Bind durable output on runs.run/runs.all, not task filename prose; return actual outputReference/outputPathMapping/artifactPaths, evidence and residual risks.
-• children.list is workflow-only, not an exhaustive list of direct native children: resume only resumable rows. When an intended child's exact run id is known, inspect it with {action:"status",id}; if status identifies the candidate, attempt {action:"resume",id,message}. Resume authoritatively checks eligibility, may reject it, and otherwise detaches a follow-up/challenge with the stored agent/model/tool contract. Use a labeled same-role fallback only when no known candidate exists or resume rejects eligibility. Scripts await runs.run(newKey,{resume:runId,task}); continue from latest returned runId. Each distinct resume pass needs a new stable key; same-key reuse requires identical launch parameters.
+• When an intended child's exact run id is known, inspect it with {action:"status",id}; if status identifies the candidate, attempt {action:"resume",id,message}. Resume authoritatively checks eligibility, may reject it, and otherwise detaches a follow-up/challenge with the stored agent/model/tool contract. Use a labeled same-role fallback only when no known candidate exists or resume rejects eligibility. Scripts await runs.run(newKey,{resume:runId,task}); continue from latest returned runId. Each distinct resume pass needs a new stable key; same-key reuse requires identical launch parameters.
 • Named resources own authority; raw workflowScript cannot use runs.host. Granted commands/relative outputs use workflow cwd, never per-step cwd.
-• Inspect asyncId/asyncDir (status.json, events.jsonl, logs) with status/debug.run; control with interrupt/stop/resume/steer. Read {action:"guide",topic:"tool-reference"} for controls/evidence gates.`;
+• Inspect asyncId/asyncDir (status.json, events.jsonl, logs) with {action:"status",id}; control owned runs with interrupt/resume/steer. Read {action:"guide",topic:"tool-reference"} for controls/evidence gates.`;
 
 /** Compact safety kernel retained in every description path. */
 export const SUBAGENT_SAFETY_GUIDANCE = `SAFETY KERNEL (authoritative):
 - Direct parent execution is the default. Invoke subagents only when delegation is authorized by the operator's current request or applicable user/project instructions; task size, complexity, risk, tool-call count, or recipe fit do not independently authorize delegation.
-- Authoritative preflight: {action:"list",capabilities:true}; executable, non-disabled only; PATH is not proof.
+- Authoritative preflight: {action:"guide",topic:"agents"}; executable, non-disabled only; PATH is not proof.
 - No silent fallback on infra failure (lane infrastructure blocker): stop/report evidence; alternate execution needs owner approval.
 - One writer per cwd/worktree; ordinary child subagents are not orchestrators. Async completion wakes session; do not sleep or poll.
 - Bind durable output to runs.run/runs.all; return references, artifacts, evidence, risks.
@@ -53,7 +53,7 @@ WORKFLOW DETAILS:
 • runs.lanes([{key,stages:[{key,agent,task},{key,resume:'previous',task}]}]) runs first stages together, later stages sequentially per lane. Failures stay lane-local; only explicit structuredOutput.verdict === 'blocked' blocks a successful stage, never reviewer prose.
 • Workflow child controls default onto runs.run/runs.all items; child fields override them.
 • Missions auto-attach unless mission:false; await state.get(key)/state.set(key,JSONValue) requires a mission. See guide topic missions. Omit acceptance for reviewer/read-only calls; acceptance.review.required requests independent writer review.
-• Management discovery: list/get/models/guide; create/update/delete/eject/disable/enable/reset/refine; mission.*, schedule.*, watchdog.*, inspector.*, project.*, lane.status/recordMerge/recordSupersession; worktree.discard and plan-only worktree.cleanup; doctor and grant-spawn-budget. Use guide topics agents, missions, observability, tool-reference, configuration, models, watchdog or extension-api for exact action fields. Schedules take script inputs, not direct children; recipes live in the missions guide.`;
+• Owned-run controls: {action:"status",id} to inspect, interrupt/resume/steer to control, {action:"validate",workflowScript} for offline script checks. Read {action:"guide",topic:"tool-reference"} for exact control fields. Agent, mission, schedule, watchdog, inspector, project, worktree, lane, and refinement management lives in Fleet, not in this tool.`;
 
 function isToolDescriptionMode(value: unknown): value is ToolDescriptionMode {
 	return value === "full" || value === "compact" || value === "custom";

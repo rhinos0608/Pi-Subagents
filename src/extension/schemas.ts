@@ -239,7 +239,7 @@ const SubagentParamProperties = {
 	agent: Type.Optional(Type.String({ description: "One-child agent or management target." })),
 	task: Type.Optional(Type.String({ description: "One-child task; requires agent." })),
 	action: Type.Optional(Type.String({ minLength: 1,
-		description: "Management/control only; omit for execution. Only steer, resume, and interrupt are exposed to the model."
+		description: "Management/control only; omit for execution. Only steer, resume, interrupt, status, guide, and validate are exposed to the model."
 	})),
 	id: Type.Optional(Type.String({
 		description: "Run id/prefix for status/control."
