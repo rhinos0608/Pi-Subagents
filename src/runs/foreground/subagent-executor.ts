@@ -3386,12 +3386,15 @@ function resolveSingleRunOutputBaseDir(deps: ExecutorDeps, artifactsDir: string,
 	return resolveConfiguredSingleRunOutputBaseDir(deps) ?? path.join(artifactsDir, "outputs", sanitizeRunPathSegment(runId));
 }
 
-function workflowChildDefaultOutput(aggregateOutputPath: string | undefined, artifactsDir: string, workflowRunId: string, workflowKey: string): string {
+function workflowChildDefaultOutput(aggregateOutputPath: string | undefined, artifactsDir: string, workflowRunId: string, workflowKey: string, configuredOutputBaseDir?: string): string {
 	if (aggregateOutputPath) {
 		const parsed = path.parse(aggregateOutputPath);
 		return path.join(parsed.dir, `${parsed.name}.${workflowKey}${parsed.ext || ".md"}`);
 	}
-	return path.join(artifactsDir, "outputs", sanitizeRunPathSegment(workflowRunId), `${workflowKey}.md`);
+	// Colliding inherited outputs isolate under the configured base when one is
+	// set, mirroring the default run-output layout otherwise.
+	const baseDir = configuredOutputBaseDir ?? path.join(artifactsDir, "outputs", sanitizeRunPathSegment(workflowRunId));
+	return path.join(baseDir, `${workflowKey}.md`);
 }
 
 function workflowHostCommandRunner(input: {
@@ -3541,7 +3544,7 @@ function workflowChildOutputClaims(input: {
 	const overrides = new Map<string, string>();
 	for (const entry of resolvedEntries) {
 		if (entry.inherited && entry.path && (paths.get(resolveWorkflowHostOutputClaimPath(entry.path)) ?? 0) > 1) {
-			const output = workflowChildDefaultOutput(input.aggregateOutputPath, input.artifactsDir, input.workflowRunId, entry.key);
+			const output = workflowChildDefaultOutput(input.aggregateOutputPath, input.artifactsDir, input.workflowRunId, entry.key, input.configuredOutputBaseDir);
 			overrides.set(entry.key, output);
 			entry.path = output;
 		}
