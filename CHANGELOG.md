@@ -45,6 +45,7 @@ First npm release of the fork: `v0.71.0-fork.1` (published as `@rhinos0608/pi-su
 - Answering a background subagent's supervisor request no longer wakes the parent again with a stale needs-attention notice and intercom copy. The attention notice now waits 60 seconds and is sent only if the request is still unanswered and the run is still active. Status displays and waits still react to the request immediately.
 - Async run retention now removes old runs whose mission has finished or was deleted, instead of keeping every mission-bound run forever. Runs whose mission update has not been synced yet are still kept. Fixes [#2535](https://github.com/nicobailon/pi-subagents/issues/2535). Thanks to [@LCorleone](https://github.com/LCorleone) for [#2536](https://github.com/nicobailon/pi-subagents/pull/2536).
 
+- Stopping a background run while it was shutting down could report "Stop requested" even though the runner never read the stop, so an interrupted run finished as paused instead of stopped. The stop now fails with a message to retry once the runner has exited, and that retry stops a paused run.
 
 ## [0.71.0] - 2026-09-23
 
