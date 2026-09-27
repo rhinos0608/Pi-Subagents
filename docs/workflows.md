@@ -63,6 +63,8 @@ Each `runs.run` / `runs.all` child accepts exactly: `agent`, `task`, `cwd`, `res
 
 `worktree: true` gives that child its own managed worktree at a mirrored subpath (requires a clean git working tree — commit or stash first); omit it to use the workflow/operator default. `worktree` must be a boolean; `baseRef` / `isolation` / provider overrides stay rejected on children.
 
+The result is `{ ok, errors }`. Invalid scripts return a tool error and include line and column data when available. Validation checks syntax, portable nested-async rules, literal `runs.run` and `runs.all` keys, duplicate literal keys in one `runs.all` group, direct keyed access to a known `runs.all` result, and statically clear non-JSON boundary values. It also looks up literal `agent` names in `runs.run`, `runs.all`, and `runs.lanes` children against the agents discovered for the request `cwd`, and reports unknown or ambiguous names with a close match when one exists. Children with their own `cwd` or `resume`, object spreads, and names built at runtime are left to launch time. Dynamic keys and other runtime-only values are accepted without a warning. Validation does not launch children or create run artifacts. Executing a workflow runs the same agent-name check first, so an unknown literal agent fails before any child launches.
+
 ```js
 subagent({ workflowScript: `
   const scan = await runs.run("scan", { label: "Map codebase behavior", agent: "scout", task: "Scan the codebase" });

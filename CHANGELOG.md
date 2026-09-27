@@ -24,6 +24,8 @@ First npm release of the fork: `v0.71.0-fork.1` (published as `@rhinos0608/pi-su
 
 ### Fixed
 
+- A workflow script with a misspelled agent name now fails before any child starts, instead of running the earlier children first. `action: "validate"` reports the same error with its line, column, and a close match when there is one (for example `Did you mean 'reviewer'?`). Names built at runtime and children with their own `cwd` or `resume` are still checked when they launch. Fixes [#2504](https://github.com/nicobailon/pi-subagents/issues/2504).
+
 - Large workflow results no longer flood the parent's context. A foreground workflow now caps its Return, Emitted, and Console sections and its failure error at 200 KB / 5000 lines, shortens each call-trace error to 500 characters, says where it cut them, and saves the full text to a file under the run's artifacts directory. Async completion notices and `action: "status"` show short previews: a cut preview ends in `…` and names the run's `status.json`, which holds the full value. Fixes [#2505](https://github.com/nicobailon/pi-subagents/issues/2505).
 
 - Compaction-triggered child aborts now recover when Pi reports `compaction_start` after `agent_settled`. Thanks to [@jiuai233](https://github.com/jiuai233) for [#2537](https://github.com/nicobailon/pi-subagents/pull/2537).

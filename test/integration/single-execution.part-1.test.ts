@@ -965,11 +965,9 @@ Answer only from the supplied synthetic text.
 		assert.equal(forwarded, undefined, "removed loader must not forward");
 	});
 
-	it("rejects a static spawn-budget mismatch before discovering or launching children", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+	it("rejects a static spawn-budget mismatch before launching children", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
 		const before = fs.readdirSync(tempDir).sort();
-		const executor = makeExecutor([makeAgent("echo")], {}, false, undefined, true, new Map(), undefined, undefined, createEventBus(), () => {
-			throw new Error("spawn-budget validation must not discover or launch agents");
-		});
+		const executor = makeExecutor([makeAgent("echo")]);
 		const script = [
 			`const results = await runs.all([`,
 			`  { key: "a", agent: "echo", task: "A" },`,
@@ -1001,9 +999,7 @@ Answer only from the supplied synthetic text.
 
 	it("validates workflow scripts without launching children or creating artifacts", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
 		const before = fs.readdirSync(tempDir).sort();
-		const executor = makeExecutor([makeAgent("echo")], {}, false, undefined, true, new Map(), undefined, undefined, createEventBus(), () => {
-			throw new Error("validate must not discover or launch agents");
-		});
+		const executor = makeExecutor([makeAgent("echo")]);
 
 		const result = await executor.executePublic(
 			"offline-validation",
@@ -1450,9 +1446,6 @@ Answer only from the supplied synthetic text.
 		fs.rmSync(failed.details.asyncDir!, { recursive: true, force: true });
 		if (failed.details.asyncId) fs.rmSync(path.join(DIRS.results, `${failed.details.asyncId}.json`), { force: true });
 	});
-
-
-
 
 	it("starts workflow scripts asynchronously with a portable internal run id", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
 		mockPi.onCall({ output: "async child done" });
@@ -3771,6 +3764,27 @@ Answer only from the supplied synthetic text.
 		assert.match(result.content[0]?.text ?? "", /validation failed before child launch; no children launched/);
 		assert.match(result.content[0]?.text ?? "", /'first', 'second'.*minimum required: 2; configured: 1/);
 		assert.equal(result.details.workflow, undefined);
+	});
+
+	it("rejects an unknown literal agent before launching any workflow child", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		const executor = makeExecutor([makeAgent("reviewer")]);
+		const workflowScript = `const scan = await runs.run("scan", { agent: "reviewer", task: "Scan" });\nreturn runs.run("review", { agent: "reviwer", task: scan.output });`;
+
+		const result = await executor.execute("scripted-workflow-unknown-agent", { async: false, workflowScript }, new AbortController().signal, undefined, makeMinimalCtx(tempDir));
+		assert.equal(result.isError, true);
+		assert.equal(mockPi.callCount(), 0);
+		assert.match(result.content[0]?.text ?? "", /no children launched\. runs\.run: Unknown agent 'reviwer'\. Did you mean 'reviewer'\?/);
+
+		const validation = await executor.execute("scripted-workflow-unknown-agent-validate", { action: "validate", workflowScript }, new AbortController().signal, undefined, makeMinimalCtx(tempDir));
+		assert.equal(validation.isError, true);
+		assert.deepEqual(JSON.parse(validation.content[0]?.text ?? "").errors.map((error: { kind?: string; line?: number }) => ({ kind: error.kind, line: error.line })), [{ kind: "agent", line: 2 }]);
+	});
+
+	it("checks literal agents with the parent model's provider-specific discovery", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		const executor = makeExecutor([], {}, false, undefined, true, new Map(), undefined, undefined, createEventBus(), (_cwd, provider) => provider === "openai-codex" ? [makeAgent("reviewer")] : []);
+		const ctx = { ...makeMinimalCtx(tempDir), model: { provider: "openai-codex", id: "gpt-test" } };
+		const validation = await executor.execute("provider-agent-validate", { action: "validate", workflowScript: `return runs.run("review", { agent: "reviewer", task: "Review" });` }, new AbortController().signal, undefined, ctx as ReturnType<typeof makeMinimalCtx>);
+		assert.equal(validation.isError, undefined, validation.content[0]?.text);
 	});
 
 	it("lets an explicit workflow spawn override exceed config", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
