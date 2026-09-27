@@ -116,7 +116,7 @@ export function buildWorkflowGraphSnapshot(input: WorkflowGraphBuildInput): Work
 					flatIndex,
 					stepIndex,
 					outputName: task.as,
-					structured: Boolean(task.outputSchema),
+					structured: false,
 					acceptanceStatus: input.results?.[flatIndex]?.acceptance?.status,
 					error: input.stepStatuses?.[flatIndex]?.error ?? input.results?.[flatIndex]?.error,
 				};
@@ -206,7 +206,7 @@ export function buildWorkflowGraphSnapshot(input: WorkflowGraphBuildInput): Work
 			flatIndex,
 			stepIndex,
 			outputName: seq.as,
-			structured: Boolean(seq.outputSchema),
+			structured: false,
 			acceptanceStatus: input.results?.[flatIndex]?.acceptance?.status,
 			error: input.stepStatuses?.[flatIndex]?.error ?? input.results?.[flatIndex]?.error,
 		});

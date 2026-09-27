@@ -399,27 +399,12 @@ type ExecutionAcceptanceInput = {
 	acceptance?: unknown;
 	outputSchema?: unknown;
 	tasks?: Array<{ acceptance?: unknown; outputSchema?: unknown }>;
-	chain?: Array<{
-		acceptance?: unknown;
-		outputSchema?: unknown;
-		parallel?: Array<{ acceptance?: unknown; outputSchema?: unknown }> | { acceptance?: unknown; outputSchema?: unknown };
-	}>;
 };
 
 export function validateExecutionAcceptancePolicy(input: ExecutionAcceptanceInput): string[] {
 	const errors = validateAcceptanceInput(input.acceptance, "acceptance");
 	for (const [index, task] of (input.tasks ?? []).entries()) {
 		errors.push(...validateAcceptanceInput(task.acceptance, `tasks[${index}].acceptance`));
-	}
-	for (const [stepIndex, step] of (input.chain ?? []).entries()) {
-		errors.push(...validateAcceptanceInput(step.acceptance, `chain[${stepIndex}].acceptance`));
-		if (Array.isArray(step.parallel)) {
-			for (const [taskIndex, task] of step.parallel.entries()) {
-				errors.push(...validateAcceptanceInput(task.acceptance, `chain[${stepIndex}].parallel[${taskIndex}].acceptance`));
-			}
-		} else if (step.parallel) {
-			errors.push(...validateAcceptanceInput(step.parallel.acceptance, `chain[${stepIndex}].parallel.acceptance`));
-		}
 	}
 	return errors;
 }
@@ -429,16 +414,6 @@ export function validateExecutionAcceptance(input: ExecutionAcceptanceInput): st
 	errors.push(...validateAcceptanceReportMode(input.acceptance, input.outputSchema, "acceptance"));
 	for (const [index, task] of (input.tasks ?? []).entries()) {
 		errors.push(...validateAcceptanceReportMode(task.acceptance, task.outputSchema, `tasks[${index}].acceptance`));
-	}
-	for (const [stepIndex, step] of (input.chain ?? []).entries()) {
-		errors.push(...validateAcceptanceReportMode(step.acceptance, step.outputSchema, `chain[${stepIndex}].acceptance`));
-		if (Array.isArray(step.parallel)) {
-			for (const [taskIndex, task] of step.parallel.entries()) {
-				errors.push(...validateAcceptanceReportMode(task.acceptance, task.outputSchema, `chain[${stepIndex}].parallel[${taskIndex}].acceptance`));
-			}
-		} else if (step.parallel) {
-			errors.push(...validateAcceptanceReportMode(step.parallel.acceptance, step.parallel.outputSchema, `chain[${stepIndex}].parallel.acceptance`));
-		}
 	}
 	return errors;
 }
