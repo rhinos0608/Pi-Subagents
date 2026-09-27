@@ -165,6 +165,24 @@ describe("scripted workflow runtime", () => {
 		assert.deepEqual(validateWorkflowScript(`return runs.run("same", { agent: selectedAgent });`), { ok: true, errors: [] });
 	});
 
+	it("rejects statically known non-allowlisted child fields offline", () => {
+		for (const script of [
+			`return runs.run("child", { agent: "worker", task: "Check", model: "other" });`,
+			`return runs.run("child", { agent: "worker", task: "Check", toolBudget: { hard: 4 } });`,
+			`return runs.all([{ key: "child", agent: "worker", task: "Check", model: "other" }]);`,
+			`return runs.all([{ key: "child", agent: "worker", task: "Check", toolBudget: { hard: 4 } }]);`,
+		]) {
+			const result = validateWorkflowScript(script);
+			assert.equal(result.ok, false, script);
+			assert.ok(result.errors.some((error) => error.message.includes("unsupported field")), script);
+		}
+		for (const script of [
+			`return runs.run("child", { agent: "worker", task: "Check", ...overrides });`,
+			`return runs.run("child", { agent: "worker", task: "Check", [field]: "other" });`,
+			`return runs.all([{ key: "child", agent: "worker", task: "Check", ...overrides }]);`,
+		]) assert.deepEqual(validateWorkflowScript(script), { ok: true, errors: [] }, script);
+	});
+
 	it("reports literal child baseRef policy errors with source locations offline", () => {
 		for (const [call, value] of [
 			["run", JSON.stringify("a".repeat(40))],
@@ -185,25 +203,18 @@ describe("scripted workflow runtime", () => {
 			].join("\n");
 			const result = validateWorkflowScript(script);
 			assert.equal(result.ok, false, script);
-			assert.equal(result.errors.length, 1, script);
+			assert.equal(result.errors.length, call === "run" ? 3 : 2, script);
 			assert.equal(result.errors[0]?.line, 3);
 			assert.equal(result.errors[0]?.column, 12);
 			assert.match(result.errors[0]!.message, new RegExp(`runs\\.${call}.*baseRef`));
 			assert.match(result.errors[0]!.message, /HEAD.*named ref.*40\/64-character commit IDs.*revision expressions.*unsupported/);
+			assert.ok(result.errors.some((error) => error.message.includes("unsupported field 'baseRef'")), script);
 		}
 	});
 
 	it("validates only the final statically known child baseRef without guessing overwrites", () => {
 		for (const fields of [
 			"",
-			'baseRef: "HEAD"',
-			'baseRef: "refs/heads/release"',
-			'baseRef: "refs/tags/v1"',
-			'baseRef: "origin/main"',
-			'baseRef: "HEAD~1", baseRef: "HEAD"',
-			'baseRef: "HEAD~1", ["baseRef"]: `HEAD`',
-			'baseRef: "HEAD~1", baseRef: selectedRef',
-			'baseRef: "HEAD~1", baseRef: "refs/heads/" + branch',
 			'baseRef: "HEAD~1", ...overrides',
 			'baseRef: "HEAD~1", [field]: "HEAD"',
 			'baseRef: "HEAD~1", get baseRef() { return "HEAD"; }',
@@ -214,6 +225,25 @@ describe("scripted workflow runtime", () => {
 				`return runs.all([{ key: "child", agent: "worker", task: "Check", ${fields} }]);`,
 			]) assert.deepEqual(validateWorkflowScript(script), { ok: true, errors: [] }, script);
 		}
+		for (const fields of [
+		'baseRef: "HEAD"',
+		'baseRef: "refs/heads/release"',
+		'baseRef: "refs/tags/v1"',
+		'baseRef: "origin/main"',
+		'baseRef: "HEAD~1", baseRef: "HEAD"',
+		'baseRef: "HEAD~1", baseRef: selectedRef',
+		'baseRef: "HEAD~1", baseRef: "refs/heads/" + branch',
+		'baseRef: "HEAD~1", ["baseRef"]: `HEAD`',
+	]) {
+		for (const script of [
+			`return runs.run("child", { agent: "worker", task: "Check", ${fields} });`,
+			`return runs.all([{ key: "child", agent: "worker", task: "Check", ${fields} }]);`,
+		]) {
+			const result = validateWorkflowScript(script);
+			assert.equal(result.ok, false, script);
+			assert.ok(result.errors.some((error) => error.message.includes("unsupported field 'baseRef'")), script);
+		}
+	}
 		for (const fields of [
 			'baseRef: "HEAD", baseRef: "HEAD~1"',
 			'...defaults, baseRef: "HEAD~1"',
@@ -1802,7 +1832,9 @@ describe("scripted workflow runtime", () => {
 				? `return runs.run("invalid", { agent: "worker", task: "Check", baseRef: ${expression} });`
 				: `return runs.all([{ key: "valid", agent: "worker", task: "Check", baseRef: "HEAD" }, { key: "invalid", agent: "worker", task: "Check", baseRef: ${expression} }]);`;
 			if (expression.includes("repeat") || expression.includes(" + ")) {
-				assert.deepEqual(validateWorkflowScript(script), { ok: true, errors: [] });
+				const staticResult = validateWorkflowScript(script);
+				assert.equal(staticResult.ok, false, `${call} ${expression}`);
+				assert.ok(staticResult.errors.some((error) => error.message.includes("unsupported field 'baseRef'")), `${call} ${expression}`);
 			}
 			await assert.rejects(
 				runWorkflowScript({

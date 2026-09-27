@@ -1656,6 +1656,26 @@ function directRunsAllKeys(call: AstNode): Array<{ key: string; node: AstNode }>
 	});
 }
 
+function validateStaticRunParams(params: AstNode | undefined, owner: string, skipKey: boolean): WorkflowScriptValidationError[] {
+	if (!params || params.type !== "ObjectExpression") return [];
+	const properties = Array.isArray(params.properties) ? params.properties : [];
+	const names: string[] = [];
+	for (const property of properties) {
+		if (property?.type !== "Property" || property.kind !== "init") return [];
+		const name = staticPropertyKey(property);
+		if (name === undefined) return [];
+		names.push(name);
+	}
+	const errors: WorkflowScriptValidationError[] = [];
+	const reported = new Set<string>();
+	for (const name of names) {
+		if ((name === "key" && skipKey) || WORKFLOW_CHILD_ALLOWED_FIELDS.has(name) || reported.has(name)) continue;
+		reported.add(name);
+		errors.push({ message: `${owner} params contain unsupported field '${name}'.`, ...nodeLocation(params) });
+	}
+	return errors;
+}
+
 function containsWorkflowLaunch(node: unknown): boolean {
 	let found = false;
 	walkAst(node, (candidate) => {
@@ -1800,6 +1820,7 @@ export function validateWorkflowScript(script: string, options: WorkflowScriptVa
 			if (keyNode && key !== undefined && !KEY_PATTERN.test(key)) errors.push({ message: "runs.run key must be 1-128 characters using letters, numbers, '.', '_' or '-', and start with a letter or number.", ...nodeLocation(keyNode) });
 			if (astNode(args[1])) {
 				errors.push(...validateStaticBaseRef(args[1], "runs.run"));
+				errors.push(...validateStaticRunParams(args[1], "runs.run", false));
 				const message = definitelyNonJson(args[1]);
 				if (message) errors.push({ message: `runs.run params are invalid: ${message}.`, ...nodeLocation(args[1]) });
 			}
@@ -1810,6 +1831,7 @@ export function validateWorkflowScript(script: string, options: WorkflowScriptVa
 			if (astNode(args[0]) && args[0].type === "ArrayExpression" && Array.isArray(args[0].elements)) {
 				for (const item of args[0].elements) if (astNode(item)) {
 					errors.push(...validateStaticBaseRef(item, "runs.all item"));
+					errors.push(...validateStaticRunParams(item, "runs.all item", true));
 					const message = definitelyNonJson(item);
 					if (message) errors.push({ message: `runs.all item params are invalid: ${message}.`, ...nodeLocation(item) });
 				}
