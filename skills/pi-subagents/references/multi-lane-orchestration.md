@@ -41,8 +41,7 @@ Use one async `workflowScript` for a coordinated wave. Use `runs.all` for indepe
 While one lane waits, run safe independent preparation, validation, or fresh read-only review lanes. Do not block the parent just because a run is active. If no safe lane remains, record the blocker and the event that will reopen work.
 
 In an ordinary interactive session, completion wakes the parent; after useful
-async lanes are launched or triaged, yield rather than use
-`bg_wait({ all: true })` as a barrier. “Continue/orchestrate/work until
+async lanes are launched or triaged, yield and let the completion notice wake the parent; never poll status as a barrier. “Continue/orchestrate/work until
 done” means keep the board moving while safe immediate work remains. If only
 async lanes are running, record the revisit trigger and yield.
 

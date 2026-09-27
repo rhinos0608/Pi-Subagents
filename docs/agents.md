@@ -202,6 +202,8 @@ The provider must be loaded in the child and register all four tools, including 
 
 ## Overriding builtins and custom agents
 
+Provenance: the flat `agentOverrides` operator layer is kept deliberately (supervisor decision) so an operator can disable, enable, and tune a role without forking shared or package-owned definitions. The provider-scoped override layer stays deleted.
+
 You can override selected agent fields without copying the whole agent. Overrides live in settings:
 
 - User: `~/.pi/agent/settings.json`
@@ -230,11 +232,11 @@ Supported override fields: `description`, `machine`, `output`, `outputMode`, `de
 
 Disable and restore:
 
-- `disabled: true` hides a builtin from runtime discovery and agent-facing `subagent({ action: "list" })` output.
+- `disabled: true` hides a builtin from runtime discovery and Fleet agent output.
 - `subagents.disableBuiltins: true` disables all builtins at once.
-- `subagent({ action: "disable", agent: "reviewer" })` writes the override without editing settings by hand; `subagent({ action: "enable", agent: "reviewer" })` removes it.
-- `subagent({ action: "eject", agent: "reviewer" })` copies a bundled builtin or package agent verbatim into the user or project agent dir (default `user`) as an editable custom file that shadows the original.
-- `subagent({ action: "reset", agent: "reviewer" })` deletes the scope's custom agent file and/or settings override entry, restoring the bundled default. It refuses if no bundled default exists (use `delete` for purely custom agents).
+- Fleet disable/enable writes the override without editing settings by hand.
+- Fleet eject copies a bundled builtin or package agent verbatim into the user or project agent dir (default `user`) as an editable custom file that shadows the original.
+- Fleet reset deletes the scope's custom agent file and/or settings override entry, restoring the bundled default. It refuses if no bundled default exists.
 
 A custom agent file that shadows a bundled agent replaces the bundled definition wholesale; it does not inherit omitted frontmatter, including `acceptanceRole`. Custom implementation profiles must declare `acceptanceRole: writer` explicitly when writer acceptance inference is intended. Without it, automatic acceptance uses lightweight attestation as described in the [frontmatter reference](#frontmatter-reference).
 
@@ -267,7 +269,7 @@ pi-subagents never clones, pulls, or checks out on the machine. Generic `externa
 
 Set `advertise: true` in a specialist's agent file frontmatter for parent-prompt discovery. When the `subagent` tool is active, pi-subagents adds an agent-owned catalog of names and descriptions to the parent system prompt. Disabled agents and agents excluded by the current capability ceiling are omitted. Advertisement is not supported through settings overrides or runtime registration.
 
-Advertisement is opt-in discovery, not automatic routing. The catalog is sorted by name and limited to 16 agents and 12,288 total rendered UTF-8 bytes, including XML escaping, instructions, and omission counts. Descriptions are capped at 512 UTF-8 bytes before escaping. Entries that cannot fit are omitted; canonical agent names are never truncated. The parent still calls `subagent({ action: "list", capabilities: true })` before execution to confirm that the selected agent is executable (including `runner.available === true` for external CLI agents).
+Advertisement is opt-in discovery, not automatic routing. The catalog is sorted by name and limited to 16 agents and 12,288 total rendered UTF-8 bytes, including XML escaping, instructions, and omission counts. Descriptions are capped at 512 UTF-8 bytes before escaping. Entries that cannot fit are omitted; canonical agent names are never truncated. The parent still checks Fleet agent output before execution to confirm that the selected agent is executable (including `runner.available === true` for external CLI agents).
 
 The file catalog snapshot refreshes at session start/reload and after extension-owned agent-management mutations. External file or settings edits require `/reload`; ordinary turns do not poll the filesystem. Tool availability and capability-ceiling filtering are checked in memory on every prompt. A failed management-triggered refresh withdraws the catalog until a successful refresh, without changing the persisted mutation's result.
 
@@ -283,7 +285,7 @@ Use these fields when an agent should see more:
 | `inheritProjectContext: true` | Keep inherited repository instructions from files like `AGENTS.md` and `CLAUDE.md`. |
 | `inheritGlobalContext: true` | Also keep the operator's global context file from the Pi config agent directory (such as `~/.pi/agent/AGENTS.md`). Defaults to `false`. |
 | `inheritSkills: true` | Let the child see Pi's discovered skills catalog. |
-| `defaultContext: fork` | Prefer forked session context when a launch omits `context`; if the parent has no persisted session file or current leaf yet, the implicit default falls back to `fresh` without a failed first attempt. Explicit `context: "fork"` remains strict, and explicit `context: "fresh"` still wins. |
+| `defaultContext: fork` | Prefer forked session context for this agent; if the parent has no persisted session file or current leaf yet, the default falls back to `fresh`. There is no per-call context field on the model tool. |
 
 Builtin agents opt into repository instruction inheritance by default so they follow repo-specific rules out of the box, but global context remains excluded unless `inheritGlobalContext: true` is set. This changes the behavior of existing agents that previously received global context as part of `inheritProjectContext: true`. `delegate` also uses append mode because its job is orchestration inside the parent workflow.
 
@@ -355,16 +357,16 @@ Field notes:
 | `inheritProjectContext` | Keeps or strips inherited repository instruction blocks. |
 | `inheritGlobalContext` | Keeps or strips the operator's global context file from the Pi config agent directory (e.g. `~/.pi/agent/AGENTS.md`). It has an effect only when `inheritProjectContext` is `true`; otherwise all context files are already disabled. Defaults to `false`. |
 | `inheritSkills` | Keeps or strips Pi's discovered skills catalog. |
-| `defaultContext` | Optional `fresh` or `fork` launch-context preference. An implicit `fork` falls back to `fresh` when the parent has no persisted session file or current leaf; an explicit launch `context: "fork"` remains strict. |
+| `defaultContext` | Optional `fresh` or `fork` launch-context preference for this agent. A `fork` default falls back to `fresh` when the parent has no persisted session file or current leaf. There is no per-call context field on the model tool. |
 | `skills` | Selects specific skills for the child, regardless of `inheritSkills`. |
 | `skillPath` | Invocation-private skill files or discovery directories. Relative paths resolve from the agent definition file. Local matches take precedence, while unresolved or unreadable matches fall back to normal skill discovery. This field discovers candidates only; `skills` still selects what the child receives. |
 | `output` | Default single-agent output file. |
 | `defaultReads` | Files to read before running the agent. |
 | `defaultProgress` | Maintain `progress.md`. |
 | `async` | Default a single-agent launch to background (`true`) or foreground (`false`) when the call omits `async`. Explicit call values and `forceTopLevelAsync` win. |
-| `timeoutMs` | Positive integer default runtime deadline in milliseconds for single-agent launches. Foreground launches use 30 minutes when neither the call nor agent provides a timeout; explicit `timeoutMs`/`maxRuntimeMs` and agent defaults win. |
-| `toolTimeoutMs` | Optional positive integer hard per-tool-call deadline in milliseconds. An explicit call value wins, then this agent default, global `toolTimeoutMs`, and `PI_SUBAGENT_TOOL_TIMEOUT_MS`. When omitted, known-fast built-in tools get a five-minute default; long-running tools get attention notices but no hard default. It does not extend the run-level deadline; `contact_supervisor` and `intercom` are exempt. |
-| `acceptance` | Acceptance default for single-agent launches. Use a scalar level such as `checked` or an inline/block YAML map such as `{ level: "none", reason: "lightweight lookup" }`. Explicit call values win; chain and parallel acceptance remains task/step configuration. |
+| `timeoutMs` | Positive integer default runtime deadline in milliseconds for single-agent launches. Foreground launches use 30 minutes when neither the agent default nor operator config provides a timeout. |
+| `toolTimeoutMs` | Optional positive integer hard per-tool-call deadline in milliseconds. Operator config (`toolTimeoutMs`, `PI_SUBAGENT_TOOL_TIMEOUT_MS`) overrides this agent default. When omitted, known-fast built-in tools get a five-minute default; long-running tools get attention notices but no hard default. It does not extend the run-level deadline; `contact_supervisor` and `intercom` are exempt. |
+| `acceptance` | Acceptance default for single-agent launches. Use a scalar level such as `checked` or an inline/block YAML map such as `{ level: "none", reason: "lightweight lookup" }`. There is no per-call acceptance parameter. |
 | `acceptanceRole` | Optional `read-only` or `writer` role for automatic acceptance inference. When omitted, automatic acceptance uses lightweight attestation; task wording and agent names do not escalate it. This does not grant or revoke tools. |
 | `mutationTools` | Comma-separated extension tool names treated as mutating activity for runtime diagnostics, long-running-tool status, and timeout recovery. This is diagnostic only and never determines successful completion. List and load each tool through `tools` and its extension provider as usual. |
 | `interactive` | Parsed for compatibility but not currently enforced. |
@@ -413,20 +415,7 @@ A refinement overlay is bounded, project-local guidance layered on top of one ag
 /subagents-refine reviewer
 ```
 
-```ts
-subagent({ action: "refine", agent: "reviewer" })
-subagent({ action: "refine.show", agent: "reviewer" })
-subagent({ action: "refine.rollback", agent: "reviewer" })
-```
-
-How it works:
-
-- `refine` collects bounded evidence from that agent's recent runs in the project (statuses, errors, review findings, residual risks, output tails), then launches a fresh read-only proposal child to draft small guidance edits from that evidence.
-- Proposed guidance is validated before it is written. Edits that try to override safety, policy, tool, output, acceptance, developer, or system instructions are rejected, as are edits that target all agents or base agent files.
-- The accepted overlay is stored at `.pi/subagents/refinements/<agent>.md` with revision metadata and snapshots. Each `refine` or `refine.rollback` adds a snapshot, and `refine.rollback` restores the previous revision.
-- At launch, the current overlay is injected into that agent's child system prompt as a `<pi-subagents-refinement>` block scoped to this project. The base agent definition is never modified.
-
-`refine.show` prints the current overlay and revision history. Delete the overlay file to remove the refinement entirely.
+Refinement is managed through slash commands and Fleet, not the model tool. The accepted overlay is stored at `.pi/subagents/refinements/<agent>.md` with revision metadata and snapshots. At launch, the current overlay is injected into that agent's child system prompt as a `<pi-subagents-refinement>` block scoped to this project. Delete the overlay file to remove the refinement entirely.
 
 ## Tool and extension selection
 
@@ -539,6 +528,6 @@ What it covers:
 - **Role-agent prompting guidance**: compact contract prompts instead of long scripts, what to include in role-specific meta prompts, and retrieval budgets for researchers.
 - **Safety boundaries**: child agents must not run subagents unless their resolved builtin tools explicitly include `subagent`, must not invent intercom targets, and must escalate unapproved decisions.
 - **Intercom conventions**: when to ask vs send, and how parent-side supervisor/result delivery works through the native channel.
-- **Control and diagnostics**: attention signals, soft interrupts, status, and the `doctor` action.
+- **Control and diagnostics**: attention signals, soft interrupts, and status. Diagnostics run via `/subagents-doctor`.
 
 If you are writing an agent that has been asked to orchestrate subagents, the bundled skill helps it behave correctly without guessing the patterns. If you are a human user, you do not need to read it; the README and prompt shortcuts encode the same workflows in user-facing form.

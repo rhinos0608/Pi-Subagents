@@ -4,15 +4,8 @@ This file is a detailed reference loaded from `skills/pi-subagents/SKILL.md`.
 
 ## Important Constraints
 
-- **Explicit forking requires a persisted parent session.** If the current session
-  does not have a persisted session file or current leaf, explicit `context: "fork"`
-  fails. An agent-level `defaultContext: fork` is a preference: packaged `oracle`
-  and `advisor` fall back to `fresh` when those fork preconditions are not
-  met yet. Use `context: "fresh"` when you do not want a fork even after the parent
-  session exists.
-- **Packaged workers start fresh.** `worker` defaults to fresh context so its brief,
-  not the parent's unfinished agenda, controls the implementation. Pass explicit
-  `context: "fork"` when inherited conversation history is required.
+- **Forking requires a persisted parent session.** If the current session does not have a persisted session file or current leaf, fork-default children start fresh. An agent-level `defaultContext: fork` is a preference: packaged `oracle` and `advisor` fall back to `fresh` when those fork preconditions are not met yet. There is no per-call context field on the model tool.
+- **Packaged workers start fresh.** `worker` defaults to fresh context so its brief, not the parent's unfinished agenda, controls the implementation. Use a fork-default agent when inherited conversation history is required.
 - **Forked runs inherit parent history.** They are branched threads, not fresh
   filtered contexts. Use fresh context for adversarial reviewers unless the user explicitly asks for forked context.
 - **Default subagent nesting depth is 2.** Deeper recursive delegation is blocked
@@ -22,9 +15,9 @@ This file is a detailed reference loaded from `skills/pi-subagents/SKILL.md`.
   ask wait state at a time.
 - **Keep conversational authority clear.** Advisory subagents should not silently
   become second decision-makers.
-- **Respect the fixed authority policy.** `authorityPolicy` is a small `auto` / `confirm` / `forbid` map for supported operational actions. Worktree discard, destructive cleanup, and spawn-budget grants default to confirmation; stop, steer, and schedule creation remain automatic. Use `worktree.discard` with the durable `handoffPath`; confirm-required actions refuse safely without an interactive UI and retained paths include manual Git recovery commands.
+- **Respect the fixed authority policy.** `authorityPolicy` is a small `auto` / `confirm` / `forbid` map for supported operational actions. Destructive cleanup and spawn-budget grants default to confirmation; steer and interrupt remain automatic. Confirm-required actions refuse safely without an interactive UI and retained paths include manual Git recovery commands.
 
-Runtime config can change orchestration behavior. `intercomBridge.resultDelivery: false` disables only external acknowledged grouped-result delivery when native parent notifications own completion; supervisor asks/progress stay active, and enabled transport failures are still reported. `asyncByDefault` and `forceTopLevelAsync` affect whether launches detach; `waitTool` can make direct `bg_wait()` calls return immediately while headless auto-drain remains active, and its effective value is propagated to child runtimes; `globalConcurrencyLimit` bounds concurrent fanout, while a positive `maxSubagentSpawnsPerSession` optionally caps cumulative launches (`0` or unset is unlimited). Status and doctor report the budget; static work preflights declared capacity; only the settled root interactive parent can use `grant-spawn-budget` after native confirmation, with total grants bounded by the original cap. Compaction does not reset usage or grants; `singleRunOutputBaseDir` and `worktreeBaseDir` route outputs and worktrees; `completionBatch` groups async notifications. `artifactDir` is `session` (default), `project`, or `temp` and chooses where subagent artifacts are stored. Set `asyncWidget: false` to hide the above-editor background-run widget when a companion footer or dashboard owns that space (fleet inspector remains available). Per-run `artifacts: false` disables artifact capture for that launch. Async status and result artifacts include `lifecycleArtifactVersion` and fields such as `workflowGraph`, `steps`, `results`, `totalTokens`, `totalCost`, `turnCount`, `toolCount`, and nested `children`. Prefer these artifacts and `status` views over scraping terminal output.
+Runtime config can change orchestration behavior. `intercomBridge.resultDelivery: false` disables only external acknowledged grouped-result delivery when native parent notifications own completion; supervisor asks/progress stay active, and enabled transport failures are still reported. `asyncByDefault` and `forceTopLevelAsync` affect whether launches detach; headless auto-drain of settled runs remains active; `globalConcurrencyLimit` bounds concurrent fanout, while a positive `maxSubagentSpawnsPerSession` optionally caps cumulative launches (`0` or unset is unlimited). Status and Fleet report the budget; static work preflights declared capacity; only the settled root interactive parent can approve a spawn-budget grant after native confirmation, with total grants bounded by the original cap. Compaction does not reset usage or grants; `singleRunOutputBaseDir` and `worktreeBaseDir` route outputs and worktrees; `completionBatch` groups async notifications. `artifactDir` is `session` (default), `project`, or `temp` and chooses where subagent artifacts are stored. Set `asyncWidget: false` to hide the above-editor background-run widget when a companion footer or dashboard owns that space (fleet inspector remains available). Per-run `artifacts: false` disables artifact capture for that launch. Async status and result artifacts include `lifecycleArtifactVersion` and fields such as `workflowGraph`, `steps`, `results`, `totalTokens`, `totalCost`, `turnCount`, `toolCount`, and nested `children`. Prefer these artifacts and `status` views over scraping terminal output.
 
 ### Keep report artifacts out of the repository root
 
@@ -64,11 +57,11 @@ its overhead. Recipes select a shape; they do not authorize delegation:
 
 ## Error Handling
 
-- **Unknown agent:** run `subagent({ action: "list" })`; check scope/precedence and author new orchestration with `workflowScript`, not legacy chains.
-- **Setup, discovery, or intercom confusion:** run `subagent({ action: "doctor" })`.
+- **Unknown agent:** check the Fleet Agents view for scope/precedence and author new orchestration with `workflowScript`, not legacy chains.
+- **Setup, discovery, or intercom confusion:** run `/subagents-doctor`.
 - **Max subagent depth exceeded:** flatten the workflow or raise `maxSubagentDepth` in config.
-- **Missing session file for a fork:** persist the parent session before using `context: "fork"`.
+- **Missing session file for a fork:** persist the parent session so fork-default agents can branch from it.
 - **Intercom already waiting for a reply:** resolve the pending ask before starting another.
 - **Parallel output-path conflict:** give each task a distinct output path, or disable output where no artifact is needed.
 - **Worktree launch failure:** ensure the git tree is clean and task cwd overrides match the shared cwd.
-- **Child fails before starting:** inspect `subagent({ action: "status", id: "..." })`, artifact metadata, output logs, and `doctor`; loader errors usually appear in child logs.
+- **Child fails before starting:** inspect `subagent({ action: "status", id: "..." })`, artifact metadata, and output logs; loader errors usually appear in child logs.
