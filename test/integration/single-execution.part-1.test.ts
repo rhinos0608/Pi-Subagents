@@ -2308,29 +2308,37 @@ Answer only from the supplied synthetic text.
 		const result = await executor.execute(
 			`scripted-workflow-async-child-timeout-${Date.now()}`,
 			{
-				workflowScript: `return await runs.run("background", { agent: "slow", task: "Wait" });`,
+				// runs.all settles instead of throwing, so the timed-out child still
+				// yields its runId for the result-file assertions below.
+				workflowScript: `const [child] = await runs.all([{ key: "background", agent: "slow", task: "Wait" }]); return child.runId;`,
 				async: false,
 			},
 			new AbortController().signal,
 			undefined,
 			makeMinimalCtx(tempDir),
 		);
-		const childRunId = (result.details.workflow?.value as { runId?: string } | undefined)?.runId;
+		assert.equal(result.isError, undefined, result.content[0]?.text ?? "workflow failed");
+		const childRunId = result.details.workflow?.value as string | undefined;
 		assert.ok(childRunId, JSON.stringify(result.details.workflow?.value ?? result.content));
-		const childDir = path.join(DIRS.async, childRunId);
-		const childResultPath = path.join(DIRS.results, `${childRunId}.json`);
-		let persisted: { timeoutMs?: number; state?: string; results?: Array<{ timedOut?: boolean; error?: string }> } = {};
+		// The workflow import consumes the child's standalone result publication,
+		// so deadline evidence lives in the child status file (persisted) and in
+		// the settled workflow result — not in DIRS.results/<childRunId>.json.
+		const childStatusPath = path.join(DIRS.async, childRunId, "status.json");
+		let persisted: { timeoutMs?: number; state?: string; error?: string } = {};
 		for (let attempt = 0; attempt < 200; attempt++) {
-			if (fs.existsSync(childResultPath)) persisted = JSON.parse(fs.readFileSync(childResultPath, "utf-8"));
+			try {
+				persisted = JSON.parse(fs.readFileSync(childStatusPath, "utf-8"));
+			} catch {}
 			if (persisted.state === "failed") break;
 			await new Promise((resolve) => setTimeout(resolve, 20));
 		}
 		assert.equal(persisted.timeoutMs, 150);
 		assert.equal(persisted.state, "failed");
-		assert.deepEqual(persisted.results?.map((entry) => entry.timedOut), [true]);
-		assert.deepEqual(persisted.results?.map((entry) => entry.error), ["Subagent timed out after 150ms."]);
-		fs.rmSync(childDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
-		fs.rmSync(childResultPath, { force: true });
+		assert.match(persisted.error ?? "", /timed out after 150ms/);
+		const settled = (result.details.results as Array<{ timedOut?: boolean; error?: string }> | undefined)?.[0];
+		assert.equal(settled?.timedOut, true);
+		assert.equal(settled?.error, "Subagent timed out after 150ms.");
+		fs.rmSync(path.join(DIRS.async, childRunId), { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
 	});
 
 	it("persists workflow parent metadata in an async worktree child status and result", { skip: !createSubagentExecutor || process.platform === "win32" ? "executor unavailable or worktree paths differ on Windows" : undefined }, async () => {
