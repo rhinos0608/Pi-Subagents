@@ -68,12 +68,6 @@ let suppressNativePromiseConsumption = 0;
 const activeNativePromises = [];
 const pending = new Map();
 const runKeyPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
-function validGitRef(ref) {
-  if (typeof ref !== "string" || !ref || ref === "@" || new TextEncoder().encode(ref).length > 1024 || ref.startsWith("/") || ref.endsWith("/") || ref.includes("//") || ref.includes("..") || ref.includes("@{")) return false;
-  if (/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/iu.test(ref)) return false;
-  if (/[[\]\\~^:?*\u0000-\u0020\u007f]/u.test(ref) || ref.endsWith(".") || ref.endsWith(".lock")) return false;
-  return ref.split("/").every((component) => component.length > 0 && component !== "." && component !== ".." && !component.startsWith(".") && !component.endsWith(".") && !component.endsWith(".lock"));
-}
 const trackedPromiseTrackers = new WeakMap();
 const trackedPromiseTargets = new WeakMap();
 let nativePromiseTrackers = new WeakMap();
@@ -87,9 +81,7 @@ function stableRunJson(value) {
 }
 
 function canonicalRunParams(params) {
-  if (params.gate === undefined || params.acceptance !== false) return params;
-  const { acceptance: _acceptance, ...withoutAcceptance } = params;
-  return withoutAcceptance;
+  return params;
 }
 
 function isDirectWorkflowScriptPromiseHandlerCall() {
@@ -549,7 +541,6 @@ function runLanes(laneSpecs) {
       generatedKey: stage.generatedKey,
       ...workflowPlanStringMetadata(stage.params),
       ...(typeof stage.params.as === "string" && stage.params.as.trim() ? { outputName: stage.params.as.trim() } : {}),
-      ...(stage.params.outputSchema ? { structured: true } : {}),
     })),
   })) });
   const firstItems = lanes.map((lane) => {
@@ -591,28 +582,6 @@ function decorateWorkflowChildResult(result) {
 
 let runFingerprints = new Map();
 
-function validateExtensionBindings(value, label) {
-  if (value === undefined) return;
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(label + " extensionBindings must be a plain JSON object.");
-  const keys = Object.keys(value);
-  if (keys.length > 16) throw new Error(label + " extensionBindings supports at most 16 namespaces.");
-  for (const key of keys) if (!/^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,62})\/[1-9][0-9]{0,8}$/.test(key)) throw new Error(label + " extensionBindings namespace '" + key + "' must use a package-like name followed by '/<positive-version>'.");
-  assertJsonValue(value, label + " extensionBindings");
-  let propertyCount = 0;
-  function visit(entry, depth) {
-    if (!entry || typeof entry !== "object") return;
-    if (depth > 16) throw new Error(label + " extensionBindings exceeds the maximum nesting depth of 16.");
-    if (Array.isArray(entry)) { for (const item of entry) visit(item, depth + 1); return; }
-    for (const child of Object.values(entry)) {
-      propertyCount++;
-      if (propertyCount > 256) throw new Error(label + " extensionBindings exceeds 256 total properties.");
-      visit(child, depth + 1);
-    }
-  }
-  visit(value, 0);
-  if (new TextEncoder().encode(stableRunJson(value)).byteLength > 16384) throw new Error(label + " extensionBindings canonical JSON exceeds 16384 bytes.");
-}
-
 function validateLaneMetadata(value, label, workflowKey) {
   if (value === undefined) return;
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(label + " must be a plain JSON object.");
@@ -632,56 +601,19 @@ function validateLaneMetadata(value, label, workflowKey) {
   }
 }
 
-// Mirrors parseGateInput in src/runs/shared/acceptance.ts; the sandbox cannot import it.
-function describeGateShapeError(gate) {
-  const shape = "gate must be a non-empty command string or { command, output?: \"json\", schema?, timeoutMs? }.";
-  if (typeof gate === "string") return gate.trim() ? undefined : shape;
-  if (!gate || typeof gate !== "object" || Array.isArray(gate)) return shape;
-  for (const key of Object.keys(gate)) {
-    if (!["command", "output", "schema", "timeoutMs"].includes(key)) return "gate." + key + " is not supported.";
-  }
-  if (typeof gate.command !== "string" || !gate.command.trim()) return shape;
-  if (gate.output !== undefined && gate.output !== "json") return "gate.output must be \"json\" when present.";
-  if (gate.schema !== undefined) {
-    if (gate.output !== "json") return "gate.schema requires gate.output: \"json\".";
-    if (!gate.schema || typeof gate.schema !== "object" || Array.isArray(gate.schema)) return "gate.schema must be a JSON Schema object.";
-  }
-  if (gate.timeoutMs !== undefined && (!Number.isInteger(gate.timeoutMs) || gate.timeoutMs < 1)) return "gate.timeoutMs must be an integer >= 1.";
-  return undefined;
-}
-
-function describeGateAcceptanceConflict(gate, acceptance) {
-  const render = (value) => {
-    let encoded;
-    try {
-      encoded = JSON.stringify(value) ?? String(value);
-    } catch {
-      encoded = String(value);
-    }
-    return encoded.length > 120 ? encoded.slice(0, 120) + "..." : encoded;
-  };
-  return " Both fields were present: gate=" + render(gate) + " acceptance=" + render(acceptance) + ".";
-}
-
 function validateRunCall(key, params, label, fingerprints) {
   if (typeof key !== "string" || !runKeyPattern.test(key)) throw new Error(label + " has an invalid key.");
   if (hostKeys.has(key)) throw new Error("Workflow key '" + key + "' is already used by runs.host.");
   if (!params || typeof params !== "object" || Array.isArray(params)) throw new Error(label + " requires a params object.");
   if (Object.prototype.hasOwnProperty.call(params, "action") || Object.prototype.hasOwnProperty.call(params, "workflowScript") || Object.prototype.hasOwnProperty.call(params, "globalConcurrencyLimit") || Object.prototype.hasOwnProperty.call(params, "maxSubagentSpawnsPerRun") || Object.prototype.hasOwnProperty.call(params, "tasks") || Object.prototype.hasOwnProperty.call(params, "chain") || Object.prototype.hasOwnProperty.call(params, "parallel") || Object.prototype.hasOwnProperty.call(params, "concurrency") || Object.prototype.hasOwnProperty.call(params, "chainDir")) {
     const hint = label === "runs.run" ? "; use runs.all(...) and JavaScript control flow for orchestration." : ".";
-    throw new Error(label + " accepts one child via { agent, task } and execution controls only" + hint);
+    throw new Error(label + " accepts one child via { agent, task, cwd, resume } plus naming keys (as, phase, label, lane)" + hint);
   }
   if (Object.prototype.hasOwnProperty.call(params, "clarify")) throw new Error(label + " does not support clarify UI.");
-  if (params.worktree !== undefined && typeof params.worktree !== "boolean") throw new Error(label + " worktree must be true or false.");
-  if (params.baseRef !== undefined && (typeof params.baseRef !== "string" || !validGitRef(params.baseRef))) throw new Error(label + " baseRef must be a valid Git ref: use HEAD or a supported named ref (for example, refs/heads/main). Full 40/64-character commit IDs and revision expressions are unsupported.");
+  const allowedRunFields = new Set(["agent", "task", "cwd", "resume", "as", "phase", "label", "lane", "index"]);
+  const unknownRunFields = Object.keys(params).filter((field) => !allowedRunFields.has(field));
+  if (unknownRunFields.length > 0) throw new Error(label + " has unsupported fields: " + unknownRunFields.join(", ") + ". Supported workflow child fields: agent, task, cwd, resume, as, phase, label, lane, index.");
   validateLaneMetadata(params.lane, label + " lane", key);
-  if (params.gate !== undefined) {
-    const gateError = describeGateShapeError(params.gate);
-    if (gateError) throw new Error(label + " " + gateError);
-  }
-  if (params.gate !== undefined && params.acceptance !== undefined && params.acceptance !== false) throw new Error(label + " gate cannot be combined with acceptance; use one gate command or acceptance.verify." + describeGateAcceptanceConflict(params.gate, params.acceptance));
-  if (params.gate !== undefined && params.resume !== undefined) throw new Error(label + " gate is not supported with retained resume.");
-  if (params.extensionBindings !== undefined && params.resume !== undefined) throw new Error(label + " extensionBindings is not supported with retained resume; resume uses the original retained child binding.");
   if (params.resume !== undefined && typeof params.resume !== "string") {
     const reference = params.resume;
     if (!reference || typeof reference !== "object" || Array.isArray(reference)) throw new Error(label + " resume must be a retained run id or keyed workflow receipt reference.");
@@ -694,7 +626,6 @@ function validateRunCall(key, params, label, fingerprints) {
   if (typeof params.resume === "string" && !params.resume.trim()) throw new Error(label + " resume must be a non-empty retained run id.");
   if (params.resume !== undefined && params.agent !== undefined) throw new Error(label + " resume and agent are mutually exclusive.");
   if (params.resume !== undefined && (typeof params.task !== "string" || !params.task.trim())) throw new Error(label + " resume requires a non-empty task follow-up.");
-  validateExtensionBindings(params.extensionBindings, label);
   assertJsonValue(params, label + " params");
   const fingerprint = stableRunJson(canonicalRunParams(params));
   const existing = fingerprints.get(key);
@@ -1501,9 +1432,7 @@ function stableJson(value: unknown): string {
 }
 
 function canonicalRunParams(params: Record<string, unknown>): Record<string, unknown> {
-	if (params.gate === undefined || params.acceptance !== false) return params;
-	const { acceptance: _acceptance, ...withoutAcceptance } = params;
-	return withoutAcceptance;
+	return params;
 }
 
 function validateKey(value: unknown, owner = "runs.run"): string {
@@ -1948,6 +1877,8 @@ export function validateWorkflowScript(script: string, options: WorkflowScriptVa
 	const unique = errors.filter((error, index) => errors.findIndex((candidate) => candidate.message === error.message && candidate.line === error.line && candidate.column === error.column) === index);
 	return { ok: unique.length === 0, errors: unique, ...(warnings.length > 0 ? { warnings } : {}) };
 }
+const WORKFLOW_CHILD_ALLOWED_FIELDS = new Set(["agent", "task", "cwd", "resume", "as", "phase", "label", "lane", "index"]);
+
 function workflowStringMetadata(params: Record<string, unknown>): Pick<WorkflowScriptTraceEntry, "phase" | "label" | "agent"> {
 	return {
 		...(typeof params.phase === "string" && params.phase.trim() ? { phase: params.phase.trim() } : {}),
@@ -1977,7 +1908,7 @@ function resolveWorkflowParserEntry(): string {
 	}
 }
 
-const AUTO_RESUME_PARAM_KEYS = ["acceptance", "agentContract", "baseRef", "index", "intercomBridge", "label", "lane", "maxRuntimeMs", "output", "outputMode", "outputSchema", "phase", "skill", "skills", "task", "timeoutMs", "toolBudget", "worktree"] as const;
+const AUTO_RESUME_PARAM_KEYS = ["index", "label", "lane", "phase", "task"] as const;
 
 function isZeroUsage(usage: unknown): boolean {
 	if (!isRecord(usage)) return false;
@@ -2495,23 +2426,11 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 			if (params.action !== undefined) return respond(Promise.reject(new Error(`runs.run('${key}') accepts execution params only; management action is not allowed.`)));
 			if (params.workflowScript !== undefined) return respond(Promise.reject(new Error(`runs.run('${key}') cannot start a nested workflow script.`)));
 			if (params.tasks !== undefined || params.chain !== undefined || params.parallel !== undefined || params.concurrency !== undefined || params.chainDir !== undefined) {
-				return respond(Promise.reject(new Error(`runs.run('${key}') accepts one child via { agent, task }; use runs.all(...) and JavaScript control flow for orchestration.`)));
+				return respond(Promise.reject(new Error(`runs.run('${key}') accepts one child via { agent, task, cwd, resume } plus naming keys (as, phase, label, lane); use runs.all(...) and JavaScript control flow for orchestration.`)));
 			}
-			if (params.worktree !== undefined && typeof params.worktree !== "boolean") {
-				return respond(Promise.reject(new Error(`runs.run('${key}') worktree must be true or false.`)));
-			}
-			if (params.baseRef !== undefined && (typeof params.baseRef !== "string" || !validGitRef(params.baseRef))) {
-				return respond(Promise.reject(new Error(`runs.run('${key}') ${BASE_REF_VALIDATION_ERROR}`)));
-			}
-			if (params.gate !== undefined) {
-				const parsedGate = parseGateInput(params.gate);
-				if (!parsedGate.ok) return respond(Promise.reject(new Error(`runs.run('${key}') ${parsedGate.error}`)));
-			}
-			if (params.gate !== undefined && params.acceptance !== undefined && params.acceptance !== false) {
-				return respond(Promise.reject(new Error(`runs.run('${key}') gate cannot be combined with acceptance; use one gate command or acceptance.verify.` + describeGateAcceptanceConflict(params.gate, params.acceptance))));
-			}
-			if (params.gate !== undefined && params.resume !== undefined) {
-				return respond(Promise.reject(new Error(`runs.run('${key}') gate is not supported with retained resume.`)));
+			const unknownFields = Object.keys(params).filter((field) => !WORKFLOW_CHILD_ALLOWED_FIELDS.has(field));
+			if (unknownFields.length > 0) {
+				return respond(Promise.reject(new Error(`runs.run('${key}') has unsupported fields: ${unknownFields.join(", ")}. Supported workflow child fields: agent, task, cwd, resume, as, phase, label, lane, index.`)));
 			}
 			let resumeReference: WorkflowReceiptResumeReference | undefined;
 			try {

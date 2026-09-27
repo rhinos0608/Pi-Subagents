@@ -2766,11 +2766,6 @@ function applySingleAgentLaunchDefaults(params: SubagentParamsLike, agents: Agen
 
 function validateLaunchOutputSchemaOverrides(params: SubagentParamsLike): string | undefined {
 	const values: unknown[] = [params.outputSchema, ...(params.tasks ?? []).map((task) => task.outputSchema)];
-	for (const step of params.chain ?? []) {
-		if (isParallelStep(step)) values.push(...step.parallel.map((task) => task.outputSchema));
-		else if (isDynamicParallelStep(step)) values.push(step.parallel.outputSchema);
-		else values.push(step.outputSchema);
-	}
 	for (const value of values) {
 		if (value === undefined || value === false) continue;
 		try {
@@ -2846,7 +2841,7 @@ function expandChainParallelCounts(chain: ChainStep[]): { chain?: ChainStep[]; e
 			if (rawCount !== undefined && (typeof rawCount !== "number" || !Number.isInteger(rawCount) || rawCount < 1)) {
 				return { error: `chain[${stepIndex}].parallel[${taskIndex}].count must be an integer >= 1` };
 			}
-			const { count, ...concreteTask } = task;
+			const { count, ...concreteTask } = task as typeof task & { count?: unknown };
 			for (let repeat = 0; repeat < (rawCount ?? 1); repeat++) {
 				expandedParallel.push({ ...concreteTask });
 			}
@@ -2982,7 +2977,7 @@ function collectStaticLaunchSummaries(input: {
 		for (const step of input.params.chain) {
 			if (isParallelStep(step)) {
 				for (const task of step.parallel) {
-					launches.push(summary(task.agent, flatIndex, task.model));
+					launches.push(summary(task.agent, flatIndex, undefined));
 					flatIndex++;
 				}
 				continue;
@@ -2990,13 +2985,13 @@ function collectStaticLaunchSummaries(input: {
 			if (isDynamicParallelStep(step)) {
 				const maxItems = step.expand.maxItems ?? input.dynamicFanoutMaxItems ?? 0;
 				for (let itemIndex = 0; itemIndex < maxItems; itemIndex++) {
-					launches.push(summary(step.parallel.agent, flatIndex, step.parallel.model));
+					launches.push(summary(step.parallel.agent, flatIndex, undefined));
 					flatIndex++;
 				}
 				continue;
 			}
 			const sequential = step as SequentialStep;
-			launches.push(summary(sequential.agent, flatIndex, sequential.model));
+			launches.push(summary(sequential.agent, flatIndex, undefined));
 			flatIndex++;
 		}
 		return launches;
