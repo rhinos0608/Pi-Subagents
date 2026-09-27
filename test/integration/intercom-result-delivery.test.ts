@@ -290,15 +290,13 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 		assert.doesNotMatch(result.content[0]?.text ?? "", /Delivered single subagent result via intercom\./);
 	});
 
-	it("keeps a workflow child bridge override isolated and preserves final output", async () => {
-		mockPi.onCall({ matchArgIncludes: "isolated task", output: "Isolated child output" });
-		mockPi.onCall({ matchArgIncludes: "normal task", output: "Normal child output" });
-		const { executor, events } = makeExecutor({ resultDelivery: true, agents: [makeAgent("worker", { tools: ["read"] })] });
+	it("rejects workflow child bridge overrides outside the orchestration allowlist", async () => {
+		const { executor } = makeExecutor({ resultDelivery: true, agents: [makeAgent("worker", { tools: ["read"] })] });
 
 		const result = await executor.execute(
 			"workflow-intercom-override",
 			{
-				workflowScript: `const isolated = await runs.run("isolated", { agent: "worker", task: "isolated task", intercomBridge: { mode: "off" } }); const normal = await runs.run("normal", { agent: "worker", task: "normal task" }); return { isolated: isolated.output, normal: normal.output };`,
+				workflowScript: `const isolated = await runs.run("isolated", { agent: "worker", task: "isolated task", intercomBridge: { mode: "off" } }); return { isolated: isolated.output };`,
 				async: false,
 			},
 			new AbortController().signal,
@@ -306,12 +304,9 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 			makeMinimalCtx(tempDir),
 		);
 
-		const isolatedArgs = await readMockCallArgs(0);
-		const normalArgs = await readMockCallArgs(1);
-		assert.equal(isolatedArgs[isolatedArgs.indexOf("--tools") + 1], "read");
-		assert.equal(normalArgs[normalArgs.indexOf("--tools") + 1], "read,contact_supervisor");
-		assert.equal(events.emitted.filter((entry) => entry.channel === "subagent:result-intercom").length, 1);
-		assert.deepEqual(result.details?.workflow?.value, { isolated: "Isolated child output", normal: "Normal child output" });
+		assert.equal(result.isError, true);
+		assert.match(result.content[0]?.text ?? "", /unsupported fields: intercomBridge/);
+		assert.equal(mockPi.callCount(), 0);
 	});
 
 	it("waits for retained workflow resume loops and returns each completed revived child", async () => {
@@ -417,7 +412,7 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 
 
 
-	it("suppresses successful worktree child receipts for live-card workflows", { skip: process.platform === "win32" ? "git worktree cleanup differs on Windows" : undefined }, async () => {
+	it("suppresses successful child receipts for live-card workflows", { skip: process.platform === "win32" ? "git worktree cleanup differs on Windows" : undefined }, async () => {
 		execFileSync("git", ["init"], { cwd: tempDir, stdio: "ignore" });
 		execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: tempDir });
 		execFileSync("git", ["config", "user.name", "Test User"], { cwd: tempDir });
@@ -429,7 +424,7 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 
 		const result = await executor.execute(
 			"workflow-worktree-live-card",
-			{ workflowScript: "const result = await runs.run('worker', { agent: 'worker', task: 'task', worktree: true }); return result.output;", async: false, chatProgress: "live-card" },
+			{ workflowScript: "const result = await runs.run('worker', { agent: 'worker', task: 'task' }); return result.output;", async: false, chatProgress: "live-card" },
 			new AbortController().signal,
 			undefined,
 			makeMinimalCtx(tempDir),
@@ -1034,7 +1029,7 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 			const result = await executor.execute(
 				"resume-revive-multi",
 				workflow
-					? { async: false, workflowScript: `return runs.run("indexed", { resume: ${JSON.stringify(runId)}, index: 1, task: "What did b find?", output: false });` }
+					? { async: false, workflowScript: `return runs.run("indexed", { resume: ${JSON.stringify(runId)}, index: 1, task: "What did b find?" });` }
 					: { action: "resume", id: runId, index: 1, message: "What did b find?" },
 				new AbortController().signal,
 				undefined,
@@ -1345,7 +1340,7 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 			const failed = await executor.execute(
 				"workflow-prep-capacity-release",
 				{
-					workflowScript: `return await runs.run("gated", { agent: "worker", task: "run", gate: "npm test" });`,
+					workflowScript: `return await runs.run("gated", { agent: "missing-worker", task: "run" });`,
 					async: true,
 					acceptance: "checked",
 				},
@@ -1361,7 +1356,7 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 
 			assert.equal(status.state, "failed");
 			assert.equal(status.steps?.[0]?.async, false);
-			assert.match(status.error ?? "", /gate cannot be combined with acceptance/);
+			assert.match(status.error ?? "", /Unknown agent: missing-worker/);
 			assert.deepEqual(getActiveAsyncCapacitySnapshot(parentSessionId, 1), { used: 0, limit: 1 });
 
 			const next = await executor.execute(
@@ -1740,7 +1735,7 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 			makeMinimalCtx(tempDir),
 		);
 		const statusText = status.content[0]?.text ?? "";
-		assert.match(statusText, /do not resume or launch a replacement while any child remains detached/);
+		assert.match(statusText, /do not resume or launch a replacement while any child remains detached/i);
 		assert.doesNotMatch(statusText, /Revive child:/);
 
 		const resumed = await executor.execute(

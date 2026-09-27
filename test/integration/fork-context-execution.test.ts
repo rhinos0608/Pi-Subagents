@@ -348,7 +348,6 @@ describe("fork context execution wiring", { skip: !available ? "subagent executo
 
 		assert.equal(result.isError, undefined);
 		assert.equal(result.details?.context, "fresh");
-		assert.equal(result.details?.results?.[0]?.context, "fresh");
 		assert.doesNotMatch(readCallArgs().at(-1) ?? "", /delegated subagent running from a fork/);
 	});
 
@@ -427,7 +426,6 @@ describe("fork context execution wiring", { skip: !available ? "subagent executo
 
 		assert.equal(result.isError, undefined);
 		assert.equal(result.details?.context, "fresh");
-		assert.equal(result.details?.results?.[0]?.context, "fresh");
 		assert.deepEqual(openedPaths, []);
 	});
 
@@ -456,23 +454,9 @@ describe("fork context execution wiring", { skip: !available ? "subagent executo
 		assert.deepEqual(branchedLeafIds, ["leaf-current"]);
 	});
 
-	it("fails profile context when the selected agent has no defaultContext", async () => {
-		const executor = makeExecutorWithDiscoverAgents(() => ({
-			agents: [{ name: "worker", description: "Worker" }],
-			projectAgentsDir: null,
-		}), { defaultSubagentContext: "fork" });
-
-		const result = await executor.execute(
-			"id",
-			{ agent: "worker", task: "test", context: "profile" },
-			new AbortController().signal,
-			undefined,
-			makeCtx(makeSessionManagerRecorder().manager),
-		);
-
-		assert.equal(result.isError, true);
-		assert.match(result.content[0]?.text ?? "", /context: "profile" requires agent 'worker' to declare defaultContext/);
-	});
+	// Per-call context:"profile" validation was removed with the per-call context
+	// vocabulary (profile intent now resolves from agent defaultContext only), so
+	// this error-path test is deleted as purely per-call behavior.
 
 	it("sanitizes inherited signed thinking and keeps child thinking", async () => {
 		const parentSessionFile = path.join(tempDir, "parent.jsonl");
@@ -877,38 +861,9 @@ describe("fork context execution wiring", { skip: !available ? "subagent executo
 		assert.equal(result.details?.context, "fork");
 	});
 
-	it("keeps explicit fresh context over agent defaultContext fork", async () => {
-		const parentSessionFile = path.join(tempDir, "parent.jsonl");
-		const { manager, openedPaths, branchedLeafIds } = makeForkingSessionManagerRecorder({ sessionFile: parentSessionFile, leafId: "leaf-current" });
-		const executor = makeExecutorWithDiscoverAgents(() => ({
-			agents: [
-				{ name: "oracle", description: "Oracle", defaultContext: "fork" },
-			],
-			projectAgentsDir: null,
-		}));
-
-		const result = await executor.execute(
-			"id",
-			{ agent: "oracle", task: "test", context: "fresh" },
-			new AbortController().signal,
-			undefined,
-			makeCtx(manager),
-		);
-
-		assert.equal(result.isError, undefined);
-		assert.equal(result.details?.context, "fresh");
-		assert.equal(result.details?.results?.[0]?.context, "fresh");
-		assert.deepEqual(openedPaths, []);
-		assert.deepEqual(branchedLeafIds, []);
-		assert.notEqual(readSessionArgsFromCalls()[0], path.join(tempDir, "fork-1.jsonl"));
-	});
-
-
-
-
-
-
-
+	// Per-call context was removed from the subagent vocabulary: fork intent now
+	// comes from agent defaultContext or config defaultSubagentContext only, so the
+	// explicit-fresh override test below was purely per-call behavior and is deleted.
 	it("fails before launching mixed parallel children when a default-fork session cannot branch", async () => {
 		const parentSessionFile = path.join(tempDir, "parent-mixed-fail.jsonl");
 		fs.writeFileSync(parentSessionFile, '{"type":"session","version":1,"id":"parent","timestamp":"2026-04-16T00:00:00.000Z","cwd":"/tmp"}\n', "utf-8");
@@ -1012,21 +967,9 @@ describe("fork context execution wiring", { skip: !available ? "subagent executo
 		assert.doesNotMatch(result.content[0]?.text ?? "", /persisted parent session/);
 	});
 
-	it("fails fast when context=fork and parent session is missing", async () => {
-		const { manager } = makeSessionManagerRecorder({ sessionFile: undefined, leafId: "leaf-current" });
-		const executor = makeExecutor();
-
-		const result = await executor.execute(
-			"id",
-			{ agent: "echo", task: "test", context: "fork" },
-			new AbortController().signal,
-			undefined,
-			makeCtx(manager),
-		);
-
-		assert.equal(result.isError, true);
-		assert.match(result.content[0]?.text ?? "", /persisted parent session/);
-	});
+	// Explicit per-call context:"fork" fail-fast was removed with the per-call context
+	// vocabulary: implicit default-fork with no persisted session falls back to fresh
+	// (covered above), so this explicit-fork test is deleted as purely per-call behavior.
 
 	it("falls back to fresh when an implicit default fork has a session path that is not persisted yet", async () => {
 		const parentSessionFile = path.join(tempDir, "unpersisted-parent.jsonl");
@@ -1048,7 +991,6 @@ describe("fork context execution wiring", { skip: !available ? "subagent executo
 
 		assert.equal(result.isError, undefined);
 		assert.equal(result.details?.context, "fresh");
-		assert.equal(result.details?.results?.[0]?.context, "fresh");
 		assert.doesNotMatch(readCallArgs().at(-1) ?? "", /delegated subagent running from a fork/);
 	});
 
@@ -1073,47 +1015,16 @@ describe("fork context execution wiring", { skip: !available ? "subagent executo
 
 		assert.equal(result.isError, undefined);
 		assert.equal(result.details?.context, "fresh");
-		assert.equal(result.details?.results?.[0]?.context, "fresh");
 		assert.doesNotMatch(readCallArgs().at(-1) ?? "", /delegated subagent running from a fork/);
 	});
 
-	it("keeps explicit fork fail-fast even when the agent defaults to fork", async () => {
-		const { manager } = makeSessionManagerRecorder({ sessionFile: undefined, leafId: "leaf-current" });
-		const executor = makeExecutorWithDiscoverAgents(() => ({
-			agents: [
-				{ name: "worker", description: "Worker", defaultContext: "fork" },
-			],
-			projectAgentsDir: null,
-		}));
+	// Explicit per-call context:"fork" fail-fast was removed with the per-call context
+	// vocabulary (the defaults-config equivalent is the mixed-parallel default-fork
+	// test above), so this test is deleted as purely per-call behavior.
 
-		const result = await executor.execute(
-			"id",
-			{ agent: "worker", task: "test", context: "fork" },
-			new AbortController().signal,
-			undefined,
-			makeCtx(manager),
-		);
-
-		assert.equal(result.isError, true);
-		assert.match(result.content[0]?.text ?? "", /persisted parent session/);
-		assert.equal(mockPi.callCount(), 0);
-	});
-
-	it("fails fast when context=fork and leaf is missing", async () => {
-		const { manager } = makeSessionManagerRecorder({ sessionFile: "/tmp/parent.jsonl", leafId: null });
-		const executor = makeExecutor();
-
-		const result = await executor.execute(
-			"id",
-			{ agent: "echo", task: "test", context: "fork" },
-			new AbortController().signal,
-			undefined,
-			makeCtx(manager),
-		);
-
-		assert.equal(result.isError, true);
-		assert.match(result.content[0]?.text ?? "", /current leaf/);
-	});
+	// Explicit per-call context:"fork" fail-fast was removed with the per-call context
+	// vocabulary (the defaults-config equivalent is the no-current-leaf fallback test
+	// above), so this test is deleted as purely per-call behavior.
 
 	it("returns a tool error (instead of throwing) when branch creation fails", async () => {
 		const executor = makeExecutor();

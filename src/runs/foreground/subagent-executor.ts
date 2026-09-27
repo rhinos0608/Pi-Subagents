@@ -2809,6 +2809,17 @@ function applySingleAgentLaunchDefaults(params: SubagentParamsLike, agents: Agen
 
 function validateLaunchOutputSchemaOverrides(params: SubagentParamsLike): string | undefined {
 	const values: unknown[] = [params.outputSchema, ...(params.tasks ?? []).map((task) => task.outputSchema)];
+	// Chain steps carry outputSchema at runtime for internal callers even though the
+	// shrunken ChainStep type only models orchestration intent; narrow at runtime.
+	for (const rawStep of params.chain ?? []) {
+		const step = (typeof rawStep === "object" && rawStep !== null ? rawStep : {}) as {
+			outputSchema?: unknown;
+			parallel?: unknown;
+		};
+		if (isParallelStep(rawStep as never)) values.push(...(step.parallel as Array<{ outputSchema?: unknown }>).map((task) => task.outputSchema));
+		else if (isDynamicParallelStep(rawStep as never)) values.push((step.parallel as { outputSchema?: unknown }).outputSchema);
+		else values.push(step.outputSchema);
+	}
 	for (const value of values) {
 		if (value === undefined || value === false) continue;
 		try {
