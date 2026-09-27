@@ -154,11 +154,10 @@ describe("async runner execution", () => {
 		assert.equal(resolveAsyncRunnerLogPaths({}), undefined);
 	});
 
-	it("resolves async step tool budgets with step over run over agent over config precedence", () => {
+	it("resolves async tool budgets with run over agent over config precedence (no per-step override)", () => {
 		const result = buildAsyncRunnerSteps("run-1", {
 			chain: [
-				{ agent: "worker", task: "agent beats config" },
-				{ agent: "worker", task: "step beats run", toolBudget: { hard: 2, block: ["grep"] } },
+				{ agent: "worker", task: "run beats agent" },
 			],
 			agents: [agent("worker", { hard: 4, block: ["read"] })],
 			ctx,
@@ -170,7 +169,6 @@ describe("async runner execution", () => {
 
 		assert.ok("steps" in result, "expected successful step build");
 		assert.deepEqual(result.steps[0]?.toolBudget, { hard: 40, block: ["find"] });
-		assert.deepEqual(result.steps[1]?.toolBudget, { hard: 40, block: ["grep"] });
 	});
 	it("carries the resolved model context window into async runner steps", () => {
 		const result = buildAsyncRunnerSteps("context-limit-run", {
@@ -236,7 +234,7 @@ describe("async runner execution", () => {
 		assert.deepEqual(result.steps[0]?.toolBudget, { hard: 40, block: ["read"] });
 	});
 
-	it("attaches external runner config and rejects unsupported Pi-only overrides", (t) => {
+	it("attaches external runner config and rejects unsupported Pi-only run flags", (t) => {
 		const external = agent("external");
 		external.runner = { type: "external-cli", command: process.execPath, args: ["fake.mjs"] };
 		const registration = registerRequiredChildExtensions({ sessionId: ctx.currentSessionId, extensions: [{ id: "native-only", path: import.meta.filename }] });
@@ -254,13 +252,14 @@ describe("async runner execution", () => {
 		assert.equal(built.steps[0]?.requiredExtensions, undefined);
 
 		const rejected = buildAsyncRunnerSteps("external-rejected", {
-			chain: [{ agent: "external", task: "review", model: "provider/model" }],
+			chain: [{ agent: "external", task: "review" }],
 			agents: [external],
 			ctx,
 			asyncDir: path.join(process.cwd(), ".tmp-external-test"),
 			maxSubagentDepth: 2,
+			fast: true,
 		});
-		assert.deepEqual(rejected, { error: "Agent 'external' uses runner.type='external-cli' and does not support: model override." });
+		assert.deepEqual(rejected, { error: "Agent 'external' uses runner.type='external-cli' and does not support: fast mode." });
 	});
 
 	it("uses config default when no step, run, or agent budget exists", () => {

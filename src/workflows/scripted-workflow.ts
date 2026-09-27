@@ -1302,8 +1302,7 @@ function isExplicitReadOnlyRecoveryReview(params: Record<string, unknown>): bool
 		.replace(RECOVERY_REVIEW_NO_DELEGATION_CLAUSE_PATTERN, " ")
 		.replace(RECOVERY_REVIEW_NO_MUTATION_CLAUSE_PATTERN, " ")
 		.replace(new RegExp(RECOVERY_REVIEW_READ_ONLY_PATTERN.source, "gi"), " ");
-	return params.acceptance === false
-		&& agent !== ""
+	return agent !== ""
 		&& /\b(?:advisor|oracle|review|reviewer)\b/i.test(agent)
 		&& RECOVERY_REVIEW_READ_ONLY_PATTERN.test(task)
 		&& !RECOVERY_REVIEW_DESTRUCTIVE_COMMAND_PATTERN.test(taskDestructiveCommandText)
@@ -1315,7 +1314,7 @@ function isExplicitReadOnlyRecoveryReview(params: Record<string, unknown>): bool
 }
 
 function recoveryBarrierMessage(sourceKey: string, target: string): string {
-	return `Run '${target}' cannot launch after run '${sourceKey}' returned rejected acceptance recovery; only explicit read-only review children with acceptance:false may follow.`;
+	return `Run '${target}' cannot launch after run '${sourceKey}' returned rejected acceptance recovery; only explicit read-only review children may follow.`;
 }
 
 function isPlainJsonObject(value: unknown): value is Record<string, unknown> {
