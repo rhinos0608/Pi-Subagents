@@ -98,6 +98,7 @@ import { formatSubagentModelVerificationError, isContextOverflow } from "../shar
 import { formatExhaustedCandidatesDiagnostic, formatModelAttemptNote, isRetryableModelFailureAttempt, MODEL_MAX_ATTEMPTS_PER_CANDIDATE, modelRetryBackoffMs, sleepMs } from "../shared/model-fallback.ts";
 import { markProcessTerminalCandidateLeaseRelease, processTerminalPath, writeProcessTerminalCandidate, type ProcessTerminalCandidate } from "./process-terminal.ts";
 import { persistRunnerStartupFailure } from "./runner-startup-failure.ts";
+import { currentPidNamespaceScope } from "./pid-namespace.ts";
 import { createSteeringStatus, recordSteeringRequest, steeringStatus, terminalSteeringNoticeState, unconsumedSteerReason, updateSteeringTarget } from "./steering.ts";
 import { PROMPT_REDACTED, detectSubagentError, extractTextFromContent, extractToolArgsPreview, formatEmptyTerminalAssistantResponseError, getAgentDir, getFinalOutput, hasEmptyTerminalAssistantResponse, readStatus } from "../../shared/utils.ts";
 import { planAbortRecovery } from "../shared/abort-recovery.ts";
@@ -2184,6 +2185,7 @@ export async function runSubagent(
 		...(config.deadlineAt !== undefined ? { deadlineAt: config.deadlineAt } : {}),
 		...(config.toolBudget ? { toolBudget: initialToolBudgetState(config.toolBudget) } : {}),
 		pid: process.pid,
+		pidNamespaceScope: currentPidNamespaceScope(),
 		cwd,
 		currentStep: 0,
 		chainStepCount: steps.length,
