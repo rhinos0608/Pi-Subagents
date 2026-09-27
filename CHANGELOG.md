@@ -37,6 +37,7 @@ First npm release of the fork: `v0.71.0-fork.1` (published as `@rhinos0608/pi-su
 - External-job agents that a child session launches no longer stay queued. Only the root session serviced external-job bridge requests, so a child's own external-job run never started. A child session now services the bridges of the external-job runs it launches. Thanks to [@juanpprieto](https://github.com/juanpprieto) for [#2449](https://github.com/nicobailon/pi-subagents/issues/2449).
 - Worktree naming labels stay within the 256-byte limit when truncated at a multi-byte UTF-8 boundary, so async status remains readable. Thanks to [@chenhaoxiang](https://github.com/chenhaoxiang) for [#2446](https://github.com/nicobailon/pi-subagents/pull/2446).
 - Machine-generated worktree patches now use explicit `a/` and `b/` prefixes instead of Git's newer `--default-prefix` option, so diff capture works on older Git releases while still overriding `diff.noprefix`. Thanks to [@quifox](https://github.com/quifox) for [#2527](https://github.com/nicobailon/pi-subagents/pull/2527).
+- `mcp:` direct-tool selections now resolve from pi-mcp-adapter 3.0's `mcp-adapter.json` files (the Pi-global one and a project's `.pi/mcp-adapter.json`), so a migrated setup no longer fails child launch with `Unresolved MCP direct-tool selectors`. Pi's own `mcp.json` files are no longer read, matching the adapter: they belong to Pi's built-in MCP support. Thanks to [@qsgy-edge](https://github.com/qsgy-edge) for [#2511](https://github.com/nicobailon/pi-subagents/pull/2511).
 
 ## [0.71.0] - 2026-09-23
 
