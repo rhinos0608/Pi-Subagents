@@ -7422,7 +7422,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			owner = { state, executor: createSubagentExecutor({ ...deps, state }) };
 			ownerExecutors.set(ownerSessionId, owner);
 		}
-		return owner.executor.executePublic(id, params, signal, undefined, ctx);
+		return owner.executor.execute(id, params, signal, undefined, ctx);
 	};
 
 	function* getCurrentSupervisorOwnerStates(): Iterable<SubagentState> {
