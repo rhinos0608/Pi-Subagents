@@ -2301,10 +2301,13 @@ Answer only from the supplied synthetic text.
 		assert.ok(childRunId);
 		const childDir = path.join(DIRS.async, childRunId);
 		const childResultPath = path.join(DIRS.results, `${childRunId}.json`);
-		for (let attempt = 0; attempt < 200 && !fs.existsSync(childResultPath); attempt++) {
-			await new Promise((resolve) => setTimeout(resolve, 20));
-		}
-		assert.equal(fs.existsSync(childResultPath), true);
+		// The workflow import consumes the child's standalone result publication,
+		// so no DIRS.results/<childRunId>.json is retained for awaited workflow
+		// children (same import-consumes pattern as the deadline and
+		// parent-metadata legs). The watcher-owned path is proven by the
+		// persisted child status file below; the workflow-owned publication is
+		// absent from the child dir because it belongs to the watcher.
+		assert.equal(fs.existsSync(childResultPath), false);
 		assert.equal(fs.existsSync(path.join(childDir, "workflow-result.json")), false);
 		fs.rmSync(childDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
 		fs.rmSync(childResultPath, { force: true });
