@@ -1089,8 +1089,25 @@ Answer only from the supplied synthetic text.
 		assert.deepEqual(fs.readdirSync(agentDir, { recursive: true }), agentBefore, "invalid default must not create mission index files");
 		const accepted = await executor.executePublic("false-workflow-default", { ...params, acceptance: false }, new AbortController().signal, undefined, ctx);
 		assert.equal(accepted.isError, undefined, accepted.content[0]?.text);
-		assert.match(accepted.content[0]?.text ?? "", /workflow-default-ran/);
+		// Public workflows always detach async (25542469 BY DESIGN): the
+		// acceptance:false default must still launch, with the script result
+		// surfacing in the background result instead of inline text.
+		assert.ok(accepted.details.asyncId, "public workflow launch detaches async");
+		assert.match(accepted.content[0]?.text ?? "", /detached/i);
+		const acceptedResultPath = path.join(DIRS.results, `${accepted.details.asyncId}.json`);
+		let acceptedResult: { state?: string; workflow?: { value?: unknown } } = {};
+		for (let attempt = 0; attempt < 200; attempt++) {
+			try {
+				acceptedResult = JSON.parse(fs.readFileSync(acceptedResultPath, "utf-8"));
+			} catch {}
+			if (acceptedResult.state === "complete" || acceptedResult.state === "failed") break;
+			await new Promise((resolve) => setTimeout(resolve, 50));
+		}
+		assert.equal(acceptedResult.state, "complete");
+		assert.match(JSON.stringify(acceptedResult.workflow?.value ?? ""), /workflow-default-ran/);
 		assert.equal(mockPi.callCount(), 0);
+		fs.rmSync(accepted.details.asyncDir!, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+		fs.rmSync(acceptedResultPath, { force: true });
 	});
 
 	it("runs a workflow host command without launching a child", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
@@ -3569,9 +3586,14 @@ Answer only from the supplied synthetic text.
 		mockPi.onCall({ output: "first child completed", matchArgIncludes: "First task" });
 		const executor = makeExecutor([makeAgent("echo")]);
 
-		const result = await executor.executePublic(
+		// Sync internal execute: public workflows always detach async, which
+		// would leave the child launch racing the callCount assertion below.
+		// Shadowing the runs.all binding must still allow keyed access on
+		// the inner object.
+		const result = await executor.execute(
 			"scripted-workflow-runs-all-shadowed-result-access",
 			{
+				async: false,
 				workflowScript: `
 					const children = await runs.all([
 						{ key: "first", agent: "echo", task: "First task" }
@@ -3599,9 +3621,14 @@ Answer only from the supplied synthetic text.
 		mockPi.onCall({ output: "map child completed", matchArgIncludes: "Map task" });
 		const executor = makeExecutor([makeAgent("echo")]);
 
-		const result = await executor.executePublic(
+		// Sync internal execute: public workflows always detach async, which
+		// would leave the child launches racing the callCount assertion below.
+		// Array methods on the runs.all result must keep working when child
+		// keys collide with array properties.
+		const result = await executor.execute(
 			"scripted-workflow-runs-all-colliding-key-access",
 			{
+				async: false,
 				workflowScript: `
 					const children = await runs.all([
 						{ key: "length", agent: "echo", task: "Length task" },
@@ -3874,10 +3901,12 @@ Answer only from the supplied synthetic text.
 		mockPi.onCall({ output: acceptedReport });
 		mockPi.onCall({ output: acceptedReport });
 		// The per-child `gate` shorthand left the 9-key workflow contract; verify gates
-		// now ride agent-definition defaultAcceptance verify commands.
+		// now ride agent-definition defaultAcceptance verify commands. Verify commands
+		// only run at level "verified" (the old gate shorthand normalized to
+		// { level: "verified", verify: [...] }), so the level is explicit here.
 		const executor = makeExecutor([
-			makeAgent("fails-gate", { defaultAcceptance: { verify: [{ id: "gate", command: `${process.execPath} -e "process.exit(7)"` }] } }),
-			makeAgent("passes-gate", { defaultAcceptance: { verify: [{ id: "gate", command: `${process.execPath} -e "process.exit(0)"` }] } }),
+			makeAgent("fails-gate", { defaultAcceptance: { level: "verified", verify: [{ id: "gate", command: `${process.execPath} -e "process.exit(7)"` }] } }),
+			makeAgent("passes-gate", { defaultAcceptance: { level: "verified", verify: [{ id: "gate", command: `${process.execPath} -e "process.exit(0)"` }] } }),
 		]);
 
 		const result = await executor.execute(
