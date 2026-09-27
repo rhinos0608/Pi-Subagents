@@ -628,7 +628,7 @@ export function registerSlashCommands(
 	});
 
 	pi.registerCommand("run", {
-		description: "Run one subagent through workflowScript: /run agent[output=file] [task] [--bg]",
+		description: "Run one subagent through workflowScript: /run agent[reads=...] [task] [--bg]",
 		getArgumentCompletions: makeAgentCompletions(pi, state),
 		handler: async (args, ctx) => {
 			const { args: cleanedArgs, bg } = extractExecutionFlags(args);
@@ -651,12 +651,12 @@ export function registerSlashCommands(
 			}
 
 			let finalTask = task;
+			if (inline.model) { ctx.ui.notify("Per-call model= is not supported on /run; pin the role via agent frontmatter or agentOverrides (see models.md).", "error"); return; }
 			if (inline.reads && Array.isArray(inline.reads) && inline.reads.length > 0) {
 				const existingReads = inline.reads.filter((read) => resolveExistingReadPaths([read], state.baseCwd).length > 0);
 				if (existingReads.length > 0) finalTask = `[Read from: ${existingReads.join(", ")}]\n\n${finalTask}`;
 			}
-			const child: Record<string, unknown> = { agent: agentName, task: finalTask, agentScope: "both" };
-			if (inline.model) child.model = inline.model;
+			const child: Record<string, unknown> = { agent: agentName, task: finalTask };
 			launchCommand(ctx, { workflowScript: slashRunWorkflowScript("run", child), async: bg ? true : false });
 		},
 	});

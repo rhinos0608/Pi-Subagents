@@ -4886,7 +4886,6 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 	/** Scheduled state visible to the current runtime supervisor owner only. */
 	getCurrentSupervisorOwnerStates: () => Iterable<SubagentState>;
 } {
-	const delegatedThinkingOverrides = new WeakMap<object, AgentConfig["thinking"]>();
 	const delegatedZeroToolBudgets = new WeakSet<object>();
 	const delegatedExecutions = new WeakSet<object>();
 	const publicExecutions = new WeakSet<object>();
@@ -4904,7 +4903,6 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		parentModelOverride?: ParentModel | null,
 	): Promise<AgentToolResult<Details>> => {
 		const workflowLaunchObserver = workflowLaunchObservers.get(params);
-		const delegatedThinkingOverride = delegatedThinkingOverrides.get(params);
 		const allowZeroToolBudget = delegatedZeroToolBudgets.has(params);
 		const delegatedExecution = delegatedExecutions.has(params);
 		const publicExecution = publicExecutions.has(params);
@@ -6991,7 +6989,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			path.join(sessionRoot, `run-${idx ?? 0}`);
 		const forkSessionFileForTask: ForkSessionFileForTask = () => undefined;
 		const prepareForkSessionForTask: PrepareForkSessionForTask = async () => {};
-		const thinkingOverrideForTask: ThinkingOverrideForTask = () => delegatedThinkingOverride;
+		const thinkingOverrideForTask: ThinkingOverrideForTask = () => undefined;
 		const childSessionFileForTask: ForkSessionFileForTask = (agentName, idx, modelOverride, modelOverrideFromParent, modelOrigin) =>
 			forkSessionFileForTask(agentName, idx, modelOverride, modelOverrideFromParent, modelOrigin) ?? path.join(sessionDirForIndex(idx), "session.jsonl");
 		const childSessionFileForIndex = (idx?: number) =>
@@ -7374,17 +7372,13 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 	): Promise<AgentToolResult<Details>> => {
 		const delegatedParams = { ...params };
 		const privateParams = delegatedParams as SubagentParamsLike & {
-			delegatedThinkingOverride?: AgentConfig["thinking"];
 			delegatedAllowZeroToolBudget?: true;
 			delegatedWorkflowPermit?: WorkflowChildPermit;
 		};
-		const thinkingOverride = privateParams.delegatedThinkingOverride;
 		const allowZeroToolBudget = privateParams.delegatedAllowZeroToolBudget === true;
 		const workflowPermit = privateParams.delegatedWorkflowPermit;
-		delete privateParams.delegatedThinkingOverride;
 		delete privateParams.delegatedAllowZeroToolBudget;
 		delete privateParams.delegatedWorkflowPermit;
-		if (thinkingOverride !== undefined) delegatedThinkingOverrides.set(delegatedParams, thinkingOverride);
 		if (allowZeroToolBudget) delegatedZeroToolBudgets.add(delegatedParams);
 		if (workflowPermit) workflowPermitContexts.set(delegatedParams, { root: workflowPermit });
 		delegatedExecutions.add(delegatedParams);
