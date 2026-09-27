@@ -275,6 +275,14 @@ export async function resolveSubagentLaunchContract(input: SubagentLaunchContrac
 		const detail = error instanceof Error ? ` ${error.message}` : "";
 		return { ok: false, code: "invalid_cwd", message: `cwd '${effectiveCwd}' is not a directory.${detail}`, diagnostics };
 	}
+	// Per-run tuning/model/context overrides were removed from the delegation API
+	// (Phase 6/Phase 5 cutover); model and thinking resolve from the agent
+	// definition only and context is always fresh. Reject them, never ignore.
+	const removedInput = input as unknown as Record<string, unknown>;
+	const removedFields = ["context", "model", "fast", "thinking", "timeoutMs", "maxRuntimeMs", "checkpointBeforeDeadlineMs", "usageBudget", "skill", "outputMode"].filter((field) => removedInput[field] !== undefined);
+	if (removedFields.length) {
+		return { ok: false, code: "unsupported_mode", message: `Removed subagent field(s) rejected: ${removedFields.join(", ")}. Per-run model/thinking/fast/context/timeout controls were removed; model and thinking resolve from the agent definition only.`, diagnostics };
+	}
 	if (input.artifactDir !== undefined && input.artifactDir !== "project" && input.artifactDir !== "session" && input.artifactDir !== "temp") {
 		return { ok: false, code: "invalid_artifact_dir", message: `Unsupported artifactDir '${String(input.artifactDir)}'; expected 'project', 'session', or 'temp'.`, diagnostics };
 	}
