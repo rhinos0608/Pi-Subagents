@@ -92,6 +92,7 @@ interface AsyncStatusPayload {
 	parallelHandoff?: { version?: number; path?: string; groupCount?: number; childCount?: number; changedPatches?: number; cleanupState?: string };
 	capabilityCeiling?: { version?: number; allowedTools?: string[]; denyExtensions?: boolean; sources?: string[] };
 	capabilityAudit?: { effectiveTools?: string[]; removedTools?: string[]; extensionsDenied?: boolean };
+	policySnapshot?: Record<string, unknown>;
 	steps?: Array<{
 		agent?: string;
 		sessionName?: string;

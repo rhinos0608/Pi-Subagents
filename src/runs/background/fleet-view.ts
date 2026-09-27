@@ -18,6 +18,7 @@ import { readStatus } from "../../shared/utils.ts";
 import { formatNestedRunStatusLines } from "../shared/nested-render.ts";
 import { contextModeLabel, summarizeContextModes } from "../shared/context-mode.ts";
 import { formatModelAttemptNote } from "../shared/model-fallback.ts";
+import { formatResolvedPolicySnapshotLines } from "../../policy/snapshot.ts";
 import type { ModelAttempt } from "../../shared/types.ts";
 import { formatAsyncRunOutputPath, formatAsyncRunProgressLabel, listAsyncRuns, type AsyncRunSummary } from "./async-status.ts";
 import { isTrustedRecordedSessionFile } from "../../shared/session-file-trust.ts";
@@ -381,6 +382,10 @@ function formatAsyncFleetLines(runs: AsyncRunSummary[], now = Date.now()): strin
 		const attached = new Set(run.steps.flatMap((step) => step.children?.map((child) => child.id) ?? []));
 		const unattached = run.nestedChildren?.filter((child) => !attached.has(child.id)) ?? [];
 		lines.push(...formatNestedRunStatusLines(unattached, { indent: "  ", commandHints: true, maxLines: 12 }));
+		const policySnapshot = readStatus(run.asyncDir)?.policySnapshot;
+		if (policySnapshot) {
+			lines.push(`  policy: ${policySnapshot.model ?? "default"} (${policySnapshot.modelOrigin})${policySnapshot.thinking ? ` · thinking ${policySnapshot.thinking} (${policySnapshot.thinkingOrigin})` : ""}${policySnapshot.toolBudgetHard !== undefined ? ` · budget ${policySnapshot.toolBudgetHard} [${policySnapshot.toolBudgetSource}]` : ""}${policySnapshot.timeoutMs !== undefined ? ` · timeout ${policySnapshot.timeoutMs}ms [${policySnapshot.timeoutSource}]` : ""} · ${policySnapshot.allowedTools === undefined ? "tools unrestricted" : policySnapshot.allowedTools.length === 0 ? "no tools" : `${policySnapshot.allowedTools.length} tools`}${policySnapshot.worktree ? " · worktree" : ""}`);
+		}
 		if (run.error) lines.push(`  error: ${run.error}`);
 		for (const warning of run.nestedWarnings ?? []) lines.push(`  warning: ${warning}`);
 		const outputPath = formatAsyncRunOutputPath(run);
@@ -607,13 +612,11 @@ export function formatModelAttemptLines(attempts: ModelAttempt[] | undefined, in
 }
 
 /**
- * Every reachable effective-policy fragment for a run. No ResolvedRunPolicy type
- * exists and no compact policy snapshot is persisted (probe: shared/types.ts has
- * only fragments — launchContractDigest, capabilityCeiling, per-step model/
- * thinking/timeout/toolBudget fields). Per-attempt backoff delays are likewise
- * not persisted on ModelAttempt. Missing-snapshot persistence is a follow-up.
+ * Launch-persisted policy snapshot when present; reachable live fragments
+ * otherwise. Live per-turn counts stay rendered by callers — never snapshot.
  */
 export function formatEffectivePolicyLines(status: AsyncStatus): string[] {
+	if (status.policySnapshot) return formatResolvedPolicySnapshotLines(status.policySnapshot);
 	const lines = ["Effective policy (reachable fragments; no persisted policy snapshot):"];
 	const models = [...new Set((status.steps ?? []).flatMap((step) => step.model ? [`${formatModelThinking(step.model, step.thinking)}${step.modelResolution ? ` (${step.modelResolution.source})` : ""}`] : []))];
 	lines.push(`  Model: ${models.length ? models.join(" | ") : "default (no per-step model recorded)"}`);

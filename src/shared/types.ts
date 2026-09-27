@@ -18,6 +18,7 @@ import type { ExtensionBindings } from "../runs/shared/extension-bindings.ts";
 import type { WorkflowChildPermitContext } from "./workflow-child-permit.ts";
 import type { WatchdogWarningDetails } from "../watchdog/types.ts";
 import type { RequiredChildExtensionSnapshot } from "./required-child-extensions.ts";
+import type { ResolvedRunPolicy } from "../policy/snapshot.ts";
 
 // ============================================================================
 // Basic Types
@@ -1886,6 +1887,8 @@ export interface AsyncStatus {
 	/** Parent admission authority before the selected workflow child's descendant restrictions. */
 	admissionCapabilityCeiling?: ResolvedSubagentCapabilityCeiling;
 	capabilityAudit?: SubagentCapabilityAudit;
+	/** Compact resolved-policy snapshot written once at launch; display prefers it over fragments. */
+	policySnapshot?: ResolvedRunPolicy;
 	workflow?: Details["workflow"];
 	workflowChildren?: WorkflowChildSummary;
 	parentWorkflowRunId?: string;

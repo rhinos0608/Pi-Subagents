@@ -75,6 +75,7 @@ import { inheritedChildRuntime } from "../shared/child-launch.ts";
 import { resultFilePath } from "./result-files.ts";
 import { updateActiveRunIndex } from "./active-run-index.ts";
 import { validateToolBudgetConfig } from "../shared/tool-budget.ts";
+import { buildResolvedRunPolicy } from "../../policy/snapshot.ts";
 import type { ImportedAsyncRoot } from "./chain-root-attachment.ts";
 import type { SessionLeaseRequest } from "../shared/session-lease.ts";
 import { finalizeProcessTerminal, initializeProcessTerminal, readProcessTerminal } from "./process-terminal.ts";
@@ -1452,6 +1453,24 @@ export function executeAsyncChain(
 	const initialCompletionOwnerId = ctx.completionOwnerId ?? currentCompletionOwnerId();
 	const launchParentSessionId = ctx.parentSessionId ?? ctx.currentSessionId;
 
+	const chainPolicyStepModels = steps.flatMap((step) => {
+		if ("parallel" in step && Array.isArray(step.parallel)) return step.parallel;
+		if ("parallel" in step) return [];
+		return [step];
+	}) as Array<{ model?: string; modelResolution?: { source: string }; thinking?: string; modelCandidates?: string[] }>;
+	const chainPolicyFirst = chainPolicyStepModels.find((step) => step.model) ?? chainPolicyStepModels[0];
+	const chainPolicySnapshotInput = {
+		model: chainPolicyFirst?.model,
+		modelOrigin: chainPolicyFirst?.modelResolution?.source,
+		thinking: chainPolicyFirst?.thinking,
+		toolBudget: params.toolBudget?.hard !== undefined ? { ...(params.toolBudget.soft !== undefined ? { soft: params.toolBudget.soft } : {}), hard: params.toolBudget.hard } : undefined,
+		toolBudgetSource: (params.toolBudget ? "call" : params.configToolBudget ? "config" : "none") as "call" | "agent" | "config" | "none",
+		timeoutMs: params.timeoutMs,
+		timeoutSource: "call" as const,
+		worktree: chain.some((entry) => "worktree" in entry && entry.worktree === true),
+		allowedTools: capabilityCeiling?.allowedTools,
+		modelCandidates: chainPolicyFirst?.modelCandidates,
+	};
 	let spawnResult: SpawnRunnerResult = {};
 	try {
 		spawnResult = spawnRunner(
@@ -1517,6 +1536,7 @@ export function executeAsyncChain(
 				chainStepCount: eventChain.length,
 				...(initialParallelGroups.length ? { parallelGroups: initialParallelGroups } : {}),
 				steps: initialStatusSteps,
+				policySnapshot: buildResolvedRunPolicy(chainPolicySnapshotInput),
 			},
 			path.join(asyncDir, "status.json"),
 			launchParentSessionId,
@@ -2147,6 +2167,20 @@ export function executeAsyncSingle(
 				chainStepCount: 1,
 				...(lane ? { lane } : {}),
 				steps: [{ agent, status: "pending", ...(lane ? { lane } : {}), ...(model ? { model } : {}), ...(contextLimit !== undefined ? { contextLimit } : {}) }],
+				policySnapshot: buildResolvedRunPolicy({
+					model: selectedModel,
+					modelOrigin,
+					thinking: launchThinking ?? undefined,
+					thinkingOverride: params.thinkingOverride,
+					agentThinking: agentConfig.thinking,
+					toolBudget: resolvedToolBudget.budget,
+					toolBudgetSource: params.toolBudget ? "call" : agentConfig.toolBudget ? "agent" : params.configToolBudget ? "config" : "none",
+					timeoutMs,
+					timeoutSource: params.absoluteDeadlineAt !== undefined || params.timeoutMs !== undefined ? "call" : "none",
+					worktree: params.worktree === true,
+					allowedTools: capabilityCeiling?.allowedTools,
+					modelCandidates,
+			}),
 			},
 			path.join(asyncDir, "status.json"),
 			launchParentSessionId,
