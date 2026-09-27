@@ -21,6 +21,7 @@ First npm release of the fork: `v0.71.0-fork.1` (published as `@rhinos0608/pi-su
 
 ### Fixed
 
+- Watchdog review, permission arbitration, and Prompt Audit now route model calls through the session model registry, so models from complete providers work there. Thanks to [@chem](https://github.com/chem) for [#2496](https://github.com/nicobailon/pi-subagents/issues/2496).
 - A qualified model such as `openrouter/auto-beta` now resolves when the provider's catalog id already starts with the provider name. The resolver only compared the part after the prefix, so these OpenRouter models failed with `Unknown subagent model` unless a bare id happened to match. Matching stays inside the named provider. Thanks to [@schmlblk](https://github.com/schmlblk) for [#2487](https://github.com/nicobailon/pi-subagents/issues/2487).
 - Session startup no longer blocks the JavaScript event loop while locating globally installed agents; the first agent prompt and `subagents_enable` still wait for complete discovery. Thanks to [@trading-bl](https://github.com/trading-bl) for [#2474](https://github.com/nicobailon/pi-subagents/issues/2474).
 - The public dispatch schema and guides now clarify script-only preflight, equal timeout aliases, budget limits, and bounded child extension bindings; empty usage budgets are rejected at schema admission. Thanks to [@amchen2310](https://github.com/amchen2310) for [#2473](https://github.com/nicobailon/pi-subagents/issues/2473).
