@@ -45,8 +45,6 @@ function structuredRequest(overrides: Record<string, unknown> = {}): Record<stri
 		nodeId: "node-1",
 		agent: "worker",
 		task: "do work",
-		context: "fresh",
-		model: "openai/gpt-5",
 		cwd: "/repo",
 		result: { kind: "text" },
 		...overrides,
