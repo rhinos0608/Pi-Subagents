@@ -138,7 +138,7 @@ import {
 	type WorkflowResourceAuthority,
 	type WorkflowResourcePermit,
 } from "../../shared/workflow-child-permit.ts";
-import { deepFreezeWorkflowArgs, normalizeWorkflowArgs, resolveWorkflowResource } from "../../workflows/workflow-resources.ts";
+import { deepFreezeWorkflowArgs, normalizeWorkflowArgs } from "../../workflows/workflow-resources.ts";
 import { stableJsonDigest } from "../../shared/launch-contract.ts";
 import {
 	cleanupWorktrees,
@@ -577,20 +577,6 @@ export function rejectMissingControlRunId(params: PublicSubagentParamsLike): str
 		return `Action '${params.action}' requires id to be a non-empty run id string.`;
 	}
 	return undefined;
-}
-
-function loadWorkflowScriptPath(params: SubagentParamsLike, runtimeCwd: string): { params?: SubagentParamsLike; error?: string } {
-	if (params.workflowScriptPath === undefined) return { params };
-	const scriptPath = path.resolve(resolveRequestedCwd(runtimeCwd, params.cwd), params.workflowScriptPath);
-	let workflowScript: string;
-	try {
-		workflowScript = fs.readFileSync(scriptPath, "utf8");
-	} catch (error) {
-		return { error: `Failed to read workflowScriptPath '${scriptPath}': ${error instanceof Error ? error.message : String(error)}` };
-	}
-	if (!workflowScript.trim()) return { error: `workflowScriptPath file '${scriptPath}' is empty.` };
-	const { workflowScriptPath: _workflowScriptPath, ...rest } = params;
-	return { params: { ...rest, workflowScript } };
 }
 
 export function removeForegroundControlIfIdle(state: SubagentState, runId: string, trackRetainedNestedRoute?: (rootRunId: string) => void): boolean {
@@ -7358,23 +7344,13 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			return Promise.resolve({ content: [{ type: "text", text: normalized.error }], isError: true, details: { mode: normalized.mode, results: [] } });
 		}
 		let publicParams = normalized.params as SubagentParamsLike;
-		if (publicParams.workflow !== undefined) {
-			const resolved = resolveWorkflowResource(publicParams.workflow, publicParams.args, ctx.sessionManager.getSessionId() ?? undefined);
-			if (!resolved.ok) return Promise.resolve({ content: [{ type: "text", text: resolved.error }], isError: true, details: { mode: "workflow", results: [] } });
-			const { workflow: _workflow, args: _args, ...withoutResourceInput } = publicParams;
-			publicParams = { ...withoutResourceInput, workflowScript: resolved.resource.script };
-			workflowResourcePermits.set(publicParams, resolved.resource.permit);
-		} else if (publicParams.workflowScript !== undefined || publicParams.workflowScriptPath !== undefined) {
+		if (publicParams.workflowScript !== undefined) {
 			const normalizedArgs = normalizeWorkflowArgs(publicParams.args);
 			if ("error" in normalizedArgs) return Promise.resolve({ content: [{ type: "text", text: normalizedArgs.error }], isError: true, details: { mode: publicParams.action ? "management" : "workflow", results: [] } });
 			publicParams = { ...publicParams, args: deepFreezeWorkflowArgs(normalizedArgs.args) };
 		}
-		const loaded = loadWorkflowScriptPath(publicParams, ctx.cwd);
-		if (loaded.error) {
-			return Promise.resolve({ content: [{ type: "text", text: loaded.error }], isError: true, details: { mode: publicParams.action ? "management" : "workflow", results: [] } });
-		}
-		publicExecutions.add(loaded.params!);
-		return executeWithSingleDispatchGuard(id, loaded.params!, signal, onUpdate, ctx);
+		publicExecutions.add(publicParams);
+		return executeWithSingleDispatchGuard(id, publicParams, signal, onUpdate, ctx);
 	};
 
 	const executeDelegated = async (
