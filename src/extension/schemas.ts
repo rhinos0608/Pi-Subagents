@@ -113,7 +113,7 @@ const WorkflowPreflightOverride = Type.Object({
 	version: Type.Integer({ minimum: 1, maximum: 1 }),
 	coverage: Type.Optional(Type.String({ enum: ["complete", "partial"] })),
 	lanes: Type.Array(WorkflowPreflightLane, { maxItems: 64 }),
-}, { additionalProperties: false, description: "workflowScript/workflowScriptPath only; display-only hints; coverage warns." });
+}, { additionalProperties: false, description: "workflowScript only; display-only hints; coverage warns." });
 
 // Parallel task item (within a parallel step)
 export const ParallelTaskSchema = Type.Object({
