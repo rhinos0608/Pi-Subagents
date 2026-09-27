@@ -1261,7 +1261,7 @@ Answer only from the supplied synthetic text.
 		assert.equal(mockPi.callCount(), 0);
 	});
 
-	it("rejects a child output claimed by an earlier host command", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+	it("isolates a child output claimed by an earlier host command", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
 		const scriptPath = path.join(tempDir, "host-output-owner.cjs");
 		fs.writeFileSync(scriptPath, `process.stdout.write("host owns output\\n");`);
 		const sharedOutput = path.join(tempDir, "reports", "shared.log");
@@ -1284,13 +1284,16 @@ Answer only from the supplied synthetic text.
 		// artifact stays intact and the child no longer clobbers it.
 		assert.equal(result.isError, undefined, result.content[0]?.text ?? "workflow failed");
 		const collidedChild = result.details.results?.[0];
-		assert.equal(collidedChild?.ok, true);
+		// details.results carries the raw foreground SingleResult (exitCode /
+		// finalOutput); the decorated { ok } shape only exists on script-facing
+		// values. Isolation is proven by the distinct saved path + intact host.
+		assert.equal(collidedChild?.exitCode, 0);
 		assert.ok(collidedChild?.savedOutputPath && path.resolve(collidedChild.savedOutputPath) !== path.resolve(sharedOutput));
 		assert.equal(fs.readFileSync(sharedOutput, "utf-8"), "host owns output\n");
 		assert.equal(mockPi.callCount(), 1);
 	});
 
-	it("rejects host and child output aliases through symlinks", { skip: !createSubagentExecutor || process.platform === "win32" ? "symlink output aliases are not portable on Windows CI" : undefined }, async () => {
+	it("isolates host and child output aliases through symlinks", { skip: !createSubagentExecutor || process.platform === "win32" ? "symlink output aliases are not portable on Windows CI" : undefined }, async () => {
 		const scriptPath = path.join(tempDir, "host-output-alias-owner.cjs");
 		const reportsDir = path.join(tempDir, "reports");
 		fs.mkdirSync(reportsDir);
@@ -1310,7 +1313,8 @@ Answer only from the supplied synthetic text.
 
 		assert.equal(result.isError, undefined, result.content[0]?.text ?? "workflow failed");
 		const aliasedChild = result.details.results?.[0];
-		assert.equal(aliasedChild?.ok, true);
+		// Raw SingleResult shape here; see the host-output-collision note above.
+		assert.equal(aliasedChild?.exitCode, 0);
 		assert.ok(aliasedChild?.savedOutputPath && path.resolve(aliasedChild.savedOutputPath) !== path.resolve(path.join(reportsDir, "shared.log")));
 		assert.equal(fs.readFileSync(path.join(reportsDir, "shared.log"), "utf-8"), "host owns output alias\n");
 		assert.equal(mockPi.callCount(), 1);
