@@ -17,8 +17,6 @@ export interface SubagentDelegationToolBudget {
 
 export type SubagentDelegationJsonSchemaObject = Record<string, unknown>;
 
-export type SubagentDelegationThinking = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
-
 export type SubagentDelegationResultRequest =
 	| { kind: "text" }
 	| { kind: "structured"; schema: SubagentDelegationJsonSchemaObject };
@@ -30,8 +28,6 @@ export interface SubagentDelegationRequest {
 	agent: string;
 	task: string;
 	cwd: string;
-	model?: string;
-	thinking?: SubagentDelegationThinking;
 	toolBudget?: SubagentDelegationToolBudget;
 	artifacts?: boolean;
 	/** Per-launch bridge config; replaces the global `intercomBridge` config. Pass the same value to preflight to compare digests. */

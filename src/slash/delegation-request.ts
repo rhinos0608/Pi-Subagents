@@ -16,18 +16,13 @@ const supportedFields = new Set([
 	"nodeId",
 	"agent",
 	"task",
-	"context",
 	"cwd",
-	"model",
-	"thinking",
-	"timeoutMs",
 	"toolBudget",
 	"artifacts",
 	"intercomBridge",
 	"result",
 ]);
 
-const thinkingLevels = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 const MAX_SCHEMA_BYTES = 64 * 1024;
 const MAX_TASK_BYTES = 1024 * 1024;
 const MAX_CWD_BYTES = 32 * 1024;
@@ -64,20 +59,7 @@ export function parseSubagentDelegationRequest(data: unknown): SubagentDelegatio
 	if (unsupportedField) return { ok: false, ...identity, error: `Unsupported delegation field: ${unsupportedField}.` };
 	if (!nonEmptyString(value.agent)) return { ok: false, ...identity, error: "Delegation agent must be a non-empty string." };
 	if (!nonEmptyString(value.task)) return { ok: false, ...identity, error: "Delegation task must be a non-empty string." };
-	if (value.context !== "fresh" && value.context !== "fork") {
-		return { ok: false, ...identity, error: "Delegation context must be fresh or fork." };
-	}
 	if (!nonEmptyString(value.cwd)) return { ok: false, ...identity, error: "Delegation cwd must be a non-empty string." };
-	if (value.model !== undefined && !nonEmptyString(value.model)) {
-		return { ok: false, ...identity, error: "model must be a non-empty string when provided." };
-	}
-	if (value.timeoutMs !== undefined && (typeof value.timeoutMs !== "number" || !Number.isInteger(value.timeoutMs) || value.timeoutMs < 1)) {
-		return { ok: false, ...identity, error: "timeoutMs must be an integer >= 1." };
-	}
-	const timeoutMs = typeof value.timeoutMs === "number" ? value.timeoutMs : undefined;
-	if (timeoutMs !== undefined && timeoutMs > 2_147_483_647) {
-		return { ok: false, ...identity, error: "timeoutMs must be <= 2147483647." };
-	}
 	if (value.toolBudget && typeof value.toolBudget === "object" && !Array.isArray(value.toolBudget)) {
 		const unsupportedToolBudgetField = Object.keys(value.toolBudget).find((key) => key !== "soft" && key !== "hard" && key !== "block");
 		if (unsupportedToolBudgetField) {
@@ -106,12 +88,6 @@ export function parseSubagentDelegationRequest(data: unknown): SubagentDelegatio
 	}
 	if (Buffer.byteLength(value.agent as string, "utf8") > MAX_SHORT_TEXT_BYTES) {
 		return { ok: false, ...identity, error: "Delegation agent exceeds 1 KiB when UTF-8 encoded." };
-	}
-	if (typeof value.model === "string" && Buffer.byteLength(value.model, "utf8") > MAX_SHORT_TEXT_BYTES) {
-		return { ok: false, ...identity, error: "Delegation model exceeds 1 KiB when UTF-8 encoded." };
-	}
-	if (value.thinking !== undefined && (typeof value.thinking !== "string" || !thinkingLevels.has(value.thinking))) {
-		return { ok: false, ...identity, error: "thinking must be one of off, minimal, low, medium, high, xhigh, or max." };
 	}
 	if (!value.result || typeof value.result !== "object" || Array.isArray(value.result)) {
 		return { ok: false, ...identity, error: "result must be { kind: \"text\" } or { kind: \"structured\", schema: object }." };

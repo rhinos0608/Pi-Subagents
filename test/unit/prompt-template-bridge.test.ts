@@ -206,8 +206,6 @@ describe("prompt-template delegation bridge", () => {
 			requestId: "legacy-1",
 			agent: "worker",
 			task: "do work",
-			context: "fresh",
-			model: "openai/gpt-5",
 			cwd: "/repo",
 		});
 
@@ -231,8 +229,6 @@ describe("prompt-template delegation bridge", () => {
 		events.emit(PROMPT_TEMPLATE_SUBAGENT_REQUEST_EVENT, {
 			requestId: "r6",
 			tasks: [{ agent: "worker-a", task: "A" }],
-			context: "fresh",
-			model: "openai/gpt-5",
 			cwd: "/repo",
 		});
 		const response = await tasksResponse as { isError: boolean; errorText?: string };
