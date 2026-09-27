@@ -238,183 +238,21 @@ const ControlOverrides = Type.Object({
 const SubagentParamProperties = {
 	agent: Type.Optional(Type.String({ description: "One-child agent or management target." })),
 	task: Type.Optional(Type.String({ description: "One-child task; requires agent." })),
-	extensionBindings: Type.Optional(Type.Unsafe({ type: "object", maxProperties: 16, additionalProperties: true, description: "Child-only plain JSON; package.name/1; depth 16, 256 props, 16 KiB." })),
-	// Management action (when present, tool operates in management mode)
 	action: Type.Optional(Type.String({ minLength: 1,
-		description: "Management/control only; omit for execution. validate accepts either script input. Discover actions with guide topic tool-reference."
+		description: "Management/control only; omit for execution. Only steer, resume, and interrupt are exposed to the model."
 	})),
-	capabilities: Type.Optional(Type.Boolean({ description: "list: compact capability rows/details without system prompts." })),
-	name: Type.Optional(Type.String({ description: "schedule.create name." })),
 	id: Type.Optional(Type.String({
 		description: "Run id/prefix for status/control."
 	})),
-	runId: Type.Optional(Type.String({
-		description: "Target run ID; prefer id."
-	})),
-	dir: Type.Optional(Type.String({
-		description: "Async directory for status/control."
-	})),
-	handoffPath: Type.Optional(Type.String({ description: "Existing manifest for worktree/lane actions." })),
-	repo: Type.Optional(Type.String({ description: "worktree.cleanup repo; default cwd." })),
-	planId: Type.Optional(Type.String({ description: "Reserved; cleanup is plan-only." })),
-	laneId: Type.Optional(Type.String({ minLength: 1, maxLength: 128, description: "Exact manifest run id for lane actions." })),
-	merge: Type.Optional(Type.Unsafe({ type: "object", additionalProperties: true, description: "lane.recordMerge evidence; read guide tool-reference." })),
-	supersession: Type.Optional(Type.Unsafe({ type: "object", additionalProperties: true, description: "lane.recordSupersession evidence; read guide tool-reference." })),
-	index: Type.Optional(Type.Integer({ minimum: 0, description: "Zero-based child/transcript index." })),
-	childId: Type.Optional(Type.String({ minLength: 1, maxLength: 256, description: "Child-scoped stop identity." })),
-	view: Type.Optional(Type.String({
-		enum: ["fleet", "transcript"],
-		description: "status view: fleet overview or transcript tail with id/dir and optional index.",
-	})),
-	lines: Type.Optional(Type.Integer({ minimum: 1, maximum: 500, description: "Transcript tail lines; default 80." })),
-	topic: Type.Optional(Type.String()),
 	message: Type.Optional(Type.String({ description: "resume/steer guidance or project.open prompt." })),
-	mode: Type.Optional(Type.String({ enum: ["steer", "follow_up", "auto", "plan", "apply"], description: "steer delivery mode; worktree.cleanup supports plan only, no apply/removal." })),
-	steeringRecovery: Type.Optional(Type.Boolean({ description: "steer: pause/revive after missed acknowledgment; default true in direct steer mode, forced false by extension RPC for exact ownership." })),
-	additional: Type.Optional(Type.Integer({ minimum: 1, description: "grant-spawn-budget: root interactive parent + native user confirmation only; total grants capped at original configured cap." })),
-	scope: Type.Optional(Type.String({ enum: ["session", "user", "project"], description: "watchdog.configure scope; default session, persistent only if explicit." })),
-	target: Type.Optional(Type.String({ enum: ["main", "children", "child"], description: "Watchdog target." })),
-	focus: Type.Optional(Type.Boolean({ description: "Focus inspector.open/project.open pane." })),
-	thinking: Type.Optional(Type.Unsafe({ anyOf: [{ type: "string" }, { type: "boolean" }], description: "watchdog.configure only: off/minimal/low/medium/high/xhigh/max, inherit, false=off; true invalid. Dispatch ignores this; use model suffix." })),
-	at: Type.Optional(Type.String({ description: "schedule.create: delay (+10m) or zoned ISO timestamp." })),
-	every: Type.Optional(Type.String({ description: "schedule.create interval, e.g. 30m/6h/2d/2w." })),
-	sessionOnly: Type.Optional(Type.Boolean()),
-	quiet: Type.Optional(Type.Boolean()),
-	on: Type.Optional(Type.Unsafe({ anyOf: [{ type: "string" }, { type: "integer" }], description: "Reserved calendar selector." })),
-	timezone: Type.Optional(Type.String()),
-	overlap: Type.Optional(Type.String({ enum: ["skip"] })),
-	catchUp: Type.Optional(Type.String({ enum: ["none", "latest"], description: "Missed schedule occurrences; default latest." })),
-	missionId: Type.Optional(Type.String()),
-	mission: Type.Optional(Type.Unsafe({ ...MissionLaunchOverride, description: "false disables; true invalid. Object: exactly one non-empty title or summary; objective/labels optional; goal only true, requires budget.tokens." })),
-	missionUpdate: Type.Optional(Type.Unsafe({ ...MissionUpdateOverride, description: "Mission patch; read guide missions." })),
-	missionStatus: Type.Optional(Type.String()),
-	missionScope: Type.Optional(Type.String({ description: "project (default) or global pointer index." })),
-	runMode: Type.Optional(Type.String({ description: "Attached run mode." })),
-	runStatus: Type.Optional(Type.String({ description: "Attached run status." })),
-	summary: Type.Optional(Type.String({ description: "Mission close summary." })),
-	// Agent configuration for create/update (nested to avoid conflicts with execution fields)
-	config: Type.Optional(Type.Unsafe({
-		anyOf: [
-			{ type: "object", additionalProperties: true },
-			{ type: "string" },
-		],
-		description: "create/update agent config; object or JSON string."
-	})),
-	workflow: Type.Optional(Type.String({ minLength: 1, description: "Extension-owned workflow resource." })),
-	args: Type.Optional(Type.Unsafe({ type: "object", maxProperties: 16, additionalProperties: true, description: "Bounded plain-JSON args for named, inline, or file-backed workflows; raw-script args are exposed deeply frozen and persisted, so do not include secrets." })),
 	workflowScript: Type.Optional(Type.String({ minLength: 1, description: "Inline JavaScript statement body; raw/unknown provenance, no runs.host. Use explicit return and top-level await; see tool guidance/guide workflows." })),
-	workflowScriptPath: Type.Optional(Type.String({ minLength: 1, description: "Raw script file; host reads from request cwd before sandbox. Mutually exclusive with workflowScript and workflow." })),
-	globalConcurrencyLimit: Type.Optional(Type.Integer({ minimum: 1 })),
-	maxSubagentSpawnsPerRun: Type.Optional(Type.Integer({ minimum: 1 })),
-	preflight: Type.Optional(WorkflowPreflightOverride),
-	chatProgress: Type.Optional(Type.String({ enum: ["auto", "off", "live-card"], description: "auto: live card only for watched foreground in same Git repository. live-card requires same-repo async:false; async: omit or auto/off." })),
-	isolation: Type.Optional(Type.String({ enum: ["none", "worktree"], description: "Shared cwd or managed git worktrees." })),
-	worktree: Type.Optional(Type.Boolean({ description: "Isolate each workflow child in a managed git worktree; child worktree:false overrides default." })),
-	baseRef: Type.Optional(Type.String()),
-	lane: Type.Optional(WorkflowLaneMetadata),
-	async: Type.Optional(Type.Boolean({ description: "Background; default asyncByDefault. false only to block parent." })),
-	toolTimeoutMs: Type.Optional(Type.Integer({ minimum: 1, description: "Per-tool deadline (ms); fast builtins default 5m." })),
-	toolBudget: Type.Optional(ToolBudgetOverride),
-	agentScope: Type.Optional(Type.String({ description: "user/project/both (default); project wins collisions." })),
 	cwd: Type.Optional(Type.String({ description: "Execution/project-pane directory." })),
-	machine: Type.Optional(Type.String({ minLength: 1, maxLength: 128, description: "Herdr saved machine id or label; runs an external CLI agent there. cwd then means the directory on that machine." })),
-	artifacts: Type.Optional(Type.Boolean({ description: "Debug artifacts; default true." })),
-	includeProgress: Type.Optional(Type.Boolean({ description: "Full result progress; default false." })),
-	share: Type.Optional(Type.Boolean({ description: "Upload session to GitHub Gist; default false." })),
-	sessionDir: Type.Optional(
-		Type.String({ description: "Session log directory; default temp, independent of share." }),
-	),
-	control: Type.Optional(ControlOverrides),
-	// Output routing is tooling-managed; child output fields stay internal.
-	model: Type.Optional(Type.String({ description: "Child model provider/id; bare id only if unique. Suffix :off/minimal/low/medium/high/xhigh/max overrides agent thinking default." })),
-	fast: Type.Optional(Type.Boolean({ description: "Native OpenAI-Codex priority tier; default false, may cost more/quota." })),
-	outputSchema: Type.Optional(OutputSchemaOverride),
-	agentContract: Type.Optional(AgentContractOverride),
-	acceptance: Type.Optional(AcceptanceOverride),
-	gate: Type.Optional(Type.Unsafe({
-		anyOf: [
-			{ type: "string", minLength: 1 },
-			{ type: "object", properties: { command: { type: "string", minLength: 1 }, output: { type: "string", enum: ["json"] }, schema: { type: "object" }, timeoutMs: { type: "integer", minimum: 1 } }, required: ["command"], additionalProperties: false },
-		],
-		description: "Host gate command run after the child finishes: a string, or { command, output: \"json\", schema?, timeoutMs? } whose passing stdout becomes structuredOutput (not with outputSchema). Cannot be combined with acceptance; an explicit acceptance of false is treated as omitted.",
-	})),
 };
 
-const SubagentParamsSchema = Type.Object(SubagentParamProperties);
+const SubagentParamsSchema = Type.Object(SubagentParamProperties, { additionalProperties: false });
 
 export const SubagentParams = keepTopLevelParameterDescriptions(SubagentParamsSchema);
 
-export type SubagentParamsProfile = "full" | "compact";
-
-// Compact schema keeps only load-bearing presentation annotations. Everything else
-// (self-explanatory IDs, UI hints, repeated overrides) is stripped to fit the
-// 8,600-char compact budget. Kept descriptions disambiguate validation or
-// surprising semantics:
-// - discriminators: action, mode (execution vs management routing)
-// - dangerous/mutating: additional (grant-spawn-budget), gate (host command),
-//   workflowScript/workflowScriptPath (raw provenance, no runs.host)
-// - opaque formats: acceptance, mission, outputSchema (false-disables/true-invalid
-//   triples), at/every (schedule shapes)
-// - surprising semantics: async (asyncByDefault default), toolBudget (block-to-finalize),
-//   preflight (display-only), thinking (dispatch ignores)
-const COMPACT_TOP_LEVEL_DESCRIPTION_KEYS = [
-	"action",
-	"mode",
-	"at",
-	"every",
-	"additional",
-	"gate",
-	"workflowScript",
-	"workflowScriptPath",
-	"acceptance",
-	"mission",
-	"outputSchema",
-	"async",
-	"toolBudget",
-	"preflight",
-	"thinking",
-] as const;
-
-// Shortened where the full text exceeds what the compact budget allows. Meaning
-// is preserved; only examples and restated defaults are trimmed.
-const COMPACT_TOP_LEVEL_DESCRIPTION_OVERRIDES: Record<string, string> = {
-	thinking: "watchdog.configure only; true invalid. Dispatch ignores this; use model suffix.",
-	mission: "false disables; object needs title/summary; goal:true requires budget.tokens.",
-	acceptance: "Evidence policy; false disables, true invalid. Prefer object; see guide tool-reference for levels, evidence and review.required.",
-	gate: "Host gate after child completion; JSON stdout may become structuredOutput; cannot be combined with acceptance or outputSchema.",
-};
-
-function shallowCloneSchema<T>(value: T): T {
-	if (!value || typeof value !== "object") return value;
-	const clone = Object.create(Object.getPrototypeOf(value));
-	for (const key of Reflect.ownKeys(value)) {
-		const descriptor = Object.getOwnPropertyDescriptor(value, key);
-		if (descriptor) Object.defineProperty(clone, key, descriptor);
-	}
-	return clone as T;
-}
-
-function toCompactSubagentParamsSchema<T extends { properties?: Record<string, unknown> }>(full: T): T {
-	const root = shallowCloneSchema(full);
-	const properties: Record<string, unknown> = { ...(full.properties ?? {}) };
-	for (const name of Object.keys(properties)) {
-		const prop = properties[name];
-		if (!prop || typeof prop !== "object") continue;
-		const next = shallowCloneSchema(prop as Record<string, unknown>);
-		if ((COMPACT_TOP_LEVEL_DESCRIPTION_KEYS as readonly string[]).includes(name)) {
-		(next as Record<string, unknown>).description =
-			COMPACT_TOP_LEVEL_DESCRIPTION_OVERRIDES[name] ?? (next as Record<string, unknown>).description;
-		} else {
-		delete (next as Record<string, unknown>).description;
-	}
-		properties[name] = next;
-	}
-	(root as { properties?: unknown }).properties = properties;
-	return root;
-}
-
-export const CompactSubagentParams = toCompactSubagentParamsSchema(SubagentParams);
-
-export function createSubagentParamsSchema(profile: SubagentParamsProfile = "full"): typeof SubagentParams {
-	return profile === "compact" ? CompactSubagentParams : SubagentParams;
-}
+// Phase 6a: single small public schema. The full/compact branching
+// (toCompactSubagentParamsSchema, CompactSubagentParams,
+// COMPACT_TOP_LEVEL_DESCRIPTION_KEYS, SubagentParamsProfile) is removed.
