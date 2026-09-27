@@ -64,7 +64,8 @@ describe("scheduled internal route", () => {
 			assert.equal(run.state, "running", JSON.stringify(launched));
 			f.track(run.asyncDir!);
 
-			// Model-authored equivalent through the public gate must fail: args are scheduler-owned internals.
+			// Model-authored equivalent through the public gate must fail: async is a
+			// removed model-passed field (scheduler/agent-default async stays internal).
 			const rejected = await f.executor.executePublic(randomUUID(), {
 				workflowScript: "return args.who;",
 				args: { who: "sched" },
@@ -74,7 +75,7 @@ describe("scheduled internal route", () => {
 				cwd: f.root,
 			} as never, new AbortController().signal, undefined, ctx);
 			assert.equal(rejected.isError, true, JSON.stringify(rejected));
-			assert.match(JSON.stringify(rejected), /args were removed/);
+			assert.match(JSON.stringify(rejected), /Removed subagent field\(s\) rejected: async/);
 		} finally { await f.dispose(); }
 	});
 });

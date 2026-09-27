@@ -685,7 +685,8 @@ describe("supervisor ask registration", () => {
 		let terminal: () => void = () => {};
 		const executor = createSubagentExecutor({
 			pi: pi as never, state, config: { maxSubagentDepth: 2, control: {}, intercomBridge: {} } as never,
-			asyncByDefault: false, tempArtifactsDir: root, getSubagentSessionRoot: () => root,
+			asyncByDefault: true, tempArtifactsDir: root, getSubagentSessionRoot: () => root,
+			// Model-passed async is rejected; this fixture opts into async at the executor level.
 			expandTilde: (value) => value, discoverAgents: () => ({ agents: [] }),
 			activateSupervisorTransport: () => channel.activateTransport(),
 			refreshResultDelivery: () => { if ([...state.asyncJobs.values()].every(job => job.status !== "running" && job.status !== "queued")) terminal(); },
@@ -697,7 +698,8 @@ describe("supervisor ask registration", () => {
 			assert.equal(intervals.size, 0, "idle registration has no timer");
 			for (let cycle = 0; cycle < 2; cycle += 1) {
 				const done = new Promise<void>(resolve => { terminal = resolve; });
-				const result = await executor.executePublic(randomUUID(), { workflowScript: "return [];", async: true }, new AbortController().signal, undefined, ctx as never);
+				// Model-passed async is rejected; async placement comes from the executor default above.
+				const result = await executor.executePublic(randomUUID(), { workflowScript: "return [];" }, new AbortController().signal, undefined, ctx as never);
 				assert.equal(result.isError, undefined, JSON.stringify(result));
 				const runId = result.details!.asyncId!;
 				const job = state.asyncJobs.get(runId)!;

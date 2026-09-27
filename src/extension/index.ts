@@ -785,6 +785,15 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		return executeSubagentReady(id, params, signal, onUpdate, ctx);
 	};
 
+	const executeRpcCollapsed = (id: string, params: SubagentParamsLike, signal: AbortSignal, onUpdate: ((result: AgentToolResult<Details>) => void) | undefined, ctx: ExtensionContext) => {
+		// RPC is an internal caller and rides the internal dispatch,
+		// never the model-visible executePublic gate (which rejects schedule.* management).
+		return (async () => {
+			await waitForAdvertisement();
+			return executor.execute(id, params, signal, onUpdate, ctx);
+		})();
+	};
+
 	const executeSlashCollapsed = (id: string, params: SubagentParamsLike, signal: AbortSignal, onUpdate: ((result: AgentToolResult<Details>) => void) | undefined, ctx: ExtensionContext) => {
 		if (ctx.hasUI) ctx.ui.setToolsExpanded(false);
 		// Phase 7c: slash is an internal caller and rides the internal dispatch,
@@ -817,7 +826,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	const rpcBridge = registerSubagentRpcBridge({
 		events: pi.events,
 		getContext: () => state.lastUiContext,
-		execute: executeSubagentReady,
+		execute: executeRpcCollapsed,
 		state,
 	});
 	// Portable leaf-model runtime: separate versioned namespace. The host probe

@@ -10,8 +10,8 @@ import { MODEL_VISIBLE_SUBAGENT_ACTIONS, SUBAGENT_ACTIONS } from "../../src/shar
 // Phase 1b public-boundary contract tests: prove the INTENDED end state from
 // docs/subagent-tooling-overhaul.md ("Target public tool boundary" + "Schema cleanup").
 //
-// Intended top-level vocabulary (7 fields only):
-//   agent, task, cwd, workflowScript, action, id, message
+// Intended top-level vocabulary (8 fields only):
+//   agent, task, cwd, workflowScript, action, id, message, topic (guide-only)
 // Plus the intended runs.run child allowlist: { agent, task, cwd, resume }.
 //
 // Sibling-work note: three sibling worktrees are concurrently shrinking the
@@ -61,7 +61,7 @@ try {
 
 const describeIfSchemas = schemasAvailable && CompileSchema ? describe : describe.skip;
 
-describeIfSchemas("public boundary: intended 7-field shapes validate", () => {
+describeIfSchemas("public boundary: intended 8-field shapes validate", () => {
 	function check(value: unknown): boolean {
 		return CompileSchema!(SubagentParams).Check(value);
 	}
@@ -96,6 +96,21 @@ describeIfSchemas("public boundary: intended 7-field shapes validate", () => {
 			assert.equal(check({ action, id: "run-abc123", message: "adjust course" }), true);
 		});
 	}
+
+	it("guide shape with topic validates", () => {
+		assert.equal(check({ action: "guide", topic: "agents" }), true);
+	});
+
+	it("guide shape without topic validates", () => {
+		assert.equal(check({ action: "guide" }), true);
+	});
+
+	it("topic description survives top-level pruning (guide-only)", () => {
+		const properties = (SubagentParams as JsonSchemaNode)?.properties as Record<string, JsonSchemaNode> | undefined;
+		const topic = properties?.topic as JsonSchemaNode | undefined;
+		assert.equal(typeof topic?.description, "string");
+		assert.match(topic?.description as string, /guide/i);
+	});
 });
 
 describeIfSchemas("public boundary: legacy workflow spellings are rejected", () => {

@@ -310,7 +310,7 @@ interface TaskParam {
 
 /**
  * Model-authored public vocabulary (Phase 6a cutover): agent, task, cwd,
- * workflowScript, action, id, message ONLY. executePublic rejects any other
+ * workflowScript, action, id, message, topic (guide-only) ONLY. executePublic rejects any other
  * model-supplied key; the tool schema sets additionalProperties:false so
  * providers reject them before dispatch.
  */
@@ -322,6 +322,8 @@ export interface PublicSubagentParamsLike {
 	action?: string;
 	id?: string;
 	message?: string;
+	/** Guide-only topic for action:"guide"; ignored on other actions. */
+	topic?: string;
 }
 
 // ---- Internal boundary: everything below is NEVER model-authored. ----
@@ -555,6 +557,7 @@ const REMOVED_PUBLIC_SUBAGENT_FIELDS = [
 	"checkpointBeforeDeadlineMs",
 	"usageBudget",
 	"skill",
+	"async",
 	"model",
 	"fast",
 	"thinking",
@@ -564,7 +567,7 @@ function rejectRemovedPublicSubagentFields(params: PublicSubagentParamsLike): st
 	const record = params as Record<string, unknown>;
 	const rejected = (REMOVED_PUBLIC_SUBAGENT_FIELDS as readonly string[]).filter((field) => record[field] !== undefined);
 	if (!rejected.length) return undefined;
-	return `Removed subagent field(s) rejected: ${rejected.join(", ")}. The public subagent vocabulary is agent, task, cwd, workflowScript, action, id, message only.`;
+	return `Removed subagent field(s) rejected: ${rejected.join(", ")}. The public subagent vocabulary is agent, task, cwd, workflowScript, action, id, message, topic (guide-only).`;
 }
 
 /** Control actions target a live run, so they require a non-empty run id. Launch mode omits action and id legitimately. */

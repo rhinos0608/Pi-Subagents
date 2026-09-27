@@ -245,6 +245,7 @@ const SubagentParamProperties = {
 		description: "Run id/prefix for status/control."
 	})),
 	message: Type.Optional(Type.String({ description: "resume/steer guidance or project.open prompt." })),
+	topic: Type.Optional(Type.String({ description: "Guide topic for action:'guide' only; ignored on other actions." })),
 	workflowScript: Type.Optional(Type.String({ minLength: 1, description: "Inline JavaScript statement body; raw/unknown provenance, no runs.host. Use explicit return and top-level await; see tool guidance/guide workflows." })),
 	cwd: Type.Optional(Type.String({ description: "Execution/project-pane directory." })),
 };
