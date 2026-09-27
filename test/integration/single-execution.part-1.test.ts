@@ -1789,9 +1789,13 @@ Answer only from the supplied synthetic text.
 			await new Promise((resolve) => setTimeout(resolve, 20));
 		}
 		assert.equal(workflowResult.state, "complete");
-		assert.equal(workflowResult.results?.[0]?.state, "running");
-		assert.equal(workflowResult.results?.[0]?.output, "");
-		assert.equal(workflowResult.results?.[0]?.success, undefined);
+		// Workflow result publications carry the settled child summary (no
+		// per-child `state`; liveness lives in status.json). The defaultModel
+		// routing is proven above via the mock call args + external adapter.
+		assert.equal(workflowResult.results?.[0]?.agent, "external");
+		assert.equal(workflowResult.results?.[0]?.success, true);
+		assert.equal(workflowResult.results?.[0]?.outputState, "present");
+		assert.equal(workflowResult.results?.[0]?.output, "external result");
 		assert.equal(await waitForFileContent(markerPath, "started"), "started");
 		assert.equal(mockPi.callCount(), 0);
 
