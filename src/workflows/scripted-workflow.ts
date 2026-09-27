@@ -1837,6 +1837,23 @@ export function validateWorkflowScript(script: string, options: WorkflowScriptVa
 				}
 			}
 		}
+		if (directRunsCall(node, "lanes")) {
+			const args = Array.isArray(node.arguments) ? node.arguments : [];
+			if (astNode(args[0]) && args[0].type === "ArrayExpression" && Array.isArray(args[0].elements)) {
+				for (const lane of args[0].elements) {
+					if (!astNode(lane)) continue;
+					const stages = directObjectPropertyValue(lane, "stages");
+					if (!astNode(stages) || stages.type !== "ArrayExpression" || !Array.isArray(stages.elements)) continue;
+					for (const stage of stages.elements) {
+						if (!astNode(stage)) continue;
+						errors.push(...validateStaticBaseRef(stage, "runs.lanes stage"));
+						errors.push(...validateStaticRunParams(stage, "runs.lanes stage", true));
+						const message = definitelyNonJson(stage);
+						if (message) errors.push({ message: `runs.lanes stage params are invalid: ${message}.`, ...nodeLocation(stage) });
+					}
+				}
+			}
+		}
 		if (directRunsCall(node, "host")) errors.push(...validateStaticHostCall(node));
 		const boundaryValue = node.type === "CallExpression" && astNode(node.callee) && node.callee.type === "Identifier" && node.callee.name === "emit" && Array.isArray(node.arguments) && astNode(node.arguments[0])
 			? node.arguments[0]

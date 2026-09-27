@@ -3466,7 +3466,7 @@ function resolveWorkflowChildOutputPath(input: {
 		// check a default-output resume of a live nested run throws "Async run
 		// not found" during output-claim admission and never reaches launch.
 		try {
-			const nested = resolveSubagentRunId(input.params.resume.trim(), omitUndefinedProperties({ state: input.state }));
+			const nested = resolveSubagentRunId(input.params.resume.trim(), omitUndefinedProperties({ state: input.state, exactOnly: true }));
 			if (nested?.kind === "nested") return { path: undefined, inherited: false };
 		} catch {
 			// Ambiguous/unresolvable ids fall through to the foreground/async
