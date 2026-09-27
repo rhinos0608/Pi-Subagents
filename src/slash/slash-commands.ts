@@ -29,6 +29,7 @@ import { collectSubagentCost, formatSubagentCostReport } from "./subagent-cost.t
 import { openSubagentsAdmin } from "./subagents-admin.ts";
 import { SUBAGENT_GUIDE_TOPICS } from "../extension/subagent-guide.ts";
 import { openSubagentFleet } from "../tui/fleet.ts";
+import { openSubagentAgents } from "../tui/fleet-agents.ts";
 import { createBuiltinInspectorPlugins } from "../inspectors/plugins.ts";
 import {
 	applySlashUpdate,
@@ -721,6 +722,14 @@ export function registerSlashCommands(
 	pi.registerCommand("subagents-fleet", {
 		description: "Open the live subagent fleet inspector",
 		handler: async (_args, ctx) => showFleet(ctx),
+	});
+
+	pi.registerCommand("subagents-agents", {
+		description: "Open the subagent Agents view: list, create, edit, or delete agents",
+		handler: async (_args, ctx) => {
+			state.lastUiContext = ctx;
+			await openSubagentAgents(ctx, { cwd: state.baseCwd || ctx.cwd, modelRegistry: ctx.modelRegistry });
+		},
 	});
 
 	const detachForegroundRun = (args: string, ctx: ExtensionContext): void => {

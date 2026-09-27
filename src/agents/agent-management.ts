@@ -1275,7 +1275,7 @@ export function handleUpdate(params: ManagementParams, ctx: ManagementContext): 
 	return result([headline, ...warnings].join("\n"));
 }
 
-function handleDelete(params: ManagementParams, ctx: ManagementContext): AgentToolResult<Details> {
+export function handleDelete(params: ManagementParams, ctx: ManagementContext): AgentToolResult<Details> {
 	if (!params.agent) return result("Specify 'agent' for delete.", true);
 	const scopeHint = asDisambiguationScope(params.agentScope);
 	const targetOrError = resolveTarget(params.agent, findAgents(params.agent, ctx, scopeHint ?? "both"), ctx.cwd, ctx, scopeHint);
