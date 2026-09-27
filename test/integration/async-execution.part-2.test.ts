@@ -258,10 +258,9 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 						agent: "worker",
 						task: "Inspect the task and return a report. Do not edit files.",
 						acceptance: false,
-						...(diagnostic === "structured" ? { outputSchema: { type: "object", required: ["ok"], properties: { ok: { type: "boolean" } } } } : {}),
 						...(diagnostic === "file" ? { output: outputPath, outputMode: "file-only" as const } : {}),
 					}],
-					agents: [makeAgent("worker", { tools: ["read", "write"] })],
+					agents: [makeAgent("worker", { tools: ["read", "write"], ...(diagnostic === "structured" ? { outputSchema: { type: "object", required: ["ok"], properties: { ok: { type: "boolean" } } } } : {}) })],
 					ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-completion-diagnostics" },
 					artifactConfig: { enabled: true, includeInput: false, includeOutput: true, includeJsonl: true, includeMetadata: true, cleanupDays: 7 },
 					artifactsDir: path.join(tempDir, "artifacts", id),
@@ -305,7 +304,10 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 					assert.ok(transcript);
 					assert.match(fs.readFileSync(transcript, "utf-8"), /Blocked by policy/);
 				}
-				assert.equal(mockPi.callCount(), 1);
+				// Bounded model fallback retries retryable cold-start/empty-output failures
+				// (up to 3 attempts); hidden tool failures, structured validation
+				// failures, and paused runs launch once.
+				assert.equal(mockPi.callCount(), interrupted || diagnostic === "hidden" || diagnostic === "structured" ? 1 : 3);
 			});
 		}
 	}
@@ -1099,7 +1101,7 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		});
 		assert.match(interactiveResult.content[0]?.text ?? "", /interactive session/);
 		assert.match(interactiveResult.content[0]?.text ?? "", /return control to the user/);
-		assert.match(interactiveResult.content[0]?.text ?? "", /does not need a wait call/);
+		assert.match(interactiveResult.content[0]?.text ?? "", /never as a wait loop/);
 		assert.match(interactiveResult.content[0]?.text ?? "", /native completion notification/);
 		assert.doesNotMatch(interactiveResult.content[0]?.text ?? "", /bg_wait\(\{ id:/);
 		assert.doesNotMatch(interactiveResult.content[0]?.text ?? "", /auto-drain/);
@@ -1422,11 +1424,10 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 					phase: "Collect",
 					label: "Produce structured data",
 					as: "data",
-					outputSchema: schema,
 				},
 				{ agent: "consumer", task: "Use {outputs.data}", phase: "Use", label: "Consume data" },
 			],
-			agents: [makeAgent("producer"), makeAgent("consumer")],
+			agents: [makeAgent("producer", { outputSchema: schema }), makeAgent("consumer")],
 			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-structured" },
 			artifactConfig: { enabled: false, includeInput: false, includeOutput: false, includeJsonl: false, includeMetadata: false, cleanupDays: 7 },
 			shareEnabled: false,
@@ -1522,16 +1523,16 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		const id = `async-dynamic-placeholder-${Date.now().toString(36)}`;
 		const result = executeAsyncChain(id, {
 			chain: [
-				{ agent: "producer", task: "Produce targets", as: "targets", outputSchema: { type: "object" } },
+				{ agent: "producer", task: "Produce targets", as: "targets" },
 				{
 					expand: { from: { output: "targets", path: "/items" }, item: "target", key: "/path", maxItems: 4 },
-					parallel: { agent: "reviewer", task: "Review {target.path}", label: "Review {target.path}", outputSchema: { type: "object" } },
+					parallel: { agent: "reviewer", task: "Review {target.path}", label: "Review {target.path}" },
 					collect: { as: "reviews" },
 					concurrency: 1,
 				},
 				{ agent: "consumer", task: "Use {outputs.reviews}" },
 			],
-			agents: [makeAgent("producer"), makeAgent("reviewer"), makeAgent("consumer")],
+			agents: [makeAgent("producer", { outputSchema: { type: "object" } }), makeAgent("reviewer", { outputSchema: { type: "object" } }), makeAgent("consumer")],
 			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-dynamic-placeholder" },
 			artifactConfig: { enabled: false, includeInput: false, includeOutput: false, includeJsonl: false, includeMetadata: false, cleanupDays: 7 },
 			shareEnabled: false,
@@ -1568,20 +1569,19 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		const id = `async-dynamic-chain-${Date.now().toString(36)}`;
 		const result = executeAsyncChain(id, {
 			chain: [
-				{ agent: "producer", task: "Produce targets", as: "targets", outputSchema: { type: "object" } },
+				{ agent: "producer", task: "Produce targets", as: "targets" },
 				{
 					expand: { from: { output: "targets", path: "/items" }, item: "target", key: "/path", maxItems: 4 },
 					parallel: {
 						agent: "reviewer",
 						task: "Review {target.path}",
-						outputSchema: { type: "object" },
 				},
 				collect: { as: "reviews" },
 				concurrency: 1,
 				},
 				{ agent: "consumer", task: "Use {outputs.reviews}" },
 			],
-			agents: [makeAgent("producer"), makeAgent("reviewer", { output: "context.md" }), makeAgent("consumer")],
+			agents: [makeAgent("producer", { outputSchema: { type: "object" } }), makeAgent("reviewer", { output: "context.md", outputSchema: { type: "object" } }), makeAgent("consumer")],
 			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-dynamic" },
 			artifactConfig: { enabled: true, includeInput: false, includeOutput: true, includeJsonl: false, includeMetadata: false, cleanupDays: 7 },
 			artifactsDir: path.join(tempDir, ".pi/subagents", "artifacts"),
@@ -1629,7 +1629,7 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		const id = `async-dynamic-explicit-output-${Date.now().toString(36)}`;
 		const launch = executeAsyncChain(id, {
 			chain: [
-				{ agent: "producer", task: "Produce targets", as: "targets", outputSchema: { type: "object" } },
+				{ agent: "producer", task: "Produce targets", as: "targets" },
 				{
 					expand: { from: { output: "targets", path: "/items" }, item: "target", maxItems: 2 },
 					parallel: { agent: "reviewer", task: "Review {target.path}", output: "shared.md" },
@@ -1637,7 +1637,7 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 					concurrency: 2,
 				},
 			],
-			agents: [makeAgent("producer"), makeAgent("reviewer")],
+			agents: [makeAgent("producer", { outputSchema: { type: "object" } }), makeAgent("reviewer")],
 			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-dynamic-explicit-output" },
 			artifactConfig: { enabled: false, includeInput: false, includeOutput: false, includeJsonl: false, includeMetadata: false, cleanupDays: 7 },
 			shareEnabled: false,
@@ -1662,20 +1662,19 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		const sessionB = path.join(tempDir, "dynamic-b.jsonl");
 		const result = executeAsyncChain(id, {
 			chain: [
-				{ agent: "producer", task: "Produce targets", as: "targets", outputSchema: { type: "object" } },
+				{ agent: "producer", task: "Produce targets", as: "targets" },
 				{
 					expand: { from: { output: "targets", path: "/items" }, item: "target", key: "/path", maxItems: 2 },
 					parallel: {
 						agent: "reviewer",
 						task: "Review {target.path}",
 						label: "Review {target.path}",
-						outputSchema: { type: "object" },
 					},
 					collect: { as: "reviews" },
 					concurrency: 1,
 				},
 			],
-			agents: [makeAgent("producer"), makeAgent("reviewer", { model: "anthropic/claude-sonnet-4-5:high", thinking: "high" })],
+			agents: [makeAgent("producer", { outputSchema: { type: "object" } }), makeAgent("reviewer", { model: "anthropic/claude-sonnet-4-5:high", thinking: "high", outputSchema: { type: "object" } })],
 			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-dynamic" },
 			artifactConfig: { enabled: false, includeInput: false, includeOutput: false, includeJsonl: false, includeMetadata: false, cleanupDays: 7 },
 			shareEnabled: false,
@@ -1721,15 +1720,15 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		const id = `async-dynamic-acceptance-role-${Date.now().toString(36)}`;
 		const result = executeAsyncChain(id, {
 			chain: [
-				{ agent: "producer", task: "Produce targets", as: "targets", outputSchema: { type: "object" } },
+				{ agent: "producer", task: "Produce targets", as: "targets" },
 				{
 					expand: { from: { output: "targets", path: "/items" }, item: "target", key: "/path", maxItems: 2 },
-					parallel: { agent: "explorer", task: "Explore {target.path}", outputSchema: { type: "object" } },
+					parallel: { agent: "explorer", task: "Explore {target.path}" },
 					collect: { as: "reviews" },
 					concurrency: 1,
 				},
 			],
-			agents: [makeAgent("producer"), makeAgent("explorer", { acceptanceRole: "read-only" })],
+			agents: [makeAgent("producer", { outputSchema: { type: "object" } }), makeAgent("explorer", { acceptanceRole: "read-only", outputSchema: { type: "object" } })],
 			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-dynamic-role" },
 			artifactConfig: { enabled: false, includeInput: false, includeOutput: false, includeJsonl: false, includeMetadata: false, cleanupDays: 7 },
 			shareEnabled: false,
@@ -1766,15 +1765,15 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		const id = `async-dynamic-role-item-template-${Date.now().toString(36)}`;
 		executeAsyncChain(id, {
 			chain: [
-				{ agent: "producer", task: "Produce targets", as: "targets", outputSchema: { type: "object" } },
+				{ agent: "producer", task: "Produce targets", as: "targets" },
 				{
 					expand: { from: { output: "targets", path: "/items" }, item: "target", key: "/path", maxItems: 2 },
-					parallel: { agent: "explorer", task: "Patch {target.path}", outputSchema: { type: "object" } },
+					parallel: { agent: "explorer", task: "Patch {target.path}" },
 					collect: { as: "reviews" },
 					concurrency: 1,
 				},
 			],
-			agents: [makeAgent("producer"), makeAgent("explorer", { acceptanceRole: "read-only" })],
+			agents: [makeAgent("producer", { outputSchema: { type: "object" } }), makeAgent("explorer", { acceptanceRole: "read-only", outputSchema: { type: "object" } })],
 			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-dynamic-role-item" },
 			artifactConfig: { enabled: false, includeInput: false, includeOutput: false, includeJsonl: false, includeMetadata: false, cleanupDays: 7 },
 			shareEnabled: false,
@@ -1797,10 +1796,10 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		const startedAt = Date.now();
 		executeAsyncChain(id, {
 			chain: [
-				{ agent: "producer", task: "Produce targets", as: "targets", outputSchema: { type: "object" } },
+				{ agent: "producer", task: "Produce targets", as: "targets" },
 				{
 					expand: { from: { output: "targets", path: "/items" }, item: "target", key: "/path", maxItems: 4 },
-					parallel: { agent: "reviewer", task: "Review {target.path}", outputSchema: { type: "object" }, acceptance: { level: "checked" } },
+					parallel: { agent: "reviewer", task: "Review {target.path}", acceptance: { level: "checked" } },
 					collect: { as: "reviews" },
 					acceptance: {
 						level: "verified",
@@ -1808,7 +1807,7 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 					},
 				},
 			],
-			agents: [makeAgent("producer"), makeAgent("reviewer")],
+			agents: [makeAgent("producer", { outputSchema: { type: "object" } }), makeAgent("reviewer", { outputSchema: { type: "object" } })],
 			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-dynamic-acceptance-timeout" },
 			artifactConfig: { enabled: false, includeInput: false, includeOutput: false, includeJsonl: false, includeMetadata: false, cleanupDays: 7 },
 			shareEnabled: false,
@@ -1840,16 +1839,16 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		const id = `async-dynamic-targets-${Date.now().toString(36)}`;
 		const result = executeAsyncChain(id, {
 			chain: [
-				{ agent: "producer", task: "Produce targets", as: "targets", outputSchema: { type: "object" } },
+				{ agent: "producer", task: "Produce targets", as: "targets" },
 				{
 					expand: { from: { output: "targets", path: "/items" }, item: "target", key: "/path", maxItems: 4 },
-					parallel: { agent: "reviewer", task: "Review {target.path}", outputSchema: { type: "object" } },
+					parallel: { agent: "reviewer", task: "Review {target.path}" },
 					collect: { as: "reviews" },
 					concurrency: 1,
 				},
 				{ agent: "consumer", task: "Use {outputs.reviews}" },
 			],
-			agents: [makeAgent("producer"), makeAgent("reviewer"), makeAgent("consumer")],
+			agents: [makeAgent("producer", { outputSchema: { type: "object" } }), makeAgent("reviewer", { outputSchema: { type: "object" } }), makeAgent("consumer")],
 			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-dynamic-targets" },
 			artifactConfig: { enabled: false, includeInput: false, includeOutput: false, includeJsonl: false, includeMetadata: false, cleanupDays: 7 },
 			shareEnabled: false,
@@ -1872,14 +1871,14 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		const id = `async-dynamic-prespawn-fail-${Date.now().toString(36)}`;
 		const result = executeAsyncChain(id, {
 			chain: [
-				{ agent: "producer", task: "Produce targets", as: "targets", outputSchema: { type: "object" } },
+				{ agent: "producer", task: "Produce targets", as: "targets" },
 				{
 					expand: { from: { output: "targets", path: "/items" }, item: "target", key: "/path", maxItems: 1 },
 					parallel: { agent: "reviewer", task: "Review {target.path}" },
 					collect: { as: "reviews" },
 				},
 			],
-			agents: [makeAgent("producer"), makeAgent("reviewer")],
+			agents: [makeAgent("producer", { outputSchema: { type: "object" } }), makeAgent("reviewer")],
 			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-dynamic-fail" },
 			artifactConfig: { enabled: false, includeInput: false, includeOutput: false, includeJsonl: false, includeMetadata: false, cleanupDays: 7 },
 			shareEnabled: false,
@@ -1905,14 +1904,14 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		const id = `async-dynamic-collect-fail-${Date.now().toString(36)}`;
 		const result = executeAsyncChain(id, {
 			chain: [
-				{ agent: "producer", task: "Produce targets", as: "targets", outputSchema: { type: "object" } },
+				{ agent: "producer", task: "Produce targets", as: "targets" },
 				{
 					expand: { from: { output: "targets", path: "/items" }, item: "target", key: "/path", maxItems: 4 },
-					parallel: { agent: "reviewer", task: "Review {target.path}", outputSchema: { type: "object" } },
+					parallel: { agent: "reviewer", task: "Review {target.path}" },
 					collect: { as: "reviews", outputSchema: { type: "object" } },
 				},
 			],
-			agents: [makeAgent("producer"), makeAgent("reviewer")],
+			agents: [makeAgent("producer", { outputSchema: { type: "object" } }), makeAgent("reviewer", { outputSchema: { type: "object" } })],
 			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-dynamic-collect-fail" },
 			artifactConfig: { enabled: false, includeInput: false, includeOutput: false, includeJsonl: false, includeMetadata: false, cleanupDays: 7 },
 			shareEnabled: false,

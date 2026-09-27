@@ -471,7 +471,7 @@ describe("async status helpers", () => {
 	});
 
 	it("ignores legacy turn-budget fields in persisted status data", () => {
-		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-async-turn-budget-removed-"));
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-async-legacy-budget-removed-"));
 		try {
 			createAsyncDir(root, "run-legacy-budget", {
 				runId: "run-legacy-budget",
