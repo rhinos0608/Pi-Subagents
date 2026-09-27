@@ -29,6 +29,7 @@ it("emits bounded file-only snapshots, refreshes through management, and perform
 			import path from "node:path";
 			import { syncBuiltinESMExports } from "node:module";
 			import register from "./src/extension/index.ts";
+			import { SLASH_SUBAGENT_REQUEST_EVENT, SLASH_SUBAGENT_RESPONSE_EVENT } from "./src/shared/types.ts";
 			import { registerSubagentCapabilityCeiling } from "./src/runs/shared/capability-ceiling.ts";
 			const home = process.env.PI_CODING_AGENT_DIR;
 			const cwd = path.join(home, "project");
@@ -40,8 +41,9 @@ it("emits bounded file-only snapshots, refreshes through management, and perform
 			const handlers = new Map();
 			let tool;
 			let activeTools = ["subagent"];
+			const bus = new Map();
 			const pi = new Proxy({
-				events: { on() { return () => {}; }, emit() {} },
+				events: { on(event, handler) { bus.set(event, [...(bus.get(event) ?? []), handler]); return () => {}; }, emit(event, data) { for (const handler of [...(bus.get(event) ?? [])]) handler(data); } },
 				on(event, handler) { handlers.set(event, [...(handlers.get(event) ?? []), handler]); },
 				registerTool(value) { if (value.name === "subagent") tool = value; },
 				getActiveTools() { return activeTools; },
@@ -94,7 +96,20 @@ it("emits bounded file-only snapshots, refreshes through management, and perform
 			assert.equal(await noIo(() => emit(prompt)), "base");
 			ceiling.dispose();
 			assert.match(await noIo(() => emit()), /Original specialist/);
-			const manage = async (params) => tool.execute("manage", params, new AbortController().signal, undefined, ctx);
+			// Phase 7c: get/update/disable/enable/delete/create left the model-visible tool; drive the
+			// internal slash bridge (executor.execute), the post-rewire operator path with onAgentsChanged
+			// refresh wiring, mirroring the extension registration.
+			let manageSeq = 0;
+			const manage = (params) => new Promise((resolve, reject) => {
+				const requestId = "manage-" + (manageSeq++);
+				bus.set(SLASH_SUBAGENT_RESPONSE_EVENT, [...(bus.get(SLASH_SUBAGENT_RESPONSE_EVENT) ?? []), (response) => {
+					if (!response || response.requestId !== requestId) return;
+					const actionResult = response.result;
+					if (actionResult?.isError) reject(new Error(actionResult.content?.map((entry) => entry.text ?? "").join("\n") || response.errorText || "management action failed"));
+					else resolve(actionResult);
+				}]);
+				pi.events.emit(SLASH_SUBAGENT_REQUEST_EVENT, { requestId, params, ctx });
+			});
 			write("pending", "pending", "External change awaiting refresh");
 			await manage({ action: "get", agent: "specialist" });
 			assert.doesNotMatch(await noIo(() => emit()), /<name>pending<\/name>/, "reads must not refresh");
