@@ -3492,7 +3492,7 @@ function resolveWorkflowChildOutputPath(input: {
 	}
 	const childCwd = resolveWorkflowChildLocalCwd(input);
 	let agentOutput: string | undefined;
-	if (rawOutput === true || rawOutput === "true" || (!hasExplicitOutput && !input.aggregateOutputPath)) {
+	if (rawOutput === true || rawOutput === "true" || !hasExplicitOutput) {
 		if (typeof input.params.agent === "string") {
 			const agentScope = resolveExecutionAgentScope(input.params.agentScope ?? input.workflowAgentScope);
 						const workflowAgents = input.discoverAgents(childCwd, agentScope).agents;
@@ -3506,9 +3506,9 @@ function resolveWorkflowChildOutputPath(input: {
 		? agentOutput
 		: hasExplicitOutput
 			? rawOutput
-			: input.aggregateOutputPath
+			: (agentOutput ?? (input.aggregateOutputPath
 				? workflowChildDefaultOutput(input.aggregateOutputPath, input.artifactsDir, input.workflowRunId, input.key)
-				: agentOutput;
+				: undefined));
 	return {
 		path: resolveSingleOutputPath(output, input.ctxCwd, childCwd, input.configuredOutputBaseDir ?? path.join(input.artifactsDir, "outputs", sanitizeRunPathSegment(input.workflowRunId))),
 		inherited: !hasExplicitOutput && !input.aggregateOutputPath && agentOutput !== undefined,
@@ -3589,7 +3589,12 @@ function prepareWorkflowChildLaunchParams(input: {
 	if (usesDefaultOutput && input.outputOverride !== undefined) {
 		childParams = { ...input.childParams, output: input.outputOverride };
 	} else if (usesDefaultOutput && input.aggregateOutputPath !== undefined) {
-		childParams = { ...input.childParams, output: workflowChildDefaultOutput(input.aggregateOutputPath, input.artifactsDir, input.parentWorkflowRunId, input.workflowKey) };
+		// Resolve exactly like admission: an agent-definition default wins under
+		// the aggregate; the sibling-of-aggregate default is only the fallback.
+		// Resolving differently here than in workflowChildOutputClaims trips the
+		// post-claim "Output path changed after it was claimed" guard.
+		const resolvedOutput = resolveWorkflowChildOutputPath({ ctxCwd: input.ctxCwd, workflowCwd: input.workflowCwd, artifactsDir: input.artifactsDir, workflowRunId: input.parentWorkflowRunId, aggregateOutputPath: input.aggregateOutputPath, configuredOutputBaseDir: input.configuredOutputBaseDir, discoverAgents: input.discoverAgents, agents: input.agents, workflowAgentScope: input.workflowAgentScope, key: input.workflowKey, params: input.childParams });
+		if (resolvedOutput.path) childParams = { ...input.childParams, output: resolvedOutput.path };
 	} else if (input.childParams.resume === undefined || input.childParams.output !== undefined) {
 		const resolvedOutput = resolveWorkflowChildOutputPath({ ctxCwd: input.ctxCwd, workflowCwd: input.workflowCwd, artifactsDir: input.artifactsDir, workflowRunId: input.parentWorkflowRunId, aggregateOutputPath: input.aggregateOutputPath, configuredOutputBaseDir: input.configuredOutputBaseDir, discoverAgents: input.discoverAgents, agents: input.agents, workflowAgentScope: input.workflowAgentScope, key: input.workflowKey, params: input.childParams });
 		if (resolvedOutput.path) childParams = { ...input.childParams, output: resolvedOutput.path };
