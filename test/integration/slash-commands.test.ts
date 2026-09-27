@@ -1008,7 +1008,7 @@ describe("slash command custom message delivery", { skip: !available ? "slash-co
 		await commands.get("run")!.handler("scout", ctx);
 		await new Promise<void>((resolve) => setImmediate(resolve));
 
-		assert.deepEqual(requestedParams, { workflowScript: "return runs.run(\"run\", {\"agent\":\"scout\",\"task\":\"\",\"agentScope\":\"both\"})", async: false });
+		assert.deepEqual(requestedParams, { workflowScript: "return runs.run(\"run\", {\"agent\":\"scout\",\"task\":\"\"})", async: false });
 		assert.equal(requestedCtx, ctx);
 		assert.equal(sent.length, 2);
 		assert.equal((sent[0] as { display?: boolean }).display, true);
@@ -1151,7 +1151,7 @@ describe("slash command custom message delivery", { skip: !available ? "slash-co
 			});
 
 			assert.deepEqual(run.params, {
-				workflowScript: "return runs.run(\"run\", {\"agent\":\"runtime-helper\",\"task\":\"Inspect\",\"agentScope\":\"both\"})",
+				workflowScript: "return runs.run(\"run\", {\"agent\":\"runtime-helper\",\"task\":\"Inspect\"})",
 				async: false,
 			});
 		});
@@ -1215,7 +1215,7 @@ Inspect
 
 			const run = await captureSlashCommandParams("run", "scout[reads=context.md+missing.md] Inspect", root);
 			assert.deepEqual(run.params, {
-				workflowScript: "return runs.run(\"run\", {\"agent\":\"scout\",\"task\":\"[Read from: context.md]\\n\\nInspect\",\"agentScope\":\"both\"})",
+				workflowScript: "return runs.run(\"run\", {\"agent\":\"scout\",\"task\":\"[Read from: context.md]\\n\\nInspect\"})",
 				async: false,
 			});
 		});
@@ -1377,7 +1377,7 @@ Inspect
 `, "utf-8");
 
 			const run = await captureSlashCommandParams("run", "code-analysis.scout Investigate", root);
-			assert.deepEqual(run.params, { workflowScript: "return runs.run(\"run\", {\"agent\":\"code-analysis.scout\",\"task\":\"Investigate\",\"agentScope\":\"both\"})", async: false });
+			assert.deepEqual(run.params, { workflowScript: "return runs.run(\"run\", {\"agent\":\"code-analysis.scout\",\"task\":\"Investigate\"})", async: false });
 
 			await withIsolatedHome(async () => {
 				const commands = new Map<string, RegisteredSlashCommand>();

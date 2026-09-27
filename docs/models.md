@@ -11,7 +11,7 @@ Builtin agents inherit your current Pi default model. This keeps new installs fr
 
 Precedence, strongest first: `agentOverrides.<name>.model` → agent frontmatter `model` → `subagents.defaultModel` → the parent session model. A provider preference does not replace this order; it only resolves bare model ids when the active registry has more than one match. Fully qualified `provider/model` strings still win exactly.
 
-There are no per-call model or thinking parameters on the `subagent` tool. One launch resolves one model; provider errors, including HTTP 429 responses, are returned from that model rather than selecting another one.
+There are no per-call model or thinking parameters on the `subagent` tool. One launch walks an ordered candidate list: the resolved primary model plus the agent's configured `fallbackModels`. The walk is stateless (every launch starts at candidate zero) and bounded: up to 3 attempts per candidate with ~500ms then ~1500ms backoff, advancing on retryable startup/availability failures (rate limits, quota/billing, auth, network, overload, 5xx). Once the child has run tools, the outcome is terminal and never retried on another model.
 
 Use `model: "inherit"` in agent frontmatter or `agentOverrides.<name>.model` to select the current parent session model explicitly.
 
@@ -69,7 +69,7 @@ A setup that works well in practice: route agents by task shape instead of runni
 
 The routing rule: use the capability tiers (1–3) when the task is well-scoped, and the intent tier (4) when scoping or judging is the task itself. Put the assignments in agent definitions or `agentOverrides`, not in per-call parameters.
 
-Each launch resolves one model and starts the child once. Provider, authentication, quota, rate-limit, stream, empty-response, context-overflow, and provisioning failures are returned from that attempt. To try another model, the parent or operator must issue a later explicit launch.
+Each launch walks the ordered candidate list and starts the child on the first candidate that starts. Only retryable startup/availability failures advance the walk; a child that started executing keeps its outcome, and context-overflow never retries. When every candidate burns its attempts, the launch fails with the configured-candidate diagnostic instead of selecting an unconfigured model.
 
 ## Thinking level defaults
 

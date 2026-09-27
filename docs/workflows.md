@@ -34,7 +34,7 @@ For multi-step or parallel work, make exactly one top-level `subagent` workflow 
 
 Child results cross into the script as plain JSON data. Use returned fields such as `runId`, `ok`, `output`, and `structuredOutput` for workflow control.
 
-Omitting a child's `async` preserves awaited final-result semantics, even if the child runs in the background. Explicit child `async: true` intentionally returns after launch: its receipt has `state: "running"`, `ok: false`, and an empty `output`. `ok` confirms successful child completion, not successful dispatch.
+Children always run awaited: the script continues once the child settles with its final result. `ok` confirms successful child completion, not successful dispatch.
 
 A workflow can finish dispatch while these children remain running. Its summary and child rows identify that distinction. Consume the later child result before treating its work or report as complete.
 
@@ -47,7 +47,7 @@ subagent({ action: "validate", workflowScript: `
 ` });
 ```
 
-Each `runs.run` / `runs.all` child accepts exactly: `agent`, `task`, `cwd`, `resume`, `as`, `phase`, `label`, `lane`, `index`, `output`, `outputMode`, `reads`, `progress`, `async`. There are no per-child model, thinking, tool-budget, timeout, context, skill, worktree, or ref fields; those resolve from agent definitions and operator config.
+Each `runs.run` / `runs.all` child accepts exactly: `agent`, `task`, `cwd`, `resume`, `as`, `phase`, `label`, `lane`, `index`. There are no per-child model, thinking, tool-budget, timeout, context, skill, worktree, ref, output, outputMode, reads, progress, or async fields; those resolve from agent definitions and operator config.
 
 ```js
 subagent({ workflowScript: `
@@ -88,11 +88,9 @@ The first stage of each lane is launched by one existing `runs.all(...)` batch. 
 
 For advanced rolling fanout, keep launched `runs.run` promises only when every promise is later observed with direct `await`, `Promise.race`, or `Promise.all`. `Promise.race` gives the next completed child, `runs.steer` can challenge a still-running keyed sibling, and `Promise.all` collects the rest.
 
-### Output binding
+### Output routing
 
-Give each child an explicit `output` path when later script steps need a durable file reference. The `output` field is the API binding; a filename mentioned in task text is only instruction and does not override runtime routing. When a later workflow step or parent needs a durable file, set `output` on `runs.run` / `runs.all` and return the child's `outputReference` or `artifactPaths`.
-
-Use `outputMode: "file-only"` when a saved output may be large and the parent only needs a pointer.
+Output routing is tooling-managed, not a per-child script field: `runs.run` / `runs.all` params do not accept `output` or `outputMode`. Child outputs are saved to managed artifacts automatically. A filename mentioned in task text is only instruction and does not override runtime routing. When a later workflow step or parent needs a durable file, return the child's `outputReference` or `artifactPaths`.
 
 ### Retained children and follow-ups
 

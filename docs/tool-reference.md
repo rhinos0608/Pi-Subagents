@@ -62,7 +62,7 @@ Chaining is code-driven through `workflowScript`. Use `await runs.run(...)` for 
 
 ### Workflow child fields
 
-Each `runs.run` / `runs.all` child accepts exactly: `agent`, `task`, `cwd`, `resume`, `as`, `phase`, `label`, `lane`, `index`, `output`, `outputMode`, `reads`, `progress`, `async`.
+Each `runs.run` / `runs.all` child accepts exactly: `agent`, `task`, `cwd`, `resume`, `as`, `phase`, `label`, `lane`, `index`.
 
 ```js
 { workflowScript: `
@@ -77,13 +77,15 @@ Each `runs.run` / `runs.all` child accepts exactly: `agent`, `task`, `cwd`, `res
 
 Child results cross into the script as plain JSON data. Use returned fields such as `runId`, `ok`, `output`, and `structuredOutput` for workflow control.
 
-Omitting a child's `async` preserves awaited final-result semantics, even if the child runs in the background. Explicit child `async: true` intentionally returns after launch: its receipt has `state: "running"`, `ok: false`, and an empty `output`. `ok` confirms successful child completion, not successful dispatch. Use `runId` to inspect the running child.
+Children always run awaited: the script continues once the child settles with its final result. `ok` confirms successful child completion, not successful dispatch. Use `runId` to inspect a child.
 
-### Output mode details
+### Output routing
 
-Use `outputMode: "file-only"` when a saved output may be large and the parent only needs a pointer. The returned text is a compact reference like `Output saved to: /abs/report.md (48.2 KB, 2847 lines). Read this file if needed.` Failed runs and save errors still return normal inline output for debugging.
+Output routing is tooling-managed, not a per-child script field: `runs.run` / `runs.all` params do not accept `output` or `outputMode`.
 
-The `output` field is the API binding; a filename mentioned in task text (for example, `Write your findings to exactly this path: report.md`) is only instruction and does not override runtime routing. When a later workflow step or parent needs a durable file, set `output` on `runs.run`/`runs.all` and return the child's `outputReference` or `artifactPaths`.
+Child outputs are saved to managed artifacts automatically. A filename mentioned in task text (for example, `Write your findings to exactly this path: report.md`) is only instruction and does not override runtime routing. When a later workflow step or parent needs a durable file, return the child's `outputReference` or `artifactPaths`.
+
+Child results cross into the script as plain JSON data, including saved-output references.
 
 ### Retained children and resume
 
@@ -115,4 +117,4 @@ Agent management (list/create/update/delete/disable), run details, and run contr
 
 - Global default-model settings (`subagents.defaultModel`, `defaultProvider`, `defaultThinking` in settings files) have no Fleet writer. Hand-edit the settings file; see [models](models.md).
 - Fleet resume is not a button. Resume via `subagent({ action: "resume", id, message })`, via `runs.run(newKey, { resume: runId, task })` inside a workflow, or via slash.
-- Effective policy: at launch the runtime persists a compact resolved-policy snapshot into `status.json` (supervisor decision: persist-policy-snapshot). Fields: resolved model + thinking + origin, toolBudget soft/hard + source, timeoutMs + source, context, isolation/worktree, allowedTools union. Fleet run details render this snapshot. (Persistence incoming, shape final.)
+- Effective policy: at launch the runtime persists a compact resolved-policy snapshot into `status.json` (supervisor decision: persist-policy-snapshot). Fields: resolved model + thinking + origin, toolBudget soft/hard + source, timeoutMs + source, context, isolation/worktree, allowedTools union. Fleet run details render this snapshot via `formatResolvedPolicySnapshotLines` (`src/policy/snapshot.ts`).

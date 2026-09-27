@@ -111,7 +111,7 @@ The Agents view lists every discovered agent with source, enabled state, model, 
 
 Run details show cwd, budgets, worktree/branch, delivery state, fallback-attempt history, and policy blocks. Controls: `s` compose an acknowledged steer message to a live child (Tab cycles `steer`, `follow_up`, `auto`), `D` stop a run after confirmation, `Enter`/`H` open the child inspector. Fleet resume is not a button: resume via `subagent({ action: "resume", id, message })`, via `runs.run(newKey, { resume: runId, task })` inside a workflow, or via slash. Global default-model settings (`subagents.defaultModel`, `defaultProvider`, `defaultThinking`) have no Fleet writer; hand-edit settings files.
 
-Run details render the persisted resolved-policy snapshot from `status.json`: resolved model + thinking + origin, toolBudget soft/hard + source, timeoutMs + source, context, isolation/worktree, allowedTools union (supervisor decision: persist-policy-snapshot). (Persistence incoming, shape final.)
+Run details render the persisted resolved-policy snapshot from `status.json`: resolved model + thinking + origin, toolBudget soft/hard + source, timeoutMs + source, context, isolation/worktree, allowedTools union (supervisor decision: persist-policy-snapshot), via `formatResolvedPolicySnapshotLines` (`src/policy/snapshot.ts`). When no snapshot was persisted, run details fall back to reachable live fragments with an explicit header.
 
 Default keys:
 
