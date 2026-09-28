@@ -431,6 +431,7 @@ export function runChildSession(input: RunChildSessionInput): Promise<RunChildSe
 			if (event.type === "compaction_start") {
 				compactionStartedReceived = true;
 				compactionObserved = true;
+				if (agentSettledReceived) afterCompactionSettlement = true;
 			}
 			if (event.type === "compaction_end" && event.willRetry === true) {
 				compactionStartedReceived = false;

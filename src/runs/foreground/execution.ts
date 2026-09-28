@@ -988,6 +988,7 @@ async function runSingleAttempt(
 			if (evt.type === "compaction_start") {
 				compactionStartedReceived = true;
 				compactionObserved = true;
+				if (agentSettledReceived) afterCompactionSettlement = true;
 			}
 			if (evt.type === "compaction_end" && evt.willRetry === true) {
 				compactionStartedReceived = false;
