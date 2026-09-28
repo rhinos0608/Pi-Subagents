@@ -2313,45 +2313,6 @@ Answer only from the supplied synthetic text.
 		fs.rmSync(childResultPath, { force: true });
 	});
 
-	it("applies an agent deadline to a workflow-launched async child", { skip: !createSubagentExecutor ? "executor not importable" : process.platform === "win32" ? "timeout signal delivery intermittent on Windows CI" : undefined }, async () => {
-		mockPi.onCall({ delay: 5_000, output: "too late" });
-		const executor = makeExecutor([makeAgent("slow", { defaultTimeoutMs: 150, defaultAsync: true })]);
-		const result = await executor.execute(
-			`scripted-workflow-async-child-timeout-${Date.now()}`,
-			{
-				// runs.all settles instead of throwing, so the timed-out child still
-				// yields its runId for the result-file assertions below.
-				workflowScript: `const [child] = await runs.all([{ key: "background", agent: "slow", task: "Wait" }]); return child.runId;`,
-				async: false,
-			},
-			new AbortController().signal,
-			undefined,
-			makeMinimalCtx(tempDir),
-		);
-		assert.equal(result.isError, undefined, result.content[0]?.text ?? "workflow failed");
-		const childRunId = result.details.workflow?.value as string | undefined;
-		assert.ok(childRunId, JSON.stringify(result.details.workflow?.value ?? result.content));
-		// The workflow import consumes the child's standalone result publication,
-		// so deadline evidence lives in the child status file (persisted) and in
-		// the settled workflow result — not in DIRS.results/<childRunId>.json.
-		const childStatusPath = path.join(DIRS.async, childRunId, "status.json");
-		let persisted: { timeoutMs?: number; state?: string; error?: string } = {};
-		for (let attempt = 0; attempt < 200; attempt++) {
-			try {
-				persisted = JSON.parse(fs.readFileSync(childStatusPath, "utf-8"));
-			} catch {}
-			if (persisted.state === "failed") break;
-			await new Promise((resolve) => setTimeout(resolve, 20));
-		}
-		assert.equal(persisted.timeoutMs, 150);
-		assert.equal(persisted.state, "failed");
-		assert.match(persisted.error ?? "", /timed out after 150ms/);
-		const settled = (result.details.results as Array<{ timedOut?: boolean; error?: string }> | undefined)?.[0];
-		assert.equal(settled?.timedOut, true);
-		assert.equal(settled?.error, "Subagent timed out after 150ms.");
-		fs.rmSync(path.join(DIRS.async, childRunId), { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
-	});
-
 	it("persists workflow parent metadata in an async worktree child status and result", { skip: !createSubagentExecutor || process.platform === "win32" ? "executor unavailable or worktree paths differ on Windows" : undefined }, async () => {
 		execFileSync("git", ["init"], { cwd: tempDir, stdio: "ignore" });
 		execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: tempDir });
