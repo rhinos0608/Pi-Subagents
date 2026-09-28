@@ -48,6 +48,20 @@ Entries are literal directory paths (no globs), supporting `~` and absolute path
 
 User and nearest-project exclusions are combined for every discovery scope, including all-source diagnostics. They apply before traversal and definition reads; explicit scan roots, environment roots, and installed packages cannot re-include an excluded tree. Normalized and real-path containment also excludes symlink aliases without matching sibling directory prefixes. Settings changes invalidate cached discovery. Excluded agent trees are not fingerprinted; chain discovery keeps its own unchanged watches when it shares a directory. Skills, chains, and the extension's bundled builtin snapshot are outside this setting's scope.
 
+## Global tool allowlist (settings)
+
+Restrict every child launch to an operator-authored tool set with `subagents.allowedTools` in Pi settings:
+
+```json
+{
+  "subagents": {
+    "allowedTools": ["read", "grep", "bash"]
+  }
+}
+```
+
+Absent or empty means no global restriction. Project settings win over user settings. It composes by dumb intersection: effective tools = agent `tools` ∩ `allowedTools` (plus any external host ceiling, applied separately). The list never inherits parent→child; each launch resolves it fresh from settings.
+
 ## `modelResponseAliases`
 
 In `~/.pi/agent/extensions/subagent/config.json` (top-level, not under `subagents`):

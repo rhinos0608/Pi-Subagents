@@ -1645,7 +1645,7 @@ async function runSyncCompletionInner(
 	}
 	options = {
 		...options,
-		capabilityCeiling: intersectSubagentCapabilityCeilings(options.capabilityCeiling ?? resolveCurrentSubagentCapabilityCeiling(options.parentSessionId), options.childRuntime?.capabilityCeiling),
+		capabilityCeiling: options.capabilityCeiling ?? resolveCurrentSubagentCapabilityCeiling(options.parentSessionId),
 	};
 	const childSessionName = deriveChildSessionName({ agent: agentName, task });
 	const agent = agents.find((a) => a.name === agentName);

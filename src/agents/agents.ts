@@ -205,6 +205,7 @@ interface SubagentSettings {
 	maxThinking?: ThinkingLevel;
 	defaultExtensions?: string[];
 	defaultSubagentOnlyExtensions?: string[];
+	allowedTools?: string[];
 	disableBuiltins?: boolean;
 	disableThinking?: boolean;
 	modelScope?: ModelScopeConfig;
@@ -1228,6 +1229,14 @@ function readSubagentSettings(filePath: string | null): SubagentSettings {
 		}
 		defaultSubagentOnlyExtensions = subagentsObject.defaultSubagentOnlyExtensions.map((item) => item.trim());
 	}
+	let allowedTools: string[] | undefined;
+	if ("allowedTools" in subagentsObject) {
+		if (!Array.isArray(subagentsObject.allowedTools)
+			|| subagentsObject.allowedTools.some((item) => typeof item !== "string" || !item.trim())) {
+			throw new Error(`Subagent settings in '${filePath}' have invalid 'allowedTools'; expected an array of non-empty strings.`);
+		}
+		allowedTools = subagentsObject.allowedTools.map((item) => item.trim());
+	}
 	let agentScanDirs: string[] | undefined;
 	if ("agentScanDirs" in subagentsObject) {
 		if (!Array.isArray(subagentsObject.agentScanDirs)
@@ -1256,6 +1265,7 @@ function readSubagentSettings(filePath: string | null): SubagentSettings {
 		...(maxThinking !== undefined ? { maxThinking } : {}),
 		...(defaultExtensions !== undefined ? { defaultExtensions } : {}),
 		...(defaultSubagentOnlyExtensions !== undefined ? { defaultSubagentOnlyExtensions } : {}),
+		...(allowedTools !== undefined ? { allowedTools } : {}),
 		...(agentScanDirs !== undefined ? { agentScanDirs } : {}),
 		...(agentExcludeDirs !== undefined ? { agentExcludeDirs } : {}),
 		...(disableBuiltins !== undefined ? { disableBuiltins } : {}),
@@ -1362,6 +1372,27 @@ function applySubagentDefaultExtensions(agents: AgentConfig[], defaultExtensions
 		if (frontmatterFields) agentFrontmatterFields.set(next, frontmatterFields);
 		return next;
 	});
+}
+
+function resolveSubagentAllowedToolsSetting(
+	userSettings: SubagentSettings,
+	projectSettings: SubagentSettings,
+	projectSettingsPath: string | null,
+): string[] | undefined {
+	if (projectSettingsPath && projectSettings.allowedTools !== undefined) return projectSettings.allowedTools;
+	return userSettings.allowedTools;
+}
+
+/**
+ * Operator-authored global tool allowlist from settings (`subagents.allowedTools`).
+ * Project settings win over user settings. Absent or empty means no global
+ * restriction. Applies uniformly at every launch; never inherited parent→child.
+ */
+export function resolveSubagentAllowedTools(cwd: string): string[] | undefined {
+	const sources = getAgentDiscoverySources(cwd);
+	const { user, project } = settingsForScope(sources, "both");
+	const list = resolveSubagentAllowedToolsSetting(user, project, sources.projectSettingsPath);
+	return list?.length ? list : undefined;
 }
 
 function resolveSubagentDefaultSubagentOnlyExtensions(

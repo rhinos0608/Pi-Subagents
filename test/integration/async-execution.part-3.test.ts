@@ -24,6 +24,7 @@ import { createRunFanoutBudget, getRunFanoutBudgetSnapshot, writeRunFanoutBudget
 import { deriveForkPromptCacheKey } from "../../src/runs/shared/child-tool-plan.ts";
 import { INVALID_STRUCTURED_OUTPUT_SCHEMA_ERROR, validateStructuredOutputValue } from "../../src/runs/shared/structured-output.ts";
 import type { ChildRuntimeConfig } from "../../src/runs/shared/child-runtime-config.ts";
+import { registerSubagentCapabilityCeiling } from "../../src/api/capability-ceiling.ts";
 import type { AsyncExecutionResult, AsyncResultPayload, AsyncStatusPayload } from "../support/async-execution-fixture.ts";
 import {
 	installAsyncExecutionHooks, waitForMockPiRuntime, available, isAsyncAvailable,
@@ -1428,9 +1429,10 @@ export default function() {
 				openSession: () => ({ createBranchedSession: () => plannerSessionFile }),
 			},
 		};
-		const callerRuntime: ChildRuntimeConfig = {
-			capabilityCeiling: { version: 1, allowedTools: ["grep", "read"], allowedAgents: ["planner", "researcher"], denyExtensions: false, sources: ["original-parent"] },
-		};
+		// Authority simplification: parent session ceilings no longer inherit
+		// parent→child. The caller runtime carries no ceiling; only the
+		// agent's own descendant allowlist restricts the resumed child.
+		const callerRuntime: ChildRuntimeConfig = {};
 		const makeExecutor = () => createSubagentExecutor!({
 			pi: { events: createEventBus(), getSessionName: () => undefined },
 			state: { baseCwd: tempDir, currentSessionId: sessionId, asyncJobs: new Map(), foregroundControls: new Map(), lastForegroundControlId: null },
@@ -1451,7 +1453,6 @@ export default function() {
 		assert.ok(!launch.isError, launch.content[0]?.text);
 		assert.ok(launch.details.asyncId);
 		assert.equal((await readAsyncPayload(launch.details.asyncId)).success, true);
-		callerRuntime.capabilityCeiling = { version: 1, allowedTools: ["read"], allowedAgents: ["planner", "researcher"], denyExtensions: false, sources: ["current-caller"] };
 
 		let retainedId = launch.details.asyncId;
 		for (const [index, output] of ["First continuation complete", "Second continuation complete"].entries()) {
@@ -1465,32 +1466,53 @@ export default function() {
 			retainedId = resumed.details.asyncId;
 			const payload = await readAsyncPayload(retainedId);
 			assert.equal(payload.success, true);
+			// Authority simplification: no parent tool ceiling or parent
+			// sources inherit. Only the agent-authored descendant allowlist
+			// (planner -> researcher) applies.
 			assert.deepEqual(payload.capabilityCeiling, {
 				version: 1,
-				allowedTools: ["read"],
 				allowedAgents: ["researcher"],
 				denyExtensions: false,
-				sources: ["agent:planner", "current-caller", "original-parent"],
+				sources: ["agent:planner"],
 			});
 			const descriptor = JSON.parse(fs.readFileSync(path.join(ASYNC_DIR, retainedId, "recovery-descriptor.json"), "utf-8"));
 			assert.deepEqual(descriptor.allowedAgents, ["researcher"]);
-			assert.deepEqual(descriptor.capabilityCeiling, {
-				version: 1,
-				allowedTools: ["read"],
-				allowedAgents: ["planner", "researcher"],
-				denyExtensions: false,
-				sources: ["current-caller", "original-parent"],
-			});
+			// Authority simplification: the descriptor carries no inherited
+			// parent ceiling. Restriction still restricts via the
+			// agent-authored descendant list above and the host ceiling below.
+			assert.ok(
+				descriptor.capabilityCeiling === undefined ||
+					!(descriptor.capabilityCeiling.sources ?? []).some((source: string) => source === "current-caller" || source === "original-parent"),
+				`descriptor must not carry an inherited parent ceiling: ${JSON.stringify(descriptor.capabilityCeiling)}`,
+			);
 		}
 
-		callerRuntime.capabilityCeiling = { version: 1, allowedAgents: ["researcher"], denyExtensions: false, sources: ["restricted-current-caller"] };
+		// Restriction still restricts: the external host ceiling API survives
+		// (re-homed, registered per session — never inherited), so a
+		// host-registered agent allowlist still rejects the retained planner.
+		// Resume resolves the current session via the session file first
+		// (resolveCurrentSessionId prefers getSessionFile), so register under
+		// both identities this mock manager exposes.
+		const hostRestrictions = [sessionId, parentSessionFile].map((identity) =>
+			registerSubagentCapabilityCeiling({ sessionId: identity, source: "restricted-current-caller", ceiling: { allowedAgents: ["researcher"] } }),
+		);
+		try {
 		const restrictedExecutor = makeExecutor();
 		const rejected = await restrictedExecutor.execute(
-			"allowlist-rejected", { action: "resume", id: retainedId, message: "Continue", acceptance: false },
+			"allowlist-rejected",
+			{
+				action: "resume",
+				id: retainedId,
+				message: "Continue",
+				acceptance: false,
+			},
 			new AbortController().signal, undefined, ctx,
 		) as AsyncExecutionResult;
-		assert.equal(rejected.isError, true);
+		assert.equal(rejected.isError, true, JSON.stringify(rejected).slice(0, 1000));
 		assert.match(rejected.content[0]?.text ?? "", /does not allow agent 'planner'/);
+		} finally {
+			for (const hostRestriction of hostRestrictions) hostRestriction.dispose();
+		}
 	});
 
 	it("revives a current workflow child from persisted parent admission authority", { skip: !isAsyncAvailable() || !createSubagentExecutor ? "jiti or executor not available" : undefined }, async () => {
