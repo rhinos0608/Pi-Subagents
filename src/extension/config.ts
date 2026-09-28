@@ -152,6 +152,8 @@ function validateConfig(config: Record<string, unknown>): void {
 	validateArtifactConfig(config.artifactConfig);
 	validateCapacityConfig(config.capacity);
 	if (config.modelExclusions !== undefined) throw new Error("config.modelExclusions was removed; model failures are no longer persisted or used for automatic switching");
+	if (config.defaultSubagentContext !== undefined) throw new Error("config.defaultSubagentContext was removed; launches are always fresh — delete this key");
+	if (config.forkContext !== undefined) throw new Error("config.forkContext was removed; launches are always fresh — delete this key");
 	validateModelResponseAliases(config.modelResponseAliases);
 	validateMainWindowRendererConfig(config.mainWindowRenderer);
 	validateOrcaProgressTabsConfig(config.orcaProgressTabs);
@@ -198,7 +200,7 @@ export function loadConfig(): ExtensionConfig {
 		try {
 			const raw = JSON.parse(fs.readFileSync(configPath, "utf-8")) as unknown;
 			if (raw && typeof raw === "object" && !Array.isArray(raw)
-				&& (Object.hasOwn(raw, "worktreeProvider") || Object.hasOwn(raw, "worktreeBranchPrefix") || Object.hasOwn(raw, "modelResponseAliases") || Object.hasOwn(raw, "modelExclusions") || Object.hasOwn(raw, "checkpointBeforeDeadlineMs"))) throw error;
+				&& (Object.hasOwn(raw, "worktreeProvider") || Object.hasOwn(raw, "worktreeBranchPrefix") || Object.hasOwn(raw, "modelResponseAliases") || Object.hasOwn(raw, "modelExclusions") || Object.hasOwn(raw, "defaultSubagentContext") || Object.hasOwn(raw, "forkContext") || Object.hasOwn(raw, "checkpointBeforeDeadlineMs"))) throw error;
 		} catch (readError) {
 			if (readError === error) throw error;
 		}

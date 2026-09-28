@@ -113,6 +113,13 @@ describe("builtin agent overrides", () => {
 		assert.throws(() => discoverAgentsAll(tempProject), /field 'machine' must be a non-empty string or false/u);
 	});
 
+	it("rejects removed fork default settings keys", () => {
+		writeJson(path.join(tempHome, ".pi", "agent", "settings.json"), { subagents: { defaultSubagentContext: "fork" } });
+		assert.throws(() => discoverAgentsAll(tempProject), /declare removed 'defaultSubagentContext'.*always fresh/);
+		writeJson(path.join(tempHome, ".pi", "agent", "settings.json"), { subagents: { forkContext: { mode: "full" } } });
+		assert.throws(() => discoverAgentsAll(tempProject), /declare removed 'forkContext'.*always fresh/);
+	});
+
 	it("replaces and clears custom-agent allowedAgents while preserving explicit deny-all", () => {
 		writeProjectAgent(tempProject, "coordinator", "---\nname: coordinator\ndescription: Coordinator\nallowedAgents: scout\n---\n\nCoordinate.\n");
 		writeJson(path.join(tempHome, ".pi", "agent", "settings.json"), {

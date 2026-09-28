@@ -1160,6 +1160,12 @@ function readSubagentSettings(filePath: string | null): SubagentSettings {
 	if (!subagents || typeof subagents !== "object" || Array.isArray(subagents)) return EMPTY_SUBAGENT_SETTINGS;
 
 	const subagentsObject = subagents as Record<string, unknown>;
+	if ("defaultSubagentContext" in subagentsObject) {
+		throw new Error(`Subagent settings in '${filePath}' declare removed 'defaultSubagentContext'; the field was removed and launches are always fresh — delete those lines.`);
+	}
+	if ("forkContext" in subagentsObject) {
+		throw new Error(`Subagent settings in '${filePath}' declare removed 'forkContext'; the field was removed and launches are always fresh — delete those lines.`);
+	}
 	let disableBuiltins: boolean | undefined;
 	if ("disableBuiltins" in subagentsObject) {
 		if (typeof subagentsObject.disableBuiltins === "boolean") {

@@ -927,7 +927,7 @@ Project prompt.
 		}
 	});
 
-	it("ignores removed defaultSubagentContext config and stays fresh", async () => {
+	it("rejects removed defaultSubagentContext config loud", async () => {
 		const cwd = path.join(tempDir, "repo-global-fork");
 		fs.mkdirSync(cwd, { recursive: true });
 		writeAgent(path.join(cwd, ".pi", "agents", "worker.md"), `---
@@ -942,30 +942,11 @@ Project prompt.
 		const parentSessionFile = path.join(tempDir, "global-parent.jsonl");
 		fs.writeFileSync(parentSessionFile, '{"type":"session","version":1,"id":"parent","timestamp":"2026-04-16T00:00:00.000Z","cwd":"/tmp"}\n', "utf-8");
 
-		const implicit = await resolveSubagentLaunchContract({
-		agent: "worker",
-		cwd,
-		parentSessionFile,
-	});
-	assert.equal(implicit.ok, true);
-	assert.equal(implicit.contract.context, "fresh");
-
-		const explicitFresh = await resolveSubagentLaunchContract({
+		await assert.rejects(() => resolveSubagentLaunchContract({
 			agent: "worker",
 			cwd,
-			context: "fresh" as never,
 			parentSessionFile,
-		});
-		// Per-call context overrides were removed; explicit context input is rejected.
-		assert.equal(explicitFresh.ok, false);
-		if (!explicitFresh.ok) {
-			assert.equal(explicitFresh.code, "unsupported_mode");
-			assert.match(explicitFresh.message, /Removed subagent field.*context/);
-		}
-
-		const unavailableFork = await resolveSubagentLaunchContract({ agent: "worker", cwd });
-		assert.equal(unavailableFork.ok, true);
-		assert.equal(unavailableFork.contract.context, "fresh");
+		}), /config\.defaultSubagentContext was removed; launches are always fresh/);
 	});
 
 	it("rejects removed agent defaultContext frontmatter", async () => {
