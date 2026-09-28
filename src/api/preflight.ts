@@ -81,7 +81,8 @@ export interface SubagentLaunchContractInput {
 	/** Root run id supplied by a host when projecting nested async lifecycle paths. */
 	nestedRootRunId?: string;
 	capabilityCeiling?: ResolvedSubagentCapabilityCeiling;
-	inheritedCapabilityCeiling?: ResolvedSubagentCapabilityCeiling;
+	/** Operator global allowlist override; when omitted it resolves fresh from settings. */
+	operatorAllowedTools?: string[];
 	/** Builtin tool names the host runtime provides; used to intersect agent-declared tools. */
 	hostAvailableBuiltins?: readonly string[];
 	/** `{ name, label }` identities from the host registry; display labels in tool allowlists resolve to internal names. */
@@ -325,7 +326,7 @@ export async function resolveSubagentLaunchContract(input: SubagentLaunchContrac
 		diagnostics.push({ code: "host_required", severity: "host-required", message: "The intercomBridge instruction file names the supervisor session; supply orchestratorTarget to bind the exact child prompt." });
 	}
 	const agent = applyIntercomBridgeToAgent(definitionAgent, bridge);
-	const effectiveCapabilityCeiling = intersectSubagentCapabilityCeilings(input.capabilityCeiling, input.inheritedCapabilityCeiling);
+	const effectiveCapabilityCeiling = input.capabilityCeiling;
 	const restrictionMessage = capabilityCeilingAgentRestrictionMessage(agent.name, effectiveCapabilityCeiling);
 	if (restrictionMessage) return { ok: false, code: "restricted_agent", message: restrictionMessage, diagnostics };
 	const runId = input.runId ?? "preflight";
@@ -404,6 +405,7 @@ export async function resolveSubagentLaunchContract(input: SubagentLaunchContrac
 			model,
 			modelCandidates,
 			capabilityCeiling: effectiveCapabilityCeiling,
+			...(input.operatorAllowedTools !== undefined ? { operatorAllowedTools: input.operatorAllowedTools } : {}),
 			agentName: agent.name,
 			permissionRules,
 			hostAvailableBuiltins: input.hostAvailableBuiltins,
