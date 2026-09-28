@@ -45,6 +45,39 @@ function text(result: Awaited<ReturnType<ReturnType<typeof createSubagentExecuto
 	return result.content[0]?.type === "text" ? result.content[0].text : "";
 }
 
+function nestedResumeFixture(root: string, child: any, agents: any[] = []) {
+	const route = createNestedRoute("root-control");
+	routeRoots.push(path.dirname(route.eventSink));
+	writeNestedEvent(route, {
+		type: "subagent.nested.updated",
+		ts: 100,
+		parentRunId: "root-control",
+		parentStepIndex: 0,
+		child,
+	});
+	const state = createState();
+	state.foregroundControls.set(route.rootRunId, {
+		runId: route.rootRunId,
+		mode: "single",
+		startedAt: 1,
+		updatedAt: 1,
+		nestedRoute: route,
+	});
+	state.lastForegroundControlId = route.rootRunId;
+	const executor = createSubagentExecutor({
+		pi: { events: { emit() {}, on() { return () => {}; } }, getSessionName() { return "parent"; } } as any,
+		state,
+		config: { maxSubagentDepth: 2, control: {}, intercomBridge: {} } as any,
+		asyncByDefault: false,
+		tempArtifactsDir: os.tmpdir(),
+		getSubagentSessionRoot: (parentSessionFile) => parentSessionFile ? path.join(path.dirname(parentSessionFile), path.basename(parentSessionFile, ".jsonl")) : os.tmpdir(),
+		expandTilde: (value) => value,
+		discoverAgents: () => ({ agents }),
+		allowMutatingManagementActions: true,
+	});
+	return { route, executor };
+}
+
 /**
  * Retained identity owns nested-resume routing: output persistence policy
  * (absent or truthy) must not decide resumability. Before the routing fix,
@@ -57,35 +90,10 @@ describe("workflow nested resume output routing", () => {
 	it(`routes workflow string resume with default output through the control inbox`, async () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-nested-resume-output-"));
 		try {
-			const route = createNestedRoute("root-control");
-			routeRoots.push(path.dirname(route.eventSink));
-		writeNestedEvent(route, {
-			type: "subagent.nested.updated",
-			ts: 100,
-			parentRunId: "root-control",
-			parentStepIndex: 0,
-			child: { id: "nested-live-resume", parentRunId: "root-control", parentStepIndex: 0, depth: 1, path: [{ runId: "root-control", stepIndex: 0 }], state: "running", agent: "worker", ownerState: "live" },
+			const { route, executor } = nestedResumeFixture(root, {
+				id: "nested-live-resume", parentRunId: "root-control", parentStepIndex: 0, depth: 1,
+				path: [{ runId: "root-control", stepIndex: 0 }], state: "running", agent: "worker", ownerState: "live",
 			});
-		const state = createState();
-		state.foregroundControls.set(route.rootRunId, {
-			runId: route.rootRunId,
-			mode: "single",
-			startedAt: 1,
-			updatedAt: 1,
-			nestedRoute: route,
-			});
-		state.lastForegroundControlId = route.rootRunId;
-		const executor = createSubagentExecutor({
-			pi: { events: { emit() {}, on() { return () => {}; } }, getSessionName() { return "parent"; } } as any,
-			state,
-			config: { maxSubagentDepth: 2, control: {}, intercomBridge: {} } as any,
-			asyncByDefault: false,
-			tempArtifactsDir: os.tmpdir(),
-			getSubagentSessionRoot: (parentSessionFile) => parentSessionFile ? path.join(path.dirname(parentSessionFile), path.basename(parentSessionFile, ".jsonl")) : os.tmpdir(),
-			expandTilde: (value) => value,
-			discoverAgents: () => ({ agents: [] }),
-			allowMutatingManagementActions: true,
-		});
 		const responder = (async () => {
 			const deadline = Date.now() + 2_000;
 			let request = readNestedControlRequests(route)[0];
@@ -116,35 +124,11 @@ describe("workflow nested resume output routing", () => {
 	it(`reports stopped (not missing) for default-output workflow string resume of a stopped nested run`, async () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-nested-resume-output-stopped-"));
 		try {
-			const route = createNestedRoute("root-control");
-			routeRoots.push(path.dirname(route.eventSink));
-		writeNestedEvent(route, {
-			type: "subagent.nested.updated",
-			ts: 100,
-			parentRunId: "root-control",
-			parentStepIndex: 0,
-			child: { id: "nested-stopped-resume", parentRunId: "root-control", parentStepIndex: 0, depth: 1, path: [{ runId: "root-control", stepIndex: 0 }], state: "stopped", agent: "worker", ownerState: "gone", sessionFile: path.join(root, "missing-session.jsonl") },
-			});
-		const state = createState();
-		state.foregroundControls.set(route.rootRunId, {
-			runId: route.rootRunId,
-			mode: "single",
-			startedAt: 1,
-			updatedAt: 1,
-			nestedRoute: route,
-			});
-		state.lastForegroundControlId = route.rootRunId;
-		const executor = createSubagentExecutor({
-			pi: { events: { emit() {}, on() { return () => {}; } }, getSessionName() { return "parent"; } } as any,
-			state,
-			config: { maxSubagentDepth: 2, control: {}, intercomBridge: {} } as any,
-			asyncByDefault: false,
-			tempArtifactsDir: os.tmpdir(),
-			getSubagentSessionRoot: (parentSessionFile) => parentSessionFile ? path.join(path.dirname(parentSessionFile), path.basename(parentSessionFile, ".jsonl")) : os.tmpdir(),
-			expandTilde: (value) => value,
-			discoverAgents: () => ({ agents: [{ name: "worker", description: "Worker", prompt: "Do work" }] as any }),
-			allowMutatingManagementActions: true,
-		});
+			const { executor } = nestedResumeFixture(root, {
+				id: "nested-stopped-resume", parentRunId: "root-control", parentStepIndex: 0, depth: 1,
+				path: [{ runId: "root-control", stepIndex: 0 }], state: "stopped", agent: "worker", ownerState: "gone",
+				sessionFile: path.join(root, "missing-session.jsonl"),
+			}, [{ name: "worker", description: "Worker", prompt: "Do work" }] as any);
 		const result = await executor.execute("resume", {
 			async: false,
 			workflowScript: `return runs.run("stopped", { resume: "nested-stopped-resume", task: "continue" });`,
@@ -167,35 +151,10 @@ describe("workflow nested resume output routing", () => {
 	it(`rejects nested-id prefixes at claim admission with the authoritative not-found error`, async () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-nested-resume-prefix-"));
 		try {
-			const route = createNestedRoute("root-control");
-		routeRoots.push(path.dirname(route.eventSink));
-		writeNestedEvent(route, {
-			type: "subagent.nested.updated",
-			ts: 100,
-			parentRunId: "root-control",
-			parentStepIndex: 0,
-			child: { id: "nested-live-prefix-target-abcdef", parentRunId: "root-control", parentStepIndex: 0, depth: 1, path: [{ runId: "root-control", stepIndex: 0 }], state: "running", agent: "worker", ownerState: "live" },
-			});
-		const state = createState();
-		state.foregroundControls.set(route.rootRunId, {
-			runId: route.rootRunId,
-			mode: "single",
-			startedAt: 1,
-			updatedAt: 1,
-			nestedRoute: route,
-			});
-		state.lastForegroundControlId = route.rootRunId;
-		const executor = createSubagentExecutor({
-			pi: { events: { emit() {}, on() { return () => {}; } }, getSessionName() { return "parent"; } } as any,
-			state,
-			config: { maxSubagentDepth: 2, control: {}, intercomBridge: {} } as any,
-			asyncByDefault: false,
-			tempArtifactsDir: os.tmpdir(),
-			getSubagentSessionRoot: (parentSessionFile) => parentSessionFile ? path.join(path.dirname(parentSessionFile), path.basename(parentSessionFile, ".jsonl")) : os.tmpdir(),
-			expandTilde: (value) => value,
-			discoverAgents: () => ({ agents: [{ name: "worker", description: "Worker", prompt: "Do work" }] as any }),
-			allowMutatingManagementActions: true,
-			});
+			const { executor } = nestedResumeFixture(root, {
+				id: "nested-live-prefix-target-abcdef", parentRunId: "root-control", parentStepIndex: 0, depth: 1,
+				path: [{ runId: "root-control", stepIndex: 0 }], state: "running", agent: "worker", ownerState: "live",
+			}, [{ name: "worker", description: "Worker", prompt: "Do work" }] as any);
 		const run = (resume: string) => executor.execute("resume", {
 			async: false,
 			workflowScript: `return runs.run("p", { resume: ${JSON.stringify(resume)}, task: "continue" });`,
