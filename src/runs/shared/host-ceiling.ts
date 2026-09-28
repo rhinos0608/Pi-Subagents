@@ -57,6 +57,8 @@ export interface SubagentCapabilityCeilingHandle {
 type Registration = { source: string; ceiling: ResolvedSubagentCapabilityCeiling };
 type Registry = Map<string, Map<symbol, Registration>>;
 
+const compareCapabilityText = (left: string, right: string): number => left.localeCompare(right, "en");
+
 function registry(): Registry {
 	const key = Symbol.for(SUBAGENT_CAPABILITY_CEILING_REGISTRY_KEY);
 	const store = globalThis as typeof globalThis & { [key: symbol]: unknown };
@@ -95,7 +97,7 @@ function normalizeCeiling(ceiling: SubagentCapabilityCeiling): ResolvedSubagentC
 			if (!pattern.test(name)) throw new Error(`Invalid capability ceiling ${field} entry '${name}'.`);
 			if (Buffer.byteLength(name, "utf8") > 128) throw new Error(`Invalid capability ceiling ${field} entry '${name}'; max 128 UTF-8 bytes.`);
 			return name;
-		}))].sort();
+		}))].sort(compareCapabilityText);
 	};
 	const allowedTools = normalizeList("allowedTools", /^[A-Za-z0-9_.:-]+$/u);
 	const allowedAgents = normalizeList("allowedAgents", /^[A-Za-z0-9_.:-]+$/u);
@@ -115,7 +117,7 @@ export function parseSubagentCapabilityCeiling(value: unknown, field = "capabili
 	const normalized = normalizeCeiling(record as SubagentCapabilityCeiling);
 	const sources = record.sources;
 	if (!Array.isArray(sources) || sources.some((source) => typeof source !== "string")) throw new Error(`Invalid ${field} sources; expected an array of strings.`);
-	normalized.sources = [...new Set(sources.map((source) => validateText(source, `${field} source`)))].sort();
+	normalized.sources = [...new Set(sources.map((source) => validateText(source, `${field} source`)))].sort(compareCapabilityText);
 	return normalized;
 }
 
@@ -159,7 +161,7 @@ export function intersectSubagentCapabilityCeilings(...ceilings: Array<ResolvedS
 	const intersectLists = (field: "allowedTools" | "allowedAgents"): string[] | undefined => {
 		const definedLists = active.filter((ceiling) => ceiling[field] !== undefined).map((ceiling) => new Set(ceiling[field]));
 		if (definedLists.length === 0) return undefined;
-		return [...definedLists[0]!].filter((entry) => definedLists.every((list) => list.has(entry))).sort();
+		return [...definedLists[0]!].filter((entry) => definedLists.every((list) => list.has(entry))).sort(compareCapabilityText);
 	};
 	const allowedTools = intersectLists("allowedTools");
 	const allowedAgents = intersectLists("allowedAgents");
@@ -168,7 +170,7 @@ export function intersectSubagentCapabilityCeilings(...ceilings: Array<ResolvedS
 		...(allowedTools !== undefined ? { allowedTools } : {}),
 		...(allowedAgents !== undefined ? { allowedAgents } : {}),
 		denyExtensions: active.some((ceiling) => ceiling.denyExtensions),
-		sources: [...new Set(active.flatMap((ceiling) => ceiling.sources))].sort(),
+		sources: [...new Set(active.flatMap((ceiling) => ceiling.sources))].sort(compareCapabilityText),
 	};
 }
 
