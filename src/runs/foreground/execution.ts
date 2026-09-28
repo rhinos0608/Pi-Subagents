@@ -349,7 +349,8 @@ function isCompleteUsageCounter(value: unknown): value is number {
 
 const STOPPED_BEFORE_COMPLETION_ERROR = "Subagent stopped before completion.";
 const AFTER_COMPACTION_SETTLEMENT = Symbol("afterCompactionSettlement");
-type AbortRecoverySingleResult = SingleResult & { [AFTER_COMPACTION_SETTLEMENT]?: true };
+const COMPACTION_OBSERVED = Symbol("compactionObserved");
+type AbortRecoverySingleResult = SingleResult & { [AFTER_COMPACTION_SETTLEMENT]?: true; [COMPACTION_OBSERVED]?: true };
 const settledReadonlySource = new WeakMap<SingleResult, ChildSession>();
 
 
@@ -567,6 +568,7 @@ async function runSingleAttempt(
 	let structuredOutputMessageStartIndex: number | undefined;
 	let toolAvailabilityError: string | undefined;
 	let abortedBySignal = options.signal?.aborted === true;
+	let compactionObserved = false;
 	let afterCompactionSettlement = false;
 
 	if (options.workflowChildPermitLaunch) {
@@ -991,7 +993,10 @@ async function runSingleAttempt(
 			jsonlWriter.writeLine(JSON.stringify(projectChildSessionEventForJson(evt)));
 			shared.transcriptWriter?.writeChildEvent(evt);
 			shared.orcaProgressTab?.event(evt);
-			if (evt.type === "compaction_start") compactionStartedReceived = true;
+			if (evt.type === "compaction_start") {
+				compactionStartedReceived = true;
+				compactionObserved = true;
+			}
 			if (evt.type === "compaction_end" && evt.willRetry === true) {
 				compactionStartedReceived = false;
 				afterCompactionSettlement = false;
@@ -1455,6 +1460,9 @@ async function runSingleAttempt(
 	result.exitCode = exitCode;
 	if (afterCompactionSettlement) {
 		(result as AbortRecoverySingleResult)[AFTER_COMPACTION_SETTLEMENT] = true;
+	}
+	if (compactionObserved) {
+		(result as AbortRecoverySingleResult)[COMPACTION_OBSERVED] = true;
 	}
 	if (interruptedByControl) {
 		result.exitCode = 0;
@@ -2056,7 +2064,12 @@ async function runSyncCompletionInner(
 				error: result.error,
 				messages: result.messages,
 				toolCount: result.progressSummary?.toolCount,
-				taskExecutionStarted: Boolean(result.outputSaveError || result.structuredOutputFailed || result.effects?.fileMutation),
+				taskExecutionStarted: Boolean(
+					result.outputSaveError
+					|| result.structuredOutputFailed
+					|| result.effects?.fileMutation
+					|| (result as AbortRecoverySingleResult)[COMPACTION_OBSERVED],
+				),
 			});
 			if (isContextOverflow(result.error)) {
 				result.contextOverflow = true;

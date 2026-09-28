@@ -137,6 +137,8 @@ export interface RunChildSessionResult {
 	currentTool?: string;
 	currentToolArgs?: string;
 	currentPath?: string;
+	/** The child entered compaction at least once during this attempt. */
+	compactionObserved?: boolean;
 	afterCompactionSettlement?: boolean;
 	abortRecoveryDiagnostic?: string;
 	/** Set by the runner while it finalizes the attempt. */
@@ -205,6 +207,7 @@ export function runChildSession(input: RunChildSessionInput): Promise<RunChildSe
 		let agentSettledReceived = false;
 		let queuedDrainHold = false;
 		let compactionStartedReceived = false;
+		let compactionObserved = false;
 		let afterCompactionSettlement = false;
 		let finalDrainTimer: NodeJS.Timeout | undefined;
 		let finalHardFinishTimer: NodeJS.Timeout | undefined;
@@ -425,7 +428,10 @@ export function runChildSession(input: RunChildSessionInput): Promise<RunChildSe
 			const event = raw as ChildSessionEvent & ChildEvent;
 			appendChildEvent(projectChildSessionEventForJson(raw) as Record<string, unknown>);
 			input.transcriptWriter?.writeChildEvent(projectChildSessionEventForJson(raw) as ChildEvent);
-			if (event.type === "compaction_start") compactionStartedReceived = true;
+			if (event.type === "compaction_start") {
+				compactionStartedReceived = true;
+				compactionObserved = true;
+			}
 			if (event.type === "compaction_end" && event.willRetry === true) {
 				compactionStartedReceived = false;
 				afterCompactionSettlement = false;
@@ -635,6 +641,7 @@ export function runChildSession(input: RunChildSessionInput): Promise<RunChildSe
 					currentTool,
 					currentToolArgs,
 					currentPath,
+					compactionObserved: compactionObserved || undefined,
 					afterCompactionSettlement: afterCompactionSettlement || undefined,
 				});
 				if (session && !forced && !forcedTermination && !interrupted && !timedOut && !stopped && getReadonlySessionEvidence(session)) settledChildren.set(result, session);
