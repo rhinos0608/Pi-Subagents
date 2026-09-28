@@ -92,7 +92,7 @@ function assertTrustedDir(dir: string, label: string): void {
 	catch { throw new Error(`Nested ${label} is missing or unreadable.`); }
 	if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error(`Nested ${label} is unsafe.`);
 	if (typeof process.getuid === "function" && stat.uid !== process.getuid()) throw new Error(`Nested ${label} is not owned by the current user.`);
-	if ((stat.mode & 0o777) !== 0o700) throw new Error(`Nested ${label} is not a mode-0700 agent-private directory.`);
+	if (process.platform !== "win32" && (stat.mode & 0o777) !== 0o700) throw new Error(`Nested ${label} is not a mode-0700 agent-private directory.`);
 }
 
 function assertRouteDirSafe(dir: string, label: string): void {

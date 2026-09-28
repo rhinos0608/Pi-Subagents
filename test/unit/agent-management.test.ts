@@ -1186,7 +1186,7 @@ Drive the failing test first.
 		});
 	}
 
-	it("shows provider-scoped runtime agent metadata but refuses edits without writing configuration", async () => {
+	it("shows runtime agent metadata but refuses edits without writing configuration", async () => {
 		const sent: Array<{ content?: string }> = [];
 		const notified: string[] = [];
 		const pi = {
@@ -1202,8 +1202,8 @@ Drive the failing test first.
 			fs.mkdirSync(path.join(tempDir, "agent-home"), { recursive: true });
 			fs.writeFileSync(path.join(tempDir, "agent-home", "settings.json"), JSON.stringify({
 				subagents: {
-					agentOverridesByProvider: {
-						custom: { "runtime-admin-helper": { model: "custom/provider-model", thinking: "high" } },
+					agentOverrides: {
+						"runtime-admin-helper": { model: "custom/provider-model", thinking: "high" },
 					},
 				},
 			}));

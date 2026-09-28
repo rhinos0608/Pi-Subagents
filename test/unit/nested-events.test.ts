@@ -7,6 +7,7 @@ import {
 	buildNestedRouteIndex,
 	createNestedRoute,
 	hasLiveNestedDescendants,
+	NESTED_EVENTS_DIR,
 	nestedSummaryFromAsyncStatus,
 	parseNestedEventRecords,
 	inheritedNestedParentAddressOf,
@@ -99,6 +100,20 @@ describe("nested route index", () => {
 });
 
 describe("nested event route validation", () => {
+	it("does not enforce POSIX mode bits on Windows", () => {
+		const originalPlatform = process.platform;
+		fs.mkdirSync(NESTED_EVENTS_DIR, { recursive: true });
+		fs.chmodSync(NESTED_EVENTS_DIR, 0o755);
+		Object.defineProperty(process, "platform", { value: "win32" });
+		try {
+			const route = trackRoute("windows-mode-root");
+			assert.equal(fs.existsSync(route.eventSink), true);
+		} finally {
+			Object.defineProperty(process, "platform", { value: originalPlatform });
+			fs.chmodSync(NESTED_EVENTS_DIR, 0o700);
+		}
+	});
+
 	it("resolves nested parent addresses from the inherited child runtime", () => {
 		assert.deepEqual(inheritedNestedParentAddressOf({
 			nestedParent: {
