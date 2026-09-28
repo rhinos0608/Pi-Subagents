@@ -177,7 +177,14 @@ export default function registerSmoke(pi: ExtensionAPI) {
 					}
 					if (mode.endsWith("-timeout")) {
 						assert.equal(status.steps[0].timedOut, true);
-						assert.match(status.steps[0].error, mode === "tool-timeout" ? /Tool 'bash' exceeded its timeout of 1000ms/ : /timed out after 8000ms/);
+						if (mode === "tool-timeout") {
+							assert.match(status.steps[0].error, /Tool 'bash' exceeded its timeout of 1000ms/);
+						} else {
+							const timeout = /timed out after (\d+)ms/.exec(status.steps[0].error ?? "");
+							assert.ok(timeout, status.steps[0].error);
+							const remainingBudget = Number(timeout[1]);
+							assert.ok(remainingBudget > 7_000 && remainingBudget <= 8_000, `expected the shared 8s operator deadline after setup, got ${remainingBudget}ms`);
+						}
 					}
 					if (steered) {
 						const followup = lifecycle.find((entry) => entry.event === "followup" && entry.pid === status.pid);
