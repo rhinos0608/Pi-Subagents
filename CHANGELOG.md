@@ -8,6 +8,7 @@ First npm release of the fork: `v0.71.0-fork.1` (published as `@rhinos0608/pi-su
 
 - Workflow children accept per-child `worktree: true/false` (10-field child allowlist). `true` isolates the child in its own managed worktree at a mirrored subpath and requires a clean git working tree; omit it to use the workflow/operator default. Non-boolean values are rejected before launch. `baseRef` / `isolation` / provider overrides stay rejected on children.
 - Top-level `args` for `workflowScript`: a plain JSON object readable in the script as the frozen global `args` (total ≤ 16 KB with per-value/depth/width limits; persisted as run evidence, so never put secrets in it). Rejected without `workflowScript`.
+- `subagents.agentOverrides.<name>.advertise` adds an agent to the parent-prompt catalog from settings, so you no longer have to copy a builtin agent file just to advertise it. Runtime-registered agents still cannot be advertised. Thanks to [@strive-run](https://github.com/strive-run) for [#2534](https://github.com/nicobailon/pi-subagents/pull/2534).
 
 ### Changed
 
