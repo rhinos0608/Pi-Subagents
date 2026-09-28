@@ -2861,7 +2861,7 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		assert.equal(mockPi.callCount(), 1);
 	});
 
-	it("does not use compaction recovery for a generic empty assistant abort after a compaction retry", async () => {
+	it("does not relaunch a model for a generic empty assistant abort after a compaction retry", async () => {
 		const sessionFile = path.join(tempDir, "generic-empty-after-compaction-retry-session.jsonl");
 		mockPi.onCall({
 			jsonl: [
@@ -2895,10 +2895,10 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 
 		assert.equal(result.exitCode, 1);
 		assert.match(result.error ?? "", /Subagent produced no output after terminal assistant stopReason "aborted"\./u);
-		assert.equal(mockPi.callCount(), 3);
+		assert.equal(mockPi.callCount(), 1);
 	});
 
-	it("does not use compaction recovery after compaction_end willRetry false and a continued agent turn", async () => {
+	it("does not relaunch a model after compaction_end willRetry false and a continued agent turn", async () => {
 		const sessionFile = path.join(tempDir, "generic-empty-after-successful-compaction-session.jsonl");
 		mockPi.onCall({
 			jsonl: [
@@ -2929,7 +2929,7 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 
 		assert.equal(result.exitCode, 1);
 		assert.match(result.error ?? "", /Subagent produced no output after terminal assistant stopReason "aborted"\./u);
-		assert.equal(mockPi.callCount(), 3);
+		assert.equal(mockPi.callCount(), 1);
 	});
 
 	it("does not use compaction recovery for a generic provider abort after normal settlement", async () => {

@@ -93,7 +93,7 @@ function waitForJson<T>(file: string, predicate: (value: T) => boolean, asyncDir
 describe("async execution utilities", { skip: !available ? "pi packages not available" : undefined }, () => {
 	installAsyncExecutionHooks();
 
-	it("background does not use compaction recovery after compaction_end willRetry false and a continued agent turn", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
+	it("background does not relaunch a model after compaction_end willRetry false and a continued agent turn", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
 		const sessionFile = path.join(tempDir, "async-generic-empty-after-successful-compaction-session.jsonl");
 		mockPi.onCall({
 			jsonl: [
@@ -138,7 +138,7 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		const payload = JSON.parse(fs.readFileSync(await waitForAsyncResultFile(id), "utf-8"));
 		assert.equal(payload.success, false);
 		assert.match(payload.results[0]?.error ?? "", /Subagent produced no output after terminal assistant stopReason "aborted"\./u);
-		assert.equal(mockPi.callCount(), 3);
+		assert.equal(mockPi.callCount(), 1);
 	});
 
 	it("background fails a zero-exit child that stops during a tool after earlier assistant output", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
