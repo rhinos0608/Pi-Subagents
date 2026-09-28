@@ -881,41 +881,18 @@ export default function() {
 		assert.match(payload.results[0]?.error ?? "", /Missing structured_output call/);
 	});
 
-	it("workflow acceptance uses inherited schemas and rejects a false opt-out", { skip: !isAsyncAvailable() || !createSubagentExecutor ? "jiti or executor not available" : undefined }, async () => {
+	it("workflow children inherit agent-owned output schemas", { skip: !isAsyncAvailable() || !createSubagentExecutor ? "jiti or executor not available" : undefined }, async () => {
 		const agentDir = path.join(tempDir, ".pi", "agents");
 		fs.mkdirSync(agentDir, { recursive: true });
 		fs.writeFileSync(path.join(agentDir, "typed.md"), `---\nname: typed\ndescription: Typed output\noutputSchema: {"type":"object","required":["ok"]}\n---\nReturn data.\n`);
 		const executor = makeAsyncExecutor(discoverAgents(tempDir, "project").agents);
 		mockPi.onCall({ output: "ordinary prose" });
-		const inherited = await executor.execute("workflow-schema-default", {
+		const result = await executor.execute("workflow-schema-default", {
 			async: false,
-			workflowScript: `return runs.run("typed", { agent: "typed", task: "Return data", acceptance: { level: "checked", report: "on" } });`,
+			workflowScript: `return runs.run("typed", { agent: "typed", task: "Return data" });`,
 		}, new AbortController().signal, undefined, makeMinimalCtx(tempDir));
-		assert.equal(inherited.isError, true);
-		assert.match(inherited.content[0]?.type === "text" ? inherited.content[0].text : "", /Missing structured_output call/);
-
-		const disabled = await executor.execute("workflow-schema-disabled", {
-			async: false,
-			workflowScript: `return runs.run("typed", { agent: "typed", task: "Return prose", outputSchema: false, acceptance: { level: "checked", report: "on" } });`,
-		}, new AbortController().signal, undefined, makeMinimalCtx(tempDir));
-		assert.equal(disabled.isError, true);
-		assert.match(disabled.content[0]?.type === "text" ? disabled.content[0].text : "", /acceptance\.report requires outputSchema/);
-
-		mockPi.onCall({ output: "missing structured call" });
-		mockPi.onCall({ output: "false opted out" });
-		const parallel = await executor.execute("workflow-schema-parallel", {
-			async: false,
-			workflowScript: `const children = await runs.all([
-				{ key: "inherited", agent: "typed", task: "Return data", acceptance: false },
-				{ key: "disabled", agent: "typed", task: "Return prose", outputSchema: false, acceptance: false }
-			]); return children.map(({ key, ok, error, output }) => ({ key, ok, error, output }));`,
-		}, new AbortController().signal, undefined, makeMinimalCtx(tempDir));
-		assert.equal(parallel.isError, undefined, parallel.content[0]?.type === "text" ? parallel.content[0].text : undefined);
-		const children = parallel.details.workflow?.value as Array<{ key: string; ok: boolean; error?: string; output: string }>;
-		assert.equal(children.find(({ key }) => key === "inherited")?.ok, false);
-		assert.match(children.find(({ key }) => key === "inherited")?.error ?? "", /Missing structured_output call/);
-		assert.deepEqual(children.find(({ key }) => key === "disabled"), { key: "disabled", ok: true, output: "false opted out" });
-		assert.equal(mockPi.callCount(), 3);
+		assert.equal(result.isError, true);
+		assert.match(result.content[0]?.type === "text" ? result.content[0].text : "", /Missing structured_output call/);
 	});
 
 	it("background outputSchema runs fail closed when required acceptanceReport is missing", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
@@ -1270,7 +1247,7 @@ export default function() {
 			tempArtifactsDir: tempDir,
 			getSubagentSessionRoot: () => path.join(tempDir, "sessions"),
 			expandTilde: (p: string) => p,
-			discoverAgents: () => ({ agents: [makeAgent("worker")] }),
+			discoverAgents: () => ({ agents: [makeAgent("worker"), makeAgent("explicit", { model: "openai/gpt-5-mini" })] }),
 		});
 		const context = makeMinimalCtx(tempDir);
 		context.sessionManager.getSessionId = () => "session-workflow-parent-model";
@@ -1282,7 +1259,7 @@ export default function() {
 
 		const launch = await executor.execute(
 			"workflow-parent-model",
-			{ workflowScript: `await runs.run("inherited", { agent: "worker", task: "Do inherited work" }); return runs.run("explicit", { agent: "worker", task: "Do explicit work", model: "openai/gpt-5-mini" });`, async: true },
+			{ workflowScript: `await runs.run("inherited", { agent: "worker", task: "Do inherited work" }); return runs.run("explicit", { agent: "explicit", task: "Do explicit work" });`, async: true },
 			new AbortController().signal,
 			undefined,
 			context,
@@ -1488,7 +1465,7 @@ export default function() {
 		mockPi.onCall({ output: "Initial workflow child complete" });
 		const launch = await executor.execute(
 			"workflow-parent-authority-launch",
-			{ workflowScript: `return await runs.run("planner", { agent: "planner", task: "Plan", acceptance: false })`, async: true, mission: false, capabilityCeiling: parentAuthority },
+			{ workflowScript: `return await runs.run("planner", { agent: "planner", task: "Plan" })`, async: true, mission: false, capabilityCeiling: parentAuthority },
 			new AbortController().signal, undefined, ctx,
 		) as AsyncExecutionResult;
 		assert.ok(!launch.isError, launch.content[0]?.text);
@@ -1499,7 +1476,7 @@ export default function() {
 
 		mockPi.onCall({ output: "Workflow child resumed" });
 		const resumed = await executor.execute(
-			"workflow-parent-authority-resume", { action: "resume", id: launch.details.asyncId, message: "Continue", acceptance: false },
+			"workflow-parent-authority-resume", { action: "resume", id: launch.details.asyncId, message: "Continue" },
 			new AbortController().signal, undefined, ctx,
 		) as AsyncExecutionResult;
 		assert.ok(!resumed.isError, resumed.content[0]?.text);
@@ -1812,7 +1789,7 @@ syncBuiltinESMExports();
 		}
 	});
 
-	it("append-step admits inherited schemas and rejects false report modes before enqueue", { skip: !createSubagentExecutor ? "executor not available" : undefined }, async () => {
+	it("append-step admits agent-owned inherited schemas before enqueue", { skip: !createSubagentExecutor ? "executor not available" : undefined }, async () => {
 		const runId = `append-effective-schema-${Date.now().toString(36)}`;
 		const asyncDir = path.join(ASYNC_DIR, runId);
 		const agentDir = path.join(tempDir, ".pi", "agents");
@@ -1832,7 +1809,7 @@ syncBuiltinESMExports();
 
 			const admitted = await executor.execute(
 				"append-inherited-schema",
-				{ action: "append-step", id: runId, step: { agent: "typed", task: "Review", acceptance: { level: "checked", report: "on" } } },
+				{ action: "append-step", id: runId, step: { agent: "typed", task: "Review" } },
 				new AbortController().signal,
 				undefined,
 				ctx,
@@ -1844,20 +1821,6 @@ syncBuiltinESMExports();
 			assert.deepEqual(requests[0]?.steps[0]?.structuredOutputSchema, schema);
 			assert.deepEqual(getRunFanoutBudgetSnapshot(budget), { used: 1, limit: 8, remaining: 7 });
 
-			for (const report of ["on", "off"] as const) {
-				const rejected = await executor.execute(
-					`append-false-schema-${report}`,
-					{ action: "append-step", id: runId, step: { agent: "typed", task: "Review", outputSchema: false, acceptance: { level: "checked", report } } },
-					new AbortController().signal,
-					undefined,
-					ctx,
-				) as AsyncExecutionResult;
-				assert.equal(rejected.isError, true);
-				assert.match(rejected.content[0]?.text ?? "", /Cannot append step: chain\[0\]\.acceptance\.report requires outputSchema/);
-				assert.equal(readPendingChainAppendRequests(asyncDir).length, 1);
-				assert.deepEqual(getRunFanoutBudgetSnapshot(budget), { used: 1, limit: 8, remaining: 7 });
-				assert.equal(mockPi.callCount(), 0);
-			}
 		} finally {
 			fs.rmSync(asyncDir, { recursive: true, force: true });
 			fs.rmSync(budget.directory, { recursive: true, force: true });
@@ -1899,12 +1862,12 @@ syncBuiltinESMExports();
 		assert.equal(args[args.indexOf("--model") + 1], "deepseek/deepseek-v4-flash");
 	});
 
-	it("background chains treat empty step models as parent inheritance", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
+	it("background chains use the agent-owned model instead of a parent override", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
 		mockPi.onCall({ output: "Done asynchronously" });
 
 		const id = `async-chain-empty-model-${Date.now().toString(36)}`;
 		executeAsyncChain(id, {
-			chain: [{ agent: "worker", task: "Do work", model: "" }],
+			chain: [{ agent: "worker", task: "Do work" }],
 			agents: [makeAgent("worker", { model: "anthropic/claude-sonnet-4-5", thinking: "high" })],
 			ctx: {
 				pi: { events: { emit() {} } },
@@ -1933,9 +1896,9 @@ syncBuiltinESMExports();
 		const resultPath = await waitForAsyncResultFile(id, 10_000);
 		const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8")) as AsyncResultPayload;
 		assert.equal(payload.success, true);
-		assert.equal(payload.results[0].model, "openai/gpt-5-mini:high");
+		assert.equal(payload.results[0].model, "anthropic/claude-sonnet-4-5:high");
 		const args = readMockPiArgs(mockPi, 0);
-		assert.equal(args[args.indexOf("--model") + 1], "openai/gpt-5-mini:high");
+		assert.equal(args[args.indexOf("--model") + 1], "anthropic/claude-sonnet-4-5:high");
 	});
 
 	it("background runs resolve skills from the effective task cwd", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {

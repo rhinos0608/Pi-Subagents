@@ -80,15 +80,15 @@ describe("public workflow worktree admission", { skip: !available }, () => {
 			});
 		}
 	}
-	it("launches a valid isolated child and preserves explicit false on a non-repository sibling", async () => {
+	it("launches valid isolated children when workflow-level worktree isolation is enabled", async () => {
 		const repo = createRepo("pi-admission-clean-");
 		mockPi.onCall({ output: "Inspected" });
 		mockPi.onCall({ output: "Shared cwd inspected" });
 		try {
 			const executor = makeAdmissionExecutor({ worktreeProvider: "native", worktree: true });
 			const result = await executor.executePublic("admission-clean", {
-				workflowScript: `const results = await runs.all([{ key: 'isolated', agent: 'worker', task: 'Inspect', cwd: ${JSON.stringify(repo)}, async: false }, { key: 'shared', agent: 'worker', task: 'Inspect shared', worktree: false, async: false }]); return results.map(r => r.ok);`,
-				async: false, worktree: true,
+				workflowScript: `const results = await runs.all([{ key: 'isolated-a', agent: 'worker', task: 'Inspect A', async: false }, { key: 'isolated-b', agent: 'worker', task: 'Inspect B', async: false }]); return results.map(r => r.ok);`,
+				cwd: repo, async: false, worktree: true,
 			}, new AbortController().signal, undefined, makeMinimalCtx(tempDir));
 			assert.notEqual(result.isError, true, JSON.stringify(result));
 			assert.equal(callCount(), 2);
