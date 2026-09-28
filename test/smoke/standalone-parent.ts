@@ -69,7 +69,7 @@ export default function registerSmoke(pi: ExtensionAPI) {
 			if (startupFailure) assert.equal(JSON.parse(fs.readFileSync("/stage/startup-hook-ready.json", "utf8")).pid, process.pid);
 			const launching = tool.execute("standalone-smoke", {
 				...request, context: "fresh", async: true,
-				model: "standalone-smoke/local", acceptance: false, timeoutMs: mode === "run-timeout" ? 8000 : 20000, output: false,
+				model: "standalone-smoke/local", acceptance: false, timeoutMs: mode === "run-timeout" ? 8000 : 20000,
 				...(mode === "tool-timeout" ? { toolTimeoutMs: 1000 } : {}),
 			}, new AbortController().signal, undefined, ctx);
 			if (mode === "missing-bootstrap") {
