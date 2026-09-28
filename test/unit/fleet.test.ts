@@ -47,7 +47,7 @@ function writeAsyncRun(root: string, input: {
 	lastUpdate?: number;
 	startedAt?: number;
 	agents?: string[];
-	contexts?: Array<"fresh" | "fork">;
+	contexts?: Array<"fresh">;
 	models?: string[];
 	thinking?: string[];
 	output?: string;
@@ -1041,7 +1041,7 @@ describe("native subagent fleet", () => {
 	it("renders selectable transcript detail and completed artifact paths within terminal width", () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-fleet-render-"));
 		try {
-			const asyncDir = writeAsyncRun(root, { id: "async-finished", state: "complete", contexts: ["fork"], output: "FINAL ASYNC OUTPUT" });
+			const asyncDir = writeAsyncRun(root, { id: "async-finished", state: "complete", contexts: ["fresh"], output: "FINAL ASYNC OUTPUT" });
 			const state = stateForTest();
 			let closed = false;
 			let renderRequests = 0;
@@ -1057,7 +1057,7 @@ describe("native subagent fleet", () => {
 				const lines = component.render(100);
 				assert.ok(lines.some((line) => line.includes("FINAL ASYNC OUTPUT")));
 				assert.ok(lines.some((line) => line.includes("output-0.log")));
-				assert.ok(lines.some((line) => line.includes("worker") && line.includes("[fork]")));
+				assert.ok(lines.some((line) => line.includes("worker") && line.includes("[fresh]")));
 				assert.ok(lines.some((line) => line.includes("worker.jsonl")));
 				for (const line of lines) assert.ok(visibleWidth(line) <= 100, `line exceeded width: ${line}`);
 				tui.terminal.rows = 10;

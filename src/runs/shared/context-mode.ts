@@ -17,7 +17,6 @@ export function summarizeContextModes(modes: Array<ContextMode | undefined>): Co
 }
 
 export function contextModeLabel(mode: ContextMode | ContextSummary | undefined): string {
-	if (mode === "fork") return "[fork]";
 	if (mode === "fresh") return "[fresh]";
 	if (mode === "mixed") return "[mixed]";
 	return "";
@@ -29,7 +28,6 @@ export function contextModeBadge(
 ): string {
 	const label = contextModeLabel(mode);
 	if (!label) return "";
-	if (mode === "fork") return theme.fg("warning", ` ${label}`);
 	return theme.fg("dim", ` ${label}`);
 }
 
@@ -39,6 +37,5 @@ export function contextModePrefix(
 ): string {
 	const label = contextModeLabel(mode);
 	if (!label) return "";
-	if (mode === "fork") return `${theme.fg("warning", label)} `;
 	return `${theme.fg("dim", label)} `;
 }
