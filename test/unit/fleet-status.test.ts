@@ -1259,7 +1259,7 @@ describe("below-editor subagent FleetView", () => {
 			updatedAt: 20,
 			steps: [
 				{ agent: "scout", workflowKey: "scan", phase: "Plan", label: "Find seams", status: "complete" as const, index: 0, context: "fresh" as const, model: "openai-codex/gpt-5.6-luna", thinking: "max", tokens: { input: 10, output: 5, total: 15 } },
-				{ agent: "reviewer", workflowKey: "review", phase: "Review", status: "running" as const, index: 1, context: "fork" as const, currentTool: "grep", tokens: { input: 20, output: 5, total: 25 } },
+				{ agent: "reviewer", workflowKey: "review", phase: "Review", status: "running" as const, index: 1, context: "fresh" as const, currentTool: "grep", tokens: { input: 20, output: 5, total: 25 } },
 				{ agent: "tester", workflowKey: "test", phase: "Verify", status: "pending" as const, index: 2 },
 			],
 		};
@@ -1289,7 +1289,7 @@ describe("below-editor subagent FleetView", () => {
 			const lines = component.render(140).join("\n");
 			assert.match(lines, /workflow · running/);
 			assert.match(lines, /Plan: scan · Find seams \(scout\) \[fresh\] \(gpt-5\.6-luna · thinking max\) · complete/);
-			assert.match(lines, /Review: review \(reviewer\) \[fork\] · running · tool grep/);
+			assert.match(lines, /Review: review \(reviewer\) \[fresh\] · running · tool grep/);
 			assert.match(lines, /Verify: test \(tester\) · pending/);
 		} finally {
 			fleet.dispose();
