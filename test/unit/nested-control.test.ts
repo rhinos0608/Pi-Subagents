@@ -377,6 +377,28 @@ describe("nested control routing", () => {
 		}
 	});
 
+	it("rejects nested-id prefixes at workflow claim admission with the exact not-found error", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-nested-resume-prefix-"));
+		try {
+			const route = createNestedRun("nested-live-prefix-target-abcdef");
+			const executor = createExecutor(stateWithNestedRoute(route), [{ name: "worker", description: "Worker", prompt: "Do work" }]);
+			const run = (resume: string) => executor.execute("resume", {
+				async: false,
+				workflowScript: `return runs.run("p", { resume: ${JSON.stringify(resume)}, task: "continue" });`,
+			}, new AbortController().signal, undefined, ctx(root));
+			const prefix = await run("nested-live-prefix-target");
+			const unknown = await run("no-such-run-anywhere");
+			for (const result of [prefix, unknown]) {
+				assert.equal(result.isError, true);
+				assert.match(text(result), /Async run not found\. Provide id or dir\./);
+			}
+			const stable = (value: string) => value.split("\n").filter((line) => !line.startsWith("Mission:")).join("\n");
+			assert.equal(stable(text(prefix)), stable(text(unknown)));
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("validates terminal nested resume session files before revive", async () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-nested-terminal-resume-"));
 		try {

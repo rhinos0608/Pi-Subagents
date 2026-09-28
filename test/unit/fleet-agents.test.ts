@@ -31,29 +31,20 @@ function mgmtCtx() {
 }
 
 function readText(result: { content: Array<{ type: string; text?: string }> }): string {
-	const first = result.content[0];
-	assert.ok(first);
-	assert.equal(first.type, "text");
-	assert.equal(typeof first.text, "string");
-	return first.text;
+	const first = result.content[0]; assert.ok(first); assert.equal(first.type, "text"); assert.equal(typeof first.text, "string"); return first.text;
+}
+function setupFleetProject(): void {
+	tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-fleet-agents-")); fs.mkdirSync(path.join(tempDir, ".pi"), { recursive: true });
+	oldAgentDir = process.env.PI_CODING_AGENT_DIR; process.env.PI_CODING_AGENT_DIR = path.join(tempDir, "agent-home"); clearSkillCache();
+}
+function cleanupFleetProject(): void {
+	if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
+	delete process.env[PI_CODING_AGENT_PACKAGE_ROOT_ENV]; clearSkillCache(); fs.rmSync(tempDir, { recursive: true, force: true });
 }
 
 describe("fleet agents view", () => {
-	beforeEach(() => {
-		tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-fleet-agents-"));
-		fs.mkdirSync(path.join(tempDir, ".pi"), { recursive: true });
-		oldAgentDir = process.env.PI_CODING_AGENT_DIR;
-		process.env.PI_CODING_AGENT_DIR = path.join(tempDir, "agent-home");
-		clearSkillCache();
-	});
-
-	afterEach(() => {
-		if (oldAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
-		else process.env.PI_CODING_AGENT_DIR = oldAgentDir;
-		delete process.env[PI_CODING_AGENT_PACKAGE_ROOT_ENV];
-		clearSkillCache();
-		fs.rmSync(tempDir, { recursive: true, force: true });
-	});
+	beforeEach(setupFleetProject);
+	afterEach(cleanupFleetProject);
 
 	it("uses the internal management handlers directly, not the model-tool surface", () => {
 		assert.equal(defaultAgentsActions.list, handleList);

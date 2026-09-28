@@ -9,17 +9,14 @@ import { createSubagentExecutor } from "../../src/runs/foreground/subagent-execu
 import type { SubagentState } from "../../src/shared/types.ts";
 
 function fixture() {
-	const root = fs.mkdtempSync(path.join(os.tmpdir(), "scheduled-internal-route-"));
-	const initialOwner = randomUUID();
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "scheduled-internal-route-")), initialOwner = randomUUID();
 	const context = (owner = initialOwner, file: string | null = path.join(root, "parent.jsonl")) => ({
-		cwd: root, hasUI: false,
-		sessionManager: { getSessionId: () => owner, getSessionFile: () => file, getEntries: () => [] },
+		cwd: root, hasUI: false, sessionManager: { getSessionId: () => owner, getSessionFile: () => file, getEntries: () => [] },
 	});
 	const state: SubagentState = {
 		baseCwd: root, currentSessionId: context().sessionManager.getSessionFile(), supervisorOwnerSessionId: initialOwner,
 		asyncJobs: new Map(), foregroundControls: new Map(), lastForegroundControlId: null, cleanupTimers: new Map(), lastUiContext: null,
-		poller: null, completionSeen: new Map(), watcher: null, watcherRestartTimer: null,
-		resultFileCoalescer: { schedule: () => false, clear() {} },
+		poller: null, completionSeen: new Map(), watcher: null, watcherRestartTimer: null, resultFileCoalescer: { schedule: () => false, clear() {} },
 	};
 	const pi = {
 		getAllTools: () => [], registerTool() {}, getSessionName: () => "parent",
