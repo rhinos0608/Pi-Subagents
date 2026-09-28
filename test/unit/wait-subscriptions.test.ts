@@ -66,6 +66,45 @@ function textOf(result: { content: Array<{ type: string; text?: string }> }): st
 	return result.content.map((entry) => entry.text ?? "").join("");
 }
 
+function createBackgroundWorkWakeHarness(input: {
+	prefix: string;
+	provider: string;
+	channel: string;
+	itemId: string;
+	pollIntervalMs: number;
+}) {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), input.prefix));
+	let active = [{ id: input.itemId, sessionId: "session-a" }];
+	const disposeProvider = registerBackgroundWorkProvider({
+		name: input.provider,
+		wakeChannels: [input.channel],
+		listActiveWork: () => active,
+	});
+	const delivered: Array<{ message: { content?: unknown }; options?: { triggerTurn?: boolean } }> = [];
+	const bus = new TestBus();
+	const manager = createWaitSubscriptionManager({
+		events: bus,
+		sendMessage(message: { content?: unknown }, options?: { triggerTurn?: boolean }) { delivered.push({ message, options }); },
+	} as never, makeState("session-a"), {
+		asyncDirRoot: path.join(root, "runs"),
+		subscriptionsDir: path.join(root, "subscriptions"),
+		pollIntervalMs: input.pollIntervalMs,
+		now: Date.now,
+		kill: () => true,
+	});
+	return {
+		delivered,
+		manager,
+		finish() { active = []; bus.emit(input.channel); },
+		emit() { bus.emit(input.channel); },
+		dispose() {
+			manager.dispose();
+			disposeProvider();
+			fs.rmSync(root, { recursive: true, force: true });
+		},
+	};
+}
+
 describe("non-blocking wait subscriptions", () => {
 	it("returns immediately and binds an id prefix to one exact run", async () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-wait-subscribe-arm-"));
@@ -622,95 +661,47 @@ describe("wait subscriptions armed by another session", () => {
 	});
 
 	it("wakes the owning session once when a background-work item goes inactive, with no polling", () => {
-		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-wait-subscribe-bgwork-"));
-		const asyncRoot = path.join(root, "runs");
-		const subscriptionsDir = path.join(root, "subscriptions");
-		let active = [{ id: "job-1", sessionId: "session-a" }];
-		const disposeProvider = registerBackgroundWorkProvider({
-			name: "test-bg-wait-provider",
-			wakeChannels: ["test-bg-wait:job-finished"],
-			listActiveWork: () => active,
+		const harness = createBackgroundWorkWakeHarness({
+			prefix: "pi-wait-subscribe-bgwork-",
+			provider: "test-bg-wait-provider",
+			channel: "test-bg-wait:job-finished",
+			itemId: "job-1",
+			pollIntervalMs: 60_000,
 		});
 		try {
-			const delivered: Array<{ message: { content?: unknown }; options?: { triggerTurn?: boolean } }> = [];
-			const bus = new TestBus();
-			const pi = {
-				events: bus,
-				sendMessage(message: { content?: unknown }, options?: { triggerTurn?: boolean }) { delivered.push({ message, options }); },
-			};
-			const manager = createWaitSubscriptionManager(pi as never, makeState("session-a"), {
-				asyncDirRoot: asyncRoot,
-				subscriptionsDir,
-				pollIntervalMs: 60_000,
-				now: Date.now,
-				kill: () => true,
-			});
-			try {
-				manager.restore();
-				manager.reconcile(); // first reconcile baselines the active item, no wake
-				assert.deepEqual(delivered, []);
-				active = []; // provider item finishes between reconciliations
-				bus.emit("test-bg-wait:job-finished"); // provider wake channel triggers reconcile
-				assert.equal(delivered.length, 1, "exactly one native wake for the finished provider item");
-				assert.equal(delivered[0]!.options?.triggerTurn, true);
-				assert.match(String(delivered[0]!.message.content), /test-bg-wait-provider\/job-1/);
-				bus.emit("test-bg-wait:job-finished"); // already baselined: no second wake
-				assert.equal(delivered.length, 1, "no duplicate wake once the item is baselined");
-			} finally {
-				manager.dispose();
-			}
+			harness.manager.restore();
+			harness.manager.reconcile();
+			assert.deepEqual(harness.delivered, [], "first reconcile only baselines active work");
+			harness.finish();
+			assert.equal(harness.delivered.length, 1, "exactly one native wake for the finished provider item");
+			assert.equal(harness.delivered[0]!.options?.triggerTurn, true);
+			assert.match(String(harness.delivered[0]!.message.content), /test-bg-wait-provider\/job-1/);
+			harness.emit();
+			assert.equal(harness.delivered.length, 1, "no duplicate wake once the item is baselined");
 		} finally {
-			disposeProvider();
-			fs.rmSync(root, { recursive: true, force: true });
+			harness.dispose();
 		}
 	});
 
 	it("wakes for an item active at first discovery that finishes before any periodic tick", () => {
-		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-wait-subscribe-bgwork-first-sight-"));
-		const asyncRoot = path.join(root, "runs");
-		const subscriptionsDir = path.join(root, "subscriptions");
-		// Item is already active when this brand-new channel is first seen.
-		let active = [{ id: "job-early", sessionId: "session-a" }];
-		const disposeProvider = registerBackgroundWorkProvider({
-			name: "test-bg-wait-first-sight-provider",
-			wakeChannels: ["test-bg-wait:first-sight-finished"],
-			listActiveWork: () => active,
+		const harness = createBackgroundWorkWakeHarness({
+			prefix: "pi-wait-subscribe-bgwork-first-sight-",
+			provider: "test-bg-wait-first-sight-provider",
+			channel: "test-bg-wait:first-sight-finished",
+			itemId: "job-early",
+			pollIntervalMs: 3_600_000,
 		});
 		try {
-			const delivered: Array<{ message: { content?: unknown }; options?: { triggerTurn?: boolean } }> = [];
-			const bus = new TestBus();
-			const pi = {
-				events: bus,
-				sendMessage(message: { content?: unknown }, options?: { triggerTurn?: boolean }) { delivered.push({ message, options }); },
-			};
-			const manager = createWaitSubscriptionManager(pi as never, makeState("session-a"), {
-				asyncDirRoot: asyncRoot,
-				subscriptionsDir,
-				// Far-future tick: it must never fire during this test, proving
-				// the wake comes from subscribe-plus-baseline plus the channel
-				// event alone, with no polling.
-				pollIntervalMs: 3_600_000,
-				now: Date.now,
-				kill: () => true,
-			});
-			try {
-				// start() must subscribe AND baseline synchronously: the channel
-				// has never been seen before and the tick never runs.
-				manager.start();
-				assert.deepEqual(delivered, [], "baselining an active item is not a wake");
-				active = []; // item finishes before any periodic tick could run
-				bus.emit("test-bg-wait:first-sight-finished");
-				assert.equal(delivered.length, 1, "exactly one native wake for the never-before-baselined item");
-				assert.equal(delivered[0]!.options?.triggerTurn, true);
-				assert.match(String(delivered[0]!.message.content), /test-bg-wait-first-sight-provider\/job-early/);
-				bus.emit("test-bg-wait:first-sight-finished");
-				assert.equal(delivered.length, 1, "no duplicate wake");
-			} finally {
-				manager.dispose();
-			}
+			harness.manager.start();
+			assert.deepEqual(harness.delivered, [], "start subscribes and baselines without waking");
+			harness.finish();
+			assert.equal(harness.delivered.length, 1, "exactly one native wake before any periodic tick");
+			assert.equal(harness.delivered[0]!.options?.triggerTurn, true);
+			assert.match(String(harness.delivered[0]!.message.content), /test-bg-wait-first-sight-provider\/job-early/);
+			harness.emit();
+			assert.equal(harness.delivered.length, 1, "no duplicate wake");
 		} finally {
-			disposeProvider();
-			fs.rmSync(root, { recursive: true, force: true });
+			harness.dispose();
 		}
 	});
 });
