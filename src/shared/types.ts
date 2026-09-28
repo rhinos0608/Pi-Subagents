@@ -2599,10 +2599,6 @@ export interface ActiveAsyncCapacityConfig {
 
 export interface ExtensionConfig {
 	asyncByDefault?: boolean;
-	/** Set the context for launches that omit an explicit context. */
-	defaultSubagentContext?: "fresh" | "fork";
-	/** Configure how every resolved fork session is prepared before child spawn. */
-	forkContext?: ForkContextConfig;
 	/** Optional shortcut that detaches the active foreground single-subagent run. */
 	foregroundDetachShortcut?: string;
 	/** Show the Claude Code-style navigable fleet. Defaults to true. */

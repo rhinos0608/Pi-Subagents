@@ -283,7 +283,6 @@ export function editableAgentConfig(agent: AgentConfig): AgentConfig {
 		inheritProjectContext: _inheritProjectContext,
 		inheritGlobalContext: _inheritGlobalContext,
 		inheritSkills: _inheritSkills,
-		defaultContext: _defaultContext,
 		acceptanceRole: _acceptanceRole,
 		disabled: _disabled,
 		systemPrompt: _systemPrompt,
@@ -318,7 +317,6 @@ export function editableAgentConfig(agent: AgentConfig): AgentConfig {
 		inheritProjectContext: base.inheritProjectContext,
 		inheritGlobalContext: base.inheritGlobalContext,
 		inheritSkills: base.inheritSkills,
-		...(base.defaultContext !== undefined ? { defaultContext: base.defaultContext } : {}),
 		...(base.acceptanceRole !== undefined ? { acceptanceRole: base.acceptanceRole } : {}),
 		...(base.disabled !== undefined ? { disabled: base.disabled } : {}),
 		systemPrompt: base.systemPrompt,
@@ -387,7 +385,6 @@ export function preservedAgentFrontmatterFields(agent: AgentConfig, cfg: Record<
 		changed("inheritSkills");
 		fields.add("inheritSkills");
 	}
-	if (hasKey(cfg, "defaultContext")) changed("defaultContext");
 	if (hasKey(cfg, "async")) changed("async");
 	if (hasKey(cfg, "timeoutMs")) changed("timeoutMs");
 	if (hasKey(cfg, "acceptance")) changed("acceptance");
@@ -562,11 +559,6 @@ function applyAgentConfig(target: AgentConfig, cfg: Record<string, unknown>): st
 		if (typeof cfg.inheritSkills !== "boolean") return "config.inheritSkills must be a boolean when provided.";
 		target.inheritSkills = cfg.inheritSkills;
 	}
-	if (hasKey(cfg, "defaultContext")) {
-		if (cfg.defaultContext === false || cfg.defaultContext === "") delete target.defaultContext;
-		else if (cfg.defaultContext === "fresh" || cfg.defaultContext === "fork") target.defaultContext = cfg.defaultContext;
-		else return "config.defaultContext must be 'fresh', 'fork', or false when provided.";
-	}
 	if (hasKey(cfg, "async")) {
 		if (cfg.async === "") delete target.defaultAsync;
 		else if (typeof cfg.async === "boolean") target.defaultAsync = cfg.async;
@@ -733,7 +725,6 @@ function agentListMetadata(agent: AgentConfig, providerNames: Set<string> | unde
 	return [
 		source,
 		runnerListBadge(agent, providerNames, externalCliAvailability),
-		agent.defaultContext ? `context: ${agent.defaultContext}` : undefined,
 		agent.aliases?.length ? `aliases: ${agent.aliases.join(", ")}` : undefined,
 	].filter((part): part is string => Boolean(part)).join(", ");
 }
@@ -956,7 +947,6 @@ function formatAgentDetail(agent: AgentConfig): string {
 	lines.push(`Inherit project context: ${agent.inheritProjectContext ? "true" : "false"}`);
 	lines.push(`Inherit global context: ${agent.inheritGlobalContext ? "true" : "false"}`);
 	lines.push(`Inherit skills: ${agent.inheritSkills ? "true" : "false"}`);
-	if (agent.defaultContext) lines.push(`Default context: ${agent.defaultContext}`);
 	if (agent.defaultAsync !== undefined) lines.push(`Async: ${agent.defaultAsync ? "true" : "false"}`);
 	if (agent.defaultTimeoutMs !== undefined) lines.push(`Timeout: ${agent.defaultTimeoutMs}ms`);
 	if (agent.defaultAcceptance !== undefined) lines.push(`Acceptance: ${typeof agent.defaultAcceptance === "object" ? JSON.stringify(agent.defaultAcceptance) : String(agent.defaultAcceptance)}`);
