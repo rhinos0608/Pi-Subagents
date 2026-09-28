@@ -772,7 +772,6 @@ describe("builtin agent overrides", () => {
 						systemPromptMode: "append",
 						inheritProjectContext: true,
 						inheritSkills: true,
-						defaultContext: "fork",
 						acceptanceRole: "writer",
 						tools: ["bash", "mcp:xcodebuild_list_sims"],
 						skills: ["tdd"],
@@ -794,7 +793,6 @@ describe("builtin agent overrides", () => {
 		assert.equal(implementer.systemPromptMode, "append");
 		assert.equal(implementer.inheritProjectContext, true);
 		assert.equal(implementer.inheritSkills, true);
-		assert.equal(implementer.defaultContext, "fork");
 		assert.equal(implementer.acceptanceRole, "writer");
 		assert.deepEqual(implementer.tools, ["bash"]);
 		assert.deepEqual(implementer.mcpDirectTools, ["xcodebuild_list_sims"]);
@@ -860,14 +858,13 @@ describe("builtin agent overrides", () => {
 						tools: ["bash"],
 						skills: ["override-skill"],
 						inheritProjectContext: true,
-						defaultContext: "fork",
 						acceptanceRole: "writer",
 						systemPrompt: "Override prompt",
 					},
 				},
 			},
 		});
-		writeProjectAgent(tempProject, "implementer", `---\nname: implementer\ndescription: TDD implementer\noutput: artifacts/explicit.md\noutputMode: inline\ndefaultReads: explicit.md\nmodel: google/gemini-3-pro\nfast: false\nthinking: medium\ntools: read, mcp:local_tool\nskills: agent-skill\ninheritProjectContext: false\ndefaultContext: fresh\nacceptanceRole: read-only\n---\n\nDrive the failing test first.\n`);
+		writeProjectAgent(tempProject, "implementer", `---\nname: implementer\ndescription: TDD implementer\noutput: artifacts/explicit.md\noutputMode: inline\ndefaultReads: explicit.md\nmodel: google/gemini-3-pro\nfast: false\nthinking: medium\ntools: read, mcp:local_tool\nskills: agent-skill\ninheritProjectContext: false\nacceptanceRole: read-only\n---\n\nDrive the failing test first.\n`);
 
 		const implementer = discoverAgents(tempProject, "both").agents.find((agent) => agent.name === "implementer");
 		assert.ok(implementer);
@@ -879,7 +876,6 @@ describe("builtin agent overrides", () => {
 		assert.equal(implementer.mcpDirectTools, undefined);
 		assert.deepEqual(implementer.skills, ["override-skill"]);
 		assert.equal(implementer.inheritProjectContext, true);
-		assert.equal(implementer.defaultContext, "fork");
 		assert.equal(implementer.acceptanceRole, "writer");
 		assert.equal(implementer.systemPrompt, "Override prompt");
 		assert.equal(implementer.override?.scope, "project");
@@ -1095,7 +1091,6 @@ describe("builtin agent overrides", () => {
 				inheritProjectContext: true,
 				inheritGlobalContext: true,
 				inheritSkills: false,
-				defaultContext: "fork",
 				acceptanceRole: "read-only",
 				systemPrompt: "Base prompt",
 				skills: ["safe-bash"],
@@ -1113,7 +1108,6 @@ describe("builtin agent overrides", () => {
 				inheritProjectContext: false,
 				inheritGlobalContext: false,
 				inheritSkills: false,
-				defaultContext: undefined,
 				acceptanceRole: undefined,
 				systemPrompt: "Base prompt",
 				skills: undefined,
@@ -1132,7 +1126,6 @@ describe("builtin agent overrides", () => {
 			systemPromptMode: "replace",
 			inheritProjectContext: false,
 			inheritGlobalContext: false,
-			defaultContext: false,
 			acceptanceRole: false,
 			skills: false,
 			tools: false,
