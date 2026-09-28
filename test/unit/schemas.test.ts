@@ -177,7 +177,7 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 		assert.ok(CompileSchema);
 		const validator = CompileSchema!(SubagentParams);
 		const base = { agent: "worker", task: "work" };
-		// Phase 6a: outputSchema is not part of the 7-field public vocabulary.
+		// 8-field public vocabulary (topic added for action:"guide").
 		assert.equal(validator.Check(base), true);
 		assert.equal(validator.Check({ ...base, outputSchema: { type: "object" } }), false);
 		assert.equal(validator.Check({ ...base, outputSchema: false }), false);
@@ -196,8 +196,8 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 		assert.equal(contextSchema, undefined, "context should not be public");
 	});
 
-	it("exposes the 7-field single-schema vocabulary and omits removed workflow/resource modes", () => {
-		assert.deepEqual(Object.keys(SubagentParams?.properties ?? {}), ["agent", "task", "action", "id", "message", "workflowScript", "cwd"]);
+	it("exposes the 8-field single-schema vocabulary and omits removed workflow/resource modes", () => {
+		assert.deepEqual(Object.keys(SubagentParams?.properties ?? {}), ["agent", "task", "action", "id", "message", "topic", "workflowScript", "cwd"]);
 		const properties = SubagentParams?.properties as Record<string, unknown> | undefined;
 		for (const name of ["workflow", "args", "workflowScriptPath", "globalConcurrencyLimit", "maxSubagentSpawnsPerRun", "preflight", "chatProgress", "worktree", "isolation", "gate", "acceptance", "mission", "config", "thinking", "model", "fast", "skill", "toolBudget", "toolTimeoutMs", "capabilities", "control", "agentContract", "outputSchema"]) {
 			assert.equal(properties?.[name], undefined, `${name} should not be public`);
@@ -228,7 +228,7 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 		assert.equal(actionSchema.enum, undefined);
 		const description = String(actionSchema.description ?? "");
 		assert.match(description, /Management\/control only; omit for execution/);
-		assert.match(description, /Only steer, resume, and interrupt are exposed to the model/);
+		assert.match(description, /Only steer, resume, interrupt, status, guide, and validate are exposed to the model/);
 	});
 
 	it("capabilities field is deleted: discovery goes through the list action", () => {
@@ -440,7 +440,7 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 		assert.deepEqual(acceptanceLevelBranch?.enum, ["auto", "attested", "checked"], "verified requires object form with runtime commands");
 	});
 
-	it("validates the 7-field vocabulary with TypeBox compiler", { skip: !CompileSchema ? "typebox compiler not available" : undefined }, () => {
+	it("validates the 8-field vocabulary with TypeBox compiler", { skip: !CompileSchema ? "typebox compiler not available" : undefined }, () => {
 		assert.ok(SubagentParams, "SubagentParams schema should exist");
 		assert.ok(CompileSchema, "TypeBox compiler should exist");
 		const validator = CompileSchema(SubagentParams);
@@ -451,6 +451,7 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 			{ cwd: "/tmp/work" },
 			{ action: "list" },
 			{ action: "steer", id: "run-1", message: "focus on tests" },
+			{ action: "guide", topic: "agents" },
 			{ action: "not-a-real-action" },
 		];
 		const invalidValues = [
@@ -493,7 +494,7 @@ describe("single public schema (Phase 6a: full/compact dual-mode removed)", { sk
 		assert.ok(SubagentParams, "SubagentParams schema should exist");
 		const serialized = JSON.stringify(SubagentParams);
 		assert.ok(serialized.length <= 8_600, `expected single schema at or under 8600 chars, got ${serialized.length}`);
-		assert.deepEqual(Object.keys((SubagentParams as unknown as JsonSchemaNode).properties as Record<string, unknown>), ["agent", "task", "action", "id", "message", "workflowScript", "cwd"]);
+		assert.deepEqual(Object.keys((SubagentParams as unknown as JsonSchemaNode).properties as Record<string, unknown>), ["agent", "task", "action", "id", "message", "topic", "workflowScript", "cwd"]);
 	});
 
 	it("keeps load-bearing top-level annotations on the single schema", () => {

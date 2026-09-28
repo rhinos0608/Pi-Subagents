@@ -22,7 +22,7 @@ pi
 ```
 
 ```js
-subagent({ workflowScriptPath: "workflow.js", agentScope: "both" })
+subagent({ workflowScript: `return runs.run("main", { agent: "reviewer", task: "Review the current diff." })` })
 ```
 
 The gate command (`./classify --report ...`) is a shell command run in the child's cwd, so it can stay relative.

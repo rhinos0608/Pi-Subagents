@@ -1437,7 +1437,9 @@ describe("subagent async widget rendering", () => {
 
 		assert.match(text, /parallel \[mixed\]/);
 		assert.match(text, /scout \[fresh\] · running/);
-		assert.match(text, /worker \[fork\] · running/);
+		// Always fresh: the stale fork step renders no badge.
+		assert.doesNotMatch(text, /\[fork\]/);
+		assert.match(text, /worker · running/);
 	});
 
 	it("shows model and thinking for active async widget rows", () => {

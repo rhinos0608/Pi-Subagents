@@ -1,14 +1,17 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
-	decodeSubagentCapabilityCeiling,
-	encodeSubagentCapabilityCeiling,
 	intersectSubagentCapabilityCeilings,
 	resolveCurrentSubagentCapabilityCeiling,
 	parseSubagentCapabilityCeiling,
 	registerSubagentCapabilityCeiling,
 	resolveSubagentCapabilityCeiling,
 } from "../../src/api/capability-ceiling.ts";
+import {
+	intersectOperatorAllowedTools,
+	normalizeOperatorAllowedTools,
+} from "../../src/runs/shared/capability-ceiling.ts";
+import { resolveOperatorCeiling } from "../../src/runs/shared/child-tool-plan.ts";
 
 describe("subagent capability ceiling", () => {
 	it("intersects active registrations for an exact session", () => {
@@ -39,24 +42,33 @@ describe("subagent capability ceiling", () => {
 		assert.throws(() => handle.update({ allowedTools: ["read"] }), /disposed/);
 	});
 
-	it("round-trips inherited policy and rejects malformed payloads", () => {
-		const input = { version: 1 as const, allowedTools: ["read"], denyExtensions: true, sources: ["plan"] };
-		assert.deepEqual(decodeSubagentCapabilityCeiling(encodeSubagentCapabilityCeiling(input)), input);
-		assert.throws(() => decodeSubagentCapabilityCeiling("not-base64-json"), /Invalid inherited capability ceiling/);
-		assert.throws(() => parseSubagentCapabilityCeiling({ version: 1, allowedTools: ["read"], denyExtensions: true }), /sources/);
-		assert.throws(() => parseSubagentCapabilityCeiling({ version: 2, allowedTools: ["read"], denyExtensions: true, sources: ["plan"] }), /version/);
+	it("normalizes the operator allowlist with dumb validation only", () => {
+		assert.deepEqual(normalizeOperatorAllowedTools(undefined), undefined);
+		assert.deepEqual(normalizeOperatorAllowedTools([]), undefined);
+		assert.deepEqual(normalizeOperatorAllowedTools(["read", "read", "Grep"]), ["read", "Grep"]);
+		assert.throws(() => normalizeOperatorAllowedTools("read"), /expected an array/);
+		assert.throws(() => normalizeOperatorAllowedTools(["read", " "]), /non-empty strings/);
 	});
 
-	it("combines the inherited child runtime ceiling with exact-session registrations", () => {
+	it("intersects operator allowlist with agent grants as dumb arithmetic", () => {
+		assert.deepEqual(intersectOperatorAllowedTools(["read", "bash"], undefined), { effective: ["read", "bash"], removed: [] });
+		assert.deepEqual(intersectOperatorAllowedTools(["Read", "bash", "write"], ["read", "bash"]), {
+			effective: ["Read", "bash"],
+			removed: ["write"],
+		});
+	});
+
+	it("does not inherit parent ceilings; settings apply uniformly per launch", () => {
+		// Authority simplification: nested/async parent→child restriction
+		// inheritance is deleted. The settings list resolves fresh per launch.
 		const sessionId = `current-${Date.now()}-${Math.random()}`;
 		const handle = registerSubagentCapabilityCeiling({ sessionId, source: "local", ceiling: { allowedTools: ["grep", "read"] } });
 		try {
-			const inherited = decodeSubagentCapabilityCeiling(encodeSubagentCapabilityCeiling({ version: 1, allowedTools: ["read", "write"], denyExtensions: true, sources: ["ancestor"] }));
-			assert.deepEqual(resolveSubagentCapabilityCeiling(sessionId, inherited), {
+			assert.deepEqual(resolveSubagentCapabilityCeiling(sessionId), {
 				version: 1,
-				allowedTools: ["read"],
-				denyExtensions: true,
-				sources: ["ancestor", "local"],
+				allowedTools: ["grep", "read"],
+				denyExtensions: false,
+				sources: ["local"],
 			});
 			assert.deepEqual(resolveCurrentSubagentCapabilityCeiling(sessionId), {
 				version: 1,
@@ -64,8 +76,20 @@ describe("subagent capability ceiling", () => {
 				denyExtensions: false,
 				sources: ["local"],
 			});
+			assert.deepEqual(resolveOperatorCeiling(["read"], undefined), {
+				version: 1,
+				allowedTools: ["read"],
+				denyExtensions: false,
+				sources: ["settings:subagents.allowedTools"],
+			});
+			assert.equal(resolveOperatorCeiling(undefined, undefined), undefined);
 		} finally {
 			handle.dispose();
 		}
+	});
+
+	it("still rejects malformed persisted ceilings", () => {
+		assert.throws(() => parseSubagentCapabilityCeiling({ version: 1, allowedTools: ["read"], denyExtensions: true }), /sources/);
+		assert.throws(() => parseSubagentCapabilityCeiling({ version: 2, allowedTools: ["read"], denyExtensions: true, sources: ["plan"] }), /version/);
 	});
 });

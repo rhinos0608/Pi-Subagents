@@ -11,15 +11,23 @@ describe("writer budget guidance", () => {
 		const skill = readProjectFile("skills/pi-subagents/SKILL.md");
 		const reviewLoop = readProjectFile("prompts/review-loop.md");
 
-		for (const text of [toolReference, skill, reviewLoop]) {
-			assert.match(text, /As a conservative orchestration policy, do not (?:pass|set) a hard `toolBudget`/);
-			assert.match(text, /default tool budget blocks read\/search tools rather than mutation tools/i);
-			assert.match(text, /checkpoint after the current tool returns/);
-			assert.match(text, /changed files/);
-			assert.match(text, /build\/test state/);
-			assert.match(text, /commit or PR state/);
+		// Per-run/per-call toolBudget left the model surface, so no shipped
+		// reference may tell writers to pass or set a hard toolBudget cap.
+		for (const text of [toolReference, skill]) {
+			assert.doesNotMatch(text, /do not (?:pass|set) a hard `toolBudget`/);
 		}
-		assert.match(toolReference, /elapsed timeout is not a mutation-safe boundary/i);
-	});
+		// The consolidated guidance lives in the skill: no tight budgets on
+		// mutation-capable workers, checkpoint after the current tool returns.
+		assert.match(skill, /do not set tight tool budgets on mutation-capable workers/i);
+		assert.match(skill, /checkpoint after the current tool returns/);
+		assert.match(skill, /changed files/);
+		assert.match(skill, /build\/test state/);
+		assert.match(skill, /commit or PR state/);
 
+		// The review-loop prompt keeps the same durable checkpoint contract.
+		assert.match(reviewLoop, /checkpoint after the current tool returns/);
+		assert.match(reviewLoop, /changed files/);
+		assert.match(reviewLoop, /build\/test state/);
+		assert.match(reviewLoop, /commit or PR state/);
+	});
 });

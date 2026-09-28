@@ -16,6 +16,7 @@ import {
 	refreshProviderModelCatalog,
 } from "../profiles/profiles.ts";
 import type { SubagentParamsLike } from "../runs/foreground/subagent-executor.ts";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { findModelInfo, toModelInfo } from "../shared/model-info.ts";
 import { shortenPath } from "../shared/formatters.ts";
 import { listAsyncRuns, formatAsyncRunProgressLabel, type AsyncRunSummary } from "../runs/background/async-status.ts";
@@ -29,6 +30,7 @@ import { collectSubagentCost, formatSubagentCostReport } from "./subagent-cost.t
 import { openSubagentsAdmin } from "./subagents-admin.ts";
 import { SUBAGENT_GUIDE_TOPICS } from "../extension/subagent-guide.ts";
 import { openSubagentFleet } from "../tui/fleet.ts";
+import { openSubagentAgents } from "../tui/fleet-agents.ts";
 import { createBuiltinInspectorPlugins } from "../inspectors/plugins.ts";
 import {
 	applySlashUpdate,
@@ -586,7 +588,7 @@ function slashRunWorkflowScript(key: string, child: Record<string, unknown>): st
 export function registerSlashCommands(
 	pi: ExtensionAPI,
 	state: SubagentState,
-	options: { fleetKeybindings?: FleetKeybindingsConfig; foregroundDetachShortcut?: string } = {},
+	options: { fleetKeybindings?: FleetKeybindingsConfig; foregroundDetachShortcut?: string; fleetResume?: (input: { runId: string; asyncDir: string; index?: number; message: string }) => Promise<AgentToolResult<Details>> | AgentToolResult<Details> } = {},
 ): { dispose: () => void } {
 	let fleetOpen = false;
 	let disposed = false;
@@ -612,7 +614,7 @@ export function registerSlashCommands(
 		}
 		fleetOpen = true;
 		try {
-			await openSubagentFleet(ctx, state, { asyncDirRoot: DIRS.async, inspectorPlugins: createBuiltinInspectorPlugins(), resultsDir: DIRS.results, fleetKeybindings: options.fleetKeybindings });
+			await openSubagentFleet(ctx, state, { asyncDirRoot: DIRS.async, inspectorPlugins: createBuiltinInspectorPlugins(), resultsDir: DIRS.results, fleetKeybindings: options.fleetKeybindings, ...(options.fleetResume ? { resumeRun: options.fleetResume } : {}) });
 		} finally {
 			fleetOpen = false;
 		}
@@ -626,7 +628,7 @@ export function registerSlashCommands(
 	});
 
 	pi.registerCommand("run", {
-		description: "Run one subagent through workflowScript: /run agent[output=file] [task] [--bg]",
+		description: "Run one subagent through workflowScript: /run agent[reads=...] [task] [--bg]",
 		getArgumentCompletions: makeAgentCompletions(pi, state),
 		handler: async (args, ctx) => {
 			const { args: cleanedArgs, bg } = extractExecutionFlags(args);
@@ -649,12 +651,12 @@ export function registerSlashCommands(
 			}
 
 			let finalTask = task;
+			if (inline.model) { ctx.ui.notify("Per-call model= is not supported on /run; pin the role via agent frontmatter or agentOverrides (see models.md).", "error"); return; }
 			if (inline.reads && Array.isArray(inline.reads) && inline.reads.length > 0) {
 				const existingReads = inline.reads.filter((read) => resolveExistingReadPaths([read], state.baseCwd).length > 0);
 				if (existingReads.length > 0) finalTask = `[Read from: ${existingReads.join(", ")}]\n\n${finalTask}`;
 			}
-			const child: Record<string, unknown> = { agent: agentName, task: finalTask, agentScope: "both" };
-			if (inline.model) child.model = inline.model;
+			const child: Record<string, unknown> = { agent: agentName, task: finalTask };
 			launchCommand(ctx, { workflowScript: slashRunWorkflowScript("run", child), async: bg ? true : false });
 		},
 	});
@@ -721,6 +723,14 @@ export function registerSlashCommands(
 	pi.registerCommand("subagents-fleet", {
 		description: "Open the live subagent fleet inspector",
 		handler: async (_args, ctx) => showFleet(ctx),
+	});
+
+	pi.registerCommand("subagents-agents", {
+		description: "Open the subagent Agents view: list, create, edit, or delete agents",
+		handler: async (_args, ctx) => {
+			state.lastUiContext = ctx;
+			await openSubagentAgents(ctx, { cwd: state.baseCwd || ctx.cwd, modelRegistry: ctx.modelRegistry });
+		},
 	});
 
 	const detachForegroundRun = (args: string, ctx: ExtensionContext): void => {

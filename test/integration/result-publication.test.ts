@@ -85,14 +85,14 @@ describe("native runner result publication", { skip: !available ? "pi packages u
 			mockPi.onCall({ output: "targets", structuredOutput: { items: [{ path: "a.ts" }, { path: "b.ts" }] } });
 			const receipt = executeAsyncChain(id, {
 				chain: [
-					{ agent: "producer", task: "Produce targets", as: "targets" },
+				{ agent: "producer", task: "Produce targets", as: "targets" },
 					{
 						expand: { from: { output: "targets", path: "/items" }, item: "target", maxItems: 2 },
 						parallel: { agent: "reviewer", task: "Review {target.path}", output: "shared.md" },
 						collect: { as: "reviews" }, concurrency: 2,
 					},
 				],
-				agents: [makeAgent("producer", { outputSchema: { type: "object" } }), makeAgent("reviewer")],
+				agents: [makeAgent("producer", { outputSchema: { type: "object" } } as Record<string, unknown>), makeAgent("reviewer")],
 				ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: sessionId, completionOwnerId: owner },
 				artifactConfig: { enabled: false, includeInput: false, includeOutput: false, includeJsonl: false, includeMetadata: false, cleanupDays: 7 },
 				shareEnabled: false, maxSubagentDepth: 2, acceptance: false,

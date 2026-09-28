@@ -113,7 +113,7 @@ const WorkflowPreflightOverride = Type.Object({
 	version: Type.Integer({ minimum: 1, maximum: 1 }),
 	coverage: Type.Optional(Type.String({ enum: ["complete", "partial"] })),
 	lanes: Type.Array(WorkflowPreflightLane, { maxItems: 64 }),
-}, { additionalProperties: false, description: "workflowScript/workflowScriptPath only; display-only hints; coverage warns." });
+}, { additionalProperties: false, description: "workflowScript only; display-only hints; coverage warns." });
 
 // Parallel task item (within a parallel step)
 export const ParallelTaskSchema = Type.Object({
@@ -239,12 +239,13 @@ const SubagentParamProperties = {
 	agent: Type.Optional(Type.String({ description: "One-child agent or management target." })),
 	task: Type.Optional(Type.String({ description: "One-child task; requires agent." })),
 	action: Type.Optional(Type.String({ minLength: 1,
-		description: "Management/control only; omit for execution. Only steer, resume, and interrupt are exposed to the model."
+		description: "Management/control only; omit for execution. Only steer, resume, interrupt, status, guide, and validate are exposed to the model."
 	})),
 	id: Type.Optional(Type.String({
 		description: "Run id/prefix for status/control."
 	})),
 	message: Type.Optional(Type.String({ description: "resume/steer guidance or project.open prompt." })),
+	topic: Type.Optional(Type.String({ description: "Guide topic for action:'guide' only; ignored on other actions." })),
 	workflowScript: Type.Optional(Type.String({ minLength: 1, description: "Inline JavaScript statement body; raw/unknown provenance, no runs.host. Use explicit return and top-level await; see tool guidance/guide workflows." })),
 	cwd: Type.Optional(Type.String({ description: "Execution/project-pane directory." })),
 };

@@ -21,12 +21,12 @@ import { ACTIVE_ASYNC_CAPACITY_DIR, acquireActiveAsyncCapacity, activeAsyncCapac
 import { readPendingChainAppendRequests } from "../../src/runs/background/chain-append.ts";
 import { readActiveRunIndex } from "../../src/runs/background/active-run-index.ts";
 import { createRunFanoutBudget, getRunFanoutBudgetSnapshot, writeRunFanoutBudgetDescriptor } from "../../src/runs/shared/run-fanout-budget.ts";
-import { deriveForkPromptCacheKey } from "../../src/runs/shared/child-tool-plan.ts";
 import { INVALID_STRUCTURED_OUTPUT_SCHEMA_ERROR, validateStructuredOutputValue } from "../../src/runs/shared/structured-output.ts";
 import type { ChildRuntimeConfig } from "../../src/runs/shared/child-runtime-config.ts";
+import { registerSubagentCapabilityCeiling } from "../../src/api/capability-ceiling.ts";
 import type { AsyncExecutionResult, AsyncResultPayload, AsyncStatusPayload } from "../support/async-execution-fixture.ts";
 import {
-	installAsyncExecutionHooks, waitForMockPiRuntime, available, isAsyncAvailable,
+	installAsyncExecutionHooks, available, isAsyncAvailable,
 	executeAsyncSingle, executeAsyncChain, ASYNC_DIR, RESULTS_DIR, TEMP_ROOT_DIR,
 	createSubagentExecutor, escapeRegExp, createRepo, writePackageSkill,
 	waitForAsyncResultFile, waitForAsyncEvent, waitForAsyncState, waitForMockPiCall,
@@ -204,9 +204,11 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 	});
 
 	for (const terminal of [
-		{ name: "empty text stop", content: [{ type: "text", text: "" }], stopReason: "stop", error: /no output.*empty response/i },
-		{ name: "tool-call-only stop", content: [{ type: "toolCall", id: "read-1", name: "read", arguments: { path: "README.md" } }], stopReason: "toolUse", error: /grep failed.*Path not found/i },
-		{ name: "empty text length limit", content: [{ type: "text", text: "" }], stopReason: "length", error: /grep failed.*Path not found/i },
+		// Exploratory tool-result evidence means task execution already started,
+		// so an empty stop is terminal and must not be replayed as a cold start.
+		{ name: "empty text stop", content: [{ type: "text", text: "" }], stopReason: "stop", error: /Subagent produced no output.*empty response/, output: "" },
+		{ name: "tool-call-only stop", content: [{ type: "toolCall", id: "read-1", name: "read", arguments: { path: "README.md" } }], stopReason: "toolUse", error: /grep failed.*Path not found/i, output: "" },
+		{ name: "empty text length limit", content: [{ type: "text", text: "" }], stopReason: "length", error: /grep failed.*Path not found/i, output: "" },
 	]) {
 		it(`background diagnoses ${terminal.name} after an exploratory tool error`, { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
 			mockPi.onCall({
@@ -242,7 +244,8 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 			assert.equal(payload.success, false);
 			assert.equal(payload.exitCode, 1);
 			assert.match(payload.results[0]?.error ?? "", terminal.error);
-			assert.equal(payload.results[0]?.output, "");
+			if (typeof terminal.output === "string") assert.equal(payload.results[0]?.output, terminal.output);
+			else assert.match(payload.results[0]?.output ?? "", terminal.output);
 			const status = await waitForAsyncState(id, (candidate) => candidate.state === "failed");
 			assert.match(status.steps?.[0]?.error ?? "", terminal.error);
 		});
@@ -881,18 +884,47 @@ export default function() {
 		assert.match(payload.results[0]?.error ?? "", /Missing structured_output call/);
 	});
 
-	it("workflow children inherit agent-owned output schemas", { skip: !isAsyncAvailable() || !createSubagentExecutor ? "jiti or executor not available" : undefined }, async () => {
+	it("workflow acceptance uses inherited schemas and rejects a false opt-out", { skip: !isAsyncAvailable() || !createSubagentExecutor ? "jiti or executor not available" : undefined }, async () => {
 		const agentDir = path.join(tempDir, ".pi", "agents");
 		fs.mkdirSync(agentDir, { recursive: true });
 		fs.writeFileSync(path.join(agentDir, "typed.md"), `---\nname: typed\ndescription: Typed output\noutputSchema: {"type":"object","required":["ok"]}\n---\nReturn data.\n`);
+		fs.writeFileSync(path.join(agentDir, "prose.md"), `---\nname: prose\ndescription: Prose output\n---\nReturn prose.\n`);
 		const executor = makeAsyncExecutor(discoverAgents(tempDir, "project").agents);
 		mockPi.onCall({ output: "ordinary prose" });
-		const result = await executor.execute("workflow-schema-default", {
+		// Agent-definition schemas apply to workflow children; per-child
+		// outputSchema/acceptance overrides were removed (the runs.run
+		// allowlist is agent, task, cwd, resume, as, phase, label, lane,
+		// index), so the opt-out uses a schema-less agent definition.
+		const inherited = await executor.execute("workflow-schema-default", {
 			async: false,
 			workflowScript: `return runs.run("typed", { agent: "typed", task: "Return data" });`,
 		}, new AbortController().signal, undefined, makeMinimalCtx(tempDir));
-		assert.equal(result.isError, true);
-		assert.match(result.content[0]?.type === "text" ? result.content[0].text : "", /Missing structured_output call/);
+		assert.equal(inherited.isError, true);
+		assert.match(inherited.content[0]?.type === "text" ? inherited.content[0].text : "", /Missing structured_output call/);
+
+		mockPi.onCall({ output: "plain prose ok" });
+		const disabled = await executor.execute("workflow-schema-disabled", {
+			async: false,
+			workflowScript: `return runs.run("prose", { agent: "prose", task: "Return prose" });`,
+		}, new AbortController().signal, undefined, makeMinimalCtx(tempDir));
+		assert.equal(disabled.isError, undefined, disabled.content[0]?.type === "text" ? disabled.content[0].text : undefined);
+		assert.match(disabled.content[0]?.type === "text" ? disabled.content[0].text : "", /plain prose ok/);
+
+		mockPi.onCall({ output: "missing structured call" });
+		mockPi.onCall({ output: "false opted out" });
+		const parallel = await executor.execute("workflow-schema-parallel", {
+			async: false,
+			workflowScript: `const children = await runs.all([
+				{ key: "inherited", agent: "typed", task: "Return data" },
+				{ key: "disabled", agent: "prose", task: "Return prose" }
+			]); return children.map(({ key, ok, error, output }) => ({ key, ok, error, output }));`,
+		}, new AbortController().signal, undefined, makeMinimalCtx(tempDir));
+		assert.equal(parallel.isError, undefined, parallel.content[0]?.type === "text" ? parallel.content[0].text : undefined);
+		const children = parallel.details.workflow?.value as Array<{ key: string; ok: boolean; error?: string; output: string }>;
+		assert.equal(children.find(({ key }) => key === "inherited")?.ok, false);
+		assert.match(children.find(({ key }) => key === "inherited")?.error ?? "", /Missing structured_output call/);
+		assert.deepEqual(children.find(({ key }) => key === "disabled"), { key: "disabled", ok: true, output: "false opted out" });
+		assert.equal(mockPi.callCount(), 4);
 	});
 
 	it("background outputSchema runs fail closed when required acceptanceReport is missing", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
@@ -1259,6 +1291,9 @@ export default function() {
 
 		const launch = await executor.execute(
 			"workflow-parent-model",
+			// Per-child model overrides were removed (runs.run allowlist), so the
+			// explicit model resolves from the agent definition while the worker
+			// child still inherits the snapshotted parent model.
 			{ workflowScript: `await runs.run("inherited", { agent: "worker", task: "Do inherited work" }); return runs.run("explicit", { agent: "explicit", task: "Do explicit work" });`, async: true },
 			new AbortController().signal,
 			undefined,
@@ -1321,10 +1356,10 @@ export default function() {
 		];
 		for (const [index, scenario] of cases.entries()) {
 			const parentSessionFile = path.join(tempDir, `alias-parent-${index}.jsonl`);
-			const obsoleteForkSessionFile = path.join(tempDir, `alias-child-${index}.jsonl`);
+			const sessionFile = path.join(tempDir, `alias-child-${index}.jsonl`);
 			const header = JSON.stringify({ type: "session", version: 1, id: `alias-${index}`, cwd: fs.realpathSync(tempDir) });
 			fs.writeFileSync(parentSessionFile, `${header}\n`);
-			fs.writeFileSync(obsoleteForkSessionFile, `${header}\n`);
+			fs.writeFileSync(sessionFile, `${header}\n`);
 			const ctx = {
 				...makeMinimalCtx(tempDir),
 				modelRegistry: { getAvailable: () => [{ provider: "databricks-bedrock", id: "ias-claude-opus-5" }] },
@@ -1332,7 +1367,7 @@ export default function() {
 					getSessionId: () => `alias-session-${index}`,
 					getSessionFile: () => parentSessionFile,
 					getLeafId: () => "leaf",
-					openSession: () => ({ createBranchedSession: () => obsoleteForkSessionFile }),
+					openSession: () => ({ createBranchedSession: () => sessionFile }),
 				},
 			};
 			mockPi.onCall({ jsonl: [events.assistantMessage("Initial work", route)] });
@@ -1342,10 +1377,7 @@ export default function() {
 			) as AsyncExecutionResult;
 			assert.ok(!launch.isError, launch.content[0]?.text);
 			assert.ok(launch.details.asyncId);
-			const initialPayload = await readAsyncPayload(launch.details.asyncId);
-			assert.equal(initialPayload.success, true);
-			const retainedSessionFile = initialPayload.results[0]?.sessionFile;
-			assert.ok(retainedSessionFile);
+			assert.equal((await readAsyncPayload(launch.details.asyncId)).success, true);
 
 			// A new executor must recover the durable launch declaration, not its current settings.
 			mockPi.onCall({ jsonl: [events.assistantMessage("Continued work", scenario.echo)] });
@@ -1358,9 +1390,17 @@ export default function() {
 			const payload = await readAsyncPayload(resumed.details.asyncId);
 			assert.equal(payload.success, scenario.success, `case ${index}: ${payload.results[0]?.error}`);
 			if (!scenario.success) assert.match(payload.results[0]?.error ?? "", /model_verification_failed/);
-			const args = readMockPiArgs(mockPi, index * 2 + 1);
-			assert.equal(args[args.indexOf("--model") + 1], route);
-			assert.equal(args[args.indexOf("--session") + 1], retainedSessionFile);
+			const launchArgs = readMockPiArgs(mockPi, index * 2);
+			const reviveArgs = readMockPiArgs(mockPi, index * 2 + 1);
+			assert.equal(launchArgs[launchArgs.indexOf("--model") + 1], route);
+			assert.equal(reviveArgs[reviveArgs.indexOf("--model") + 1], route);
+			// Per-call context left the model contract, so launches persist under
+			// the run session root; resume must still target that retained child
+			// identity instead of branching a new session.
+			const launchSession = launchArgs[launchArgs.indexOf("--session") + 1];
+			const reviveSession = reviveArgs[reviveArgs.indexOf("--session") + 1];
+			assert.equal(reviveSession, launchSession);
+			assert.ok(fs.existsSync(reviveSession));
 		}
 	});
 
@@ -1382,9 +1422,10 @@ export default function() {
 				openSession: () => ({ createBranchedSession: () => plannerSessionFile }),
 			},
 		};
-		const callerRuntime: ChildRuntimeConfig = {
-			capabilityCeiling: { version: 1, allowedTools: ["grep", "read"], allowedAgents: ["planner", "researcher"], denyExtensions: false, sources: ["original-parent"] },
-		};
+		// Authority simplification: parent session ceilings no longer inherit
+		// parent→child. The caller runtime carries no ceiling; only the
+		// agent's own descendant allowlist restricts the resumed child.
+		const callerRuntime: ChildRuntimeConfig = {};
 		const makeExecutor = () => createSubagentExecutor!({
 			pi: { events: createEventBus(), getSessionName: () => undefined },
 			state: { baseCwd: tempDir, currentSessionId: sessionId, asyncJobs: new Map(), foregroundControls: new Map(), lastForegroundControlId: null },
@@ -1405,7 +1446,6 @@ export default function() {
 		assert.ok(!launch.isError, launch.content[0]?.text);
 		assert.ok(launch.details.asyncId);
 		assert.equal((await readAsyncPayload(launch.details.asyncId)).success, true);
-		callerRuntime.capabilityCeiling = { version: 1, allowedTools: ["read"], allowedAgents: ["planner", "researcher"], denyExtensions: false, sources: ["current-caller"] };
 
 		let retainedId = launch.details.asyncId;
 		for (const [index, output] of ["First continuation complete", "Second continuation complete"].entries()) {
@@ -1419,32 +1459,53 @@ export default function() {
 			retainedId = resumed.details.asyncId;
 			const payload = await readAsyncPayload(retainedId);
 			assert.equal(payload.success, true);
+			// Authority simplification: no parent tool ceiling or parent
+			// sources inherit. Only the agent-authored descendant allowlist
+			// (planner -> researcher) applies.
 			assert.deepEqual(payload.capabilityCeiling, {
 				version: 1,
-				allowedTools: ["read"],
 				allowedAgents: ["researcher"],
 				denyExtensions: false,
-				sources: ["agent:planner", "current-caller", "original-parent"],
+				sources: ["agent:planner"],
 			});
 			const descriptor = JSON.parse(fs.readFileSync(path.join(ASYNC_DIR, retainedId, "recovery-descriptor.json"), "utf-8"));
 			assert.deepEqual(descriptor.allowedAgents, ["researcher"]);
-			assert.deepEqual(descriptor.capabilityCeiling, {
-				version: 1,
-				allowedTools: ["read"],
-				allowedAgents: ["planner", "researcher"],
-				denyExtensions: false,
-				sources: ["current-caller", "original-parent"],
-			});
+			// Authority simplification: the descriptor carries no inherited
+			// parent ceiling. Restriction still restricts via the
+			// agent-authored descendant list above and the host ceiling below.
+			assert.ok(
+				descriptor.capabilityCeiling === undefined ||
+					!(descriptor.capabilityCeiling.sources ?? []).some((source: string) => source === "current-caller" || source === "original-parent"),
+				`descriptor must not carry an inherited parent ceiling: ${JSON.stringify(descriptor.capabilityCeiling)}`,
+			);
 		}
 
-		callerRuntime.capabilityCeiling = { version: 1, allowedAgents: ["researcher"], denyExtensions: false, sources: ["restricted-current-caller"] };
+		// Restriction still restricts: the external host ceiling API survives
+		// (re-homed, registered per session — never inherited), so a
+		// host-registered agent allowlist still rejects the retained planner.
+		// Resume resolves the current session via the session file first
+		// (resolveCurrentSessionId prefers getSessionFile), so register under
+		// both identities this mock manager exposes.
+		const hostRestrictions = [sessionId, parentSessionFile].map((identity) =>
+			registerSubagentCapabilityCeiling({ sessionId: identity, source: "restricted-current-caller", ceiling: { allowedAgents: ["researcher"] } }),
+		);
+		try {
 		const restrictedExecutor = makeExecutor();
 		const rejected = await restrictedExecutor.execute(
-			"allowlist-rejected", { action: "resume", id: retainedId, message: "Continue", acceptance: false },
+			"allowlist-rejected",
+			{
+				action: "resume",
+				id: retainedId,
+				message: "Continue",
+				acceptance: false,
+			},
 			new AbortController().signal, undefined, ctx,
 		) as AsyncExecutionResult;
-		assert.equal(rejected.isError, true);
+		assert.equal(rejected.isError, true, JSON.stringify(rejected).slice(0, 1000));
 		assert.match(rejected.content[0]?.text ?? "", /does not allow agent 'planner'/);
+		} finally {
+			for (const hostRestriction of hostRestrictions) hostRestriction.dispose();
+		}
 	});
 
 	it("revives a current workflow child from persisted parent admission authority", { skip: !isAsyncAvailable() || !createSubagentExecutor ? "jiti or executor not available" : undefined }, async () => {
@@ -1476,7 +1537,7 @@ export default function() {
 
 		mockPi.onCall({ output: "Workflow child resumed" });
 		const resumed = await executor.execute(
-			"workflow-parent-authority-resume", { action: "resume", id: launch.details.asyncId, message: "Continue" },
+			"workflow-parent-authority-resume", { action: "resume", id: launch.details.asyncId, message: "Continue", acceptance: false },
 			new AbortController().signal, undefined, ctx,
 		) as AsyncExecutionResult;
 		assert.ok(!resumed.isError, resumed.content[0]?.text);
@@ -1789,7 +1850,7 @@ syncBuiltinESMExports();
 		}
 	});
 
-	it("append-step admits agent-owned inherited schemas before enqueue", { skip: !createSubagentExecutor ? "executor not available" : undefined }, async () => {
+	it("append-step admits inherited schemas and rejects false report modes before enqueue", { skip: !createSubagentExecutor ? "executor not available" : undefined }, async () => {
 		const runId = `append-effective-schema-${Date.now().toString(36)}`;
 		const asyncDir = path.join(ASYNC_DIR, runId);
 		const agentDir = path.join(tempDir, ".pi", "agents");
@@ -1809,7 +1870,7 @@ syncBuiltinESMExports();
 
 			const admitted = await executor.execute(
 				"append-inherited-schema",
-				{ action: "append-step", id: runId, step: { agent: "typed", task: "Review" } },
+				{ action: "append-step", id: runId, step: { agent: "typed", task: "Review", acceptance: { level: "checked", report: "on" } } },
 				new AbortController().signal,
 				undefined,
 				ctx,
@@ -1821,6 +1882,20 @@ syncBuiltinESMExports();
 			assert.deepEqual(requests[0]?.steps[0]?.structuredOutputSchema, schema);
 			assert.deepEqual(getRunFanoutBudgetSnapshot(budget), { used: 1, limit: 8, remaining: 7 });
 
+			for (const report of ["on", "off"] as const) {
+				const rejected = await executor.execute(
+					`append-false-schema-${report}`,
+					{ action: "append-step", id: runId, step: { agent: "typed", task: "Review", outputSchema: false, acceptance: { level: "checked", report } } },
+					new AbortController().signal,
+					undefined,
+					ctx,
+				) as AsyncExecutionResult;
+				assert.equal(rejected.isError, true);
+				assert.match(rejected.content[0]?.text ?? "", /Cannot append step: chain\[0\]\.acceptance\.report requires outputSchema/);
+				assert.equal(readPendingChainAppendRequests(asyncDir).length, 1);
+				assert.deepEqual(getRunFanoutBudgetSnapshot(budget), { used: 1, limit: 8, remaining: 7 });
+				assert.equal(mockPi.callCount(), 0);
+			}
 		} finally {
 			fs.rmSync(asyncDir, { recursive: true, force: true });
 			fs.rmSync(budget.directory, { recursive: true, force: true });
@@ -1862,12 +1937,15 @@ syncBuiltinESMExports();
 		assert.equal(args[args.indexOf("--model") + 1], "deepseek/deepseek-v4-flash");
 	});
 
-	it("background chains use the agent-owned model instead of a parent override", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
+	it("background chains resolve the step model from the agent definition", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
 		mockPi.onCall({ output: "Done asynchronously" });
 
 		const id = `async-chain-empty-model-${Date.now().toString(36)}`;
 		executeAsyncChain(id, {
-			chain: [{ agent: "worker", task: "Do work" }],
+			// Per-step chain model overrides were removed: buildStepOverrides only
+			// forwards async/output/outputMode/reads/progress, so the agent
+			// definition model wins even when the step carries an empty model.
+			chain: [{ agent: "worker", task: "Do work", model: "" }],
 			agents: [makeAgent("worker", { model: "anthropic/claude-sonnet-4-5", thinking: "high" })],
 			ctx: {
 				pi: { events: { emit() {} } },
@@ -2027,6 +2105,33 @@ syncBuiltinESMExports();
 		assert.match(result.content[0]?.text ?? "", /Skills not found: pi-subagents/);
 	});
 
+	it("background chains report unavailable pi-subagents skill requests", () => {
+		const id = `async-chain-pi-subagents-skill-${Date.now().toString(36)}`;
+		const result = executeAsyncChain(id, {
+			// Per-step chain skill overrides were removed (buildStepOverrides
+			// forwards no skill field), so skills resolve from the agent
+			// definition; unavailable agent skills still fail the launch.
+			chain: [{ agent: "worker", task: "Do work" }],
+			agents: [makeAgent("worker", { skills: ["pi-subagents"] })],
+			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
+			cwd: tempDir,
+			artifactConfig: {
+				enabled: false,
+				includeInput: false,
+				includeOutput: false,
+				includeJsonl: false,
+				includeMetadata: false,
+				cleanupDays: 7,
+			},
+			shareEnabled: false,
+			sessionRoot: path.join(tempDir, "sessions"),
+			maxSubagentDepth: 2,
+		});
+
+		assert.equal(result.isError, true);
+		assert.match(result.content[0]?.text ?? "", /Skills not found: pi-subagents/);
+	});
+
 	it("background chains resolve relative step cwd values against the shared cwd", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
 		mockPi.onCall({ output: "Done asynchronously" });
 		const chainCwd = createTempDir("pi-subagent-async-chain-cwd-");
@@ -2038,6 +2143,9 @@ syncBuiltinESMExports();
 		try {
 			writePackageSkill(path.join(chainCwd, "packages", "app"), "async-chain-step-skill");
 			executeAsyncChain(id, {
+				// Per-step chain skill overrides were removed, so the skill
+				// resolves from the agent definition while the step cwd still
+				// scopes skill discovery to the shared cwd.
 				chain: [{ agent: "worker", task: "Do work", cwd: "packages/app" }],
 				agents: [makeAgent("worker", { skills: ["async-chain-step-skill"] })],
 				ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },

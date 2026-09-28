@@ -169,7 +169,9 @@ describe("renderSubagentResult fork indicator", () => {
 		}, { expanded: false }, theme);
 
 		const lines = widget.render(120).map((line) => line.trimEnd());
-		assert.match(lines[0]!, /^\[fork\] Managed agents:/);
+		// Always fresh: stale fork context renders no badge.
+		assert.match(lines[0]!, /^Managed agents:/);
+		assert.doesNotMatch(lines[0]!, /\[fork\]/);
 		assert.match(lines[0]!, /…$/);
 		const hintLineIndex = lines.findIndex((line) => line.includes(expandHint));
 		assert.ok(hintLineIndex > 0);
@@ -233,14 +235,16 @@ describe("renderSubagentResult fork indicator", () => {
 		assert.ok(!singleLine.includes(expandHint));
 	});
 
-	it("shows [fork] when details are empty but context is fork", () => {
+	it("renders no badge for stale fork context on empty details (always fresh)", () => {
 		const widget = renderSubagentResult!({
 			content: [{ type: "text", text: "Async: reviewer [abc123]" }],
 			details: { mode: "single", context: "fork", results: [] },
 		}, { expanded: false }, theme);
 
 		const text = widget.render(120).join("\n");
-		assert.match(text, /\[fork\]/);
+		// Always fresh: nothing renders a fork badge anymore.
+		assert.doesNotMatch(text, /\[fork\]/);
+		assert.match(text, /Async: reviewer/);
 	});
 
 	it("shows nested foreground children with timestamps on running single results", () => {
@@ -274,30 +278,46 @@ describe("renderSubagentResult fork indicator", () => {
 		assert.match(text, /↳ └─ \[\d{2}:\d{2}:\d{2}\] . implement · running · bash/);
 	});
 
-	it("shows [fresh] and [fork] on single-result headers", () => {
-		for (const context of ["fresh", "fork"] as const) {
-			const widget = renderSubagentResult!({
-				content: [{ type: "text", text: "done" }],
-				details: {
-					mode: "single",
-					context,
-					results: [{
-						agent: "reviewer",
-						task: "review",
-						context,
-						exitCode: 0,
-						messages: [],
-						usage: emptyUsage,
-					}],
-				},
-			}, { expanded: false }, theme);
+	it("shows [fresh] on fresh single-result headers and no badge for stale fork", () => {
+		// Always fresh: fresh still renders [fresh]; stale fork context renders nothing.
+		const freshText = renderSubagentResult!({
+			content: [{ type: "text", text: "done" }],
+			details: {
+				mode: "single",
+				context: "fresh",
+				results: [{
+					agent: "reviewer",
+					task: "review",
+					context: "fresh",
+					exitCode: 0,
+					messages: [],
+					usage: emptyUsage,
+				}],
+			},
+		}, { expanded: false }, theme).render(120).join("\n");
+		assert.match(freshText, /\[fresh\]/);
 
-			const text = widget.render(120).join("\n");
-			assert.match(text, new RegExp(`\\[${context}\\]`));
-		}
+		const forkText = renderSubagentResult!({
+			content: [{ type: "text", text: "done" }],
+			details: {
+				mode: "single",
+				context: "fork",
+				results: [{
+					agent: "reviewer",
+					task: "review",
+					context: "fork",
+					exitCode: 0,
+					messages: [],
+					usage: emptyUsage,
+				}],
+			},
+		}, { expanded: false }, theme).render(120).join("\n");
+		assert.doesNotMatch(forkText, /\[fork\]/);
+		assert.doesNotMatch(forkText, /\[fresh\]/);
+		assert.match(forkText, /reviewer/);
 	});
 
-	it("shows [mixed] on mixed runs and per-child context badges", () => {
+	it("shows [mixed] on mixed runs with [fresh] on fresh children and no badge on stale fork children", () => {
 		const compact = renderSubagentResult!({
 			content: [{ type: "text", text: "done" }],
 			details: {
@@ -312,7 +332,9 @@ describe("renderSubagentResult fork indicator", () => {
 
 		assert.match(compact, /parallel \[mixed\]/);
 		assert.match(compact, /scan \[fresh\]/);
-		assert.match(compact, /fix \[fork\]/);
+		// Always fresh: the stale fork child renders no badge.
+		assert.doesNotMatch(compact, /fix \[fork\]/);
+		assert.match(compact, /fix\n/);
 
 		const expanded = renderSubagentResult!({
 			content: [{ type: "text", text: "done" }],
@@ -328,7 +350,8 @@ describe("renderSubagentResult fork indicator", () => {
 
 		assert.match(expanded, /parallel \[mixed\]/);
 		assert.match(expanded, /scan \[fresh\]/);
-		assert.match(expanded, /fix \[fork\]/);
+		// Always fresh: the stale fork child renders no badge.
+		assert.doesNotMatch(expanded, /fix \[fork\]/);
 	});
 
 	it("uses compacted tool-call summaries when messages were stripped", () => {

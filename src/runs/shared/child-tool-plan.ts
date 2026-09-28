@@ -23,10 +23,12 @@ import { THINKING_LEVELS } from "../../shared/model-info.ts";
 import { getAgentDir } from "../../shared/utils.ts";
 import type { PermissionRules } from "./permissions.ts";
 import { snapshotRequiredChildExtensions, type RequiredChildExtensionSnapshot } from "../../shared/required-child-extensions.ts";
+import { resolveSubagentAllowedTools } from "../../agents/agents.ts";
 import {
 	capabilityCeilingAgentRestrictionSources,
 	intersectSubagentCapabilityCeilings,
 	isAgentAllowedByCapabilityCeiling,
+	normalizeOperatorAllowedTools,
 	type ResolvedSubagentCapabilityCeiling,
 	type SubagentCapabilityAudit,
 } from "./capability-ceiling.ts";
@@ -64,11 +66,6 @@ const PI_BUILTIN_TOOL_NAMES = new Set(["read", "bash", "powershell", "edit", "wr
 /** Native coordination tools the plan recognizes regardless of host availability. */
 const NATIVE_CHILD_TOOL_NAMES = new Set(["subagent", "contact_supervisor", "intercom", "subagent_supervisor", "structured_output"]);
 const REPOSITORY_INSPECTION_TOOLS = new Set(["read", "grep", "find", "ls", "bash", "powershell"]);
-const REVIEW_OR_SCOUT_AGENT_PATTERN = /\b(?:reviewer|scout)\b/i;
-
-export function isReviewOrScoutLaneAgent(agentName: string | undefined): boolean {
-	return typeof agentName === "string" && REVIEW_OR_SCOUT_AGENT_PATTERN.test(agentName);
-}
 
 /** Internal tool name plus its human-readable display label (Pi `registerTool({ name, label })`). */
 export interface HostToolIdentity {
@@ -252,7 +249,12 @@ export interface ResolvePiLaunchToolPlanInput {
 	model?: string;
 	modelCandidates?: readonly string[];
 	capabilityCeiling?: ResolvedSubagentCapabilityCeiling;
-	inheritedCapabilityCeiling?: ResolvedSubagentCapabilityCeiling;
+	/**
+	 * Operator-authored global allowlist (`subagents.allowedTools`). When
+	 * undefined and `cwd` is set, resolves fresh from settings; applies
+	 * uniformly, never inherits parent→child.
+	 */
+	operatorAllowedTools?: string[];
 	agentName?: string;
 	permissionRules?: PermissionRules;
 	runtimeSnapshotHost?: McpRuntimeSnapshotHost;
@@ -432,12 +434,37 @@ export function getHostBuiltinToolNames(pi: Pick<ExtensionAPI, "getAllTools">): 
 	}
 }
 
+/**
+ * Operator ceiling from an explicit list, or fresh from settings when `cwd`
+ * is set. Applies uniformly; never inherits parent→child.
+ */
+export function resolveOperatorCeiling(
+	explicit: readonly string[] | undefined,
+	cwd: string | undefined,
+): ResolvedSubagentCapabilityCeiling | undefined {
+	let fromSettings: string[] | undefined;
+	if (explicit === undefined && cwd) {
+		// Best-effort: settings validation belongs to agent discovery, which
+		// reports malformed settings with context. The plan must stay hermetic.
+		try {
+			fromSettings = resolveSubagentAllowedTools(cwd);
+		} catch {
+			fromSettings = undefined;
+		}
+	}
+	const operatorAllowed = normalizeOperatorAllowedTools(explicit ?? fromSettings);
+	return operatorAllowed === undefined
+		? undefined
+		: { version: 1 as const, allowedTools: operatorAllowed, denyExtensions: false, sources: ["settings:subagents.allowedTools"] };
+}
+
 export function resolvePiLaunchToolPlan(
 	input: ResolvePiLaunchToolPlanInput,
 ): PiLaunchToolPlan {
+	const operatorCeiling = resolveOperatorCeiling(input.operatorAllowedTools, input.cwd);
 	const capabilityCeiling = intersectSubagentCapabilityCeilings(
 		input.capabilityCeiling,
-		input.inheritedCapabilityCeiling,
+		operatorCeiling,
 	);
 	const requiredExtensions = snapshotRequiredChildExtensions(input.requiredExtensions ?? []);
 	if (requiredExtensions.length > 0 && capabilityCeiling?.denyExtensions) {

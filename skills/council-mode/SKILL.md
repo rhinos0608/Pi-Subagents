@@ -16,11 +16,11 @@ Before launch, read:
 
 ## Roster
 
-Run `subagent({ action: "list" })`, then choose 2-3 executable advisor names that start with `council-`. The prefix is convention only. Never use more than four advisors.
+Check the Fleet Agents view, then choose 2-3 executable advisor names that start with `council-`. The prefix is convention only. Never use more than four advisors.
 
-If fewer than two council profiles are available, fill with `oracle`, then `reviewer`. Launch fallback `oracle` with `context: "fork"`; let fallback `reviewer` use its normal profile context. Note fallbacks and known context modes in the memo. If fewer than two advisors remain, use the normal one-oracle consultation loop and label it degraded mode.
+If fewer than two council profiles are available, fill with `oracle`, then `reviewer`. Both launch fresh like every child. Note fallbacks in the memo. If fewer than two advisors remain, use the normal one-oracle consultation loop and label it degraded mode.
 
-`council-*` profiles live in user or project agent directories, not this package. A profile defines model, tools, context, output defaults, and persistent stance. Keep advisors read-only, disable inherited skills unless needed, and put stance in the profile body instead of inventing per-run role labels.
+`council-*` profiles live in user or project agent directories, not this package. A profile defines model, tools, output defaults, and persistent stance. Keep advisors read-only, disable inherited skills unless needed, and put stance in the profile body instead of inventing per-run role labels.
 
 External-job/package advisors may join only when their provider is registered. Treat them as ordinary advisor names in `runs.all`, but honor their runner limits: they may lack repo tools, structured output, or resumability. Include evidence they cannot read, request JSON text instead of `outputSchema`, and use a fresh-context fallback when they cannot resume for cross-exam.
 
@@ -30,9 +30,9 @@ Pass 1 is independent reports. Pass 2 is one cross-exam. Run Pass 3 only when `-
 
 ## Protocol
 
-1. Write the council brief: question, scope, non-goals, evidence targets, roster, known advisor context modes, and pass cap.
-2. Tell the user the roster, context modes, and pass cap.
-3. Launch one async `workflowScript` with `runs.all` for Pass 1. Use stable keys, `phase: "Council pass 1"`, concise labels, and `output: false` unless separate artifacts are useful. Set `context` only when the profile context is known or a fallback rule requires it.
+1. Write the council brief: question, scope, non-goals, evidence targets, roster, and pass cap.
+2. Tell the user the roster and pass cap.
+3. Launch one async `workflowScript` with `runs.all` for Pass 1. Use stable keys, `phase: "Council pass 1"`, concise labels, and `output: false` unless separate artifacts are useful.
 4. Return one aggregate Pass 1 receipt. On completion, tell the user completion count, agreement count, dispute count, and whether Pass 2 is needed.
 5. Synthesize the claim matrix in the parent: agreements, disputed claims, missing proof, owner decisions, and at most five material relay claims per advisor.
 6. For Pass 2, tell the user which claims are relayed and why they matter. Resume each advisor with a curated challenge packet. A resume needs a retained run id and task; it excludes `agent` and rejects `gate`. Record each new run id; Pass 3 resumes those latest ids with new stable keys.
@@ -54,6 +54,6 @@ The memo states:
 - owner decisions
 - evidence and run ids
 - confidence and what would change the decision
-- roster, passes, fallbacks, and known advisor context modes
+- roster, passes, and fallbacks
 
-Identify advisors by profile name. State when fallback `oracle` was forked and context-aware. Escalate to a writer only after the memo and only when the user requests it.
+Identify advisors by profile name. Escalate to a writer only after the memo and only when the user requests it.

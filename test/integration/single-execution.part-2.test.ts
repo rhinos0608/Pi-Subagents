@@ -1327,7 +1327,7 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		fs.writeFileSync(path.join(repo, ".pi", "subagents", "artifacts", "status.json"), JSON.stringify({ runId: "cleanup-action-run", state: "complete" }), "utf-8");
 		try {
 			const executor = makeExecutor([makeAgent("echo")], { worktreeBaseDir: baseDir });
-			const result = await executor.executePublic("cleanup-plan", { action: "worktree.cleanup", repo: "cleanup-repo", mode: "plan" }, new AbortController().signal, undefined, makeMinimalCtx(tempDir));
+			const result = await executor.execute("cleanup-plan", { action: "worktree.cleanup", repo: "cleanup-repo", mode: "plan" }, new AbortController().signal, undefined, makeMinimalCtx(tempDir));
 			assert.equal(result.isError, undefined, result.content[0]?.text ?? "cleanup plan failed");
 			const text = result.content[0]?.text ?? "";
 			assert.match(text, /Will remove/);
@@ -1336,10 +1336,10 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 			assert.equal(planFiles.length, 1);
 			const planId = planFiles[0]!.replace(/\.json$/, "");
 			const childSafe = makeExecutor([makeAgent("echo")], { worktreeBaseDir: baseDir }, false, undefined, false);
-			const childSafeResult = await childSafe.executePublic("cleanup-child-safe", { action: "worktree.cleanup", repo: "cleanup-repo", mode: "plan" }, new AbortController().signal, undefined, makeMinimalCtx(tempDir));
+			const childSafeResult = await childSafe.execute("cleanup-child-safe", { action: "worktree.cleanup", repo: "cleanup-repo", mode: "plan" }, new AbortController().signal, undefined, makeMinimalCtx(tempDir));
 			assert.equal(childSafeResult.isError, true);
 			assert.match(childSafeResult.content[0]?.text ?? "", /child-safe subagent fanout mode/i);
-			const apply = await executor.executePublic("cleanup-apply", { action: "worktree.cleanup", repo: "cleanup-repo", mode: "apply", planId }, new AbortController().signal, undefined, makeMinimalCtx(tempDir));
+			const apply = await executor.execute("cleanup-apply", { action: "worktree.cleanup", repo: "cleanup-repo", mode: "apply", planId }, new AbortController().signal, undefined, makeMinimalCtx(tempDir));
 			assert.equal(apply.isError, true);
 			assert.match(apply.content[0]?.text ?? "", /plan.*only|apply\/removal is not available/i);
 			assert.ok(fs.existsSync(worktree.path));
@@ -1578,51 +1578,6 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		if (child?.artifactPaths?.outputPath) assert.match(fs.readFileSync(child.artifactPaths.outputPath, "utf-8"), /"note": "captured"/);
 	});
 
-	it("routes retained workflow follow-ups to distinct outputs without overwriting the writer report", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
-		for (const relative of [false, true]) {
-			const writerPath = path.join(tempDir, `writer-${relative}.md`);
-			const challengeOutput = relative ? "challenge-relative.md" : path.join(tempDir, "challenge-absolute.md");
-			mockPi.onCall({ output: "original writer report" });
-			mockPi.onCall({ output: "No better current-scope change is needed; the retained implementation remains correct." });
-			mockPi.onCall({ output: "repeated challenge report" });
-			const result = await makeExecutor([makeAgent("echo")], {}, true).execute(
-				`workflow-retained-output-${relative}`,
-				{
-					async: false,
-					workflowScript: `
-						const writer = await runs.run("writer", { agent: "echo", task: "Write report", output: ${JSON.stringify(writerPath)} });
-						const challenge = await runs.run("challenge", { resume: ${relative ? "writer.runId.slice(0, 12)" : "writer.runId"}, task: "Challenge report", output: ${JSON.stringify(challengeOutput)} });
-						const repeated = await runs.run("repeated", { resume: challenge.runId, task: "Challenge again", output: false });
-						return { writer, challenge, repeated };
-					`,
-				},
-				new AbortController().signal,
-				undefined,
-				makeMinimalCtx(tempDir),
-			);
-
-			assert.equal(result.isError, undefined, result.content[0]?.text ?? "workflow failed");
-			const { writer, challenge, repeated } = result.details.workflow?.value as Record<string, { ok: boolean; runId: string; outputReference: string; continuation: { runIds: string[] } }>;
-			assert.equal(writer.ok, true);
-			assert.equal(challenge.ok, true);
-			assert.equal(repeated.ok, true);
-			assert.deepEqual(challenge.continuation.runIds, [writer.runId, challenge.runId]);
-			assert.deepEqual(repeated.continuation.runIds, [writer.runId, challenge.runId, repeated.runId]);
-			for (const child of [writer, challenge, repeated]) {
-				const entry = Object.values(result.details.workflow!.receipt!.entries).find((entry) => entry.latestRunId === child.runId);
-				assert.deepEqual(entry?.continuation, child.continuation);
-			}
-			assert.notEqual(challenge.runId, writer.runId);
-			assert.equal(writer.outputReference, writerPath);
-			const challengePath = relative ? path.join(TEMP_ARTIFACTS_DIR, "outputs", `workflow-retained-output-${relative}`, challengeOutput) : challengeOutput;
-			assert.equal(challenge.outputReference, challengePath);
-			assert.notEqual(challenge.outputReference, writer.outputReference);
-			assert.equal(fs.readFileSync(writer.outputReference, "utf-8"), "original writer report");
-			assert.equal(fs.readFileSync(challenge.outputReference, "utf-8"), "No better current-scope change is needed; the retained implementation remains correct.");
-			assert.deepEqual(result.details.results.map((child) => child.savedOutputPath), [writerPath, challengePath, undefined]);
-		}
-		assert.equal(mockPi.callCount(), 6);
-	});
 
 	it("preserves string resume lineage from the recorded terminal workflow receipt", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
 		mockPi.onCall({ output: "writer" });
@@ -1633,8 +1588,8 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		const started = await executor.execute("lineage-source", {
 			async: true,
 			workflowScript: `
-				const writer = await runs.run("writer", { agent: "echo", task: "Write", async: false, output: false });
-				const challenge = await runs.run("challenge", { resume: writer.runId, task: "Challenge", output: false });
+				const writer = await runs.run("writer", { agent: "echo", task: "Write" });
+				const challenge = await runs.run("challenge", { resume: writer.runId, task: "Challenge" });
 				return { writer, challenge };
 			`,
 		}, new AbortController().signal, undefined, ctx);
@@ -1648,7 +1603,7 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		assert.deepEqual(settled.workflowReceipt.receipt.entries.challenge.continuation, challenge.continuation);
 		const repeated = await executor.execute("lineage-repeated", {
 			async: false,
-			workflowScript: `return runs.run("repeated", { resume: ${JSON.stringify(challenge.runId)}, task: "Repeat challenge", output: false });`,
+			workflowScript: `return runs.run("repeated", { resume: ${JSON.stringify(challenge.runId)}, task: "Repeat challenge" });`,
 		}, new AbortController().signal, undefined, ctx);
 		assert.equal(repeated.isError, undefined, repeated.content[0]?.text);
 		const child = repeated.details.workflow!.value as { runId: string; continuation: { runIds: string[] } };
@@ -1659,7 +1614,7 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		fs.writeFileSync(settled.workflowReceipt.path, "{broken");
 		const rejected = await executor.execute("lineage-malformed", {
 			async: false,
-			workflowScript: `return runs.run("rejected", { resume: ${JSON.stringify(challenge.runId)}, task: "Do not launch", output: false });`,
+			workflowScript: `return runs.run("rejected", { resume: ${JSON.stringify(challenge.runId)}, task: "Do not launch" });`,
 		}, new AbortController().signal, undefined, ctx);
 		assert.equal(rejected.isError, true);
 		assert.match(rejected.content[0]?.text ?? "", /could not be read/);
@@ -1676,7 +1631,7 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 			mockPi.onCall({ output: "continued without older evidence" });
 			const fallback = await executor.execute(`lineage-${evidence}`, {
 				async: false,
-				workflowScript: `return runs.run("fallback", { resume: ${JSON.stringify(challenge.runId)}, task: "Continue", output: false });`,
+				workflowScript: `return runs.run("fallback", { resume: ${JSON.stringify(challenge.runId)}, task: "Continue" });`,
 			}, new AbortController().signal, undefined, ctx);
 			assert.equal(fallback.isError, undefined, fallback.content[0]?.text);
 			const continued = fallback.details.workflow!.value as { runId: string; continuation: { runIds: string[] } };
@@ -1692,7 +1647,7 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		const ctx = makeMinimalCtx(tempDir);
 		const first = await executor.execute("lineage-stale-source", {
 			async: false,
-			workflowScript: `return runs.run("writer", { agent: "echo", task: "Write", output: false });`,
+			workflowScript: `return runs.run("writer", { agent: "echo", task: "Write" });`,
 		}, new AbortController().signal, undefined, ctx);
 		assert.equal(first.isError, undefined);
 		const writer = first.details.workflow!.value as { runId: string; results: Array<{ sessionFile: string }> };
@@ -1726,8 +1681,8 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		] as const) {
 			mockPi.onCall(call);
 			const script = task === "Revived"
-				? `return runs.run("child", { resume: ${JSON.stringify(firstRunId)}, task: "Revived", output: false });`
-				: `return runs.run("child", { agent: "echo", task: ${JSON.stringify(task)}, output: false });`;
+				? `return runs.run("child", { resume: ${JSON.stringify(firstRunId)}, task: "Revived" });`
+				: `return runs.run("child", { agent: "echo", task: ${JSON.stringify(task)} });`;
 			const result = await executor.execute(`awaited-${task}`, { async: false, workflowScript: script }, new AbortController().signal, undefined, ctx);
 			assert.equal(result.isError, task === "Failed" ? true : undefined, result.content[0]?.text ?? "");
 			const child = started.at(-1)!;
@@ -1741,36 +1696,10 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 			assert.equal(matches[0]?.success, task !== "Failed");
 			assert.equal(matches[0]?.triggerTurn, false);
 		}
-		mockPi.onCall({ output: "detached" });
-		await executor.execute("explicit-child", {
-			async: false,
-			workflowScript: `return runs.run("detached", { agent: "echo", task: "Detached", async: true, output: false });`,
-		}, new AbortController().signal, undefined, ctx);
-		const explicitStart = started.at(-1)!;
-		const watcherState: SubagentState = {
-			baseCwd: tempDir, currentSessionId: explicitStart.sessionId as string,
-			completionOwnerId: explicitStart.completionOwnerId as string,
-			asyncJobs: new Map(), foregroundControls: new Map(), lastForegroundControlId: null,
-			completionSeen: new Map(), resultFileCoalescer: { schedule: () => false, clear() {} },
-		};
-		const watcher = createResultWatcher({ events: bus }, watcherState, DIRS.results, 60_000, {
-			coalesceDelayMs: 0, deliverIntercomResults: false,
-			notifier: { deliver: async () => true },
-		});
-		try {
-			for (let attempt = 0; attempt < 100 && !completed.some((event) => event.id === explicitStart.id); attempt++) {
-				watcher.refreshResultDelivery();
-				await new Promise((resolve) => setTimeout(resolve, 50));
-			}
-			const matches = completed.filter((event) => event.id === explicitStart.id);
-			assert.equal(matches.length, 1);
-			assert.equal(matches[0]?.awaitedByWorkflow, undefined);
-		} finally {
-			watcher.stopResultWatcher();
-		}
+
 	});
 
-	it("preserves original parent authority when reviving a foreground child", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+	it("revives a foreground child without inheriting the original parent ceiling", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
 		const callerRuntime: ChildRuntimeConfig = {
 			capabilityCeiling: {
 				version: 1,
@@ -1788,7 +1717,7 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		mockPi.onCall({ output: "Initial foreground work" });
 		const firstResult = await executor.execute(
 			"foreground-authority-first",
-			{ async: false, workflowScript: `return runs.run("first", { agent: "echo", task: "First", output: false });` },
+			{ async: false, workflowScript: `return runs.run("first", { agent: "echo", task: "First" });` },
 			new AbortController().signal, undefined, ctx,
 		);
 		assert.equal(firstResult.isError, undefined, firstResult.content[0]?.text ?? "foreground launch failed");
@@ -1799,16 +1728,15 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		mockPi.onCall({ output: "Resumed foreground work" });
 		const resumedResult = await executor.execute(
 			"foreground-authority-resume",
-			{ async: false, workflowScript: `return runs.run("resumed", { resume: ${JSON.stringify(first.runId)}, task: "Resume", output: false });` },
+			{ async: false, workflowScript: `return runs.run("resumed", { resume: ${JSON.stringify(first.runId)}, task: "Resume" });` },
 			new AbortController().signal, undefined, ctx,
 		);
 		assert.equal(resumedResult.isError, undefined, resumedResult.content[0]?.text ?? "foreground resume failed");
 		assert.deepEqual(readCall().runtime?.capabilityCeiling, {
 			version: 1,
-			allowedTools: ["read"],
 			allowedAgents: ["researcher"],
-			denyExtensions: true,
-			sources: ["agent:echo", "original-parent"],
+			denyExtensions: false,
+			sources: ["agent:echo"],
 		});
 	});
 
@@ -1830,7 +1758,7 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 			{
 				async: false,
 				workflowScript: `
-					const first = await runs.run("first", { agent: "typed", task: "First", output: false });
+					const first = await runs.run("first", { agent: "typed", task: "First" });
 					const resumed = await runs.run("resumed", { resume: first.runId, task: "Resume" });
 					return resumed;
 				`,

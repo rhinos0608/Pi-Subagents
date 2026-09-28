@@ -399,12 +399,41 @@ type ExecutionAcceptanceInput = {
 	acceptance?: unknown;
 	outputSchema?: unknown;
 	tasks?: Array<{ acceptance?: unknown; outputSchema?: unknown }>;
+	// Chain steps carry acceptance/outputSchema at runtime for internal callers even
+	// though the shrunken ChainStep type only models orchestration intent; narrow
+	// at runtime so internal chain launches keep pre-launch validation.
+	chain?: readonly unknown[];
 };
+
+/** Runtime view of a chain step for acceptance/outputSchema validation. */
+interface ChainValidationStep {
+	acceptance?: unknown;
+	outputSchema?: unknown;
+	parallel?: unknown;
+}
+
+function asChainValidationStep(step: unknown): ChainValidationStep {
+	if (typeof step !== "object" || step === null) return {};
+	return step as ChainValidationStep;
+}
+
+function chainParallelTasks(parallel: unknown): Array<{ acceptance?: unknown; outputSchema?: unknown }> {
+	if (Array.isArray(parallel)) return parallel as Array<{ acceptance?: unknown; outputSchema?: unknown }>;
+	if (typeof parallel === "object" && parallel !== null) return [parallel as { acceptance?: unknown; outputSchema?: unknown }];
+	return [];
+}
 
 export function validateExecutionAcceptancePolicy(input: ExecutionAcceptanceInput): string[] {
 	const errors = validateAcceptanceInput(input.acceptance, "acceptance");
 	for (const [index, task] of (input.tasks ?? []).entries()) {
 		errors.push(...validateAcceptanceInput(task.acceptance, `tasks[${index}].acceptance`));
+	}
+	for (const [stepIndex, rawStep] of (input.chain ?? []).entries()) {
+		const step = asChainValidationStep(rawStep);
+		errors.push(...validateAcceptanceInput(step.acceptance, `chain[${stepIndex}].acceptance`));
+		for (const [taskIndex, task] of chainParallelTasks(step.parallel).entries()) {
+			errors.push(...validateAcceptanceInput(task.acceptance, `chain[${stepIndex}].parallel[${taskIndex}].acceptance`));
+		}
 	}
 	return errors;
 }
@@ -414,6 +443,13 @@ export function validateExecutionAcceptance(input: ExecutionAcceptanceInput): st
 	errors.push(...validateAcceptanceReportMode(input.acceptance, input.outputSchema, "acceptance"));
 	for (const [index, task] of (input.tasks ?? []).entries()) {
 		errors.push(...validateAcceptanceReportMode(task.acceptance, task.outputSchema, `tasks[${index}].acceptance`));
+	}
+	for (const [stepIndex, rawStep] of (input.chain ?? []).entries()) {
+		const step = asChainValidationStep(rawStep);
+		errors.push(...validateAcceptanceReportMode(step.acceptance, step.outputSchema, `chain[${stepIndex}].acceptance`));
+		for (const [taskIndex, task] of chainParallelTasks(step.parallel).entries()) {
+			errors.push(...validateAcceptanceReportMode(task.acceptance, task.outputSchema, `chain[${stepIndex}].parallel[${taskIndex}].acceptance`));
+		}
 	}
 	return errors;
 }

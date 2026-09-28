@@ -96,7 +96,7 @@ For implementation work, the recommended loop is `clarify → scout → worker �
 
 Foreground runs stream progress in the conversation. Background runs keep working after control returns to you.
 
-In the TUI, a persistent FleetView below the editor keeps active work visible. `/subagents-fleet` opens a live inspector where you can browse children, read transcripts, steer a running child, or stop a run. You can also just ask: "Show me the current async runs."
+In the TUI, a persistent FleetView below the editor keeps active work visible. `/subagents-fleet` opens a live inspector where you can browse children, read transcripts, and steer, interrupt, or stop a run. The Agents view lists agents and supports create, edit, delete, and disable; run details show cwd, budgets, worktree/branch, delivery, fallback-attempt history, and policy blocks. You can also just ask: "Show me the current async runs."
 
 Details, keybindings, and the machine-readable run artifacts are in [Observability](https://github.com/nicobailon/pi-subagents/blob/main/docs/observability.md).
 
@@ -110,7 +110,7 @@ For bounded orchestration, `maxSubagentSpawnsPerRun` limits cumulative logical c
 
 or ask: "Check whether subagents and intercom are set up correctly."
 
-For installed-version help, use `/subagents-guide [topic]` or `subagent({ action: "guide", topic: "workflows" })`. The default topic is `overview`; available topics are `overview`, `workflows`, `agents`, `missions`, `observability`, `tool-reference`, `configuration`, `models`, `watchdog`, `extension-api`, and `council`.
+For installed-version help, use `/subagents-guide [topic]` or `subagent({ action: "guide", message: "workflows" })`.
 
 ## Documentation
 
@@ -119,11 +119,11 @@ The full reference lives in `docs/`:
 | Doc | What's in it |
 |-----|--------------|
 | [Agents](https://github.com/nicobailon/pi-subagents/blob/main/docs/agents.md) | Custom agents, frontmatter reference, overriding builtins, tools, extensions, skills, per-agent memory. |
-| [Models](https://github.com/nicobailon/pi-subagents/blob/main/docs/models.md) | Single-model selection and launch, defaults, per-role overrides, recommended tiering, thinking levels, model scope enforcement, profiles. |
+| [Models](https://github.com/nicobailon/pi-subagents/blob/main/docs/models.md) | Model resolution from agent definitions plus operator config, defaults, per-role overrides, recommended tiering, thinking levels, model scope enforcement, profiles. No per-call model parameters. |
 | [Workflows](https://github.com/nicobailon/pi-subagents/blob/main/docs/workflows.md) | Orchestration patterns, prompt shortcuts, scripted workflows, worktree isolation, child-to-parent coordination, the recursion guard. |
 | [Watchdog](https://github.com/nicobailon/pi-subagents/blob/main/docs/watchdog.md) | The opt-in adversarial change reviewer, scope monitoring, LSP checks, and child tool permissions. |
-| [Tool reference](https://github.com/nicobailon/pi-subagents/blob/main/docs/tool-reference.md) | Every `subagent` parameter, management actions, status/control actions, acceptance gates, external CLI runners. |
+| [Tool reference](https://github.com/nicobailon/pi-subagents/blob/main/docs/tool-reference.md) | The 7 model fields, launch/steer/resume/interrupt/status/guide/validate, workflow child fields, acceptance gates, external CLI runners. Management lives in Fleet and slash commands. |
 | [Observability](https://github.com/nicobailon/pi-subagents/blob/main/docs/observability.md) | FleetView, the fleet inspector, lifecycle artifacts, events, logs, session sharing. |
-| [Missions and schedules](https://github.com/nicobailon/pi-subagents/blob/main/docs/missions.md) | Durable mission records, delivery receipts, timed and recurring runs. |
+| [Missions and schedules](https://github.com/nicobailon/pi-subagents/blob/main/docs/missions.md) | Durable mission records and delivery receipts (managed via Fleet and slash commands, not the model tool). |
 | [Configuration](https://github.com/nicobailon/pi-subagents/blob/main/docs/configuration.md) | Every `config.json` key and environment variable. |
 | [Extension API](https://github.com/nicobailon/pi-subagents/blob/main/docs/extension-api.md) | The RPC, delegation API, preflight, capability ceilings, [trusted workflow resources](docs/extension-api.md#trusted-workflow-resources), background-work providers, Herdr integration. |

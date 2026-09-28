@@ -67,7 +67,6 @@ export function projectAgentDefinition(agent: AgentConfig): Record<string, unkno
 		outputSchema: agent.outputSchema,
 		defaultReads: agent.defaultReads,
 		defaultProgress: agent.defaultProgress,
-		defaultContext: agent.defaultContext,
 		defaultAsync: agent.defaultAsync,
 		defaultTimeoutMs: agent.defaultTimeoutMs,
 		defaultAcceptance: agent.defaultAcceptance,

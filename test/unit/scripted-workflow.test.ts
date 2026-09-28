@@ -197,6 +197,22 @@ describe("scripted workflow runtime", () => {
 		]) assert.deepEqual(validateWorkflowScript(script), { ok: true, errors: [] }, script);
 	});
 
+	it("rejects statically known non-allowlisted runs.lanes stage fields offline", () => {
+		for (const script of [
+			`return runs.lanes([{ key: "lane", stages: [{ key: "s", agent: "worker", task: "Check", async: true }] }]);`,
+		`return runs.lanes([{ key: "lane", stages: [{ key: "s", agent: "worker", task: "Check", output: "x" }, { key: "t", agent: "worker" }] }]);`,
+		]) {
+			const result = validateWorkflowScript(script);
+			assert.equal(result.ok, false, script);
+			assert.ok(result.errors.some((error) => error.message.includes("runs.lanes stage") && error.message.includes("unsupported field")), script);
+		}
+		for (const script of [
+			`return runs.lanes([{ key: "lane", stages: [{ key: "s", agent: "worker", task: "Check" }] }]);`,
+			`return runs.lanes([{ key: "lane", stages: [{ key: "s", agent: "worker", task: "Check", ...overrides }] }]);`,
+			`return runs.lanes([{ key: "lane", stages: [{ key: "s", agent: "worker", task: "Check", [field]: "other" }] }]);`,
+		]) assert.deepEqual(validateWorkflowScript(script), { ok: true, errors: [] }, script);
+	});
+
 	it("reports literal child baseRef policy errors with source locations offline", () => {
 		for (const [call, value] of [
 			["run", JSON.stringify("a".repeat(40))],

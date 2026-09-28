@@ -298,6 +298,56 @@ describe("subagent extension RPC bridge", () => {
 		bridge.dispose();
 	});
 
+	it("manage schedule.list succeeds through the internal route while the model tool rejects it", async () => {
+		// Regression: RPC manage/spawn must ride the internal execute (like slash),
+		// never the model-visible executePublic gate which rejects schedule.* actions.
+		const { randomUUID } = await import("node:crypto");
+		const { createSubagentExecutor } = await import("../../src/runs/foreground/subagent-executor.ts");
+		const { createScheduledRunManager } = await import("../../src/runs/background/scheduled-runs.ts");
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-rpc-manage-internal-"));
+		const owner = randomUUID();
+		const routeCtx = {
+			cwd: root, hasUI: false,
+			sessionManager: { getSessionId: () => owner, getSessionFile: () => path.join(root, "parent.jsonl"), getEntries: () => [] },
+		} as never;
+		const state = {
+			baseCwd: root, currentSessionId: (routeCtx as { sessionManager: { getSessionFile: () => string } }).sessionManager.getSessionFile(), supervisorOwnerSessionId: owner,
+			asyncJobs: new Map(), foregroundControls: new Map(), lastForegroundControlId: null, cleanupTimers: new Map(), lastUiContext: null,
+			poller: null, completionSeen: new Map(), watcher: null, watcherRestartTimer: null,
+			resultFileCoalescer: { schedule: () => false, clear() {} },
+		} as never;
+		const pi = { getAllTools: () => [], registerTool() {}, getSessionName: () => "parent", events: { emit() {}, on() { return () => {}; } }, sendMessage() {} } as never;
+		const config = { maxSubagentDepth: 2, control: {}, intercomBridge: {} } as never;
+		const executor = createSubagentExecutor({
+			pi, state, config, asyncByDefault: false, tempArtifactsDir: root,
+			getSubagentSessionRoot: () => root, expandTilde: (value: string) => value, discoverAgents: () => ({ agents: [] }),
+			activateSupervisorTransport() {}, refreshResultDelivery() {},
+			handleScheduledRunAction: (params, execCtx) => manager.handleToolCall(params, execCtx),
+		});
+		const manager = createScheduledRunManager({
+			config, storeRoot: path.join(root, "schedules"),
+			launch: (params, launchCtx, signal) => executor.executeScheduled(randomUUID(), params, signal, launchCtx),
+		});
+		const events = new FakeEvents();
+		const bridge = registerSubagentRpcBridge({
+			events,
+			getContext: () => routeCtx as never,
+			// Mirrors the extension wiring: RPC rides executor.execute (internal).
+			execute: (id, params, signal, onUpdate, execCtx) => executor.execute(id, params as never, signal, onUpdate, execCtx),
+		});
+		try {
+			const reply = await request(events, "manage-internal-list", "manage", { action: "schedule.list" });
+			assert.equal(reply.success, true, JSON.stringify(reply));
+
+			const modelDenied = await executor.executePublic(randomUUID(), { action: "schedule.list" } as never, new AbortController().signal, undefined, routeCtx);
+			assert.equal(modelDenied.isError, true, JSON.stringify(modelDenied));
+		} finally {
+			bridge.dispose();
+			manager.stop();
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("forwards RPC schedule.run quiet:true to launch and keeps omitted quiet noisy", async () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-rpc-schedule-quiet-"));
 		const project = path.join(root, "project");

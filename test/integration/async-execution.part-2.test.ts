@@ -257,6 +257,7 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 					chain: [{
 						agent: "worker",
 						task: "Inspect the task and return a report. Do not edit files.",
+						acceptance: false,
 						...(diagnostic === "file" ? { output: outputPath, outputMode: "file-only" as const } : {}),
 					}],
 					agents: [makeAgent("worker", { tools: ["read", "write"], ...(diagnostic === "structured" ? { outputSchema: { type: "object", required: ["ok"], properties: { ok: { type: "boolean" } } } } : {}) })],
@@ -303,6 +304,8 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 					assert.ok(transcript);
 					assert.match(fs.readFileSync(transcript, "utf-8"), /Blocked by policy/);
 				}
+				// Only an ordinary terminal empty-output startup failure is retryable.
+				// Paused runs and task-execution outcomes stay single-shot.
 				assert.equal(mockPi.callCount(), diagnostic === "empty" && !interrupted ? 3 : 1);
 			});
 		}
@@ -1098,6 +1101,7 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		assert.match(interactiveResult.content[0]?.text ?? "", /interactive session/);
 		assert.match(interactiveResult.content[0]?.text ?? "", /return control to the user/);
 		assert.match(interactiveResult.content[0]?.text ?? "", /Use subagent\(\{ action: "status"/);
+		assert.match(interactiveResult.content[0]?.text ?? "", /never as a wait loop/);
 		assert.match(interactiveResult.content[0]?.text ?? "", /native completion notification/);
 		assert.doesNotMatch(interactiveResult.content[0]?.text ?? "", /bg_wait\(\{ id:/);
 		assert.doesNotMatch(interactiveResult.content[0]?.text ?? "", /auto-drain/);
@@ -1420,7 +1424,6 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 					phase: "Collect",
 					label: "Produce structured data",
 					as: "data",
-					outputSchema: schema,
 				},
 				{ agent: "consumer", task: "Use {outputs.data}", phase: "Use", label: "Consume data" },
 			],
@@ -1572,7 +1575,6 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 					parallel: {
 						agent: "reviewer",
 						task: "Review {target.path}",
-						outputSchema: { type: "object" },
 				},
 				collect: { as: "reviews" },
 				concurrency: 1,
@@ -1667,7 +1669,6 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 						agent: "reviewer",
 						task: "Review {target.path}",
 						label: "Review {target.path}",
-						outputSchema: { type: "object" },
 					},
 					collect: { as: "reviews" },
 					concurrency: 1,
@@ -1798,7 +1799,7 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 				{ agent: "producer", task: "Produce targets", as: "targets" },
 				{
 					expand: { from: { output: "targets", path: "/items" }, item: "target", key: "/path", maxItems: 4 },
-					parallel: { agent: "reviewer", task: "Review {target.path}" },
+					parallel: { agent: "reviewer", task: "Review {target.path}", acceptance: { level: "checked" } },
 					collect: { as: "reviews" },
 					acceptance: {
 						level: "verified",
@@ -1806,7 +1807,7 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 					},
 				},
 			],
-			agents: [makeAgent("producer", { outputSchema: { type: "object" } }), makeAgent("reviewer", { outputSchema: { type: "object" }, defaultAcceptance: { level: "checked" } })],
+			agents: [makeAgent("producer", { outputSchema: { type: "object" } }), makeAgent("reviewer", { outputSchema: { type: "object" } })],
 			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-dynamic-acceptance-timeout" },
 			artifactConfig: { enabled: false, includeInput: false, includeOutput: false, includeJsonl: false, includeMetadata: false, cleanupDays: 7 },
 			shareEnabled: false,

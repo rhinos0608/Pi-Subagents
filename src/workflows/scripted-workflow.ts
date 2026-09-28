@@ -610,9 +610,9 @@ function validateRunCall(key, params, label, fingerprints) {
     throw new Error(label + " accepts one child via { agent, task, cwd, resume } plus naming keys (as, phase, label, lane)" + hint);
   }
   if (Object.prototype.hasOwnProperty.call(params, "clarify")) throw new Error(label + " does not support clarify UI.");
-  const allowedRunFields = new Set(["agent", "task", "cwd", "resume", "as", "phase", "label", "lane", "index", "output", "outputMode", "reads", "progress", "async"]);
+  const allowedRunFields = new Set(["agent", "task", "cwd", "resume", "as", "phase", "label", "lane", "index"]);
   const unknownRunFields = Object.keys(params).filter((field) => !allowedRunFields.has(field));
-  if (unknownRunFields.length > 0) throw new Error(label + " has unsupported fields: " + unknownRunFields.join(", ") + ". Supported workflow child fields: agent, task, cwd, resume, as, phase, label, lane, index, output, outputMode, reads, progress, async.");
+  if (unknownRunFields.length > 0) throw new Error(label + " has unsupported fields: " + unknownRunFields.join(", ") + ". Supported workflow child fields: agent, task, cwd, resume, as, phase, label, lane, index.");
   validateLaneMetadata(params.lane, label + " lane", key);
   if (params.resume !== undefined && typeof params.resume !== "string") {
     const reference = params.resume;
@@ -1837,6 +1837,23 @@ export function validateWorkflowScript(script: string, options: WorkflowScriptVa
 				}
 			}
 		}
+		if (directRunsCall(node, "lanes")) {
+			const args = Array.isArray(node.arguments) ? node.arguments : [];
+			if (astNode(args[0]) && args[0].type === "ArrayExpression" && Array.isArray(args[0].elements)) {
+				for (const lane of args[0].elements) {
+					if (!astNode(lane)) continue;
+					const stages = directObjectPropertyValue(lane, "stages");
+					if (!astNode(stages) || stages.type !== "ArrayExpression" || !Array.isArray(stages.elements)) continue;
+					for (const stage of stages.elements) {
+						if (!astNode(stage)) continue;
+						errors.push(...validateStaticBaseRef(stage, "runs.lanes stage"));
+						errors.push(...validateStaticRunParams(stage, "runs.lanes stage", true));
+						const message = definitelyNonJson(stage);
+						if (message) errors.push({ message: `runs.lanes stage params are invalid: ${message}.`, ...nodeLocation(stage) });
+					}
+				}
+			}
+		}
 		if (directRunsCall(node, "host")) errors.push(...validateStaticHostCall(node));
 		const boundaryValue = node.type === "CallExpression" && astNode(node.callee) && node.callee.type === "Identifier" && node.callee.name === "emit" && Array.isArray(node.arguments) && astNode(node.arguments[0])
 			? node.arguments[0]
@@ -1898,7 +1915,7 @@ export function validateWorkflowScript(script: string, options: WorkflowScriptVa
 	const unique = errors.filter((error, index) => errors.findIndex((candidate) => candidate.message === error.message && candidate.line === error.line && candidate.column === error.column) === index);
 	return { ok: unique.length === 0, errors: unique, ...(warnings.length > 0 ? { warnings } : {}) };
 }
-const WORKFLOW_CHILD_ALLOWED_FIELDS = new Set(["agent", "task", "cwd", "resume", "as", "phase", "label", "lane", "index", "output", "outputMode", "reads", "progress", "async"]);
+const WORKFLOW_CHILD_ALLOWED_FIELDS = new Set(["agent", "task", "cwd", "resume", "as", "phase", "label", "lane", "index"]);
 
 function workflowStringMetadata(params: Record<string, unknown>): Pick<WorkflowScriptTraceEntry, "phase" | "label" | "agent"> {
 	return {
@@ -2451,7 +2468,7 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 			}
 			const unknownFields = Object.keys(params).filter((field) => !WORKFLOW_CHILD_ALLOWED_FIELDS.has(field));
 			if (unknownFields.length > 0) {
-				return respond(Promise.reject(new Error(`runs.run('${key}') has unsupported fields: ${unknownFields.join(", ")}. Supported workflow child fields: agent, task, cwd, resume, as, phase, label, lane, index, output, outputMode, reads, progress, async.`)));
+				return respond(Promise.reject(new Error(`runs.run('${key}') has unsupported fields: ${unknownFields.join(", ")}. Supported workflow child fields: agent, task, cwd, resume, as, phase, label, lane, index.`)));
 			}
 			let resumeReference: WorkflowReceiptResumeReference | undefined;
 			try {

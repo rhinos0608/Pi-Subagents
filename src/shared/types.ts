@@ -18,6 +18,7 @@ import type { ExtensionBindings } from "../runs/shared/extension-bindings.ts";
 import type { WorkflowChildPermitContext } from "./workflow-child-permit.ts";
 import type { WatchdogWarningDetails } from "../watchdog/types.ts";
 import type { RequiredChildExtensionSnapshot } from "./required-child-extensions.ts";
+import type { ResolvedRunPolicy } from "../policy/snapshot.ts";
 
 // ============================================================================
 // Basic Types
@@ -1886,6 +1887,8 @@ export interface AsyncStatus {
 	/** Parent admission authority before the selected workflow child's descendant restrictions. */
 	admissionCapabilityCeiling?: ResolvedSubagentCapabilityCeiling;
 	capabilityAudit?: SubagentCapabilityAudit;
+	/** Compact resolved-policy snapshot written once at launch; display prefers it over fragments. */
+	policySnapshot?: ResolvedRunPolicy;
 	workflow?: Details["workflow"];
 	workflowChildren?: WorkflowChildSummary;
 	parentWorkflowRunId?: string;
@@ -2562,6 +2565,8 @@ export const FLEET_KEYBINDING_ACTIONS = [
 	"steer",
 	"inspect",
 	"stop",
+	"interrupt",
+	"resume",
 	"toggleTools",
 ] as const;
 
@@ -2580,13 +2585,6 @@ export interface MainWindowRendererConfig {
 	compactResultMaxLines?: number;
 }
 
-export interface ForkContextConfig {
-	/** Keep the complete fork by default, or summarize large text-only tool results before launch. */
-	mode?: "full" | "pruned";
-	/** Required pruning model when mode is "pruned". */
-	model?: string;
-}
-
 export interface ActiveAsyncCapacityConfig {
 	/** Reclaim failed runner slots after this age when process proof is unknown; false keeps strict retention. */
 	abandonedSlotReleaseAfterMs?: number | false;
@@ -2594,10 +2592,6 @@ export interface ActiveAsyncCapacityConfig {
 
 export interface ExtensionConfig {
 	asyncByDefault?: boolean;
-	/** Set the context for launches that omit an explicit context. */
-	defaultSubagentContext?: "fresh" | "fork";
-	/** Configure how every resolved fork session is prepared before child spawn. */
-	forkContext?: ForkContextConfig;
 	/** Optional shortcut that detaches the active foreground single-subagent run. */
 	foregroundDetachShortcut?: string;
 	/** Show the Claude Code-style navigable fleet. Defaults to true. */
@@ -2808,6 +2802,9 @@ export const POLL_INTERVAL_MS = 250;
 export const WIDGET_ANIMATION_INTERVAL_MS = 1000;
 export const MAX_WIDGET_JOBS = 4;
 export const DEFAULT_SUBAGENT_MAX_DEPTH = 2;
+export const MODEL_VISIBLE_SUBAGENT_ACTIONS = ["steer", "resume", "interrupt", "status", "guide", "validate"] as const;
+
+/** Internal registry: every action the internal/slash/RPC/Fleet dispatch can route. Only MODEL_VISIBLE_SUBAGENT_ACTIONS is model-visible (see executePublic gate). */
 export const SUBAGENT_ACTIONS = ["list", "get", "models", "children.list", "guide", "validate", "create", "update", "delete", "eject", "disable", "enable", "reset", "mission.create", "mission.list", "mission.show", "mission.update", "mission.resolve-decision", "mission.attach-run", "mission.close", "worktree.discard", "worktree.cleanup", "lane.status", "lane.recordMerge", "lane.recordSupersession", "refine", "refine.show", "refine.rollback", "inspector.open", "inspector.command", "inspector.status", "inspector.close", "project.open", "project.status", "project.close", "status", "debug.run", "grant-spawn-budget", "interrupt", "resume", "steer", "stop", "dismiss", "doctor", "watchdog.status", "watchdog.check", "watchdog.configure", "watchdog.recommend-model", "schedule.create", "schedule.list", "schedule.show", "schedule.history", "schedule.pause", "schedule.resume", "schedule.run", "schedule.run-due", "schedule.delete"] as const;
 
 export const DEFAULT_FORK_PREAMBLE =

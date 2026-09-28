@@ -99,7 +99,6 @@ function buildBuiltinBase(agent: AgentConfig): BuiltinAgentOverrideBase {
 		inheritProjectContext: agent.inheritProjectContext,
 		inheritGlobalContext: agent.inheritGlobalContext,
 		inheritSkills: agent.inheritSkills,
-		...(agent.defaultContext !== undefined ? { defaultContext: agent.defaultContext } : {}),
 		...(agent.acceptanceRole !== undefined ? { acceptanceRole: agent.acceptanceRole } : {}),
 		...(agent.disabled !== undefined ? { disabled: agent.disabled } : {}),
 		systemPrompt: agent.systemPrompt,
@@ -201,7 +200,6 @@ function metadataFor(agent: AgentConfig): string {
 	lines.push(`Inherit project context: ${agent.inheritProjectContext ? "true" : "false"}`);
 	lines.push(`Inherit global context: ${agent.inheritGlobalContext ? "true" : "false"}`);
 	lines.push(`Inherit skills: ${agent.inheritSkills ? "true" : "false"}`);
-	if (agent.defaultContext) lines.push(`Default context: ${agent.defaultContext}`);
 	if (agent.defaultReads?.length) lines.push(`Reads: ${agent.defaultReads.join(", ")}`);
 	if (agent.defaultProgress) lines.push("Progress: true");
 	if (agent.maxSubagentDepth !== undefined) lines.push(`Max subagent depth: ${agent.maxSubagentDepth}`);
@@ -225,7 +223,7 @@ async function selectFromList(ctx: ExtensionContext, title: string, subtitle: st
 	return choice ? (items.find((item) => item.value === choice)?.value ?? labelToValue.get(choice)) : undefined;
 }
 
-async function chooseModel(ctx: ExtensionContext, agent: AgentConfig): Promise<string | undefined | null> {
+export async function chooseModel(ctx: ExtensionContext, agent: AgentConfig): Promise<string | undefined | null> {
 	const models = await liveAvailableModels(ctx);
 	const current = agent.model ?? INHERIT_MODEL_CHOICE;
 	const items: SelectorItem[] = [{ value: INHERIT_MODEL_CHOICE, label: INHERIT_MODEL_CHOICE, current: !agent.model }];
@@ -241,7 +239,7 @@ async function chooseModel(ctx: ExtensionContext, agent: AgentConfig): Promise<s
 	return choice === INHERIT_MODEL_CHOICE ? undefined : choice;
 }
 
-async function chooseThinking(ctx: ExtensionContext, agent: AgentConfig): Promise<string | undefined | null> {
+export async function chooseThinking(ctx: ExtensionContext, agent: AgentConfig): Promise<string | undefined | null> {
 	const availableModels = (await liveAvailableModels(ctx)).map(toModelInfo);
 	const effectiveModel = agent.model ?? (ctx.model ? modelFullId(ctx.model) : undefined);
 	const modelInfo = findModelInfo(effectiveModel, availableModels, ctx.model?.provider);
@@ -302,7 +300,7 @@ function persistSettingsField(
 	};
 }
 
-async function saveAgentModel(ctx: ExtensionContext, agent: AgentConfig, selectedModel: string | undefined): Promise<string | null> {
+export async function saveAgentModel(ctx: ExtensionContext, agent: AgentConfig, selectedModel: string | undefined): Promise<string | null> {
 	if (savesThroughSettings(agent, "model")) {
 		const scope = await chooseOverrideScope(ctx, agent);
 		if (!scope) return null;
@@ -325,7 +323,7 @@ async function saveAgentModel(ctx: ExtensionContext, agent: AgentConfig, selecte
 		: `Cleared '${agent.name}' model in ${updated.filePath}.`;
 }
 
-async function saveAgentThinking(ctx: ExtensionContext, agent: AgentConfig, selectedThinking: string | undefined): Promise<string | null> {
+export async function saveAgentThinking(ctx: ExtensionContext, agent: AgentConfig, selectedThinking: string | undefined): Promise<string | null> {
 	if (savesThroughSettings(agent, "thinking")) {
 		const scope = await chooseOverrideScope(ctx, agent);
 		if (!scope) return null;
@@ -357,7 +355,7 @@ function metadataSummary(agent: AgentConfig): string {
 	].join(" · ");
 }
 
-async function saveAgentSystemPrompt(ctx: ExtensionContext, agent: AgentConfig, systemPrompt: string): Promise<string | null> {
+export async function saveAgentSystemPrompt(ctx: ExtensionContext, agent: AgentConfig, systemPrompt: string): Promise<string | null> {
 	const nextPrompt = systemPrompt.replace(/\s+$/, "");
 	if (savesThroughSettings(agent, "systemPrompt")) {
 		const scope = await chooseOverrideScope(ctx, agent);

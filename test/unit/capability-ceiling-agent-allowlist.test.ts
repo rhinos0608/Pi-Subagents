@@ -4,8 +4,6 @@ import { handleList } from "../../src/agents/agent-management.ts";
 import type { AgentConfig } from "../../src/agents/agents.ts";
 import { resolveSubagentLaunchContract } from "../../src/api/preflight.ts";
 import {
-	decodeSubagentCapabilityCeiling,
-	encodeSubagentCapabilityCeiling,
 	intersectSubagentCapabilityCeilings,
 	parseSubagentCapabilityCeiling,
 	registerSubagentCapabilityCeiling,
@@ -28,10 +26,9 @@ function agent(name: string): AgentConfig {
 }
 
 describe("capability ceiling agent allowlist", () => {
-	it("parses, round-trips, and intersects allowedAgents", () => {
+	it("parses and intersects allowedAgents", () => {
 		const parsed = parseSubagentCapabilityCeiling({ version: 1, allowedAgents: ["worker", "reviewer", "worker"], denyExtensions: false, sources: ["plan"] });
 		assert.deepEqual(parsed.allowedAgents, ["reviewer", "worker"]);
-		assert.deepEqual(decodeSubagentCapabilityCeiling(encodeSubagentCapabilityCeiling(parsed)), parsed);
 
 		assert.deepEqual(intersectSubagentCapabilityCeilings(
 			{ version: 1, allowedAgents: ["worker", "reviewer"], denyExtensions: false, sources: ["outer"] },

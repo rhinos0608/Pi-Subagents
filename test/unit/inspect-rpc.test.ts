@@ -218,16 +218,16 @@ describe("inspect-rpc reply content", () => {
 		const reply = buildInspectReply({ requestId: "r7", asyncId: "run-p2", childId: "step:9" }, makeDeps(root, resultsDir));
 		assert.equal(reply.error?.code, "not_found");
 	});
-	it("omits task for fork-context children", () => {
-		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-inspect-fork-"));
+	it("attributes task for fresh-context children", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-inspect-fresh-"));
 		const { resultsDir } = makeRun(root, {
-			runId: "run-fork",
-			context: "fork",
-			sessionMessages: [userMessage("inherited parent text"), assistantMessage("answer")],
+			runId: "run-fresh",
+			context: "fresh",
+			sessionMessages: [userMessage("delegated child task"), assistantMessage("answer")],
 		});
-		const reply = buildInspectReply({ requestId: "r8", asyncId: "run-fork" }, makeDeps(root, resultsDir));
+		const reply = buildInspectReply({ requestId: "r8", asyncId: "run-fresh" }, makeDeps(root, resultsDir));
 		assert.equal(reply.error, undefined);
-		assert.equal(reply.task, undefined);
+		assert.equal(reply.task, "delegated child task");
 		assert.equal(reply.messages?.length, 2);
 	});
 	it("reports running state with messages so far and no final output", () => {

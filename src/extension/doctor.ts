@@ -35,7 +35,6 @@ interface DoctorReportInput {
 	cwd: string;
 	config: ExtensionConfig;
 	state: SubagentState;
-	context?: "fresh" | "fork";
 	requestedSessionDir?: string;
 	currentSessionFile?: string | null;
 	currentSessionId?: string | null;
@@ -156,10 +155,10 @@ function formatDiscovery(input: DoctorReportInput, deps: DoctorDeps): string[] {
 	];
 }
 
-function formatIntercomDiagnostic(diagnostic: IntercomBridgeDiagnostic, context: "fresh" | "fork" | undefined): string[] {
+function formatIntercomDiagnostic(diagnostic: IntercomBridgeDiagnostic): string[] {
 	const lines = [
 		`- bridge: ${diagnostic.active ? "active" : "inactive"}${diagnostic.reason ? ` (${diagnostic.reason})` : ""}`,
-		`- mode: ${diagnostic.mode}; context: ${context ?? "unspecified"}`,
+		`- mode: ${diagnostic.mode}; context: fresh`,
 		`- orchestrator target: ${diagnostic.orchestratorTarget ?? "not available"}`,
 		`- supervisor channel: ${diagnostic.supervisorChannelAvailable ? "available" : "unavailable"} (${diagnostic.extensionDir})`,
 	];
@@ -268,7 +267,7 @@ export function buildDoctorReport(input: DoctorReportInput): string {
 			config: input.config.intercomBridge,
 			orchestratorTarget: input.orchestratorTarget,
 			cwd: input.cwd,
-		}), input.context).join("\n")).split("\n"),
+		})).join("\n")).split("\n"),
 	];
 	return lines.join("\n");
 }

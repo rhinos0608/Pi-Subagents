@@ -16,6 +16,7 @@ import {
 	settleForegroundSchedulingOwner,
 	updateForegroundChild,
 } from "./foreground-control.ts";
+import { buildResolvedRunPolicy } from "../../policy/snapshot.ts";
 import { getLivePromptAudit, rewritePromptWithGuidance, updateLiveEffectivePrompt } from "./prompt-audit.ts";
 import { persistForegroundRunHistory, MAX_REMEMBERED_FOREGROUND_RUNS } from "./foreground-history.ts";
 import { resolveExecutionAgentScope } from "../../agents/agent-scope.ts";
@@ -56,8 +57,6 @@ import { encodeIndexSegment } from "../background/index-segment.ts";
 import { enqueueChainAppendRequest, readPendingChainAppendRequests, runnerStepOutputNames } from "../background/chain-append.ts";
 import { ChainOutputValidationError, validateChainOutputBindingsWithContext } from "../shared/chain-outputs.ts";
 import { acceptanceHasTypedVerify, normalizeGateAcceptance, resolveAcceptanceReportMode, TYPED_VERIFY_OUTPUT_SCHEMA_CONFLICT, validateAcceptanceInput, validateExecutionAcceptance, validateExecutionAcceptancePolicy } from "../shared/acceptance.ts";
-import { canPreferFork, createForkContextResolver, resolveSubagentLaunchContext } from "../../shared/fork-context.ts";
-import { createPrunedForkSessionWriter } from "../../shared/pruned-fork.ts";
 import { resolveCurrentSessionId } from "../../shared/session-identity.ts";
 import { currentCompletionOwnerId } from "../../shared/completion-owner.ts";
 import { SUBAGENT_ASYNC_COMPLETE_EVENT } from "../../shared/types.ts";
@@ -138,7 +137,7 @@ import {
 	type WorkflowResourceAuthority,
 	type WorkflowResourcePermit,
 } from "../../shared/workflow-child-permit.ts";
-import { deepFreezeWorkflowArgs, normalizeWorkflowArgs, resolveWorkflowResource } from "../../workflows/workflow-resources.ts";
+import { deepFreezeWorkflowArgs, normalizeWorkflowArgs } from "../../workflows/workflow-resources.ts";
 import { stableJsonDigest } from "../../shared/launch-contract.ts";
 import {
 	cleanupWorktrees,
@@ -194,6 +193,7 @@ import {
 	DIRS,
 	DEFAULT_ARTIFACT_CONFIG,
 	DEFAULT_FORK_PREAMBLE,
+	MODEL_VISIBLE_SUBAGENT_ACTIONS,
 	SUBAGENT_ACTIONS,
 	SUBAGENT_ASYNC_STARTED_EVENT,
 	SUBAGENT_CHILD_STATUS_EVENT,
@@ -245,14 +245,14 @@ function hasSingleAdjacentTransposition(left: string, right: string): boolean {
 
 export function unknownSubagentActionMessage(action: string): string {
 	const requested = action.toLowerCase();
-	const suggestion = SUBAGENT_ACTIONS.find((candidate) => {
+	const suggestion = MODEL_VISIBLE_SUBAGENT_ACTIONS.find((candidate) => {
 		const distance = editDistance(requested, candidate);
 		const closeMatch = distance <= Math.max(1, Math.floor(candidate.length / 4)) || hasSingleAdjacentTransposition(requested, candidate);
 		if (DESTRUCTIVE_MANAGEMENT_ACTIONS.has(candidate)) return distance === 1 && requested.length >= candidate.length - 1;
 		return closeMatch;
 	});
-	const nextStep = 'Use subagent({ action: "status" }) to inspect runs or subagent({ action: "list" }) to inspect agents.';
-	const validActions = `Valid: ${SUBAGENT_ACTIONS.join(", ")}.`;
+	const nextStep = 'Use subagent({ action: "status" }) to inspect runs or subagent({ action: "guide" }) to read topic docs.';
+	const validActions = `Valid: ${MODEL_VISIBLE_SUBAGENT_ACTIONS.join(", ")}.`;
 	return suggestion
 		? `Unknown action: ${action}. Did you mean ${suggestion}? ${nextStep} ${validActions}`
 		: `Unknown action: ${action}. ${nextStep} ${validActions}`;
@@ -309,7 +309,7 @@ interface TaskParam {
 
 /**
  * Model-authored public vocabulary (Phase 6a cutover): agent, task, cwd,
- * workflowScript, action, id, message ONLY. executePublic rejects any other
+ * workflowScript, action, id, message, topic (guide-only) ONLY. executePublic rejects any other
  * model-supplied key; the tool schema sets additionalProperties:false so
  * providers reject them before dispatch.
  */
@@ -321,6 +321,8 @@ export interface PublicSubagentParamsLike {
 	action?: string;
 	id?: string;
 	message?: string;
+	/** Guide-only topic for action:"guide"; ignored on other actions. */
+	topic?: string;
 }
 
 // ---- Internal boundary: everything below is NEVER model-authored. ----
@@ -493,7 +495,6 @@ function inheritedRunFanoutBudget(deps: Pick<ExecutorDeps, "childRuntime">): Run
 }
 
 type ForkSessionFileForTask = (agentName: string, idx?: number, modelOverride?: string, modelOverrideFromParent?: boolean, modelOrigin?: ModelOrigin) => string | undefined;
-type PrepareForkSessionForTask = (agentName: string, idx?: number, modelOverride?: string, modelOverrideFromParent?: boolean, modelOrigin?: ModelOrigin) => Promise<void>;
 type ThinkingOverrideForTask = () => AgentConfig["thinking"] | undefined;
 
 interface ExecutionContextData {
@@ -557,6 +558,7 @@ const REMOVED_PUBLIC_SUBAGENT_FIELDS = [
 	"checkpointBeforeDeadlineMs",
 	"usageBudget",
 	"skill",
+	"async",
 	"model",
 	"fast",
 	"thinking",
@@ -566,7 +568,7 @@ function rejectRemovedPublicSubagentFields(params: PublicSubagentParamsLike): st
 	const record = params as Record<string, unknown>;
 	const rejected = (REMOVED_PUBLIC_SUBAGENT_FIELDS as readonly string[]).filter((field) => record[field] !== undefined);
 	if (!rejected.length) return undefined;
-	return `Removed subagent field(s) rejected: ${rejected.join(", ")}. The public subagent vocabulary is agent, task, cwd, workflowScript, action, id, message only.`;
+	return `Removed subagent field(s) rejected: ${rejected.join(", ")}. The public subagent vocabulary is agent, task, cwd, workflowScript, action, id, message, topic (guide-only).`;
 }
 
 /** Control actions target a live run, so they require a non-empty run id. Launch mode omits action and id legitimately. */
@@ -579,20 +581,6 @@ export function rejectMissingControlRunId(params: PublicSubagentParamsLike): str
 		return `Action '${params.action}' requires id to be a non-empty run id string.`;
 	}
 	return undefined;
-}
-
-function loadWorkflowScriptPath(params: SubagentParamsLike, runtimeCwd: string): { params?: SubagentParamsLike; error?: string } {
-	if (params.workflowScriptPath === undefined) return { params };
-	const scriptPath = path.resolve(resolveRequestedCwd(runtimeCwd, params.cwd), params.workflowScriptPath);
-	let workflowScript: string;
-	try {
-		workflowScript = fs.readFileSync(scriptPath, "utf8");
-	} catch (error) {
-		return { error: `Failed to read workflowScriptPath '${scriptPath}': ${error instanceof Error ? error.message : String(error)}` };
-	}
-	if (!workflowScript.trim()) return { error: `workflowScriptPath file '${scriptPath}' is empty.` };
-	const { workflowScriptPath: _workflowScriptPath, ...rest } = params;
-	return { params: { ...rest, workflowScript } };
 }
 
 export function removeForegroundControlIfIdle(state: SubagentState, runId: string, trackRetainedNestedRoute?: (rootRunId: string) => void): boolean {
@@ -1863,7 +1851,7 @@ function resolveRequestedResumeTarget(params: SubagentParamsLike, deps: Executor
 	const requestedId = params.id ?? params.runId;
 	let resolved: ResolvedSubagentRunId | undefined;
 	try {
-		resolved = requestedId ? resolveSubagentRunId(requestedId, omitUndefinedProperties({ state: deps.state, nested: nestedResolutionScopeForExecutor(deps) })) : undefined;
+		resolved = requestedId ? resolveSubagentRunId(requestedId, omitUndefinedProperties({ state: deps.state, nested: nestedResolutionScopeForExecutor(deps), exactOnly: true })) : undefined;
 	} catch (error) {
 		const message = error instanceof Error ? error.message : "";
 		const asyncMatches = message.match(/async:/g)?.length ?? 0;
@@ -1880,7 +1868,7 @@ function resolveRequestedResumeTarget(params: SubagentParamsLike, deps: Executor
 		];
 		return resolveNestedResumeTarget(resolved, trustedSessionRoots);
 	}
-	return resolveResumeTarget(params, deps.state, { asyncRequireSessionFile: false });
+	return resolveResumeTarget(params, deps.state, { asyncRequireSessionFile: false, exactOnly: true });
 }
 
 async function resumeAsyncRun(input: {
@@ -2821,6 +2809,17 @@ function applySingleAgentLaunchDefaults(params: SubagentParamsLike, agents: Agen
 
 function validateLaunchOutputSchemaOverrides(params: SubagentParamsLike): string | undefined {
 	const values: unknown[] = [params.outputSchema, ...(params.tasks ?? []).map((task) => task.outputSchema)];
+	// Chain steps carry outputSchema at runtime for internal callers even though the
+	// shrunken ChainStep type only models orchestration intent; narrow at runtime.
+	for (const rawStep of params.chain ?? []) {
+		const step = (typeof rawStep === "object" && rawStep !== null ? rawStep : {}) as {
+			outputSchema?: unknown;
+			parallel?: unknown;
+		};
+		if (isParallelStep(rawStep as never)) values.push(...(step.parallel as Array<{ outputSchema?: unknown }>).map((task) => task.outputSchema));
+		else if (isDynamicParallelStep(rawStep as never)) values.push((step.parallel as { outputSchema?: unknown }).outputSchema);
+		else values.push(step.outputSchema);
+	}
 	for (const value of values) {
 		if (value === undefined || value === false) continue;
 		try {
@@ -3271,6 +3270,10 @@ async function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 		const modelOverrideFromParent = modelOrigin === "inherited";
 		const launchRuleError = applyWatchdogLaunchRules({ cwd: effectiveCwd, agent: a.name, model: modelOverride ?? (parentModel && `${parentModel.provider}/${parentModel.id}`), warn: (violation) => deps.watchdog?.displayRuleWarning(violation) });
 		if (launchRuleError) return toExecutionErrorResult(params, new Error(launchRuleError), "fresh");
+		// The agent definition deadline is the only per-child timeout carrier
+		// (per-call timeoutMs left the model contract); without this forward the
+		// async runner never sees it.
+		const effectiveTimeoutMs = a.defaultTimeoutMs;
 		const asyncResult = await executeAsyncSingle(id, compactOptional<Parameters<typeof executeAsyncSingle>[1]>({
 			agent: params.agent!,
 			task: params.task ?? "",
@@ -3295,6 +3298,7 @@ async function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 			outputClaimPath: params.workflowOutputClaimPath,
 			...(params.reads !== undefined ? { reads: params.reads } : {}),
 			outputBaseDir: resolveSingleRunOutputBaseDir(deps, artifactsDir, id),
+			...(effectiveTimeoutMs !== undefined ? { timeoutMs: effectiveTimeoutMs } : {}),
 			modelOverride,
 			fast: params.fast,
 			modelOverrideFromParent,
@@ -3395,12 +3399,15 @@ function resolveSingleRunOutputBaseDir(deps: ExecutorDeps, artifactsDir: string,
 	return resolveConfiguredSingleRunOutputBaseDir(deps) ?? path.join(artifactsDir, "outputs", sanitizeRunPathSegment(runId));
 }
 
-function workflowChildDefaultOutput(aggregateOutputPath: string | undefined, artifactsDir: string, workflowRunId: string, workflowKey: string): string {
+function workflowChildDefaultOutput(aggregateOutputPath: string | undefined, artifactsDir: string, workflowRunId: string, workflowKey: string, configuredOutputBaseDir?: string): string {
 	if (aggregateOutputPath) {
 		const parsed = path.parse(aggregateOutputPath);
 		return path.join(parsed.dir, `${parsed.name}.${workflowKey}${parsed.ext || ".md"}`);
 	}
-	return path.join(artifactsDir, "outputs", sanitizeRunPathSegment(workflowRunId), `${workflowKey}.md`);
+	// Colliding inherited outputs isolate under the configured base when one is
+	// set, mirroring the default run-output layout otherwise.
+	const baseDir = configuredOutputBaseDir ?? path.join(artifactsDir, "outputs", sanitizeRunPathSegment(workflowRunId));
+	return path.join(baseDir, `${workflowKey}.md`);
 }
 
 function workflowHostCommandRunner(input: {
@@ -3478,6 +3485,18 @@ function resolveWorkflowChildOutputPath(input: {
 	if (typeof input.params.resume === "string" && (!hasExplicitOutput || rawOutput === true || rawOutput === "true")) {
 		if (!input.state) return { path: undefined, inherited: false };
 		const index = input.params.index;
+		// Retained nested identity owns routing: a resume that targets a nested run
+		// must reach the control inbox regardless of output persistence policy.
+		// resolveResumeTarget only knows foreground/async runs, so without this
+		// check a default-output resume of a live nested run throws "Async run
+		// not found" during output-claim admission and never reaches launch.
+		try {
+			const nested = resolveSubagentRunId(input.params.resume.trim(), omitUndefinedProperties({ state: input.state, exactOnly: true }));
+			if (nested?.kind === "nested") return { path: undefined, inherited: false };
+		} catch {
+			// Ambiguous/unresolvable ids fall through to the foreground/async
+			// output inheritance below, which reports the authoritative error.
+		}
 		const target = resolveResumeTarget({
 			id: input.params.resume.trim(),
 			...(typeof index === "number" && Number.isInteger(index) ? { index } : {}),
@@ -3486,7 +3505,7 @@ function resolveWorkflowChildOutputPath(input: {
 	}
 	const childCwd = resolveWorkflowChildLocalCwd(input);
 	let agentOutput: string | undefined;
-	if (rawOutput === true || rawOutput === "true" || (!hasExplicitOutput && !input.aggregateOutputPath)) {
+	if (rawOutput === true || rawOutput === "true" || !hasExplicitOutput) {
 		if (typeof input.params.agent === "string") {
 			const agentScope = resolveExecutionAgentScope(input.params.agentScope ?? input.workflowAgentScope);
 						const workflowAgents = input.discoverAgents(childCwd, agentScope).agents;
@@ -3500,9 +3519,9 @@ function resolveWorkflowChildOutputPath(input: {
 		? agentOutput
 		: hasExplicitOutput
 			? rawOutput
-			: input.aggregateOutputPath
+			: (agentOutput ?? (input.aggregateOutputPath
 				? workflowChildDefaultOutput(input.aggregateOutputPath, input.artifactsDir, input.workflowRunId, input.key)
-				: agentOutput;
+				: undefined));
 	return {
 		path: resolveSingleOutputPath(output, input.ctxCwd, childCwd, input.configuredOutputBaseDir ?? path.join(input.artifactsDir, "outputs", sanitizeRunPathSegment(input.workflowRunId))),
 		inherited: !hasExplicitOutput && !input.aggregateOutputPath && agentOutput !== undefined,
@@ -3538,7 +3557,7 @@ function workflowChildOutputClaims(input: {
 	const overrides = new Map<string, string>();
 	for (const entry of resolvedEntries) {
 		if (entry.inherited && entry.path && (paths.get(resolveWorkflowHostOutputClaimPath(entry.path)) ?? 0) > 1) {
-			const output = workflowChildDefaultOutput(input.aggregateOutputPath, input.artifactsDir, input.workflowRunId, entry.key);
+			const output = workflowChildDefaultOutput(input.aggregateOutputPath, input.artifactsDir, input.workflowRunId, entry.key, input.configuredOutputBaseDir);
 			overrides.set(entry.key, output);
 			entry.path = output;
 		}
@@ -3583,7 +3602,12 @@ function prepareWorkflowChildLaunchParams(input: {
 	if (usesDefaultOutput && input.outputOverride !== undefined) {
 		childParams = { ...input.childParams, output: input.outputOverride };
 	} else if (usesDefaultOutput && input.aggregateOutputPath !== undefined) {
-		childParams = { ...input.childParams, output: workflowChildDefaultOutput(input.aggregateOutputPath, input.artifactsDir, input.parentWorkflowRunId, input.workflowKey) };
+		// Resolve exactly like admission: an agent-definition default wins under
+		// the aggregate; the sibling-of-aggregate default is only the fallback.
+		// Resolving differently here than in workflowChildOutputClaims trips the
+		// post-claim "Output path changed after it was claimed" guard.
+		const resolvedOutput = resolveWorkflowChildOutputPath({ ctxCwd: input.ctxCwd, workflowCwd: input.workflowCwd, artifactsDir: input.artifactsDir, workflowRunId: input.parentWorkflowRunId, aggregateOutputPath: input.aggregateOutputPath, configuredOutputBaseDir: input.configuredOutputBaseDir, discoverAgents: input.discoverAgents, agents: input.agents, workflowAgentScope: input.workflowAgentScope, key: input.workflowKey, params: input.childParams });
+		if (resolvedOutput.path) childParams = { ...input.childParams, output: resolvedOutput.path };
 	} else if (input.childParams.resume === undefined || input.childParams.output !== undefined) {
 		const resolvedOutput = resolveWorkflowChildOutputPath({ ctxCwd: input.ctxCwd, workflowCwd: input.workflowCwd, artifactsDir: input.artifactsDir, workflowRunId: input.parentWorkflowRunId, aggregateOutputPath: input.aggregateOutputPath, configuredOutputBaseDir: input.configuredOutputBaseDir, discoverAgents: input.discoverAgents, agents: input.agents, workflowAgentScope: input.workflowAgentScope, key: input.workflowKey, params: input.childParams });
 		if (resolvedOutput.path) childParams = { ...input.childParams, output: resolvedOutput.path };
@@ -4856,8 +4880,11 @@ function createScheduledOwnerState(source: SubagentState, ownerSessionId: string
 }
 
 /**
- * Scheduler-owned launches bypass the model schema but not the public authority boundary:
- * raw scheduled scripts remain host-denied unless a workflow resource grants that authority.
+ * Scheduler-owned launches ride the internal owner dispatch so scheduler fields
+ * such as args and scheduleOrigin survive the model-facing schema gate. That
+ * path does not inherit host authority: raw scheduled scripts remain host-denied
+ * unless a workflow resource grants it. Module-level state preserves the mark
+ * across the hop to the per-owner executor.
  */
 const scheduledExecutions = new WeakSet<object>();
 
@@ -4899,7 +4926,6 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 	/** Scheduled state visible to the current runtime supervisor owner only. */
 	getCurrentSupervisorOwnerStates: () => Iterable<SubagentState>;
 } {
-	const delegatedThinkingOverrides = new WeakMap<object, AgentConfig["thinking"]>();
 	const delegatedZeroToolBudgets = new WeakSet<object>();
 	const delegatedExecutions = new WeakSet<object>();
 	const publicExecutions = new WeakSet<object>();
@@ -4917,7 +4943,6 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		parentModelOverride?: ParentModel | null,
 	): Promise<AgentToolResult<Details>> => {
 		const workflowLaunchObserver = workflowLaunchObservers.get(params);
-		const delegatedThinkingOverride = delegatedThinkingOverrides.get(params);
 		const allowZeroToolBudget = delegatedZeroToolBudgets.has(params);
 		const delegatedExecution = delegatedExecutions.has(params);
 		const publicExecution = publicExecutions.has(params);
@@ -5146,6 +5171,14 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 					workflow: { trace: [], emits: [], console: [], ...(workflowArgsEvidence ?? {}), ...(workflowResource ? { resource: workflowResource.provenance } : {}) },
 					workflowChildren: workflowChildSummary({ parentToolCallId: toolCallId, workflowRunId, workflowState: "running", inventoryComplete: false }),
 					runFanoutBudget: getRunFanoutBudgetSnapshot(workflowFanoutBudget),
+					policySnapshot: buildResolvedRunPolicy({
+						model: workflowParentModel ? `${workflowParentModel.provider}/${workflowParentModel.id}` : undefined,
+						modelOrigin: workflowParentModel ? "inherited" : "default",
+						toolBudgetSource: "none",
+						timeoutSource: "none",
+						worktree: requestParams.worktree === true,
+						allowedTools: workflowCapabilityCeiling?.allowedTools,
+					}),
 				};
 				const appendWorkflowEvent = (event: Record<string, unknown>) => {
 					try {
@@ -6490,14 +6523,14 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 					if (paramsWithResolvedCwd.view) {
 						return withBudget({ content: [{ type: "text", text: "action='debug.run' does not support status views." }], isError: true, details: { mode: "management", results: [] } });
 					}
-					return withBudget(inspectSubagentStatus(paramsWithResolvedCwd, omitUndefinedProperties({ state: deps.state, nested: nestedScope, sessionRoots, abandonedSlotReleaseAfterMs: resolveAbandonedSlotReleaseAfterMs(deps.config.capacity?.abandonedSlotReleaseAfterMs) })));
+					return withBudget(inspectSubagentStatus(paramsWithResolvedCwd, omitUndefinedProperties({ state: deps.state, nested: nestedScope, sessionRoots, exactOnly: true, abandonedSlotReleaseAfterMs: resolveAbandonedSlotReleaseAfterMs(deps.config.capacity?.abandonedSlotReleaseAfterMs) })));
 				}
 				if (paramsWithResolvedCwd.view === "fleet" || paramsWithResolvedCwd.view === "transcript") {
-					return withBudget(inspectSubagentStatus(paramsWithResolvedCwd, omitUndefinedProperties({ state: deps.state, nested: nestedScope, sessionRoots, abandonedSlotReleaseAfterMs: resolveAbandonedSlotReleaseAfterMs(deps.config.capacity?.abandonedSlotReleaseAfterMs) })));
+					return withBudget(inspectSubagentStatus(paramsWithResolvedCwd, omitUndefinedProperties({ state: deps.state, nested: nestedScope, sessionRoots, exactOnly: true, abandonedSlotReleaseAfterMs: resolveAbandonedSlotReleaseAfterMs(deps.config.capacity?.abandonedSlotReleaseAfterMs) })));
 				}
 				if (targetRunId) {
 					try {
-						const resolved = resolveSubagentRunId(targetRunId, omitUndefinedProperties({ state: deps.state, nested: nestedScope }));
+						const resolved = resolveSubagentRunId(targetRunId, omitUndefinedProperties({ state: deps.state, nested: nestedScope, exactOnly: true }));
 						if (resolved?.kind === "foreground") {
 							const foreground = getForegroundControl(deps.state, resolved.id);
 							if (foreground) {
@@ -6512,7 +6545,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 					const foreground = getForegroundControl(deps.state, undefined);
 					if (foreground) return withBudget(foregroundStatusResult(foreground));
 				}
-				return withBudget(inspectSubagentStatus(paramsWithResolvedCwd, omitUndefinedProperties({ state: deps.state, nested: nestedScope, sessionRoots, abandonedSlotReleaseAfterMs: resolveAbandonedSlotReleaseAfterMs(deps.config.capacity?.abandonedSlotReleaseAfterMs) })));
+				return withBudget(inspectSubagentStatus(paramsWithResolvedCwd, omitUndefinedProperties({ state: deps.state, nested: nestedScope, sessionRoots, exactOnly: true, abandonedSlotReleaseAfterMs: resolveAbandonedSlotReleaseAfterMs(deps.config.capacity?.abandonedSlotReleaseAfterMs) })));
 			}
 			if (action === "resume") {
 				return resumeAsyncRun(omitUndefinedProperties({
@@ -6574,7 +6607,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 				if (!targetRunId) return { content: [{ type: "text", text: "action='steer' requires id or dir." }], isError: true, details: { mode: "management", results: [] } };
 				let resolved: ResolvedSubagentRunId | undefined;
 				try {
-					resolved = resolveSubagentRunId(targetRunId, omitUndefinedProperties({ state: deps.state, nested: nestedResolutionScopeForExecutor(deps) }));
+					resolved = resolveSubagentRunId(targetRunId, omitUndefinedProperties({ state: deps.state, nested: nestedResolutionScopeForExecutor(deps), exactOnly: true }));
 				} catch (error) {
 					const text = error instanceof Error ? error.message : String(error);
 					return { content: [{ type: "text", text }], isError: true, details: { mode: "management", results: [] } };
@@ -6748,7 +6781,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 				let resolved: ResolvedSubagentRunId | undefined;
 				if (targetRunId) {
 					try {
-						resolved = resolveSubagentRunId(targetRunId, omitUndefinedProperties({ state: deps.state, nested: nestedResolutionScopeForExecutor(deps) }));
+						resolved = resolveSubagentRunId(targetRunId, omitUndefinedProperties({ state: deps.state, nested: nestedResolutionScopeForExecutor(deps), exactOnly: true }));
 					} catch (error) {
 						const message = error instanceof Error ? error.message : String(error);
 						return { content: [{ type: "text", text: message }], isError: true, details: { mode: "management", results: [] } };
@@ -6898,8 +6931,6 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		);
 		if (spawnPreflight.error) return spawnBudgetErrorResult(spawnPreflight.error, foregroundMode);
 
-		let forkSessionFileForIndex: (idx?: number) => string | undefined = () => undefined;
-		let prepareForkSessionForIndex: (idx?: number) => Promise<void> = async () => {};
 		const selectedAgentNames = hasSingle
 			? [effectiveParams.agent!]
 			: hasTasks
@@ -7003,11 +7034,9 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		}
 		const sessionDirForIndex = (idx?: number) =>
 			path.join(sessionRoot, `run-${idx ?? 0}`);
-		const forkSessionFileForTask: ForkSessionFileForTask = () => undefined;
-		const prepareForkSessionForTask: PrepareForkSessionForTask = async () => {};
-		const thinkingOverrideForTask: ThinkingOverrideForTask = () => delegatedThinkingOverride;
-		const childSessionFileForTask: ForkSessionFileForTask = (agentName, idx, modelOverride, modelOverrideFromParent, modelOrigin) =>
-			forkSessionFileForTask(agentName, idx, modelOverride, modelOverrideFromParent, modelOrigin) ?? path.join(sessionDirForIndex(idx), "session.jsonl");
+		const thinkingOverrideForTask: ThinkingOverrideForTask = () => undefined;
+		const childSessionFileForTask: ForkSessionFileForTask = (_agentName, idx) =>
+			path.join(sessionDirForIndex(idx), "session.jsonl");
 		const childSessionFileForIndex = (idx?: number) =>
 			path.join(sessionDirForIndex(idx), "session.jsonl");
 		const chainBindingsError = validateExecutionChainBindings(effectiveParams, deps.config.chain?.dynamicFanout?.maxItems);
@@ -7360,28 +7389,24 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		if (missingControlRunIdError) {
 			return Promise.resolve({ content: [{ type: "text", text: missingControlRunIdError }], isError: true, details: { mode: "management", results: [] } });
 		}
+		// Phase 7c: model dispatch keeps steer/resume/interrupt/status/guide/validate only.
+		// Every other management action stays implemented for internal/slash/RPC/Fleet callers.
+		const publicAction = typeof params.action === "string" ? params.action.trim() : undefined;
+		if (publicAction && !(MODEL_VISIBLE_SUBAGENT_ACTIONS as readonly string[]).includes(publicAction.toLowerCase())) {
+			return Promise.resolve({ content: [{ type: "text", text: `${unknownSubagentActionMessage(publicAction)} Management actions (agents, missions, schedules, watchdogs, inspectors, projects, worktrees, lanes, refinements, stop, dismiss) moved to Fleet; the model cannot invoke them.` }], isError: true, details: { mode: "management", results: [] } });
+		}
 		const normalized = normalizePublicSubagentExecution(params as SubagentParamsLike);
 		if (!normalized.ok) {
 			return Promise.resolve({ content: [{ type: "text", text: normalized.error }], isError: true, details: { mode: normalized.mode, results: [] } });
 		}
 		let publicParams = normalized.params as SubagentParamsLike;
-		if (publicParams.workflow !== undefined) {
-			const resolved = resolveWorkflowResource(publicParams.workflow, publicParams.args, ctx.sessionManager.getSessionId() ?? undefined);
-			if (!resolved.ok) return Promise.resolve({ content: [{ type: "text", text: resolved.error }], isError: true, details: { mode: "workflow", results: [] } });
-			const { workflow: _workflow, args: _args, ...withoutResourceInput } = publicParams;
-			publicParams = { ...withoutResourceInput, workflowScript: resolved.resource.script };
-			workflowResourcePermits.set(publicParams, resolved.resource.permit);
-		} else if (publicParams.workflowScript !== undefined || publicParams.workflowScriptPath !== undefined) {
+		if (publicParams.workflowScript !== undefined) {
 			const normalizedArgs = normalizeWorkflowArgs(publicParams.args);
 			if ("error" in normalizedArgs) return Promise.resolve({ content: [{ type: "text", text: normalizedArgs.error }], isError: true, details: { mode: publicParams.action ? "management" : "workflow", results: [] } });
 			publicParams = { ...publicParams, args: deepFreezeWorkflowArgs(normalizedArgs.args) };
 		}
-		const loaded = loadWorkflowScriptPath(publicParams, ctx.cwd);
-		if (loaded.error) {
-			return Promise.resolve({ content: [{ type: "text", text: loaded.error }], isError: true, details: { mode: publicParams.action ? "management" : "workflow", results: [] } });
-		}
-		publicExecutions.add(loaded.params!);
-		return executeWithSingleDispatchGuard(id, loaded.params!, signal, onUpdate, ctx);
+		publicExecutions.add(publicParams);
+		return executeWithSingleDispatchGuard(id, publicParams, signal, onUpdate, ctx);
 	};
 
 	const executeDelegated = async (
@@ -7393,17 +7418,13 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 	): Promise<AgentToolResult<Details>> => {
 		const delegatedParams = { ...params };
 		const privateParams = delegatedParams as SubagentParamsLike & {
-			delegatedThinkingOverride?: AgentConfig["thinking"];
 			delegatedAllowZeroToolBudget?: true;
 			delegatedWorkflowPermit?: WorkflowChildPermit;
 		};
-		const thinkingOverride = privateParams.delegatedThinkingOverride;
 		const allowZeroToolBudget = privateParams.delegatedAllowZeroToolBudget === true;
 		const workflowPermit = privateParams.delegatedWorkflowPermit;
-		delete privateParams.delegatedThinkingOverride;
 		delete privateParams.delegatedAllowZeroToolBudget;
 		delete privateParams.delegatedWorkflowPermit;
-		if (thinkingOverride !== undefined) delegatedThinkingOverrides.set(delegatedParams, thinkingOverride);
 		if (allowZeroToolBudget) delegatedZeroToolBudgets.add(delegatedParams);
 		if (workflowPermit) workflowPermitContexts.set(delegatedParams, { root: workflowPermit });
 		delegatedExecutions.add(delegatedParams);
@@ -7441,4 +7462,15 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 	}
 
 	return { execute: executeWithSingleDispatchGuard, executePublic, executeDelegated, executeScheduled, getCurrentSupervisorOwnerStates };
+}
+
+/** Fleet resume delegate: runs the SAME eligibility check the model resume path runs. */
+export type FleetResumeExecutor = Pick<ReturnType<typeof createSubagentExecutor>, "executePublic">;
+
+export async function resumeFleetRun(
+	executor: FleetResumeExecutor,
+	ctx: ExtensionContext,
+	input: { runId: string; message: string },
+): Promise<AgentToolResult<Details>> {
+	return executor.executePublic(randomUUID(), { action: "resume", id: input.runId, message: input.message }, new AbortController().signal, undefined, ctx);
 }

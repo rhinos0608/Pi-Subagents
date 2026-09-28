@@ -108,8 +108,7 @@ pi.events.emit("subagents:rpc:v1:request", {
   requestId,
   method: "spawn",
   params: {
-    workflowScript: `return runs.run("main", { agent: "reviewer", task: "Review the current diff" })`,
-    context: "fresh"
+    workflowScript: `return runs.run("main", { agent: "reviewer", task: "Review the current diff" })`
   }
 });
 ```
@@ -118,8 +117,8 @@ The RPC methods are `ping`, `status`, `manage`, `spawn`, `steer`, `interrupt`, `
 
 Method notes:
 
-- `manage` exposes a narrow schedule-only allowlist: `schedule.list`, `schedule.show`, `schedule.history`, `schedule.pause`, `schedule.resume`, `schedule.run`, and `schedule.delete`. All actions except `schedule.list` require `id`. Mission, agent, config, worktree, and arbitrary management actions are rejected before executor dispatch. `ping.capabilities.managementActions` advertises the exact allowlist.
-- `spawn` accepts structured single-child execution (`agent`, `task?`), inline `workflowScript`, or `workflowScriptPath` and is async-only: omit `async` or set `async: true`, omit `clarify`, and do not pass management `action` values. Relative script paths resolve against the request `cwd`. It goes through the same executor as the `subagent` tool, so agent discovery, validation, session attribution, configured spawn caps, child-safety depth, artifacts, and async status all behave the same.
+- `manage` exposes a narrow allowlist advertised by `ping.capabilities.managementActions`. Mission, agent, config, worktree, and arbitrary management actions are rejected before executor dispatch.
+- `spawn` accepts structured single-child execution (`agent`, `task?`) or an inline `workflowScript` and is async-only: omit `async` or set `async: true`, and do not pass management `action` values. It goes through the same executor as the `subagent` tool, so agent discovery, validation, session attribution, configured spawn caps, child-safety depth, artifacts, and async status all behave the same.
 - `steer` requires an async run `id` (plus optional child `index`) and a non-empty `message`; its reply preserves the normal acknowledged-delivery result. Optional `mode` values are `steer` (default), `follow_up`, and `auto`, and receipts include `deliveryStatus: "delivered" | "queued"`. RPC steering disables the direct tool's pause-and-revive recovery in every mode so an extension keeps authority over the exact child it spawned; `ping.capabilities.nonRecoveringSteer` advertises this guarantee.
 - `resume` requires a run target and non-empty `message`. It delegates to the existing revival path, which validates current-session ownership, persisted session/recovery metadata, stopped/live state, capability ceilings, and the exclusive session lease before returning the new async run details. Callers may request a `file-only` output path for the revived result without overriding its model, tools, or budgets. `ping.capabilities.resume` advertises this seam.
 - `cost` returns the same parent-plus-child accounting `/subagent-cost` renders, as data: `{ version: 1, parent, children, childTotal, total, unresolvedAsyncChildren }`, where each usage is `{ input, output, cacheRead, cacheWrite, cost, turns }` and each child carries `label`, `agent`, `runId`, `usage`, and `sessionFile` when known. It is read-only and walks the current session branch plus existing run artifacts, so request it on your own turn boundaries (for example after `agent_settled` or an async completion wake), not on a timer. `unresolvedAsyncChildren` counts async children whose metadata could not be read; treat `childTotal` as a lower bound when it is non-zero, exactly as documented for `/subagent-cost` in [observability.md](observability.md). `ping.capabilities.cost` advertises `{ version: 1 }`.
@@ -129,7 +128,7 @@ Method notes:
 Capability advertisements on `ping`:
 
 - `events.asyncComplete` — exact process-local completion correlation after RPC `spawn`.
-- `managementActions` — exact schedule management actions accepted by RPC `manage`.
+- `managementActions` — exact management actions accepted by RPC `manage`.
 - `launchResolvedExtensions` — the optional launch-resolved extension projection in status details.
 - `runtimeAcknowledgedExtensions` — the optional child-runtime acknowledgement projection and event name.
 - `processTerminalProof` — the process-terminal proof status (see [observability.md](observability.md#process-terminal-proof)).
@@ -190,7 +189,7 @@ const registration = request.result.registration;
 
 If `pi-subagents` is a resolvable dependency of the consumer package, `pi-subagents/agents` exports `RUNTIME_AGENT_REGISTER_EVENT`, the request/result types, and `registerAgentViaEvents()` for the same contract. A separately installed Pi package is not automatically a Node dependency of another package. In that case, use the event contract directly instead of a runtime import. A type-only development dependency is optional.
 
-A registered agent follows the operator's subagent model settings like any other agent: `subagents.defaultModel`, `defaultProvider`, and `defaultThinking` fill a definition that omits `model` or `thinking`, and the `model`, `defaultProvider`, `fast`, and `thinking` fields of `agentOverrides.<name>` win over the definition. Every other definition field stays extension-owned, and other override fields are ignored for runtime agents. Set `model` in the definition only when the agent must not follow operator model settings; `model: "inherit"` selects the parent session model explicitly.
+A registered agent follows the operator's subagent model settings like any other agent: `subagents.defaultModel`, `defaultProvider`, and `defaultThinking` fill a definition that omits `model` or `thinking`, and the `model`, `defaultProvider`, and `thinking` fields of `agentOverrides.<name>` win over the definition. Every other definition field stays extension-owned, and other override fields are ignored for runtime agents. Set `model` in the definition only when the agent must not follow operator model settings; `model: "inherit"` selects the parent session model explicitly.
 
 The installed owner applies the existing runtime-agent validation, collision checks, limits, runtime source metadata, and cleanup. If more than one owner listens, the first handler that writes `request.result` wins. Unsupported versions, malformed requests, and registration failures return `{ ok: false, error }`. No result means no compatible owner handled the event.
 
@@ -242,7 +241,6 @@ import { resolveSubagentLaunchContract } from "pi-subagents/preflight";
 const result = await resolveSubagentLaunchContract({
   agent: "reviewer",
   task: "Review the current diff.",
-  context: "fresh",
   cwd: ctx.cwd,
   sessionRoot: "/tmp/my-extension-preflight-session-root",
   availableModels: ctx.modelRegistry.getAvailable(),
@@ -262,7 +260,7 @@ Preflight covers ordinary single-agent launch resolution:
 
 - Selected agent identity and shadowed candidates.
 - A parsed-definition digest, including system prompt and launch-affecting model, tool, skill, extension, output, and memory fields. Runtime overlays such as the Intercom bridge never change it.
-- Fresh/fork context, effective model and thinking, skill and tool resolution, direct MCP selections, runtime/configured extensions.
+- Resolved launch context (always fresh), effective model and thinking, skill and tool resolution, direct MCP selections, runtime/configured extensions.
 - The resolved Intercom bridge state (`intercomBridge.mode` and `intercomBridge.active`). An active bridge appends the bridge instruction to the child prompt and adds `contact_supervisor` to a declared tool list, exactly as execution does.
 - Artifact/session paths, async lifecycle/status/result/event/process-terminal paths, package/lifecycle versions, capability-ceiling audit data, and stable digests.
 
@@ -279,7 +277,7 @@ Boundaries:
 - Raw prompts are not exposed in public contract output.
 - It is side-effect-free for launch state: it does not create child sessions, temp prompt files, structured-output runtimes, tool-diagnostic files, or run artifacts.
 - Some host-owned facts, such as exact fork snapshots, nested async roots, and live model registries, can only be proven by the Pi host; those appear as `host_required` diagnostics instead of silently pretending to be exact.
-- Preflight reads the extension config, so `defaultSubagentContext: "fresh"` or `"fork"` affects omitted context in the same way as execution. Explicit `context` still wins.
+- Preflight resolves launch context as always fresh. There is no `defaultSubagentContext` setting and no per-call `context` field.
 
 ## Structured delegation API
 
@@ -299,9 +297,7 @@ const request: SubagentDelegationRequest = {
   nodeId: "review-accuracy",
   agent: "reviewer",
   task: "Review the supplied evidence.",
-  context: "fresh",
   cwd: ctx.cwd,
-  thinking: "high",
   result: {
     kind: "structured",
     schema: {
@@ -377,14 +373,14 @@ Semantics:
 - Active registrations intersect their `allowedTools` and `allowedAgents` sets and OR `denyExtensions`.
 - An explicit empty list means no caller-facing tools or launchable agents for that field; an omitted list does not restrict names.
 - `allowedAgents` entries are canonical agent names and are case-sensitive.
-- Launching a non-allowlisted agent fails before spawn, and `{ action: "list" }` keeps restricted agents visible in a separate non-executable section instead of silently hiding them.
+- Launching a non-allowlisted agent fails before spawn, and Fleet agent output keeps restricted agents visible in a separate non-executable section instead of silently hiding them.
 - The resolved snapshot is propagated monotonically to nested and async children and is retained for recovery.
 - `structured_output` may remain as a package-owned internal protocol tool when an output schema requires it; it is not a caller capability.
 - A denied lazy-skill `read` requirement fails before spawn rather than widening the ceiling.
 
 `denyExtensions` suppresses ambient, configured, and MCP provider extensions while retaining the package runtime needed for child protocol enforcement. This is a same-process policy boundary, not a sandbox against malicious code already running in the parent process.
 
-Schedules created while a ceiling is active are rejected until durable schedule persistence is available; unrestricted schedules remain subject to any policy active when they fire. Public status exposes bounded audit counts and sources, never full extension paths.
+Scheduled runs created while a ceiling is active are rejected until durable schedule persistence is available; unrestricted scheduled runs remain subject to any policy active when they fire. Public status exposes bounded audit counts and sources, never full extension paths.
 
 ## Background-work provider API
 
@@ -441,20 +437,11 @@ The async runner process does not import provider internals. It writes operation
 
 ## Inspect integration
 
-Inspect is the portable command and action surface for an existing async run. The public actions are:
-
-```ts
-subagent({ action: "inspector.command", id: "<run-id>", index: 0 })
-subagent({ action: "inspector.open", id: "<run-id>", index: 0, focus: true })
-subagent({ action: "inspector.status", id: "<run-id>", index: 0 })
-subagent({ action: "inspector.close", id: "<run-id>", index: 0 })
-```
-
-`inspector.command` returns a standalone runner command without contacting a host or writing a binding. `inspector.open` selects an available bundled inspector plugin. `status` and `close` select the plugin that owns the run binding and report clearly when that plugin does not support the requested lifecycle action. Without an available plugin, `open` fails closed with an actionable message; ordinary launches remain headless. Closing an inspector never stops the run.
+Inspect is the portable command surface for an existing async run from Fleet. Open the selected child with `Enter`/`H`; Fleet `open` selects an available bundled inspector plugin. Without an available plugin, `open` fails closed with an actionable message; ordinary launches remain headless. Closing an inspector never stops the run.
 
 ### Herdr inspector plugin
 
-The bundled Herdr inspector plugin supports Herdr 0.7.5+. It opens a raw dashboard pane, not the child session and not a literal attach. It reads lifecycle, status, output, and mission artifacts; steer and stop continue through pi-subagents' existing control inbox. Use `focus` only with `inspector.open`; Herdr 0.7.5 cannot focus an arbitrary existing raw pane id.
+The bundled Herdr inspector plugin supports Herdr 0.7.5+. It opens a raw dashboard pane, not the child session and not a literal attach. It reads lifecycle, status, output, and mission artifacts; steer, interrupt, and stop continue through the existing Fleet controls.
 
 ### Ghostty inspector plugin
 
@@ -483,11 +470,7 @@ rows = [
 
 For substantial work in another codebase, Herdr 0.7.5+ can open a project-owned Pi pane rooted in that repository:
 
-```ts
-subagent({ action: "project.open", cwd: "/path/to/repo", message: "Own the auth refresh mission for this project." })
-subagent({ action: "project.status", cwd: "/path/to/repo" })
-subagent({ action: "project.close", cwd: "/path/to/repo" })
-```
+Open a project-owned Pi pane rooted in the target repository from Fleet or slash, and give it a narrow mission/result contract.
 
 A project pane runs its own Pi session in the target directory, so subagents launched from that pane use that project's config, agents, skills, files, git state, and missions. The parent session keeps coordination authority, but it does not own or control the subagents inside the peer pane. Existing headless runs are not moved into the pane. Pane bindings live under `<projectRoot>/.pi/subagents/project-panes/herdr.json` and are only a local pointer to the Herdr pane.
 
@@ -559,13 +542,13 @@ The main runtime files in this repository:
 | `src/extension/index.ts` | Extension registration, tool registration, message/render wiring. |
 | `src/integrations/pi-web-session-liveness.ts` | Optional pi-web idle-eviction liveness bridge. |
 | `src/agents/agents.ts` | Agent and chain discovery, frontmatter parsing. |
-| `src/runs/foreground/subagent-executor.ts` | Main execution routing for single, parallel, chain, management, status, interrupt, and doctor actions. |
+| `src/runs/foreground/subagent-executor.ts` | Main execution routing for single, workflow, status, steer, resume, interrupt, guide, and validate actions. |
 | `src/runs/foreground/execution.ts` | Core foreground `runSync` handling: drives one in-process child session per attempt. |
 | `src/runs/shared/child-session.ts` | In-process child session factory (`createAgentSession` behind an injectable seam) and the shared model runtime; used by both launch paths. |
 | `src/runs/shared/child-launch.ts` | Builds the tool plan, typed child runtime config, and session launch for a child in either host process. |
 | `src/runs/shared/child-tool-plan.ts` | Tool, MCP, and extension resolution for a child launch. |
 | `src/runs/shared/child-runtime-config.ts` | `ChildRuntimeConfig`: everything the child-side hooks need. |
-| `src/runs/shared/child-hooks.ts` | The inline hook extensions every child gets (prompt runtime, fast mode, fanout). |
+| `src/runs/shared/child-hooks.ts` | The inline hook extensions every child gets (prompt runtime, fanout). |
 | `src/runs/background/subagent-runner.ts` | Detached async runner; hosts background child sessions in its own process. |
 | `src/runs/background/run-child-session.ts` | Drives one background child session and mirrors its events into the run artifacts. |
 | `src/runs/background/runner-aliases.ts` | Aliases the host peer packages to the installed pi package for the runner (`JITI_ALIAS`). |

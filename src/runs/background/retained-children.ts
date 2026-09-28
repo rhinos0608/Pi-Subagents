@@ -108,7 +108,7 @@ export function listRetainedChildren(asyncDirRoot: string, sessionId: string): R
 }
 
 export function formatRetainedChildren(children: RetainedChild[]): string {
-	const noKnownEligibleTargetGuidance = 'children.list is workflow-only and is not an exhaustive list of direct native children. If the exact run id of the intended child is known, inspect it with subagent({ action: "status", id: "..." }); if status identifies the candidate, attempt subagent({ action: "resume", id: "...", message: "..." }), which authoritatively checks eligibility and may reject it. Launch a same-role fallback challenge, labeled as fallback, only when there is no known candidate or resume rejects eligibility.';
+	const noKnownEligibleTargetGuidance = 'The retained roster is workflow-only and internal-only (children.list is not model-visible) and is not an exhaustive list of direct native children. If the exact run id of the intended child is known, inspect it with subagent({ action: "status", id: "..." }); if status identifies the candidate, attempt subagent({ action: "resume", id: "...", message: "..." }), which authoritatively checks eligibility and may reject it. Launch a same-role fallback challenge, labeled as fallback, only when there is no known candidate or resume rejects eligibility.';
 	if (children.length === 0) return `No retained workflow children in the active parent session. ${noKnownEligibleTargetGuidance}`;
 	const retained = children.slice(0, MAX_RETAINED_CHILDREN);
 	if (!retained.some((child) => child.resumability.state === "resumable")) {

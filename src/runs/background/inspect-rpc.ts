@@ -382,11 +382,11 @@ export function buildInspectReply(request: InspectRequest, deps: InspectDeps = {
 			if (tail.messages.length > 0) {
 				messages = tail.messages.map(toReplyMessage);
 				// The delegated task is the child session's first user message, but
-				// only when it is genuinely attributable: fresh-context children
-				// (forked sessions begin with inherited parent history) whose
-				// session file is fully inside the read window (a truncated tail
-				// means the first visible user message may be a steering message).
-				if (!tail.truncated && node.status.context !== "fork" && step?.context !== "fork") {
+			// only when it is genuinely attributable: every child launches
+			// fresh, so a session file fully inside the read window starts
+			// with the delegated task (a truncated tail means the first
+			// visible user message may be a steering message).
+			if (!tail.truncated) {
 					const firstUser = tail.messages.find((message) => message.role === "user" && message.kind === "text");
 					if (firstUser) task = firstUser.text;
 				}
