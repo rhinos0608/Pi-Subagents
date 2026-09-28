@@ -30,7 +30,7 @@ Actions:
 - `subagent({ action: "guide", message: "workflows" })` — packaged guidance; reads do not change schema or grant authority.
 - `subagent({ action: "validate", workflowScript: "..." })` — check script syntax and structure without launching. Returns `{ ok, errors }`; fails the tool call when `ok` is false.
 
-Model, thinking, and context resolve from agent definitions plus operator config (see [models](models.md) and [agents](agents.md)). There are no per-call model / thinking / context parameters. Context is fresh by default, with operator/agent-level fork defaults where configured.
+Model, thinking, and context resolve from agent definitions plus operator config (see [models](models.md) and [agents](agents.md)). There are no per-call model / thinking / context parameters. Launches are always fresh.
 
 ## Never poll
 

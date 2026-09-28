@@ -260,7 +260,7 @@ Preflight covers ordinary single-agent launch resolution:
 
 - Selected agent identity and shadowed candidates.
 - A parsed-definition digest, including system prompt and launch-affecting model, tool, skill, extension, output, and memory fields. Runtime overlays such as the Intercom bridge never change it.
-- Fresh/fork context, effective model and thinking, skill and tool resolution, direct MCP selections, runtime/configured extensions.
+- Resolved launch context (always fresh), effective model and thinking, skill and tool resolution, direct MCP selections, runtime/configured extensions.
 - The resolved Intercom bridge state (`intercomBridge.mode` and `intercomBridge.active`). An active bridge appends the bridge instruction to the child prompt and adds `contact_supervisor` to a declared tool list, exactly as execution does.
 - Artifact/session paths, async lifecycle/status/result/event/process-terminal paths, package/lifecycle versions, capability-ceiling audit data, and stable digests.
 
@@ -277,7 +277,7 @@ Boundaries:
 - Raw prompts are not exposed in public contract output.
 - It is side-effect-free for launch state: it does not create child sessions, temp prompt files, structured-output runtimes, tool-diagnostic files, or run artifacts.
 - Some host-owned facts, such as exact fork snapshots, nested async roots, and live model registries, can only be proven by the Pi host; those appear as `host_required` diagnostics instead of silently pretending to be exact.
-- Preflight reads the extension config, so `defaultSubagentContext: "fresh"` or `"fork"` affects omitted context in the same way as execution. Explicit `context` still wins.
+- Preflight resolves launch context as always fresh. There is no `defaultSubagentContext` setting and no per-call `context` field.
 
 ## Structured delegation API
 

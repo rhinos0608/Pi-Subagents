@@ -4,10 +4,9 @@ This file is a detailed reference loaded from `skills/pi-subagents/SKILL.md`.
 
 ## Important Constraints
 
-- **Forking requires a persisted parent session.** If the current session does not have a persisted session file or current leaf, fork-default children start fresh. An agent-level `defaultContext: fork` is a preference: packaged `oracle` and `advisor` fall back to `fresh` when those fork preconditions are not met yet. There is no per-call context field on the model tool.
-- **Packaged workers start fresh.** `worker` defaults to fresh context so its brief, not the parent's unfinished agenda, controls the implementation. Use a fork-default agent when inherited conversation history is required.
-- **Forked runs inherit parent history.** They are branched threads, not fresh
-  filtered contexts. Use fresh context for adversarial reviewers unless the user explicitly asks for forked context.
+- **Launches are always fresh.** Each child starts from its assigned brief, not the parent's unfinished conversation. There is no context preference on the agent, in settings, or per call. Stale persisted `fork` values are accepted for old data only and render no badge.
+- **Packaged workers start fresh.** `worker` launches fresh so its brief, not the parent's unfinished agenda, controls the implementation. Pass the files, diff, plan, or request details each child needs in its task.
+- **Fresh children carry no parent history.** Each launch is a new thread, not a branched session. Give reviewers the diff, files, or plan in the task text.
 - **Default subagent nesting depth is 2.** Deeper recursive delegation is blocked
   unless configured otherwise.
 - **Attention signals are not lifecycle state.** `needs_attention` means no activity has been observed past the configured threshold. `paused` means the child turn was intentionally interrupted or is awaiting direction; it is not the same as `failed`.
@@ -60,7 +59,7 @@ its overhead. Recipes select a shape; they do not authorize delegation:
 - **Unknown agent:** check the Fleet Agents view for scope/precedence and author new orchestration with `workflowScript`, not legacy chains.
 - **Setup, discovery, or intercom confusion:** run `/subagents-doctor`.
 - **Max subagent depth exceeded:** flatten the workflow or raise `maxSubagentDepth` in config.
-- **Missing session file for a fork:** persist the parent session so fork-default agents can branch from it.
+- **Missing session file:** persist the parent session so status, resume, and supervision can attach to it.
 - **Intercom already waiting for a reply:** resolve the pending ask before starting another.
 - **Parallel output-path conflict:** give each task a distinct output path, or disable output where no artifact is needed.
 - **Worktree launch failure:** ensure the git tree is clean and task cwd overrides match the shared cwd.

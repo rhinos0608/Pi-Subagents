@@ -164,32 +164,15 @@ Set `enabled` to `false` (or remove the block) as a kill switch. In that state, 
 
 WorkflowScript calls use background execution when the request omits `async`. Set `asyncByDefault` to `false` to restore foreground-by-default behavior for tool launches that still use the internal single-run primitive. Callers can still force foreground with `async: false` unless `forceTopLevelAsync` is enabled.
 
-## `defaultSubagentContext`
+## `defaultSubagentContext` (removed)
 
-```json
-{ "defaultSubagentContext": "fresh" }
-```
+Removed. All launches use fresh context. A settings file that still carries `subagents.defaultSubagentContext` fails config loading — delete those lines.
 
-Sets `fresh` or `fork` context for subagent launches. This global preference replaces each agent-level `defaultContext`. There is no per-call context field on the model tool.
+## `forkContext` (removed)
 
-With `"fork"`, the setting uses the existing implicit-fork behavior. A launch starts fresh when the parent session file or current leaf is not available. `"fresh"` starts fresh even when the selected agent defaults to fork. Scheduled runs use fresh context. A runner or provider that does not support fork context keeps its existing rejection behavior.
+Removed. There is no fork preparation, no `full`/`pruned` mode, and no fork summary model. A settings file that still carries `subagents.forkContext` fails config loading — delete those lines.
 
-## `forkContext`
-
-```json
-{
-  "forkContext": {
-    "mode": "pruned",
-    "model": "openai-codex/gpt-5.6-luna:max"
-  }
-}
-```
-
-Controls how resolved fork launches prepare the inherited session. The default `"full"` mode keeps the complete fork. `"pruned"` mode keeps inherited context exact while it fits the code-owned 64 KiB session budget. On overflow, the required `model` returns short JSON summaries keyed by stable item ids. Tool results spill first, then older assistant and tool context, and user text only when required. It applies to global and agent fork defaults, and to `context: "profile"` when the selected profile resolves to fork.
-
-Child-visible spilled items contain only the model summary and a stable `{ batchId, itemId }` recovery ref. Raw bodies and their digests, source entry ids, labels, sizes, and tool metadata go to a private `0600` sidecar next to the child session. This release does not add a recovery command or expose that payload to the child model.
-
-Pruned forks keep the normal `parentSession` link, child cwd alignment, and fork thinking-block sanitization (signed Anthropic thinking blocks are stripped; the child keeps its requested thinking level). Missing model or auth, invalid or incomplete summary JSON, budget overflow, recovery validation failure, and raw overflow leakage all stop the launch before child spawn. The extension never falls back to a full fork or refs-only context after a prune failure.
+Migration: delete every `defaultContext`, `defaultSubagentContext`, and `forkContext` key from Pi settings files, extension config, agent frontmatter, and `agentOverrides`. Agent frontmatter or overrides that still declare `defaultContext` hard-error on load. Launches are always fresh; stale persisted `fork` context values are accepted for old data only and render no badge.
 
 ## `fleetView`
 
@@ -443,7 +426,7 @@ Controls whether subagents receive runtime coordination instructions and whether
 
 Fields:
 
-- `mode`: default `always`; use `fork-only` to inject only for forked runs, or `off` to disable the bridge.
+- `mode`: default `always`; use `off` to disable the bridge.
 - `instructionFile`: optional Markdown template replacing the default bridge instructions. `{orchestratorTarget}` is interpolated with the parent session target. Relative paths resolve from `~/.pi/agent/extensions/subagent/`. The default template does not name the session, because `contact_supervisor` resolves it from the child runtime config; a template that does name it ties `launchContractDigest` to the parent session, and launch-contract preflight then needs `orchestratorTarget` to match.
 - `resultDelivery`: default `false`; set `true` only when an external listener consumes `subagent:result-intercom` and acknowledges the grouped completion payload. This is optional external result delivery, not native supervisor messaging. Enabled delivery waits for acknowledgement and reports acknowledgement failures. It does not change supervisor asks or progress updates.
 
