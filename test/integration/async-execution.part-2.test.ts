@@ -304,10 +304,9 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 					assert.ok(transcript);
 					assert.match(fs.readFileSync(transcript, "utf-8"), /Blocked by policy/);
 				}
-				// Bounded model fallback retries retryable cold-start/empty-output failures
-				// (up to 3 attempts); hidden tool failures, structured validation
-				// failures, and paused runs launch once.
-				assert.equal(mockPi.callCount(), interrupted || diagnostic === "hidden" || diagnostic === "structured" ? 1 : 3);
+				// Only an ordinary terminal empty-output startup failure is retryable.
+				// Paused runs and task-execution outcomes stay single-shot.
+				assert.equal(mockPi.callCount(), diagnostic === "empty" && !interrupted ? 3 : 1);
 			});
 		}
 	}
@@ -1101,6 +1100,7 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		});
 		assert.match(interactiveResult.content[0]?.text ?? "", /interactive session/);
 		assert.match(interactiveResult.content[0]?.text ?? "", /return control to the user/);
+		assert.match(interactiveResult.content[0]?.text ?? "", /Use subagent\(\{ action: "status"/);
 		assert.match(interactiveResult.content[0]?.text ?? "", /never as a wait loop/);
 		assert.match(interactiveResult.content[0]?.text ?? "", /native completion notification/);
 		assert.doesNotMatch(interactiveResult.content[0]?.text ?? "", /bg_wait\(\{ id:/);
