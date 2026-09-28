@@ -35,7 +35,7 @@ import { clearLegacyResultAnimationTimer, renderSubagentResult, renderSubagentSu
 import { openSubagentFleet } from "../tui/fleet.ts";
 import { createBuiltinInspectorPlugins } from "../inspectors/plugins.ts";
 import { SubagentFleetStatus, resolveFleetViewPlacement } from "../tui/fleet-status.ts";
-import { createSubagentParamsSchema } from "./schemas.ts";
+import { SubagentParams } from "./schemas.ts";
 import { createSubagentExecutor, type SubagentParamsLike } from "../runs/foreground/subagent-executor.ts";
 import { createAsyncJobTracker } from "../runs/background/async-job-tracker.ts";
 import { getActiveAsyncCapacitySnapshot, resolveAbandonedSlotReleaseAfterMs, resolveMaxActiveAsyncRunsPerSession } from "../runs/background/active-async-capacity.ts";
@@ -829,10 +829,8 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	}
 
 
-	// Schema profile follows the description mode: default/compact gets the compact
-	// schema; full/custom/invalid gets the full schema (matching the description
-	// fallback, and custom prose may reference full contracts).
-	const parameters = createSubagentParamsSchema(config.toolDescriptionMode === "compact" || config.toolDescriptionMode === undefined ? "compact" : "full");
+	// The public subagent tool uses the simplified 7-field vocabulary.
+	const parameters = SubagentParams;
 	const tool: ToolDefinition<typeof parameters, Details> = {
 		name: "subagent",
 		label: "Subagent",
@@ -856,19 +854,12 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 			}
 			if (args.workflowScript)
 				return new Text(
-					`${title}${gap}${formatWorkflowManifest(args.workflowScript, args.async, false, args.preflight)}`,
+					`${title}${gap}${formatWorkflowManifest(args.workflowScript, undefined, false)}`,
 					0,
 					0,
 				);
-			if (args.workflowScriptPath)
-				return new Text(
-					`${title}${gap}${theme.fg("accent", args.workflowScriptPath)}${args.async === true ? `${gap}${theme.fg("warning", "[async]")}` : ""}${args.preflight !== undefined ? `${gap}${theme.fg("dim", formatWorkflowPreflightCall(args.preflight))}` : ""}`,
-					0,
-					0,
-				);
-			const asyncLabel = args.async === true ? `${gap}${theme.fg("warning", "[async]")}` : "";
 			return new Text(
-				`${title}${gap}${theme.fg("accent", args.agent || "?")}${asyncLabel}`,
+				`${title}${gap}${theme.fg("accent", args.agent || "?")}`,
 				0,
 				0,
 			);

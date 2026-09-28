@@ -1242,33 +1242,24 @@ describe("acceptance gates", () => {
 		}
 	});
 
-	it("validates explicit reviewed acceptance at every execution nesting level", () => {
+	it("validates explicit reviewed acceptance at the execution top level and tasks", () => {
 		const errors = validateExecutionAcceptance({
 			acceptance: "reviewed",
 			tasks: [{ acceptance: { level: "reviewed" } }],
-			chain: [
-				{ acceptance: "reviewed" },
-				{ parallel: [{ acceptance: { level: "reviewed" } }] },
-				{ parallel: { acceptance: "reviewed" } },
-			],
 		});
 
-		assert.equal(errors.length, 5);
+		assert.equal(errors.length, 2);
 		assert.match(errors[0] ?? "", /^acceptance is an achieved status/);
 		assert.match(errors[1] ?? "", /^tasks\[0\]\.acceptance\.level is an achieved status/);
-		assert.match(errors[2] ?? "", /^chain\[0\]\.acceptance is an achieved status/);
-		assert.match(errors[3] ?? "", /^chain\[1\]\.parallel\[0\]\.acceptance\.level is an achieved status/);
-		assert.match(errors[4] ?? "", /^chain\[2\]\.parallel\.acceptance is an achieved status/);
 		assert.match(errors.join("\n"), /acceptance\.review\.required/);
 	});
 
-	it("rejects transport-permitted true acceptance before execution, including nested inputs", () => {
+	it("rejects transport-permitted true acceptance before execution", () => {
 		const errors = validateExecutionAcceptance({
 			acceptance: true,
 			tasks: [{ acceptance: true }],
-			chain: [{ acceptance: true }, { parallel: [{ acceptance: true }] }, { parallel: { acceptance: true } }],
 		});
-		const paths = ["acceptance", "tasks[0].acceptance", "chain[0].acceptance", "chain[1].parallel[0].acceptance", "chain[2].parallel.acceptance"];
+		const paths = ["acceptance", "tasks[0].acceptance"];
 		assert.equal(errors.length, paths.length);
 		paths.forEach((path, index) => assert.ok(errors[index]?.startsWith(`${path} must be a string level, false, or an object.`)));
 	});
@@ -1282,21 +1273,12 @@ describe("acceptance gates", () => {
 				{ outputSchema: schema, acceptance: { level: "checked", report: "on" } },
 				{ outputSchema: false, acceptance: { level: "checked", report: "on" } },
 			],
-			chain: [
-				{ acceptance: { level: "checked", report: "on" } },
-				{ outputSchema: schema, acceptance: { level: "checked", report: "off" } },
-				{ parallel: [{ acceptance: { level: "checked", report: "on" } }, { outputSchema: schema, acceptance: { level: "checked", report: "on" } }] },
-				{ parallel: { acceptance: { level: "checked", report: "off" } } },
-			],
 		});
 
 		assert.deepEqual(errors, [
 			"acceptance.report requires outputSchema.",
 			"tasks[0].acceptance.report requires outputSchema.",
 			"tasks[2].acceptance.report requires outputSchema.",
-			"chain[0].acceptance.report requires outputSchema.",
-			"chain[2].parallel[0].acceptance.report requires outputSchema.",
-			"chain[3].parallel.acceptance.report requires outputSchema.",
 		]);
 	});
 

@@ -45,6 +45,20 @@ async function stopChild(child: ChildProcess): Promise<void> {
 	});
 }
 
+async function assertWorkflowChildRejectedBeforeLaunch(script: string, message: RegExp): Promise<void> {
+	const launches: string[] = [];
+	await assert.rejects(
+		runWorkflowScript({
+			script,
+			timeoutMs: 2_000,
+			async launch(key) { launches.push(key); return { key, ok: true, output: key, artifactPaths: [], results: [] }; },
+			async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
+		}),
+		(error: unknown) => error instanceof WorkflowScriptError && message.test(error.message),
+	);
+	assert.deepEqual(launches, []);
+}
+
 describe("scripted workflow runtime", () => {
 	it("exposes supplied and executor-normalized empty arguments as deeply frozen values", async () => {
 		const launch = async (key: string) => ({ key, ok: true, output: "unused", artifactPaths: [] });
@@ -165,6 +179,24 @@ describe("scripted workflow runtime", () => {
 		assert.deepEqual(validateWorkflowScript(`return runs.run("same", { agent: selectedAgent });`), { ok: true, errors: [] });
 	});
 
+	it("rejects statically known non-allowlisted child fields offline", () => {
+		for (const script of [
+			`return runs.run("child", { agent: "worker", task: "Check", model: "other" });`,
+			`return runs.run("child", { agent: "worker", task: "Check", toolBudget: { hard: 4 } });`,
+			`return runs.all([{ key: "child", agent: "worker", task: "Check", model: "other" }]);`,
+			`return runs.all([{ key: "child", agent: "worker", task: "Check", toolBudget: { hard: 4 } }]);`,
+		]) {
+			const result = validateWorkflowScript(script);
+			assert.equal(result.ok, false, script);
+			assert.ok(result.errors.some((error) => error.message.includes("unsupported field")), script);
+		}
+		for (const script of [
+			`return runs.run("child", { agent: "worker", task: "Check", ...overrides });`,
+			`return runs.run("child", { agent: "worker", task: "Check", [field]: "other" });`,
+			`return runs.all([{ key: "child", agent: "worker", task: "Check", ...overrides }]);`,
+		]) assert.deepEqual(validateWorkflowScript(script), { ok: true, errors: [] }, script);
+	});
+
 	it("reports literal child baseRef policy errors with source locations offline", () => {
 		for (const [call, value] of [
 			["run", JSON.stringify("a".repeat(40))],
@@ -185,25 +217,18 @@ describe("scripted workflow runtime", () => {
 			].join("\n");
 			const result = validateWorkflowScript(script);
 			assert.equal(result.ok, false, script);
-			assert.equal(result.errors.length, 1, script);
+			assert.equal(result.errors.length, call === "run" ? 3 : 2, script);
 			assert.equal(result.errors[0]?.line, 3);
 			assert.equal(result.errors[0]?.column, 12);
 			assert.match(result.errors[0]!.message, new RegExp(`runs\\.${call}.*baseRef`));
 			assert.match(result.errors[0]!.message, /HEAD.*named ref.*40\/64-character commit IDs.*revision expressions.*unsupported/);
+			assert.ok(result.errors.some((error) => error.message.includes("unsupported field 'baseRef'")), script);
 		}
 	});
 
 	it("validates only the final statically known child baseRef without guessing overwrites", () => {
 		for (const fields of [
 			"",
-			'baseRef: "HEAD"',
-			'baseRef: "refs/heads/release"',
-			'baseRef: "refs/tags/v1"',
-			'baseRef: "origin/main"',
-			'baseRef: "HEAD~1", baseRef: "HEAD"',
-			'baseRef: "HEAD~1", ["baseRef"]: `HEAD`',
-			'baseRef: "HEAD~1", baseRef: selectedRef',
-			'baseRef: "HEAD~1", baseRef: "refs/heads/" + branch',
 			'baseRef: "HEAD~1", ...overrides',
 			'baseRef: "HEAD~1", [field]: "HEAD"',
 			'baseRef: "HEAD~1", get baseRef() { return "HEAD"; }',
@@ -214,6 +239,25 @@ describe("scripted workflow runtime", () => {
 				`return runs.all([{ key: "child", agent: "worker", task: "Check", ${fields} }]);`,
 			]) assert.deepEqual(validateWorkflowScript(script), { ok: true, errors: [] }, script);
 		}
+		for (const fields of [
+		'baseRef: "HEAD"',
+		'baseRef: "refs/heads/release"',
+		'baseRef: "refs/tags/v1"',
+		'baseRef: "origin/main"',
+		'baseRef: "HEAD~1", baseRef: "HEAD"',
+		'baseRef: "HEAD~1", baseRef: selectedRef',
+		'baseRef: "HEAD~1", baseRef: "refs/heads/" + branch',
+		'baseRef: "HEAD~1", ["baseRef"]: `HEAD`',
+	]) {
+		for (const script of [
+			`return runs.run("child", { agent: "worker", task: "Check", ${fields} });`,
+			`return runs.all([{ key: "child", agent: "worker", task: "Check", ${fields} }]);`,
+		]) {
+			const result = validateWorkflowScript(script);
+			assert.equal(result.ok, false, script);
+			assert.ok(result.errors.some((error) => error.message.includes("unsupported field 'baseRef'")), script);
+		}
+	}
 		for (const fields of [
 			'baseRef: "HEAD", baseRef: "HEAD~1"',
 			'...defaults, baseRef: "HEAD~1"',
@@ -526,18 +570,17 @@ describe("scripted workflow runtime", () => {
 		assert.deepEqual(emitSnapshots, [1]);
 	});
 
-	it("passes a per-run intercom bridge override to the host launch", async () => {
-		let launchParams: Record<string, unknown> | undefined;
-		await runWorkflowScript({
-			script: `return runs.run("isolated", { agent: "worker", task: "Run", intercomBridge: { mode: "off" } });`,
-			async launch(key, params) {
-				launchParams = params;
-				return { key, ok: true, output: "done", artifactPaths: [] };
-			},
-			async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
-		});
-
-		assert.deepEqual(launchParams?.intercomBridge, { mode: "off" });
+	it("rejects a per-run intercom bridge override on workflow children", async () => {
+		const launches: string[] = [];
+		await assert.rejects(
+			runWorkflowScript({
+				script: `return runs.run("isolated", { agent: "worker", task: "Run", intercomBridge: { mode: "off" } });`,
+				async launch(key) { launches.push(key); return { key, ok: true, output: "done", artifactPaths: [] }; },
+				async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
+			}),
+			(error: unknown) => error instanceof WorkflowScriptError && /unsupported fields: intercomBridge/.test(error.message),
+		);
+		assert.deepEqual(launches, []);
 	});
 
 	it("resolves a keyed workflow receipt despite an invalid current worktree source", async (t) => {
@@ -1016,99 +1059,41 @@ describe("scripted workflow runtime", () => {
 		]);
 	});
 
-	it("accepts one gate command and rejects gate with acceptance", async () => {
-		const launches: Record<string, unknown>[] = [];
-		await runWorkflowScript({
-			script: `return runs.run("gated", { agent: "worker", gate: "npm test" });`,
-			async launch(key, params) { launches.push(params); return { key, ok: true, output: "done", artifactPaths: [] }; },
-			async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
-		});
-		assert.equal(launches[0]?.gate, "npm test");
-		await runWorkflowScript({
-			script: `return runs.run("gated-disabled", { agent: "worker", gate: "npm test", acceptance: false });`,
-			async launch(key, params) { launches.push(params); return { key, ok: true, output: "done", artifactPaths: [] }; },
-			async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
-		});
-		assert.equal(launches[1]?.gate, "npm test");
-		assert.equal(launches[1]?.acceptance, false);
-		await assert.rejects(
-			runWorkflowScript({
-				script: `return runs.run("invalid", { agent: "worker", gate: "npm test", acceptance: "checked" });`,
-				async launch(key) { return { key, ok: true, output: "done", artifactPaths: [] }; },
-				async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
-			}),
-			(error: unknown) => error instanceof WorkflowScriptError && /gate cannot be combined with acceptance/.test(error.message),
-		);
-	});
-
-	it("accepts an object gate with json output and rejects malformed object gates", async () => {
-		const launches: Record<string, unknown>[] = [];
-		const gate = { command: "classify.sh --report r.md", output: "json", schema: { type: "object" }, timeoutMs: 5000 };
-		await runWorkflowScript({
-			script: `return runs.run("typed", { agent: "reviewer", gate: ${JSON.stringify(gate)} });`,
-			async launch(key, params) { launches.push(params); return { key, ok: true, output: "done", artifactPaths: [] }; },
-			async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
-		});
-		assert.deepEqual(launches[0]?.gate, gate);
-		for (const [bad, pattern] of [
-			[`{ command: "x", output: "yaml" }`, /gate\.output must be "json"/],
-			[`{ command: "x", schema: {} }`, /gate\.schema requires gate\.output/],
-			[`{ command: "x", cwd: "." }`, /gate\.cwd is not supported/],
-			[`{ output: "json" }`, /non-empty command string/],
-		] as const) {
+	it("rejects gate on workflow children", async () => {
+		const launches: string[] = [];
+		for (const script of [
+			`return runs.run("gated", { agent: "worker", gate: "npm test" });`,
+			`return runs.run("typed", { agent: "reviewer", gate: { command: "classify.sh --report r.md", output: "json", schema: { type: "object" }, timeoutMs: 5000 } });`,
+			`return runs.run("invalid", { agent: "worker", gate: "npm test", acceptance: "checked" });`,
+		]) {
 			await assert.rejects(
 				runWorkflowScript({
-					script: `return runs.run("invalid", { agent: "reviewer", gate: ${bad} });`,
-					async launch(key) { return { key, ok: true, output: "done", artifactPaths: [] }; },
+					script,
+					async launch(key) { launches.push(key); return { key, ok: true, output: "done", artifactPaths: [] }; },
 					async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
 				}),
-				(error: unknown) => error instanceof WorkflowScriptError && pattern.test(error.message),
-				bad,
+				(error: unknown) => error instanceof WorkflowScriptError && /unsupported fields: gate/.test(error.message),
+				script,
 			);
 		}
+		assert.deepEqual(launches, []);
 	});
 
-	it("lanes block on a verdict supplied through a typed gate", async () => {
-		const launched: string[] = [];
-		const result = await runWorkflowScript({
-			script: `
+	it("rejects gate stages in lanes", async () => {
+		await assert.rejects(
+			runWorkflowScript({
+				script: `
 				const board = await runs.lanes([{ key: "pr", stages: [
 					{ key: "review", agent: "reviewer", gate: { command: "classify.sh", output: "json" } },
 					{ key: "land", agent: "worker", task: "Land it" }
 				] }]);
-				return board[0].stages.map((stage) => [stage.key, stage.state, stage.verdict ?? "none"]);
+				return board;
 			`,
-			async launch(key, params) {
-				launched.push(key);
-				// The runtime bridges a passing json gate into structuredOutput; the workflow only sees the result.
-				return key === "pr.review"
-					? { key, ok: true, output: "", structuredOutput: { verdict: "blocked", action: "writer-fix" }, artifactPaths: [] }
-					: { key, ok: true, output: "done", artifactPaths: [] };
-			},
-			async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
-		});
-		assert.deepEqual(launched, ["pr.review"]);
-		assert.deepEqual(result.value, [["review", "blocked", "blocked"], ["land", "skipped", "none"]]);
-	});
-
-	it("reuses a gated key when acceptance false is explicit", async () => {
-		const launches: string[] = [];
-		const result = await runWorkflowScript({
-			script: `
-				const first = await runs.run("g", { agent: "worker", gate: "npm test" });
-				const second = await runs.run("g", { agent: "worker", gate: "npm test", acceptance: false });
-				return { first: first.key, second: second.key };
-			`,
-			timeoutMs: 2_000,
-			async launch(key) {
-				launches.push(key);
-				return { key, ok: true, output: "ok", artifactPaths: [], results: [] };
-			},
-			async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
-		});
-
-		assert.deepEqual(result.value, { first: "g", second: "g" });
-		assert.deepEqual(launches, ["g"]);
+				async launch(key) { return { key, ok: true, output: "done", artifactPaths: [] }; },
+				async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
+			}),
+			(error: unknown) => error instanceof WorkflowScriptError && /unsupported fields: gate/.test(error.message),
+		);
 	});
 
 	it("rejects retained resume with gate", async () => {
@@ -1118,7 +1103,7 @@ describe("scripted workflow runtime", () => {
 				async launch(key) { return { key, ok: true, output: "done", artifactPaths: [] }; },
 				async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
 			}),
-			(error: unknown) => error instanceof WorkflowScriptError && /gate is not supported with retained resume/.test(error.message),
+			(error: unknown) => error instanceof WorkflowScriptError && /unsupported fields: gate/.test(error.message),
 		);
 	});
 
@@ -1145,7 +1130,7 @@ describe("scripted workflow runtime", () => {
 		const result = await runWorkflowScript({
 			script: `
 				const writer = await runs.run("writer", { agent: "worker", task: "write" });
-				const review = await runs.run("review", { agent: "reviewer", task: "Read-only review. Do not edit files, commit, push, comment, merge, or launch subagents. Review the patch and return findings only. Do not run workers. Do not launch worker subagents. Do not hand off remediation to workers. Do not use worker subagents. Do not have a worker continue follow-up. Do not tell a worker to continue follow-up. Do not get a worker to continue follow-up. Do not let a worker continue follow-up. Do not request implementation follow-up from a worker. Do not ask a reviewer to implement changes. Do not ask for a review from another reviewer. Delta since prior review: fixed quoted git option handling and added exact regressions; mutation detection now includes move/rename/copy file mutation imperatives; Delegation now catches target-after-preposition forms using from/with/via/by and request phrasing: 'Get implementation follow-up via a worker.', 'Get a review via another reviewer.', 'Have implementation follow-up done by a worker.', and 'Request implementation follow-up from a worker.'; 'Launch two workers for implementation follow-up.' and 'Launch review subagents for follow-up.' are blocked; 'Launch two reviewers for follow-up.' is blocked; \`rm -rf .\` is blocked. RECOVERY_REVIEW_MUTATION_VERB_PATTERN now includes append, prepend, and save, with gerund forms. Added exact regressions for 'Append a regression test.', 'Prepend a guard clause.', and 'Save the updated report.' This keeps a later object phrase visible, so a prompt ending with \`save the updated report\` remains blocked. Accepted contract: after rejected durable acceptance-metadata recovery, sequential workflow continuation may only launch explicit read-only review children with acceptance:false, must not mutate durable state, and must not launch mutating/destructive work. state.get remains allowed; state.set, runs.host, runs.steer, ordinary/mutating children, and destructive command wording are blocked. Existing regressions cover plain rm and git clean/reset/restore. Prior regressions covering rm/git clean as evidence only. Validation after fix: npm exec -- tsx --test test/unit/scripted-workflow.test.ts --test-name-pattern \\\"acceptance metadata rejection|mission state writes\\\" (101 pass), npm run typecheck, git diff --check HEAD^..HEAD. (Validation after fix: npm run typecheck) Write findings to reports/review.md.", acceptance: false });
+				const review = await runs.run("review", { agent: "reviewer", task: "Read-only review. Do not edit files, commit, push, comment, merge, or launch subagents. Review the patch and return findings only. Do not run workers. Do not launch worker subagents. Do not hand off remediation to workers. Do not use worker subagents. Do not have a worker continue follow-up. Do not tell a worker to continue follow-up. Do not get a worker to continue follow-up. Do not let a worker continue follow-up. Do not request implementation follow-up from a worker. Do not ask a reviewer to implement changes. Do not ask for a review from another reviewer. Delta since prior review: fixed quoted git option handling and added exact regressions; mutation detection now includes move/rename/copy file mutation imperatives; Delegation now catches target-after-preposition forms using from/with/via/by and request phrasing: 'Get implementation follow-up via a worker.', 'Get a review via another reviewer.', 'Have implementation follow-up done by a worker.', and 'Request implementation follow-up from a worker.'; 'Launch two workers for implementation follow-up.' and 'Launch review subagents for follow-up.' are blocked; 'Launch two reviewers for follow-up.' is blocked; \`rm -rf .\` is blocked. RECOVERY_REVIEW_MUTATION_VERB_PATTERN now includes append, prepend, and save, with gerund forms. Added exact regressions for 'Append a regression test.', 'Prepend a guard clause.', and 'Save the updated report.' This keeps a later object phrase visible, so a prompt ending with \`save the updated report\` remains blocked. Accepted contract: after rejected durable acceptance-metadata recovery, sequential workflow continuation may only launch explicit read-only review children with acceptance:false, must not mutate durable state, and must not launch mutating/destructive work. state.get remains allowed; state.set, runs.host, runs.steer, ordinary/mutating children, and destructive command wording are blocked. Existing regressions cover plain rm and git clean/reset/restore. Prior regressions covering rm/git clean as evidence only. Validation after fix: npm exec -- tsx --test test/unit/scripted-workflow.test.ts --test-name-pattern \\\"acceptance metadata rejection|mission state writes\\\" (101 pass), npm run typecheck, git diff --check HEAD^..HEAD. (Validation after fix: npm run typecheck) Write findings to reports/review.md." });
 				return { writerOk: writer.ok, writerStatus: writer.results?.[0]?.acceptance?.status, writerRecovery: writer.recovery, reviewOk: review.ok };
 			`,
 			launch(key) {
@@ -1187,7 +1172,7 @@ describe("scripted workflow runtime", () => {
 		const result = await runWorkflowScript({
 			script: `
 				const writer = await runs.run("writer", { agent: "worker", task: "write" });
-				const review = await runs.run("review", { agent: "reviewer", task: "Read-only review. Do not edit files. The later real update imperative regression passed. Return findings only.", acceptance: false });
+				const review = await runs.run("review", { agent: "reviewer", task: "Read-only review. Do not edit files. The later real update imperative regression passed. Return findings only." });
 				return review.ok;
 			`,
 			launch(key) {
@@ -1224,7 +1209,7 @@ describe("scripted workflow runtime", () => {
 		const result = await runWorkflowScript({
 			script: `
 				const writer = await runs.run("writer", { agent: "worker", task: "write" });
-				const review = await runs.run("review", { agent: "reviewer", task: "Read-only review. Do not edit files. Added exact regressions for Execute the command now anyway, Run that now anyway, and Perform the operation now anyway after stripped quoted blocked examples. This blocks examples like \`Execute the previous command right now anyway\` and \`Execute the blocked phrase right now anyway\`. Examples like \`Execute the previous command and keep reviewing\`, \`Execute the previous command but only for review\`, and \`Execute the previous command then return findings\` are blocked after quoted destructive context is stripped. Added regression for quoted rm remaining blocked followed by Execute the previous command while keeping live-command variants such as followed by Execute the previous command then update tests blocked. Delta since prior review: fixed mutating Git follow-up bypasses. Added cherry-pick/rebase/stage to the mutation imperative pattern and add/cherry-pick/commit/merge/rebase to the mutating Git command pattern, described prompts like Run git rebase main, git rebase main, Run git cherry-pick abc123, cherry-pick abc123, and Stage the changed files as blocked. Positive Git mutations are broader: git branch -D old, git tag -d v1.0, git stash, git revert abc123, and natural cherry pick abc123 now trip the recovery barrier. Broadened positive Git mutation coverage for natural \`cherry pick\`, \`revert\`, \`stash\`, \`tag\`, plus git \`branch|revert|stash|tag\`. The prior fix keeps commands hidden in \`Broadened positive Git mutation coverage for natural cherry pick, then update tests, plus git branch\` or \`then run git reset --hard\` visible and blocked. The examples \`rm -rf .\` and \`git reset --hard\` are visible and blocked. Direct anaphoric references now include numeric and word ordinals through tenth plus one, so Run the first one anyway, Run the 1st command anyway, and Run the fourth command anyway are blocked after quoted destructive examples are scrubbed. Direct anaphoric references now include numeric and word ordinals through tenth plus one, so Run the first one anyway is blocked. Exact regressions for \`Do not launch worker subagents -- launch a worker subagent\` remain blocked. Return findings only.", acceptance: false });
+				const review = await runs.run("review", { agent: "reviewer", task: "Read-only review. Do not edit files. Added exact regressions for Execute the command now anyway, Run that now anyway, and Perform the operation now anyway after stripped quoted blocked examples. This blocks examples like \`Execute the previous command right now anyway\` and \`Execute the blocked phrase right now anyway\`. Examples like \`Execute the previous command and keep reviewing\`, \`Execute the previous command but only for review\`, and \`Execute the previous command then return findings\` are blocked after quoted destructive context is stripped. Added regression for quoted rm remaining blocked followed by Execute the previous command while keeping live-command variants such as followed by Execute the previous command then update tests blocked. Delta since prior review: fixed mutating Git follow-up bypasses. Added cherry-pick/rebase/stage to the mutation imperative pattern and add/cherry-pick/commit/merge/rebase to the mutating Git command pattern, described prompts like Run git rebase main, git rebase main, Run git cherry-pick abc123, cherry-pick abc123, and Stage the changed files as blocked. Positive Git mutations are broader: git branch -D old, git tag -d v1.0, git stash, git revert abc123, and natural cherry pick abc123 now trip the recovery barrier. Broadened positive Git mutation coverage for natural \`cherry pick\`, \`revert\`, \`stash\`, \`tag\`, plus git \`branch|revert|stash|tag\`. The prior fix keeps commands hidden in \`Broadened positive Git mutation coverage for natural cherry pick, then update tests, plus git branch\` or \`then run git reset --hard\` visible and blocked. The examples \`rm -rf .\` and \`git reset --hard\` are visible and blocked. Direct anaphoric references now include numeric and word ordinals through tenth plus one, so Run the first one anyway, Run the 1st command anyway, and Run the fourth command anyway are blocked after quoted destructive examples are scrubbed. Direct anaphoric references now include numeric and word ordinals through tenth plus one, so Run the first one anyway is blocked. Exact regressions for \`Do not launch worker subagents -- launch a worker subagent\` remain blocked. Return findings only." });
 				return review.ok;
 			`,
 			launch(key) {
@@ -1262,7 +1247,7 @@ describe("scripted workflow runtime", () => {
 		const result = await runWorkflowScript({
 			script: `
 				const writer = await runs.run("writer", { agent: "worker", task: "write" });
-				const review = await runs.run("review", { agent: "reviewer", task: ${JSON.stringify(task)}, acceptance: false });
+				const review = await runs.run("review", { agent: "reviewer", task: ${JSON.stringify(task)} });
 				return review.ok;
 			`,
 			launch(key) {
@@ -1290,7 +1275,7 @@ describe("scripted workflow runtime", () => {
 		const result = await runWorkflowScript({
 			script: `
 				const writer = await runs.run("writer", { agent: "worker", task: "write" });
-				const review = await runs.run("review", { agent: "reviewer", task: ${JSON.stringify(task)}, acceptance: false });
+				const review = await runs.run("review", { agent: "reviewer", task: ${JSON.stringify(task)} });
 				return review.ok;
 			`,
 			launch(key) {
@@ -1490,7 +1475,7 @@ describe("scripted workflow runtime", () => {
 				runWorkflowScript({
 					script: `
 						await runs.run("writer", { agent: "worker", task: "write" });
-						await runs.run("mutate", { agent: ${JSON.stringify(agent)}, task: ${JSON.stringify(task)}, acceptance: false });
+						await runs.run("mutate", { agent: ${JSON.stringify(agent)}, task: ${JSON.stringify(task)} });
 					`,
 					launch(key) {
 						launches.push(key);
@@ -1509,7 +1494,7 @@ describe("scripted workflow runtime", () => {
 					},
 					async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
 				}),
-				(error: unknown) => error instanceof WorkflowScriptError && /only explicit read-only review children with acceptance:false may follow/.test(error.message),
+				(error: unknown) => error instanceof WorkflowScriptError && /only explicit read-only review children may follow/.test(error.message),
 			);
 			assert.deepEqual(launches, ["writer"]);
 		}
@@ -1820,34 +1805,18 @@ describe("scripted workflow runtime", () => {
 		);
 	});
 
-	it("passes per-child baseRef through runs.run and runs.all", async () => {
-		const launches: Array<{ key: string; baseRef: unknown }> = [];
-		await runWorkflowScript({
-			script: `
-				const one = await runs.run("one", { agent: "worker", task: "one", baseRef: "refs/heads/release" });
-				const rest = await runs.all([
-					{ key: "two", agent: "worker", task: "two", baseRef: "refs/heads/topic" },
-					{ key: "head", agent: "worker", task: "head", baseRef: "HEAD" },
-					{ key: "default", agent: "worker", task: "default" }
-				]);
-				return [one.key, ...rest.map((entry) => entry.key)];
-			`,
-			timeoutMs: 2_000,
-			async launch(key, params) {
-				launches.push({ key, baseRef: params.baseRef });
-				return { key, ok: true, output: key, artifactPaths: [], results: [] };
-			},
-			async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
-		});
-		assert.deepEqual(launches, [
-			{ key: "one", baseRef: "refs/heads/release" },
-			{ key: "two", baseRef: "refs/heads/topic" },
-			{ key: "head", baseRef: "HEAD" },
-			{ key: "default", baseRef: undefined },
-		]);
+	it("rejects per-child baseRef on workflow children", async () => {
+		await assertWorkflowChildRejectedBeforeLaunch(
+			`const one = await runs.run("one", { agent: "worker", task: "one", baseRef: "refs/heads/release" }); return one.key;`,
+			/unsupported fields: baseRef/,
+		);
+		await assertWorkflowChildRejectedBeforeLaunch(
+			`return runs.all([{ key: "head", agent: "worker", task: "head", baseRef: "HEAD" }]);`,
+			/unsupported fields: baseRef/,
+		);
 	});
 
-	it("rejects unsupported literal and computed child baseRef values before dispatch", async () => {
+	it("rejects per-child baseRef values at dispatch validation", async () => {
 		const launches: string[] = [];
 		for (const [call, expression] of [
 			["run", JSON.stringify("a".repeat(40))],
@@ -1862,7 +1831,9 @@ describe("scripted workflow runtime", () => {
 				? `return runs.run("invalid", { agent: "worker", task: "Check", baseRef: ${expression} });`
 				: `return runs.all([{ key: "valid", agent: "worker", task: "Check", baseRef: "HEAD" }, { key: "invalid", agent: "worker", task: "Check", baseRef: ${expression} }]);`;
 			if (expression.includes("repeat") || expression.includes(" + ")) {
-				assert.deepEqual(validateWorkflowScript(script), { ok: true, errors: [] });
+				const staticResult = validateWorkflowScript(script);
+				assert.equal(staticResult.ok, false, `${call} ${expression}`);
+				assert.ok(staticResult.errors.some((error) => error.message.includes("unsupported field 'baseRef'")), `${call} ${expression}`);
 			}
 			await assert.rejects(
 				runWorkflowScript({
@@ -1870,64 +1841,49 @@ describe("scripted workflow runtime", () => {
 					timeoutMs: 2_000,
 					async launch(key) {
 						launches.push(key);
-						return { key, ok: true, output: key, artifactPaths: [], results: [] };
+						return { key, ok: true, output: key, artifactPaths: [] };
 					},
 					async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
 				}),
 				(error: unknown) => error instanceof WorkflowScriptError
-					&& /baseRef.*HEAD.*named ref.*40\/64-character commit IDs.*revision expressions.*unsupported/.test(error.message),
+					&& /(unsupported fields: baseRef|baseRef must be a valid Git ref)/.test(error.message),
+				`${call} ${expression}`,
 			);
 		}
 		assert.deepEqual(launches, []);
 	});
 
-	it("leaves accessor-derived baseRef values to runtime validation", async () => {
+	it("rejects accessor-derived baseRef values at dispatch validation", async () => {
 		for (const baseRef of ["HEAD", "HEAD~1"]) {
 			const script = `return runs.run("child", { agent: "worker", task: "Check", baseRef: "invalid..ref", get baseRef() { return ${JSON.stringify(baseRef)}; } });`;
 			assert.deepEqual(validateWorkflowScript(script), { ok: true, errors: [] });
 			const launches: unknown[] = [];
-			const result = runWorkflowScript({
-				script,
-				timeoutMs: 2_000,
-				async launch(key, params) {
-					launches.push(params.baseRef);
-					return { key, ok: true, output: key, artifactPaths: [] };
-				},
-				async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
-			});
-			if (baseRef === "HEAD") {
-				await result;
-				assert.deepEqual(launches, ["HEAD"]);
-			} else {
-				await assert.rejects(result, /baseRef.*revision expressions.*unsupported/);
-				assert.deepEqual(launches, []);
-			}
+			await assert.rejects(
+				runWorkflowScript({
+					script,
+					timeoutMs: 2_000,
+					async launch(key) {
+						launches.push(key);
+						return { key, ok: true, output: key, artifactPaths: [] };
+					},
+					async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
+				}),
+				(error: unknown) => error instanceof WorkflowScriptError && /unsupported fields: baseRef/.test(error.message),
+				baseRef,
+			);
+			assert.deepEqual(launches, []);
 		}
 	});
 
-	it("passes per-child workflow controls through runs.run and runs.all", async () => {
-		const launches: Array<{ key: string; worktree: unknown; control: unknown }> = [];
-		await runWorkflowScript({
-			script: `
-				const one = await runs.run("one", { agent: "worker", task: "one", worktree: true, control: { needsAttentionAfterMs: 111 } });
-				const rest = await runs.all([
-					{ key: "two", agent: "worker", task: "two", worktree: true, control: { activeNoticeAfterMs: 222 } },
-					{ key: "three", agent: "reviewer", task: "three", worktree: false, control: { enabled: false } }
-				]);
-				return [one.key, ...rest.map((entry) => entry.key)];
-			`,
-			timeoutMs: 2_000,
-			async launch(key, params) {
-				launches.push({ key, worktree: params.worktree, control: params.control });
-				return { key, ok: true, output: key, artifactPaths: [], results: [] };
-			},
-			async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
-		});
-		assert.deepEqual(launches, [
-			{ key: "one", worktree: true, control: { needsAttentionAfterMs: 111 } },
-			{ key: "two", worktree: true, control: { activeNoticeAfterMs: 222 } },
-			{ key: "three", worktree: false, control: { enabled: false } },
-		]);
+	it("rejects per-child workflow controls on workflow children", async () => {
+		await assertWorkflowChildRejectedBeforeLaunch(
+			`const one = await runs.run("one", { agent: "worker", task: "one", worktree: true, control: { needsAttentionAfterMs: 111 } }); return one.key;`,
+			/unsupported fields: worktree, control/,
+		);
+		await assertWorkflowChildRejectedBeforeLaunch(
+			`return runs.all([{ key: "two", agent: "worker", task: "two", worktree: false, control: { enabled: false } }]);`,
+			/unsupported fields: worktree, control/,
+		);
 	});
 
 	it("validates bounded lane metadata and passes it to child launch", async () => {
@@ -1954,60 +1910,49 @@ describe("scripted workflow runtime", () => {
 		);
 	});
 
-	it("passes distinct namespaced bindings to parallel children", async () => {
-		const launches: Array<{ key: string; bindings: unknown }> = [];
-		await runWorkflowScript({
-			script: `return runs.all([
-				{ key: "coder", agent: "worker", task: "code", extensionBindings: { "shepherd.dispatch/1": { role: "coder" } } },
-				{ key: "reviewer", agent: "reviewer", task: "review", extensionBindings: { "shepherd.dispatch/1": { role: "reviewer" } } }
-			]);`,
-			timeoutMs: 2_000,
-			async launch(key, params) {
-				launches.push({ key, bindings: params.extensionBindings });
-				return { key, ok: true, output: key, artifactPaths: [], results: [] };
-			},
-			async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
-		});
-		assert.deepEqual(launches, [
-			{ key: "coder", bindings: { "shepherd.dispatch/1": { role: "coder" } } },
-			{ key: "reviewer", bindings: { "shepherd.dispatch/1": { role: "reviewer" } } },
-		]);
+	it("rejects namespaced bindings on parallel children", async () => {
+		await assertWorkflowChildRejectedBeforeLaunch(
+			`const [first, second] = await runs.all([
+				{ key: "first", agent: "worker", task: "first", extensionBindings: { "example.com/alpha/1": { token: "alpha" } } },
+				{ key: "second", agent: "reviewer", task: "second", extensionBindings: { "example.com/alpha/1": { token: "beta" } } },
+			]); return [first.key, second.key];`,
+			/unsupported fields: extensionBindings/,
+		);
 	});
 
-	it("composes dynamic sequential and parallel phases with per-child controls", async () => {
-		const launches: Array<{ key: string; agent: unknown; task: unknown; worktree: unknown }> = [];
-		const result = await runWorkflowScript({
+	it("composes dynamic sequential and parallel phases", async () => {
+		const launches: Array<{ key: string; params: unknown }> = [];
+		const dynamic = await runWorkflowScript({
 			script: `
-				const plan = await runs.run("plan", { agent: "planner", task: "plan", worktree: true });
-				const targets = ["api", "ui"];
-				const built = await runs.all(targets.map((target) => ({
-					key: "build-" + target,
-					agent: "worker",
-					task: plan.output + ":" + target,
-					worktree: true
-				})));
-				const review = await runs.run("review", {
-					agent: "reviewer",
-					task: built.map((child) => child.key).join(","),
-					worktree: false
-				});
-				return { plan: plan.key, built: built.map((child) => child.key), review: review.key };
+				const first = await runs.run("collect", { agent: "worker", task: "Collect rows", phase: "collect" });
+				const fanout = await runs.all([
+					{ key: "plan", agent: "planner", task: "Plan follow-ups" },
+					{ key: "review", agent: "reviewer", task: "Review rows" },
+				]);
+				const apply = await runs.run("apply", { agent: "worker", task: "Apply follow-ups", phase: "apply" });
+				return { first: first.key, all: fanout.map((entry) => entry.key), apply: apply.key };
 			`,
 			timeoutMs: 2_000,
 			async launch(key, params) {
-				launches.push({ key, agent: params.agent, task: params.task, worktree: params.worktree });
-				return { key, ok: true, output: key, artifactPaths: [], results: [] };
+				launches.push({ key, params });
+				return { key, ok: true, phase: key === "apply" ? "apply" : "collect", output: key, artifactPaths: [], results: [] };
 			},
 			async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
 		});
-
-		assert.deepEqual(result.value, { plan: "plan", built: ["build-api", "build-ui"], review: "review" });
-		assert.deepEqual(launches, [
-			{ key: "plan", agent: "planner", task: "plan", worktree: true },
-			{ key: "build-api", agent: "worker", task: "plan:api", worktree: true },
-			{ key: "build-ui", agent: "worker", task: "plan:ui", worktree: true },
-			{ key: "review", agent: "reviewer", task: "build-api,build-ui", worktree: false },
+		assert.equal(dynamic.children.length, 4);
+		assert.deepEqual(dynamic.children.map((child) => child.phase), ["collect", "collect", "collect", "apply"]);
+		assert.deepEqual(dynamic.children.map((child) => child.key), ["collect", "plan", "review", "apply"]);
+		assert.deepEqual(
+			[...new Set(launches.map((entry) => entry.key))],
+			["collect", "plan", "review", "apply"],
+		);
+		assert.deepEqual(dynamic.trace.map((entry) => [entry.key, entry.state]), [
+			["collect", "started"], ["collect", "completed"],
+			["plan", "started"], ["plan", "completed"],
+			["review", "started"], ["review", "completed"],
+			["apply", "started"], ["apply", "completed"],
 		]);
+		assert.deepEqual(dynamic.value, { first: "collect", all: ["plan", "review"], apply: "apply" });
 	});
 
 	it("rejects legacy orchestration params in runs.run", async () => {
@@ -3120,9 +3065,9 @@ describe("scripted workflow runtime", () => {
 		let launches = 0;
 		const result = await runWorkflowScript({
 			workflowRunId: "dispatch-only",
-			script: `const first = await runs.run("a", { agent: "worker", async: true });
-				const reused = await runs.run("a", { agent: "worker", async: true });
-				const batch = await runs.all([{ key: "b", agent: "worker", async: true }]);
+			script: `const first = await runs.run("a", { agent: "worker" });
+				const reused = await runs.run("a", { agent: "worker" });
+				const batch = await runs.all([{ key: "b", agent: "worker" }]);
 				return [first, reused, ...batch];`,
 			onChildSettled: (notice) => notifications.push(notice),
 			async launch(key) { launches++; return { key, ok: false, state: "running", runId: `${key}-run`, output: "", asyncDir: `/tmp/${key}`, artifactPaths: [`/tmp/${key}`] }; },

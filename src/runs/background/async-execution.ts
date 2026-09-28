@@ -14,12 +14,12 @@ import { createAtomicJsonWriter, writePrivateAtomicJson } from "../../shared/ato
 import { childCacheRetentionEnv } from "../../shared/child-cache-retention.ts";
 import { buildEffectiveSystemPrompt } from "../shared/effective-system-prompt.ts";
 import { currentCompletionOwnerId } from "../../shared/completion-owner.ts";
-import { planChildLaunch, projectChainOutputSchemas, resolveStepBehavior, suppressProgressForReadOnlyTask, type ResolvedStepBehavior } from "../shared/child-launch-plan.ts";
+import { planChildLaunch, projectChainOutputSchemas, resolveStepBehavior, suppressProgressForReadOnlyTask, type ResolvedStepBehavior, type StepOverrides } from "../shared/child-launch-plan.ts";
 import { formatHerdrMachineRunnerUnsupported, resolveHerdrMachinePlacement } from "../shared/herdr-machine.ts";
 import { applyThinkingSuffix, getHostAvailableTools, getHostBuiltinToolNames, projectLaunchResolvedChildExtensions, resolvePiLaunchToolPlan } from "../shared/child-tool-plan.ts";
 import { injectSingleOutputInstruction, normalizeSingleOutputOverride, resolveSingleOutputPath, validateFileOnlyOutputMode } from "../shared/single-output.ts";
 import { applyWatchdogLaunchRules, sendRuleViolationWarning } from "../../watchdog/rules.ts";
-import { buildChainInstructions, isDynamicParallelStep, isParallelStep, resolveExistingReadInstructionPaths, resolveExistingReadPaths, writeInitialProgressFile, type ChainStep, type SequentialStep, type StepOverrides } from "../../shared/settings.ts";
+import { buildChainInstructions, isDynamicParallelStep, isParallelStep, resolveExistingReadInstructionPaths, resolveExistingReadPaths, writeInitialProgressFile, type ChainStep, type ParallelTaskItem, type SequentialStep } from "../../shared/settings.ts";
 import { isDynamicRunnerGroup, isParallelGroup, type RunnerStep } from "../shared/parallel-utils.ts";
 import { PI_CODING_AGENT_PACKAGE, resolveBunPiExecutable, resolveInstalledPiPackageRoot, resolvePiPackageRoot } from "../shared/pi-spawn.ts";
 import { JITI_ALIAS_ENV, resolveHostPeerAliases } from "./runner-aliases.ts";
@@ -46,6 +46,7 @@ import {
 	type AsyncParallelGroupStatus,
 	type AsyncStatus,
 	type ArtifactConfig,
+	type ChainGateLayer,
 	type Details,
 	type IntercomBridgeConfig,
 	type HerdrMachineReference,
@@ -941,24 +942,29 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 	const workflowGraph = buildWorkflowGraphSnapshot({ runId: id, mode: resultMode, steps: graphSteps });
 
 	let progressInstructionCreated = false;
-	const buildStepOverrides = (s: SequentialStep): StepOverrides => {
+	/** Per-group execution controls (parallel-group level only). No per-step overrides. */
+	interface WorkflowGroupOverrides {
+		machine?: string;
+		worktree?: boolean;
+		agentContract?: AgentContract;
+		gateOn?: ChainGateLayer;
+	}
+	const buildStepOverrides = (s: SequentialStep | ParallelTaskItem): StepOverrides => {
 		return {
+			...(s.async !== undefined ? { async: s.async } : {}),
 			...(s.output !== undefined ? { output: s.output } : {}),
 			...(s.outputMode !== undefined ? { outputMode: s.outputMode } : {}),
 			...(s.reads !== undefined ? { reads: s.reads } : {}),
 			...(s.progress !== undefined ? { progress: s.progress } : {}),
-			...(s.model !== undefined ? { model: s.model } : {}),
-			...(s.fast !== undefined ? { fast: s.fast } : {}),
-			...(s.outputSchema !== undefined ? { outputSchema: s.outputSchema } : {}),
 		};
 	};
-	const buildSeqStep = (s: SequentialStep, sessionFile?: string, behaviorCwd?: string, progressPrecreated = false, resolvedBehavior?: ResolvedStepBehavior, flatIndex?: number, parallelOutputNamespace?: { stepIndex: number; taskIndex?: number }, runFanoutPath?: string) => {
+	const buildSeqStep = (s: SequentialStep, sessionFile?: string, behaviorCwd?: string, progressPrecreated = false, resolvedBehavior?: ResolvedStepBehavior, flatIndex?: number, parallelOutputNamespace?: { stepIndex: number; taskIndex?: number }, runFanoutPath?: string, group?: WorkflowGroupOverrides) => {
 		const a = agents.find((x) => x.name === s.agent)!;
 		const effectiveBehavior = resolvedBehavior ?? suppressProgressForReadOnlyTask(resolveStepBehavior(a, buildStepOverrides(s), chainSkills), s.task, originalTask);
-		const requestedMachine = s.machine ?? launchMachine ?? a.machine;
+		const requestedMachine = group?.machine ?? launchMachine ?? a.machine;
 		const externalRunner = a.runner?.type === "external-cli" || a.runner?.type === "external-job";
 		const externalRunnerType = a.runner?.type;
-		const machineUnsupported = formatHerdrMachineRunnerUnsupported({ machine: requestedMachine, agentName: a.name, runnerType: a.runner?.type, adapter: a.runner?.type === "external-cli" ? a.runner.adapter : undefined, worktree: s.worktree });
+		const machineUnsupported = formatHerdrMachineRunnerUnsupported({ machine: requestedMachine, agentName: a.name, runnerType: a.runner?.type, adapter: a.runner?.type === "external-cli" ? a.runner.adapter : undefined, worktree: group?.worktree });
 		if (machineUnsupported) throw new AsyncStartValidationError(machineUnsupported);
 		let machine: HerdrMachineReference | undefined;
 		let machineEnv: Record<string, string> | undefined;
@@ -973,11 +979,10 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 		}
 		if (externalRunner) {
 			const unsupported: string[] = [];
-			if (s.model !== undefined) unsupported.push("model override");
 			if (effectiveBehavior.outputSchema !== undefined) unsupported.push("structured output");
-			if (s.acceptance !== undefined || params.agentContract !== undefined || s.agentContract !== undefined) unsupported.push("acceptance/agent contract");
-			if (s.toolBudget !== undefined || params.toolBudget !== undefined || a.toolBudget !== undefined || params.configToolBudget !== undefined) unsupported.push("tool budget");
-			if ((s.fast ?? params.fast ?? a.fast) === true) unsupported.push("fast mode");
+			if (group?.agentContract !== undefined || params.agentContract !== undefined) unsupported.push("acceptance/agent contract");
+			if (params.toolBudget !== undefined || a.toolBudget !== undefined || params.configToolBudget !== undefined) unsupported.push("tool budget");
+			if ((params.fast ?? a.fast) === true) unsupported.push("fast mode");
 			if (unsupported.length > 0) throw new AsyncStartValidationError(`Agent '${a.name}' uses runner.type='${externalRunnerType}' and does not support: ${unsupported.join(", ")}.`);
 		}
 		try {
@@ -985,8 +990,8 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 		} catch (error) {
 			throw new AsyncStartValidationError(error instanceof Error ? error.message : String(error));
 		}
-		const toolBudgetInput = s.toolBudget ?? params.toolBudget ?? a.toolBudget ?? params.configToolBudget;
-		const resolvedToolBudget = validateToolBudgetConfig(toolBudgetInput, s.toolBudget ? "toolBudget" : a.toolBudget ? "agent.toolBudget" : "config.toolBudget");
+		const toolBudgetInput = params.toolBudget ?? a.toolBudget ?? params.configToolBudget;
+		const resolvedToolBudget = validateToolBudgetConfig(toolBudgetInput, a.toolBudget ? "agent.toolBudget" : "config.toolBudget");
 		if (resolvedToolBudget.error) throw new AsyncStartValidationError(resolvedToolBudget.error);
 		const resolvedToolTimeout = resolveToolTimeoutMs({
 			callValue: params.callToolTimeoutMs,
@@ -1036,10 +1041,10 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 		const task = namespaceOutputPath ? taskText : injectSingleOutputInstruction(taskText, outputPath, a);
 
 		const modelScopes = resolveModelScopesForAgent(ctx.modelScope, a.name, ctx.currentModel);
-		const modelOrigin = resolveModelOrigin({ explicitModel: s.model, agentModel: a.model, parentModel: ctx.currentModel });
+		const modelOrigin = resolveModelOrigin({ explicitModel: undefined, agentModel: a.model, parentModel: ctx.currentModel });
 		const primaryModelFromParent = modelOrigin === "inherited";
 		const primaryModel = externalRunner ? undefined : resolveEffectiveSubagentModel(
-			s.model,
+			undefined,
 			a.model,
 			ctx.currentModel,
 			availableModels,
@@ -1062,7 +1067,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 				throw new AsyncStartValidationError(error instanceof Error ? error.message : String(error));
 			}
 		}
-		const agentContract = s.agentContract ?? params.agentContract;
+		const agentContract = group?.agentContract ?? params.agentContract;
 		const permissionRules = resolvePermissionRules(ctx.permissions, a.permissions);
 		let modelCandidates: string[] = [];
 		let requestedModel: string | undefined;
@@ -1090,7 +1095,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 		const selectedModel = modelCandidates[0] ?? model;
 		const launchRuleError = applyWatchdogLaunchRules({ cwd: machine ? runnerCwd : stepCwd, agent: a.name, model: selectedModel, warn: (violation) => sendRuleViolationWarning(ctx.pi, violation) });
 		if (launchRuleError) throw new AsyncStartValidationError(launchRuleError);
-		const fast = s.fast ?? params.fast ?? a.fast;
+		const fast = params.fast ?? a.fast;
 		const hostAvailableBuiltins = getHostBuiltinToolNames(ctx.pi);
 		const hostAvailableTools = getHostAvailableTools(ctx.pi);
 		const requiredExtensions = externalRunner ? [] : ctx.childRuntime?.requiredExtensions ?? resolveRequiredChildExtensions(ctx.parentSessionId ?? ctx.currentSessionId ?? undefined);
@@ -1139,9 +1144,9 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 			requestedCwd: machine ? machine.cwd : s.cwd ?? stepCwd,
 			model: selectedModel,
 			modelResolution: buildModelResolutionMetadata({
-				...(primaryModelFromParent ? {} : (s.model ?? a.model ? { requested: s.model ?? a.model } : {})),
+				...(primaryModelFromParent ? {} : (a.model ? { requested: a.model } : {})),
 				...(selectedModel ? { resolved: selectedModel } : {}),
-				source: resolveModelResolutionSource({ explicit: s.model !== undefined, fromParent: primaryModelFromParent, agentConfigured: a.model !== undefined }),
+				source: resolveModelResolutionSource({ explicit: false, fromParent: primaryModelFromParent, agentConfigured: a.model !== undefined }),
 			}),			...(contextLimit !== undefined ? { contextLimit } : {}),
 			...(fast !== undefined ? { fast } : {}),
 			thinking: resolveEffectiveThinking(selectedModel, effectiveThinking),
@@ -1174,7 +1179,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 			maxSubagentDepth: resolveChildMaxSubagentDepth(maxSubagentDepth, a.maxSubagentDepth),
 			toolTimeoutMs: resolvedToolTimeout.toolTimeoutMs,
 			effectiveAcceptance: resolveEffectiveAcceptance({
-				explicit: s.acceptance,
+				explicit: undefined,
 				agentName: s.agent,
 				acceptanceRole: a.acceptanceRole,
 				task,
@@ -1183,13 +1188,13 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 				dynamic: false,
 				agentContract,
 			}),
-			acceptanceInput: s.acceptance,
+			agentContract,
 			acceptanceRole: a.acceptanceRole,
-			...(s.gateOn ? { gateOn: s.gateOn } : {}),
+			...(group?.gateOn ? { gateOn: group.gateOn } : {}),
 			...(behavior.outputSchema ? { structuredOutputSchema: behavior.outputSchema } : {}),
-			...(behavior.outputSchema ? { structuredOutput: createStructuredOutputRuntime(behavior.outputSchema, path.join(asyncDir, "structured-output"), { acceptanceReport: resolveAcceptanceReportMode(s.acceptance) }) } : {}),
+			...(behavior.outputSchema ? { structuredOutput: createStructuredOutputRuntime(behavior.outputSchema, path.join(asyncDir, "structured-output"), { acceptanceReport: resolveAcceptanceReportMode(undefined) }) } : {}),
 			...(resolvedToolBudget.budget ? { toolBudget: resolvedToolBudget.budget } : {}),
-			...(s.worktree ? { worktree: true } : {}),
+			...(group?.worktree ? { worktree: true } : {}),
 		};
 	};
 
@@ -1211,7 +1216,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 			if (isParallelStep(s)) {
 				const parallelBehaviors = s.parallel.map((task) => {
 					const agent = agents.find((candidate) => candidate.name === task.agent)!;
-					return suppressProgressForReadOnlyTask(resolveStepBehavior(agent, buildStepOverrides(task), chainSkills), task.task, originalTask);
+			return suppressProgressForReadOnlyTask(resolveStepBehavior(agent, buildStepOverrides(task), chainSkills), task.task, originalTask);
 				});
 				const progressPrecreated = parallelBehaviors.some((behavior) => behavior.progress);
 				if (progressPrecreated) {
@@ -1231,7 +1236,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 							}
 						}
 						const staticStep = nextFlatStep();
-						return buildSeqStep({ ...t, machine: t.machine ?? s.machine, worktree: s.worktree, agentContract: t.agentContract ?? s.agentContract, gateOn: t.gateOn ?? s.gateOn }, staticStep.sessionFile, behaviorCwd, progressPrecreated, parallelBehaviors[taskIndex], staticStep.index, { stepIndex, taskIndex }, resultMode === "parallel" ? `tasks[${taskIndex}]` : `chain[${stepIndex}].parallel[${taskIndex}]`);
+						return buildSeqStep(t, staticStep.sessionFile, behaviorCwd, progressPrecreated, parallelBehaviors[taskIndex], staticStep.index, { stepIndex, taskIndex }, resultMode === "parallel" ? `tasks[${taskIndex}]` : `chain[${stepIndex}].parallel[${taskIndex}]`, { machine: s.machine, worktree: s.worktree, agentContract: s.agentContract, gateOn: s.gateOn });
 					}),
 					concurrency: s.concurrency,
 					failFast: s.failFast,
@@ -1248,7 +1253,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 				}
 				const maxItems = s.expand.maxItems ?? params.dynamicFanoutMaxItems ?? 0;
 				const dynamicFlatSteps = Array.from({ length: maxItems }, () => nextFlatStep());
-				const parallel = buildSeqStep({ ...(s.parallel as SequentialStep), agentContract: s.parallel.agentContract ?? s.agentContract, gateOn: s.parallel.gateOn ?? s.gateOn }, undefined, undefined, progressPrecreated, behavior, undefined, { stepIndex });
+				const parallel = buildSeqStep(s.parallel, undefined, undefined, progressPrecreated, behavior, undefined, { stepIndex }, undefined, { agentContract: s.agentContract, gateOn: s.gateOn });
 				return {
 					expand: s.expand,
 					parallel,
@@ -1277,18 +1282,8 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 				};
 			}
 			const sequential = s as SequentialStep;
-			let behaviorCwd: string | undefined;
-			if (sequential.worktree && managedWorktreeProvider === "worktrunk") {
-				behaviorCwd = WORKTREE_AGENT_CWD_PLACEHOLDER;
-			} else if (sequential.worktree && managedWorktreeProvider === "native") {
-				try {
-					behaviorCwd = resolveExpectedWorktreeAgentCwd(runnerCwd, `${id}-s${stepIndex}`, 0, worktreeBaseDir);
-				} catch {
-					behaviorCwd = undefined;
-				}
-			}
 			const staticStep = nextFlatStep();
-			return buildSeqStep(sequential, staticStep.sessionFile, behaviorCwd, false, undefined, staticStep.index, undefined, `chain[${stepIndex}]`);
+			return buildSeqStep(sequential, staticStep.sessionFile, undefined, false, undefined, staticStep.index, undefined, `chain[${stepIndex}]`);
 		});
 		const steps = params.attachRoot
 			? [{
@@ -1360,11 +1355,7 @@ export function executeAsyncChain(
 		nestedRoute,
 	} = params;
 	const resultMode = params.resultMode ?? "chain";
-	const acceptanceErrors = validateExecutionAcceptance({
-		chain: projectChainOutputSchemas(chain, agents,
-			(step, outputSchema) => ({ acceptance: step.acceptance, outputSchema }),
-			(step, parallel) => Array.isArray(step.parallel) ? { parallel } : { acceptance: "acceptance" in step ? step.acceptance : undefined, parallel }),
-	});
+	const acceptanceErrors = validateExecutionAcceptance({ acceptance: params.acceptance });
 	if (acceptanceErrors.length > 0) return formatAsyncStartError(resultMode, acceptanceErrors.join(" "));
 	const capabilityCeiling = params.capabilityCeiling ?? resolveCurrentSubagentCapabilityCeiling(ctx.currentSessionId);
 	const inheritedNestedRoute = inheritedNestedRouteOf(ctx.childRuntime);

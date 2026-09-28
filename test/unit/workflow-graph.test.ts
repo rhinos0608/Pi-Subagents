@@ -8,7 +8,7 @@ describe("workflow graph snapshots", () => {
 			runId: "run-1",
 			steps: [
 				{ agent: "scout", task: "Scan", phase: "Research", label: "Find context", as: "context" },
-				{ agent: "writer", task: "Use {outputs.context}", phase: "Synthesis", outputSchema: { type: "object" } },
+				{ agent: "writer", task: "Use {outputs.context}", phase: "Synthesis" },
 			],
 			results: [{ exitCode: 0 }, { exitCode: 1, error: "bad output" }],
 		});
@@ -17,7 +17,7 @@ describe("workflow graph snapshots", () => {
 		assert.equal(graph.nodes[0]?.label, "Find context");
 		assert.equal(graph.nodes[0]?.flatIndex, 0);
 		assert.equal(graph.nodes[0]?.outputName, "context");
-		assert.equal(graph.nodes[1]?.structured, true);
+		assert.equal(graph.nodes[1]?.structured, false);
 		assert.equal(graph.nodes[1]?.status, "failed");
 		assert.deepEqual(graph.phases, [
 			{ title: "Research", nodeIds: ["step-0"] },

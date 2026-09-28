@@ -7,7 +7,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { discoverAgents, formatUnknownAgentError, unknownAgentDiagnosticContext, type AgentConfig, type AgentScope, type UnknownAgentDiagnosticContext } from "../agents/agents.ts";
 import { normalizeOutputOverride, type OutputOverrideInput, type ResolvedStepBehavior } from "../runs/shared/child-launch-plan.ts";
-import { CHAIN_RUNS_DIR, type AcceptanceInput, type AgentContract, type ChainGateLayer, type JsonSchemaObject, type OutputMode, type ToolBudgetConfig } from "./types.ts";
+import { CHAIN_RUNS_DIR, type AcceptanceInput, type AgentContract, type ChainGateLayer, type JsonSchemaObject, type OutputMode } from "./types.ts";
 const CHAIN_DIR_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
 const INITIAL_PROGRESS_CONTENT = "# Progress\n\n## Status\nIn Progress\n\n## Tasks\n\n## Files Changed\n\n## Notes\n";
 
@@ -24,51 +24,34 @@ export type { ChildLaunchPlan, ChildLaunchPlanInput, OutputOverrideInput, Resolv
 // Chain Step Types
 // =============================================================================
 
-/** Sequential step: single agent execution */
+/** Sequential step: single agent execution (orchestration intent + output routing only) */
 export interface SequentialStep {
 	agent: string;
 	task?: string;
 	phase?: string;
 	label?: string;
 	as?: string;
-	outputSchema?: JsonSchemaObject | false;
 	cwd?: string;
-	machine?: string;
+	async?: boolean;
 	output?: OutputOverrideInput;
 	outputMode?: OutputMode;
 	reads?: string[] | false;
 	progress?: boolean;
-	model?: string;
-	fast?: boolean;
-	toolBudget?: ToolBudgetConfig;
-	acceptance?: AcceptanceInput;
-	agentContract?: AgentContract;
-	gateOn?: ChainGateLayer;
-	/** Internal workflow child isolation; public workflowScript supplies this on runs.run. */
-	worktree?: boolean;
 }
 
-/** Parallel task item within a parallel step */
+/** Parallel task item within a parallel step (orchestration intent + output routing only) */
 export interface ParallelTaskItem {
 	agent: string;
 	task?: string;
 	phase?: string;
 	label?: string;
 	as?: string;
-	outputSchema?: JsonSchemaObject | false;
 	cwd?: string;
-	machine?: string;
-	count?: number;
+	async?: boolean;
 	output?: OutputOverrideInput;
 	outputMode?: OutputMode;
 	reads?: string[] | false;
 	progress?: boolean;
-	model?: string;
-	fast?: boolean;
-	toolBudget?: ToolBudgetConfig;
-	acceptance?: AcceptanceInput;
-	agentContract?: AgentContract;
-	gateOn?: ChainGateLayer;
 }
 
 export interface DynamicExpandSpec {
@@ -82,7 +65,7 @@ export interface DynamicExpandSpec {
 	onEmpty?: "skip" | "fail";
 }
 
-export type DynamicParallelTemplate = Omit<ParallelTaskItem, "as" | "count">;
+export type DynamicParallelTemplate = Omit<ParallelTaskItem, "as">;
 
 export interface DynamicCollectSpec {
 	as: string;
@@ -370,8 +353,8 @@ export function resolveParallelBehaviors(
 			skills = [...new Set([...skills, ...chainSkills])];
 		}
 
-		const outputMode = task.outputMode ?? "inline";
-		const model = task.model ?? config.model;
+		const outputMode = task.outputMode ?? config.outputMode ?? "inline";
+		const model = config.model;
 		return { output, outputMode, reads, progress, skills, model };
 	});
 }
