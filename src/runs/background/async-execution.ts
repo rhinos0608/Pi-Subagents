@@ -21,13 +21,12 @@ import { injectSingleOutputInstruction, normalizeSingleOutputOverride, resolveSi
 import { applyWatchdogLaunchRules, sendRuleViolationWarning } from "../../watchdog/rules.ts";
 import { buildChainInstructions, isDynamicParallelStep, isParallelStep, resolveExistingReadInstructionPaths, resolveExistingReadPaths, writeInitialProgressFile, type ChainStep, type SequentialStep, type StepOverrides } from "../../shared/settings.ts";
 import { isDynamicRunnerGroup, isParallelGroup, type RunnerStep } from "../shared/parallel-utils.ts";
-import type { ContextMode } from "../shared/context-mode.ts";
 import { PI_CODING_AGENT_PACKAGE, resolveBunPiExecutable, resolveInstalledPiPackageRoot, resolvePiPackageRoot } from "../shared/pi-spawn.ts";
 import { JITI_ALIAS_ENV, resolveHostPeerAliases } from "./runner-aliases.ts";
 import { preflightLaunchCwd } from "../shared/launch-cwd.ts";
 import { resolveNodeExecutable } from "../../shared/node-executable.ts";
 import { backgroundProcessOptions } from "../shared/background-process-options.ts";
-import { normalizeSkillInput, resolveSkillsWithFallback } from "../../agents/skills.ts";
+import { resolveSkillsWithFallback } from "../../agents/skills.ts";
 import { PI_CODING_AGENT_PACKAGE_ROOT_ENV, PROMPT_REDACTED, resolveChildCwd } from "../../shared/utils.ts";
 import { buildModelCandidates, buildModelResolutionMetadata, resolveEffectiveSubagentModel, resolveModelOrigin, resolveModelResolutionSource, resolveSubagentModelOverride, type AvailableModelInfo, type ModelOrigin, type ParentModel } from "../shared/model-fallback.ts";
 import { resolveModelSelection } from "../shared/model-resolution.ts";
@@ -60,7 +59,6 @@ import {
 	type SubagentRunMode,
 	type SteeringRecoveryDescriptor,
 	type WorkflowLaneMetadata,
-	type UsageBudgetConfig,
 	DIRS,
 	SUBAGENT_ASYNC_STARTED_EVENT,
 	SUBAGENT_LIFECYCLE_ARTIFACT_VERSION,
@@ -76,7 +74,6 @@ import { inheritedChildRuntime } from "../shared/child-launch.ts";
 import { resultFilePath } from "./result-files.ts";
 import { updateActiveRunIndex } from "./active-run-index.ts";
 import { validateToolBudgetConfig } from "../shared/tool-budget.ts";
-import { usageBudgetState } from "../shared/usage-budget.ts";
 import type { ImportedAsyncRoot } from "./chain-root-attachment.ts";
 import type { SessionLeaseRequest } from "../shared/session-lease.ts";
 import { finalizeProcessTerminal, initializeProcessTerminal, readProcessTerminal } from "./process-terminal.ts";
@@ -186,8 +183,6 @@ interface AsyncExecutionContext {
 	childRuntime?: ChildRuntimeConfig;
 }
 
-export const DEFAULT_ASYNC_TIMEOUT_MS = 30 * 60 * 1000;
-
 interface AsyncChainParams {
 	chain: ChainStep[];
 	task?: string;
@@ -213,7 +208,6 @@ interface AsyncChainParams {
 	chainSkills?: string[];
 	sessionFilesByFlatIndex?: (string | undefined)[];
 	thinkingOverridesByFlatIndex?: (AgentConfig["thinking"] | undefined)[];
-	contextForAgent?: (agentName: string) => ContextMode;
 	progressDir?: string;
 	dynamicFanoutMaxItems?: number;
 	maxSubagentDepth: number;
@@ -231,7 +225,6 @@ interface AsyncChainParams {
 	fast?: boolean;
 	timeoutMs?: number;
 	toolBudget?: ResolvedToolBudget;
-	usageBudget?: UsageBudgetConfig;
 	configToolBudget?: ResolvedToolBudget;
 	/** Optional per-call hard toolTimeoutMs override (highest precedence). */
 	callToolTimeoutMs?: number;
@@ -273,7 +266,6 @@ interface AsyncSingleParams {
 	sessionDir?: string;
 	sessionFile?: string;
 	revivalLease?: SessionLeaseRequest;
-	context?: ContextMode;
 	skills?: string[];
 	output?: string | boolean;
 	reads?: string[] | false;
@@ -313,7 +305,6 @@ interface AsyncSingleParams {
 	/** Steer the child to checkpoint and stop this many ms before the run deadline (resolved call param ?? config). */
 	checkpointBeforeDeadlineMs?: number;
 	toolBudget?: ResolvedToolBudget | ToolBudgetConfig;
-	usageBudget?: UsageBudgetConfig;
 	configToolBudget?: ResolvedToolBudget;
 	/** Global config.toolTimeoutMs (third precedence, after agent frontmatter). */
 	configToolTimeoutMs?: number;
@@ -360,7 +351,6 @@ export interface AsyncRunnerStepBuildParams {
 	chainSkills?: string[];
 	sessionFilesByFlatIndex?: (string | undefined)[];
 	thinkingOverridesByFlatIndex?: (AgentConfig["thinking"] | undefined)[];
-	contextForAgent?: (agentName: string) => ContextMode;
 	progressDir?: string;
 	agentContract?: AgentContract;
 	dynamicFanoutMaxItems?: number;
@@ -952,13 +942,11 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 
 	let progressInstructionCreated = false;
 	const buildStepOverrides = (s: SequentialStep): StepOverrides => {
-		const stepSkillInput = normalizeSkillInput(s.skill);
 		return {
 			...(s.output !== undefined ? { output: s.output } : {}),
 			...(s.outputMode !== undefined ? { outputMode: s.outputMode } : {}),
 			...(s.reads !== undefined ? { reads: s.reads } : {}),
 			...(s.progress !== undefined ? { progress: s.progress } : {}),
-			...(stepSkillInput !== undefined ? { skills: stepSkillInput } : {}),
 			...(s.model !== undefined ? { model: s.model } : {}),
 			...(s.fast !== undefined ? { fast: s.fast } : {}),
 			...(s.outputSchema !== undefined ? { outputSchema: s.outputSchema } : {}),
@@ -990,7 +978,6 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 			if (s.acceptance !== undefined || params.agentContract !== undefined || s.agentContract !== undefined) unsupported.push("acceptance/agent contract");
 			if (s.toolBudget !== undefined || params.toolBudget !== undefined || a.toolBudget !== undefined || params.configToolBudget !== undefined) unsupported.push("tool budget");
 			if ((s.fast ?? params.fast ?? a.fast) === true) unsupported.push("fast mode");
-			if (params.contextForAgent?.(s.agent) === "fork") unsupported.push("fork context");
 			if (unsupported.length > 0) throw new AsyncStartValidationError(`Agent '${a.name}' uses runner.type='${externalRunnerType}' and does not support: ${unsupported.join(", ")}.`);
 		}
 		try {
@@ -1143,7 +1130,6 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 			...(a.runner ? { runner: a.runner } : {}),
 			...(machine ? { machine } : {}),
 			...(machineEnv ? { machineEnv } : {}),
-			...(params.contextForAgent ? { context: params.contextForAgent(s.agent) } : {}),
 			...(agentContract ? { agentContract } : {}),
 			phase: s.phase,
 			label: s.label,
@@ -1186,7 +1172,6 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 			outputMode: behavior.outputMode,
 			sessionFile,
 			maxSubagentDepth: resolveChildMaxSubagentDepth(maxSubagentDepth, a.maxSubagentDepth),
-			timeoutMs: a.defaultTimeoutMs ?? DEFAULT_ASYNC_TIMEOUT_MS,
 			toolTimeoutMs: resolvedToolTimeout.toolTimeoutMs,
 			effectiveAcceptance: resolveEffectiveAcceptance({
 				explicit: s.acceptance,
@@ -1416,7 +1401,6 @@ export function executeAsyncChain(
 		machineCwd: params.machineCwd,
 		sessionFilesByFlatIndex,
 		thinkingOverridesByFlatIndex,
-		contextForAgent: params.contextForAgent,
 		progressDir: params.progressDir ?? (artifactsDir ? path.join(artifactsDir, "progress", id) : resultMode === "parallel" ? path.join(asyncDir, "progress") : undefined),
 		agentContract: params.agentContract,
 		outputBaseDir: artifactsDir ? path.join(artifactsDir, "outputs", id) : undefined,
@@ -1445,7 +1429,6 @@ export function executeAsyncChain(
 	}
 	const { steps, runnerCwd, workflowGraph, eventChain } = built;
 	const deadlineAt = params.timeoutMs !== undefined ? Date.now() + params.timeoutMs : undefined;
-	const initialUsageBudget = usageBudgetState(params.usageBudget, undefined);
 	let childTargetIndex = 0;
 	const childIntercomTargets = childIntercomTarget ? steps.flatMap((step) => {
 		if (!("parallel" in step) && "importAsyncRoot" in step && step.importAsyncRoot) {
@@ -1507,7 +1490,6 @@ export function executeAsyncChain(
 				worktreeBranchPrefix,
 				controlConfig,
 				toolBudget: params.toolBudget,
-				usageBudget: params.usageBudget,
 				controlIntercomTarget,
 				childIntercomTargets,
 				resultMode,
@@ -1659,7 +1641,6 @@ export function executeAsyncChain(
 			asyncDir,
 			...(sessionRoot ? { sessionRoot } : {}),
 			...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs, deadlineAt } : {}),
-			...(initialUsageBudget ? { usageBudget: initialUsageBudget } : {}),
 			...(capabilityCeiling ? { capabilityCeiling } : {}),
 			...(params.parentWorkflowRunId ? { parentWorkflowRunId: params.parentWorkflowRunId } : {}),
 			...(params.workflowKey ? { workflowKey: params.workflowKey } : {}),
@@ -1675,7 +1656,7 @@ export function executeAsyncChain(
 
 	return {
 		content: [{ type: "text", text: formatAsyncStartedMessage(`Async ${resultMode}: ${chainDesc} [${id}]`, ctx.interactive === true) }],
-		details: { mode: resultMode, runId: id, results: [], asyncId: id, asyncDir, workflowGraph, ...(capabilityCeiling ? { capabilityCeiling } : {}), ...(params.parentWorkflowRunId ? { parentWorkflowRunId: params.parentWorkflowRunId } : {}), ...(params.workflowKey ? { workflowKey: params.workflowKey } : {}), ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs, deadlineAt } : {}), ...(params.toolBudget ? { toolBudget: params.toolBudget } : {}), ...(initialUsageBudget ? { usageBudget: initialUsageBudget } : {}) },
+		details: { mode: resultMode, runId: id, results: [], asyncId: id, asyncDir, workflowGraph, ...(capabilityCeiling ? { capabilityCeiling } : {}), ...(params.parentWorkflowRunId ? { parentWorkflowRunId: params.parentWorkflowRunId } : {}), ...(params.workflowKey ? { workflowKey: params.workflowKey } : {}), ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs, deadlineAt } : {}), ...(params.toolBudget ? { toolBudget: params.toolBudget } : {}) },
 	};
 }
 
@@ -1740,7 +1721,6 @@ export function executeAsyncSingle(
 		if (params.structuredOutputSchema !== undefined) unsupported.push("structured output");
 		if (params.acceptance !== undefined || params.agentContract !== undefined) unsupported.push("acceptance/agent contract");
 		if (params.toolBudget !== undefined || agentConfig.toolBudget !== undefined || params.configToolBudget !== undefined) unsupported.push("tool budget");
-		if (params.context === "fork") unsupported.push("fork context");
 		if ((params.skills?.length ?? 0) > 0) unsupported.push("skills");
 		if (permissionRules) unsupported.push("native Pi child permissions");
 		if (extensionBindings !== undefined) unsupported.push("extension bindings");
@@ -1892,7 +1872,6 @@ export function executeAsyncSingle(
 	});
 	if (resolvedToolTimeout.error) return formatAsyncStartError("single", resolvedToolTimeout.error);
 	const toolTimeoutMs = resolvedToolTimeout.toolTimeoutMs;
-	const initialUsageBudget = usageBudgetState(params.usageBudget, undefined);
 	const resolvedSessionDir = params.sessionDir ?? (sessionRoot ? path.join(sessionRoot, `async-${id}`) : undefined);
 	const structuredOutput = params.structuredOutputSchema
 		? createStructuredOutputRuntime(params.structuredOutputSchema, path.join(asyncDir, "structured-output"), { acceptanceReport: resolveAcceptanceReportMode(params.acceptance) })
@@ -2023,7 +2002,6 @@ export function executeAsyncSingle(
 		...(params.structuredOutputSchema ? { structuredOutputSchema: params.structuredOutputSchema } : {}),
 		...(params.acceptance !== undefined ? { acceptance: params.acceptance } : {}),
 		...(controlConfig ? { controlConfig } : {}),
-		...(params.context ? { context: params.context } : {}),
 		...(params.intercomBridge !== undefined ? { intercomBridge: params.intercomBridge } : {}),
 		...(params.baseRef !== undefined ? { baseRef: params.baseRef } : {}),
 		...(deadlineAt !== undefined ? { absoluteDeadlineAt: deadlineAt } : {}),
@@ -2063,8 +2041,7 @@ export function executeAsyncSingle(
 						...(!externalRunner && machine && params.reads !== undefined ? { remoteReads: params.reads } : {}),
 						...(machineEnv ? { machineEnv } : {}),
 						...(params.externalJobFollowUp ? { externalJobFollowUp: params.externalJobFollowUp } : {}),
-						...(params.context ? { context: params.context } : {}),
-						cwd: machine?.cwd ?? runnerCwd,
+										cwd: machine?.cwd ?? runnerCwd,
 						requestedCwd: machine?.cwd ?? params.requestedCwd ?? runnerCwd,
 						model: selectedModel,
 						modelCandidates,
@@ -2144,7 +2121,6 @@ export function executeAsyncSingle(
 				toolTimeoutMs,
 				checkpointBeforeDeadlineMs: params.checkpointBeforeDeadlineMs,
 				toolBudget: params.toolBudget,
-				usageBudget: params.usageBudget,
 				controlIntercomTarget,
 				childIntercomTargets: childIntercomTarget ? [childIntercomTarget(agent, 0)] : undefined,
 				resultMode: "single",
@@ -2259,7 +2235,6 @@ export function executeAsyncSingle(
 			...(params.parentWorkflowRunId ? { parentWorkflowRunId: params.parentWorkflowRunId } : {}),
 			...(params.workflowKey ? { workflowKey: params.workflowKey } : {}),
 			...(timeoutMs !== undefined ? { timeoutMs, deadlineAt } : {}),
-			...(initialUsageBudget ? { usageBudget: initialUsageBudget } : {}),
 			...(capabilityCeiling ? { capabilityCeiling } : {}),
 			nestedRoute,
 		});
@@ -2267,7 +2242,7 @@ export function executeAsyncSingle(
 
 	return {
 		content: [{ type: "text", text: formatAsyncStartedMessage(`Async: ${agent} [${id}]`, ctx.interactive === true) }],
-		details: { mode: "single", runId: id, results: [], asyncId: id, asyncDir, launchContractDigest, launchResolvedExtensions, ...(capabilityCeiling ? { capabilityCeiling } : {}), ...(params.context ? { context: params.context } : {}), ...(timeoutMs !== undefined ? { timeoutMs, deadlineAt } : {}), ...(params.toolBudget ? { toolBudget: resolvedToolBudget.budget ?? params.toolBudget } : {}), ...(initialUsageBudget ? { usageBudget: initialUsageBudget } : {}) } as Details,
+		details: { mode: "single", runId: id, results: [], asyncId: id, asyncDir, launchContractDigest, launchResolvedExtensions, ...(capabilityCeiling ? { capabilityCeiling } : {}), ...(timeoutMs !== undefined ? { timeoutMs, deadlineAt } : {}), ...(params.toolBudget ? { toolBudget: resolvedToolBudget.budget ?? params.toolBudget } : {}) } as Details,
 	};
 	};
 	return spawnResultOrPromise instanceof Promise ? spawnResultOrPromise.then(finishSpawnResult) : finishSpawnResult(spawnResultOrPromise);

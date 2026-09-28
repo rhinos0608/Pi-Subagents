@@ -29,13 +29,10 @@ export interface SubagentDelegationRequest {
 	nodeId: string;
 	agent: string;
 	task: string;
-	context: "fresh" | "fork";
 	cwd: string;
 	model?: string;
 	thinking?: SubagentDelegationThinking;
-	timeoutMs?: number;
 	toolBudget?: SubagentDelegationToolBudget;
-	skill?: string | string[] | boolean;
 	artifacts?: boolean;
 	/** Per-launch bridge config; replaces the global `intercomBridge` config. Pass the same value to preflight to compare digests. */
 	intercomBridge?: IntercomBridgeConfig;

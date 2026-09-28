@@ -1,7 +1,6 @@
 /** Native runner construction, separate from its executable entrypoint and attempt loop. */
 import * as path from "node:path";
 import { buildInProcessChildLaunch, type BuildInProcessChildLaunchInput, type InheritedChildRuntime } from "../shared/child-launch.ts";
-import { deriveForkPromptCacheKey } from "../shared/child-tool-plan.ts";
 import { normalizeExtensionBindings } from "../shared/extension-bindings.ts";
 import type { RunnerSubagentStep } from "../shared/parallel-utils.ts";
 import { formatAcceptancePrompt } from "../shared/acceptance.ts";
@@ -40,7 +39,6 @@ export function buildRunnerChildLaunch(step: RunnerSubagentStep, ctx: RunnerChil
 		remoteSkillNames: step.skills,
 		remoteReads: step.remoteReads,
 		parentSessionId: step.parentSessionId,
-		forkCacheKey: step.context === "fork" ? deriveForkPromptCacheKey(step.parentSessionId) : undefined,
 		sessionEnabled: attempt.sessionEnabled,
 		sessionDir: attempt.sessionDir,
 		sessionFile: step.sessionFile,

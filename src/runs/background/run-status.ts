@@ -329,7 +329,6 @@ function formatNestedExactStatus(rootRunId: string, run: NestedRunSummary): stri
 		run.mode ? `Mode: ${run.mode}` : undefined,
 		`Agent: ${nestedRunDisplayName(run)}`,
 		run.currentStep !== undefined ? `Progress: step ${run.currentStep + 1}/${run.chainStepCount ?? run.steps?.length ?? 1}` : undefined,
-		run.turnBudget ? `Turn budget: ${run.turnBudget.turnCount}/${run.turnBudget.maxTurns}+${run.turnBudget.graceTurns} (${run.turnBudget.outcome})` : undefined,
 		run.asyncDir ? `Dir: ${run.asyncDir}` : undefined,
 		run.sessionFile ? `Session: ${run.sessionFile}` : undefined,
 		run.error ? `Error: ${run.error}` : undefined,
@@ -341,8 +340,7 @@ function formatNestedExactStatus(rootRunId: string, run: NestedRunSummary): stri
 		lines.push("Steps:");
 		for (const [index, step] of run.steps.entries()) {
 			const activity = step.status === "running" ? formatActivityLabel(step.lastActivityAt, step.activityState) : undefined;
-			const budget = step.turnBudget ? `, turn budget: ${step.turnBudget.turnCount}/${step.turnBudget.maxTurns}+${step.turnBudget.graceTurns} (${step.turnBudget.outcome})` : "";
-			lines.push(`  ${index + 1}. ${step.sessionName?.trim() || step.agent} ${step.status}${activity ? `, ${activity}` : ""}${budget}${step.error ? `, error: ${step.error}` : ""}`);
+			lines.push(`  ${index + 1}. ${step.sessionName?.trim() || step.agent} ${step.status}${activity ? `, ${activity}` : ""}${step.error ? `, error: ${step.error}` : ""}`);
 			lines.push(...formatNestedRunStatusLines(step.children, { indent: "    ", commandHints: true }));
 		}
 	}
@@ -607,7 +605,6 @@ export function inspectSubagentStatus(params: RunStatusParams, deps: RunStatusDe
 				status.pendingAppends ? `Pending appends: ${status.pendingAppends}` : undefined,
 				`Started: ${started}`,
 				`Updated: ${updated}`,
-				status.turnBudget ? `Turn budget: ${status.turnBudget.turnCount}/${status.turnBudget.maxTurns}+${status.turnBudget.graceTurns} (${status.turnBudget.outcome})` : undefined,
 				`Dir: ${asyncDir}`,
 				outputPath ? `Output: ${outputPath}` : undefined,
 				status.parallelHandoff ? `Parallel handoff: ${status.parallelHandoff.path}` : undefined,
@@ -629,10 +626,9 @@ export function inspectSubagentStatus(params: RunStatusParams, deps: RunStatusDe
 				const steeringSuffix = steeringText ? `, steering: ${steeringText}` : "";
 				const errorText = step.error ? `, error: ${step.error}` : "";
 				const acceptanceText = step.acceptance?.status ? `, acceptance: ${step.acceptance.status}` : "";
-				const budgetText = step.turnBudget ? `, turn budget: ${step.turnBudget.turnCount}/${step.turnBudget.maxTurns}+${step.turnBudget.graceTurns} (${step.turnBudget.outcome})` : "";
 				const display = runStatusStepDisplayName(step);
 				const phase = step.phase ? `[${step.phase}] ` : "";
-				lines.push(`${stepLineLabel(status, index)}: ${phase}${display} ${step.status}${modelText}${stepActivityText ? `, ${stepActivityText}` : ""}${steeringSuffix}${acceptanceText}${budgetText}${errorText}`);
+				lines.push(`${stepLineLabel(status, index)}: ${phase}${display} ${step.status}${modelText}${stepActivityText ? `, ${stepActivityText}` : ""}${steeringSuffix}${acceptanceText}${errorText}`);
 				if (status.mode === "workflow" && step.runId) lines.push(`  Child run: ${step.runId}`);
 				const structuredOutputPreview = step.structuredOutput === undefined ? undefined : formatWorkflowJsonPreview(step.structuredOutput, 4_000);
 				if (structuredOutputPreview !== undefined) lines.push(`  Structured output: ${structuredOutputPreview}`);
@@ -727,7 +723,7 @@ export function inspectSubagentStatus(params: RunStatusParams, deps: RunStatusDe
 		}
 		try {
 			const raw = fs.readFileSync(resultPath, "utf-8");
-			const data = JSON.parse(raw) as { id?: string; runId?: string; toolCallId?: string; agent?: string; success?: boolean; summary?: string; output?: string; exitCode?: number; state?: string; stopped?: boolean; timedOut?: boolean; turnBudgetExceeded?: boolean; processSignal?: string | null; sessionFile?: string; timeoutRecovery?: unknown; parallelHandoff?: { path?: string }; results?: Array<{ agent?: string; sessionName?: string; runId?: string; workflowKey?: string; output?: string; summary?: string; sessionFile?: string; state?: string; success?: boolean; exitCode?: number | null; stopped?: boolean; timedOut?: boolean; turnBudgetExceeded?: boolean; interrupted?: boolean; processSignal?: string | null; timeoutRecovery?: unknown }> };
+			const data = JSON.parse(raw) as { id?: string; runId?: string; toolCallId?: string; agent?: string; success?: boolean; summary?: string; output?: string; exitCode?: number; state?: string; stopped?: boolean; timedOut?: boolean; processSignal?: string | null; sessionFile?: string; timeoutRecovery?: unknown; parallelHandoff?: { path?: string }; results?: Array<{ agent?: string; sessionName?: string; runId?: string; workflowKey?: string; output?: string; summary?: string; sessionFile?: string; state?: string; success?: boolean; exitCode?: number | null; stopped?: boolean; timedOut?: boolean; interrupted?: boolean; processSignal?: string | null; timeoutRecovery?: unknown }> };
 			if (params.view === "transcript") {
 				try {
 					return { content: [{ type: "text", text: formatAsyncResultTranscript(data, resultPath, { index: params.index, lines: params.lines }) }], details: { mode: "single", results: [] } };
@@ -743,7 +739,6 @@ export function inspectSubagentStatus(params: RunStatusParams, deps: RunStatusDe
 					interrupted: child.interrupted,
 					timedOut: child.timedOut,
 					stopped: child.stopped,
-					turnBudgetExceeded: child.turnBudgetExceeded,
 					processSignal: child.processSignal,
 					exitCode: typeof child.exitCode === "number" ? child.exitCode : undefined,
 				}))

@@ -21,8 +21,6 @@ export interface RunnerSubagentStep {
 		requestId: string;
 		requestDigest: string;
 	};
-	/** Resolved launch context for this child. */
-	context?: "fresh" | "fork";
 	importAsyncRoot?: {
 		runId: string;
 		asyncDir: string;
@@ -73,7 +71,6 @@ export interface RunnerSubagentStep {
 	outputMode?: "inline" | "file-only";
 	sessionFile?: string;
 	maxSubagentDepth?: number;
-	timeoutMs?: number;
 	/** Resolved configured hard per-tool-call timeout (ms); fast tools still have a default when undefined. */
 	toolTimeoutMs?: number;
 	structuredOutput?: import("./structured-output.ts").StructuredOutputRuntime;

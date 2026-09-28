@@ -13,7 +13,6 @@ interface PromptWorkflow {
 	agent: string;
 	context?: "fresh" | "fork";
 	model?: string;
-	skill?: string | string[] | false;
 	cwd?: string;
 	chain?: string;
 }
@@ -74,13 +73,6 @@ function booleanField(frontmatter: Record<string, string>, key: string): boolean
 	return undefined;
 }
 
-function parseSkill(value: string | undefined): string | string[] | false | undefined {
-	if (!value) return undefined;
-	if (value === "false") return false;
-	const parts = value.split(",").map((part) => part.trim()).filter(Boolean);
-	return parts.length > 1 ? parts : parts[0];
-}
-
 function parseAgent(frontmatter: Record<string, string>): string {
 	const subagent = stringField(frontmatter, "subagent");
 	if (!subagent || subagent === "true") return "delegate";
@@ -93,7 +85,6 @@ function loadPromptWorkflow(filePath: string): PromptWorkflow | undefined {
 	const name = path.basename(filePath, ".md");
 	if (!name || RESERVED_COMMAND_NAMES.has(name)) return undefined;
 	const model = stringField(frontmatter, "model");
-	const skill = parseSkill(stringField(frontmatter, "skill"));
 	const cwd = stringField(frontmatter, "cwd");
 	const chain = stringField(frontmatter, "chain");
 	return {
@@ -105,7 +96,6 @@ function loadPromptWorkflow(filePath: string): PromptWorkflow | undefined {
 		...(booleanField(frontmatter, "inheritContext") === true || booleanField(frontmatter, "fork") === true ? { context: "fork" as const } : {}),
 		...(booleanField(frontmatter, "fresh") === true ? { context: "fresh" as const } : {}),
 		...(model ? { model } : {}),
-		...(skill !== undefined ? { skill } : {}),
 		...(cwd ? { cwd } : {}),
 		...(chain ? { chain } : {}),
 	};
@@ -166,18 +156,13 @@ function substituteArgs(template: string, args: string[]): string {
 		.replace(/\$(\d+)/g, (_match, index: string) => args[Number(index) - 1] ?? "");
 }
 
-function parseRuntimeOptions(words: string[]): { args: string[]; agentOverride?: string; fork?: boolean; fresh?: boolean; bg?: boolean } {
+function parseRuntimeOptions(words: string[]): { args: string[]; agentOverride?: string; fresh?: boolean; bg?: boolean } {
 	const args: string[] = [];
 	let agentOverride: string | undefined;
-	let fork = false;
 	let fresh = false;
 	let bg = false;
 	for (let i = 0; i < words.length; i++) {
 		const word = words[i]!;
-		if (word === "--fork") {
-			fork = true;
-			continue;
-		}
 		if (word === "--fresh") {
 			fresh = true;
 			continue;
@@ -197,7 +182,7 @@ function parseRuntimeOptions(words: string[]): { args: string[]; agentOverride?:
 		}
 		args.push(word);
 	}
-	return { args, agentOverride, fork, fresh, bg };
+	return { args, agentOverride, fresh, bg };
 }
 
 
@@ -207,14 +192,11 @@ function splitPromptChain(input: string): string[] {
 
 function workflowParams(workflow: PromptWorkflow, args: string[], runtime: ReturnType<typeof parseRuntimeOptions>): SubagentParamsLike {
 	const task = substituteArgs(workflow.body, args).trim();
-	const context = runtime.fork ? "fork" : runtime.fresh ? "fresh" : workflow.context;
 	return {
 		agent: runtime.agentOverride ?? workflow.agent,
 		task,
 		agentScope: "both",
-		...(context ? { context } : {}),
 		...(workflow.model ? { model: workflow.model } : {}),
-		...(workflow.skill !== undefined ? { skill: workflow.skill } : {}),
 		...(workflow.cwd ? { cwd: workflow.cwd } : {}),
 	};
 }
@@ -235,9 +217,7 @@ function promptWorkflowScript(workflows: PromptWorkflow[], args: string[], runti
 			agent: params.agent ?? "delegate",
 			task,
 			...(params.model ? { model: params.model } : {}),
-			...(params.skill !== undefined ? { skill: params.skill } : {}),
 			...(params.cwd ? { cwd: params.cwd } : {}),
-			...(params.context ? { context: params.context } : {}),
 		};
 		return `const step${index} = await runs.run(${JSON.stringify(`prompt-${index + 1}-${workflow.name}`)}, { ...${JSON.stringify(child)}, task: ${JSON.stringify(task)}.replaceAll("{previous}", previous) });\nprevious = step${index}.output;`;
 	});

@@ -6,7 +6,6 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { discoverAgents, formatUnknownAgentError, unknownAgentDiagnosticContext, type AgentConfig, type AgentScope, type UnknownAgentDiagnosticContext } from "../agents/agents.ts";
-import { normalizeSkillInput } from "../agents/skills.ts";
 import { normalizeOutputOverride, type OutputOverrideInput, type ResolvedStepBehavior } from "../runs/shared/child-launch-plan.ts";
 import { CHAIN_RUNS_DIR, type AcceptanceInput, type AgentContract, type ChainGateLayer, type JsonSchemaObject, type OutputMode, type ToolBudgetConfig } from "./types.ts";
 const CHAIN_DIR_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -39,7 +38,6 @@ export interface SequentialStep {
 	outputMode?: OutputMode;
 	reads?: string[] | false;
 	progress?: boolean;
-	skill?: string | string[] | false;
 	model?: string;
 	fast?: boolean;
 	toolBudget?: ToolBudgetConfig;
@@ -65,7 +63,6 @@ export interface ParallelTaskItem {
 	outputMode?: OutputMode;
 	reads?: string[] | false;
 	progress?: boolean;
-	skill?: string | string[] | false;
 	model?: string;
 	fast?: boolean;
 	toolBudget?: ToolBudgetConfig;
@@ -367,20 +364,10 @@ export function resolveParallelBehaviors(
 				? task.progress
 				: config.defaultProgress ?? false;
 
-		const taskSkillInput = normalizeSkillInput(task.skill);
-		let skills: string[] | false;
-		if (taskSkillInput === false) {
-			skills = false;
-		} else if (taskSkillInput !== undefined) {
-			skills = [...taskSkillInput];
-			if (chainSkills && chainSkills.length > 0) {
-				skills = [...new Set([...skills, ...chainSkills])];
-			}
-		} else {
-			skills = config.skills ? [...config.skills] : [];
-			if (chainSkills && chainSkills.length > 0) {
-				skills = [...new Set([...skills, ...chainSkills])];
-			}
+		// Skills: agent default (+ chain skills). No per-step override.
+		let skills: string[] | false = config.skills ? [...config.skills] : [];
+		if (chainSkills && chainSkills.length > 0) {
+			skills = [...new Set([...skills, ...chainSkills])];
 		}
 
 		const outputMode = task.outputMode ?? "inline";

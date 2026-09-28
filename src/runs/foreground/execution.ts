@@ -6,7 +6,6 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import type { Message } from "@earendil-works/pi-ai";
 import { discoverAgents, formatUnknownAgentError, unknownAgentDiagnosticContext, type AgentConfig } from "../../agents/agents.ts";
-import { alignForkedSessionCwd } from "../../shared/fork-session-cwd.ts";
 import { buildEffectiveSystemPrompt } from "../shared/effective-system-prompt.ts";
 import {
 	ensureArtifactsDir,
@@ -58,7 +57,7 @@ import { preflightLaunchCwd } from "../shared/launch-cwd.ts";
 import { createJsonlWriter } from "../../shared/jsonl-writer.ts";
 import { createOrcaProgressTab, type OrcaProgressTab } from "../shared/orca-progress-tabs.ts";
 import { resolvePermissionRules } from "../shared/permissions.ts";
-import { applyThinkingSuffix, deriveForkPromptCacheKey } from "../shared/child-tool-plan.ts";
+import { applyThinkingSuffix } from "../shared/child-tool-plan.ts";
 import { deriveChildSessionName } from "../../shared/child-session-name.ts";
 import { assertAgentAllowedByCapabilityCeiling, intersectSubagentCapabilityCeilings, resolveCurrentSubagentCapabilityCeiling } from "../shared/capability-ceiling.ts";
 import { resolveEffectiveThinking } from "../../shared/model-info.ts";
@@ -124,12 +123,6 @@ const acceptanceOutputByResult = new WeakMap<SingleResult, string>();
 
 function emptyUsage(): Usage {
 	return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 };
-}
-
-function withRunContext<T extends SingleResult>(result: T, context: RunSyncOptions["context"]): T {
-	if (!context) return result;
-	result.context = context;
-	return result;
 }
 
 function redactResultPrompt<T extends SingleResult>(result: T): T {
@@ -438,7 +431,6 @@ async function runSingleAttempt(
 		nestedRoute: options.nestedRoute,
 		runFanoutBudget: options.runFanoutBudget,
 		parentSessionId: options.parentSessionId,
-		forkCacheKey: options.context === "fork" ? deriveForkPromptCacheKey(options.parentSessionId) : undefined,
 		structuredOutput: options.structuredOutput,
 		fast: options.fast ?? agent.fast,
 		modelCandidates: shared.modelCandidates,
@@ -481,7 +473,7 @@ async function runSingleAttempt(
 		...(options.extensionBindings ? { extensionBindings: options.extensionBindings } : {}),
 		...(permissionRules ? { permissionRules } : {}),
 	});
-	const result: SingleResult = withRunContext({
+	const result: SingleResult = {
 		index: options.index ?? 0,
 		agent: agent.name,
 		task: shared.originalTask ?? task,
@@ -502,7 +494,7 @@ async function runSingleAttempt(
 		...(options.toolBudget ? { toolBudget: initialToolBudgetState(options.toolBudget) } : {}),
 		...(options.capabilityCeiling ? { capabilityCeiling: options.capabilityCeiling } : {}),
 		...(capabilityAudit ? { capabilityAudit } : {}),
-	}, options.context);
+	};
 	const startTime = Date.now();
 	const controlConfig = options.controlConfig ?? DEFAULT_CONTROL_CONFIG;
 	let interruptedByControl = false;
@@ -577,7 +569,7 @@ async function runSingleAttempt(
 			childKey: options.workflowChildPermitLaunch.childKey,
 			agent: agent.name,
 			launchContractDigest,
-			context: options.context ?? "fresh",
+			context: "fresh",
 			runner: "pi",
 		});
 		if (permitError) {
@@ -1649,7 +1641,7 @@ async function runSyncCompletionInner(
 	const effectiveCwd = options.cwd ?? runtimeCwd;
 	const cwdError = preflightLaunchCwd(options.requestedCwd ?? effectiveCwd, effectiveCwd);
 	if (cwdError) {
-		return redactResultPrompt(withRunContext({
+		return redactResultPrompt({
 			index: options.index ?? 0,
 			agent: agentName,
 			task,
@@ -1657,7 +1649,7 @@ async function runSyncCompletionInner(
 			messages: [],
 			usage: emptyUsage(),
 			error: cwdError,
-		}, options.context));
+		});
 	}
 	options = {
 		...options,
@@ -1668,7 +1660,7 @@ async function runSyncCompletionInner(
 	if (!agent) {
 		const diagnosticContext = options.unknownAgentDiagnosticContext
 			?? unknownAgentDiagnosticContext(discoverAgents(path.resolve(options.cwd ?? runtimeCwd), "both"));
-		return redactResultPrompt(withRunContext({
+		return redactResultPrompt({
 			index: options.index ?? 0,
 			agent: agentName,
 			task,
@@ -1676,7 +1668,7 @@ async function runSyncCompletionInner(
 			messages: [],
 			usage: emptyUsage(),
 			error: formatUnknownAgentError(agentName, diagnosticContext),
-		}, options.context));
+		});
 	}
 	options = {
 		...options,
@@ -1689,7 +1681,7 @@ async function runSyncCompletionInner(
 	try {
 		assertAgentAllowedByCapabilityCeiling(agent.name, options.capabilityCeiling);
 	} catch (error) {
-		return redactResultPrompt(withRunContext({
+		return redactResultPrompt({
 			index: options.index ?? 0,
 			agent: agent.name,
 			task,
@@ -1698,11 +1690,11 @@ async function runSyncCompletionInner(
 			usage: emptyUsage(),
 			error: error instanceof Error ? error.message : String(error),
 			...(options.capabilityCeiling ? { capabilityCeiling: options.capabilityCeiling } : {}),
-		}, options.context));
+		});
 	}
 	const acceptanceErrors = validateAcceptanceInput(options.acceptance);
 	if (acceptanceErrors.length > 0) {
-		return redactResultPrompt(withRunContext({
+		return redactResultPrompt({
 			index: options.index ?? 0,
 			agent: agentName,
 			task,
@@ -1710,7 +1702,7 @@ async function runSyncCompletionInner(
 			messages: [],
 			usage: emptyUsage(),
 			error: acceptanceErrors.join(" "),
-		}, options.context));
+		});
 	}
 	const toolTimeout = resolveToolTimeoutMs({
 		callValue: options.toolTimeoutMs,
@@ -1719,7 +1711,7 @@ async function runSyncCompletionInner(
 		envValue: toolTimeoutFromEnv(),
 	});
 	if (toolTimeout.error) {
-		return redactResultPrompt(withRunContext({
+		return redactResultPrompt({
 			index: options.index ?? 0,
 			agent: agentName,
 			task,
@@ -1727,12 +1719,12 @@ async function runSyncCompletionInner(
 			messages: [],
 			usage: emptyUsage(),
 			error: toolTimeout.error,
-		}, options.context));
+		});
 	}
 	options = { ...options, toolTimeoutMs: toolTimeout.toolTimeoutMs };
 	const outputModeValidationError = validateFileOnlyOutputMode(options.outputMode, options.outputPath, `Single run (${agentName})`);
 	if (outputModeValidationError) {
-		return redactResultPrompt(withRunContext({
+		return redactResultPrompt({
 			index: options.index ?? 0,
 			agent: agentName,
 			task,
@@ -1741,7 +1733,7 @@ async function runSyncCompletionInner(
 			usage: emptyUsage(),
 			outputMode: options.outputMode,
 			error: outputModeValidationError,
-		}, options.context));
+		});
 	}
 
 	const shareEnabled = options.share === true;
@@ -1760,9 +1752,6 @@ async function runSyncCompletionInner(
 	const taskWithAcceptance = acceptancePrompt ? `${task}\n${acceptancePrompt}` : task;
 	options.onEffectivePrompt?.(taskWithAcceptance);
 	const sessionEnabled = Boolean(options.sessionFile || options.sessionDir) || shareEnabled;
-	if (options.context === "fork" && options.sessionFile && existsSync(options.sessionFile)) {
-		alignForkedSessionCwd(options.sessionFile, options.cwd ?? runtimeCwd);
-	}
 	const skillNames = options.skills ?? agent.skills ?? [];
 	const skillCwd = options.cwd ?? runtimeCwd;
 	const { resolved: resolvedSkills, missing: missingSkills } = resolveSkillsWithFallback(
@@ -1773,7 +1762,7 @@ async function runSyncCompletionInner(
 		agent.filePath ? path.dirname(agent.filePath) : skillCwd,
 	);
 	if (skillNames.some((skill) => skill.trim() === "pi-subagents") && missingSkills.includes("pi-subagents")) {
-		return redactResultPrompt(withRunContext({
+		return redactResultPrompt({
 			index: options.index ?? 0,
 			agent: agentName,
 			task,
@@ -1781,7 +1770,7 @@ async function runSyncCompletionInner(
 			messages: [],
 			usage: emptyUsage(),
 			error: "Skills not found: pi-subagents",
-		}, options.context));
+		});
 	}
 	const systemPrompt = buildEffectiveSystemPrompt({ agent, resolvedSkills, cwd: skillCwd, ...(options.outputPath ? { outputPath: options.outputPath } : {}) });
 
@@ -1799,7 +1788,7 @@ async function runSyncCompletionInner(
 	);
 	if (options.workflowChildPermitLaunch && candidates.length > 1) {
 		const error = "Workflow child permit does not support model fallback.";
-		return redactResultPrompt(withRunContext({
+		return redactResultPrompt({
 			index: options.index ?? 0,
 			agent: agent.name,
 			task,
@@ -1807,7 +1796,7 @@ async function runSyncCompletionInner(
 			messages: [],
 			usage: emptyUsage(),
 			error,
-		}, options.context));
+		});
 	}
 	try {
 		for (const candidate of candidates) {
@@ -1815,7 +1804,7 @@ async function runSyncCompletionInner(
 			assertThinkingWithinCeiling({ model, configThinking: options.thinkingOverride ?? agent.thinking, ceiling: options.thinkingCeiling, agent: agent.name, runId: options.runId });
 		}
 	} catch (error) {
-		return redactResultPrompt(withRunContext({
+		return redactResultPrompt({
 			index: options.index ?? 0,
 			agent: agent.name,
 			task,
@@ -1823,7 +1812,7 @@ async function runSyncCompletionInner(
 			messages: [],
 			usage: emptyUsage(),
 			error: error instanceof Error ? error.message : String(error),
-		}, options.context));
+		});
 	}
 	const attemptedModels: string[] = [];
 	const modelAttempts: ModelAttempt[] = [];
@@ -1902,7 +1891,7 @@ async function runSyncCompletionInner(
 		try {
 			stagedIndexBaseline = captureStagedIndexBaseline(options.cwd ?? runtimeCwd);
 		} catch (error) {
-			return redactResultPrompt(withRunContext({
+			return redactResultPrompt({
 				index: options.index ?? 0,
 				agent: agentName,
 				task,
@@ -1910,7 +1899,7 @@ async function runSyncCompletionInner(
 				messages: [],
 				usage: emptyUsage(),
 				error: error instanceof Error ? error.message : String(error),
-			}, options.context));
+			});
 		}
 	}
 	const modelsToTry = candidates.length > 0 ? candidates : [undefined];
@@ -1923,7 +1912,7 @@ async function runSyncCompletionInner(
 	const continuationDeadline = options.deadlineAt ?? (options.timeoutMs === undefined ? undefined : Date.now() + options.timeoutMs);
 	const readonlyHandoffAllowed = () => !options.signal?.aborted && !options.interruptSignal?.aborted
 		&& !intercomDetached && !detachedReason && !options.workflowChildPermitLaunch
-		&& options.usageBudget === undefined && options.toolBudget === undefined
+		&& options.toolBudget === undefined
 		&& (continuationDeadline === undefined || Date.now() < continuationDeadline)
 		&& (!readonlySource || getReadonlySessionEvidence(readonlySource) === readonlyExpected)
 		&& !readonlySource?.detached && !readonlySource?.shutDown;
@@ -2009,7 +1998,7 @@ async function runSyncCompletionInner(
 				lifecycleAllowsContinuation: !attemptSucceeded && readonlyHandoffAllowed() && !result.stopped && !result.detached && !result.interrupted && !result.timedOut,
 				effectsAllowContinuation: !result.structuredOutputFailed && !result.toolBudgetBlocked && !result.progress?.currentTool
 					&& !result.outputSaveError && !result.effects?.fileMutation,
-				budget: options.toolBudget ? "tool-budget-configured" : options.usageBudget ? "unknown" : "unconfigured",
+				budget: options.toolBudget ? "tool-budget-configured" : "unconfigured",
 				knownContextOverflow: Boolean(result.contextOverflow || isContextOverflow(result.error)),
 			});
 			if (continuation.kind === "continue") {
@@ -2034,7 +2023,6 @@ async function runSyncCompletionInner(
 					interrupted: result.interrupted || intercomDetached || options.interruptSignal?.aborted,
 					timedOut: result.timedOut,
 					toolBudgetExhausted: result.toolBudgetBlocked,
-					usageBudgetExhausted: false,
 					structuredOutputFailed: result.structuredOutputFailed,
 					acceptanceFailed: false,
 					currentTool: result.progress?.currentTool,
@@ -2097,7 +2085,7 @@ async function runSyncCompletionInner(
 		}
 	}
 
-	const result = withRunContext(lastResult ?? {
+	const result = lastResult ?? {
 		index: options.index ?? 0,
 		agent: agentName,
 		task,
@@ -2105,7 +2093,7 @@ async function runSyncCompletionInner(
 		messages: [],
 		usage: emptyUsage(),
 		error: "Subagent did not produce a result.",
-	} satisfies SingleResult, options.context);
+	} satisfies SingleResult;
 	result.task = task;
 
 	result.usage = aggregateUsage;

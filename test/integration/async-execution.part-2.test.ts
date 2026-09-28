@@ -574,12 +574,12 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		}
 	});
 
-	it("enforces an agent-level timeout on an async serial child without a composite deadline", { skip: !isAsyncAvailable() ? "jiti not available" : process.platform === "win32" ? "timeout signal delivery intermittent on Windows CI" : undefined }, async () => {
+	it("enforces the flat run-level timeout on an async serial child (agent defaultTimeoutMs is ignored)", { skip: !isAsyncAvailable() ? "jiti not available" : process.platform === "win32" ? "timeout signal delivery intermittent on Windows CI" : undefined }, async () => {
 		mockPi.onCall({ delay: 5_000, output: "too late" });
 		const id = `async-child-timeout-chain-${Date.now().toString(36)}`;
 		executeAsyncChain(id, {
 			chain: [{ agent: "slow", task: "Wait" }],
-			agents: [makeAgent("slow", { defaultTimeoutMs: 150 })],
+			agents: [makeAgent("slow", { defaultTimeoutMs: 30_000 })],
 			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
 			artifactConfig: {
 				enabled: false,
@@ -591,10 +591,11 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 			},
 			shareEnabled: false,
 			maxSubagentDepth: 2,
+			timeoutMs: 150,
 		});
 
 		const payload = await readAsyncPayload(id);
-		assert.equal(payload.timeoutMs, undefined, "composite parent must remain unbounded by default");
+		assert.equal(payload.timeoutMs, 150, "flat run deadline owns the timeout");
 		assert.equal(payload.state, "failed");
 		assert.equal(payload.results[0]?.timedOut, true);
 		assert.equal(payload.results[0]?.error, "Subagent timed out after 150ms.");
@@ -893,7 +894,7 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		}
 	});
 
-	it("enforces child timeouts on async parallel tasks without a composite deadline", { skip: !isAsyncAvailable() ? "jiti not available" : process.platform === "win32" ? "timeout signal delivery intermittent on Windows CI" : undefined }, async () => {
+	it("enforces the flat run-level timeout on async parallel tasks (agent defaults ignored)", { skip: !isAsyncAvailable() ? "jiti not available" : process.platform === "win32" ? "timeout signal delivery intermittent on Windows CI" : undefined }, async () => {
 		mockPi.onCall({ delay: 5_000, output: "one too late" });
 		mockPi.onCall({ delay: 5_000, output: "two too late" });
 		const id = `async-child-timeout-parallel-${Date.now().toString(36)}`;
@@ -907,8 +908,8 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 			}],
 			resultMode: "parallel",
 			agents: [
-				makeAgent("slow-one", { defaultTimeoutMs: 150 }),
-				makeAgent("slow-two", { defaultTimeoutMs: 200 }),
+				makeAgent("slow-one", { defaultTimeoutMs: 30_000 }),
+				makeAgent("slow-two", { defaultTimeoutMs: 30_000 }),
 			],
 			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
 			artifactConfig: {
@@ -921,13 +922,14 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 			},
 			shareEnabled: false,
 			maxSubagentDepth: 2,
+			timeoutMs: 150,
 		});
 
 		const payload = await readAsyncPayload(id);
-		assert.equal(payload.timeoutMs, undefined, "composite parent must remain unbounded by default");
+		assert.equal(payload.timeoutMs, 150, "flat run deadline owns the timeout");
 		assert.equal(payload.state, "failed");
 		assert.deepEqual(payload.results.map((result) => result.timedOut), [true, true]);
-		assert.deepEqual(payload.results.map((result) => result.error), ["Subagent timed out after 150ms.", "Subagent timed out after 200ms."]);
+		assert.deepEqual(payload.results.map((result) => result.error), ["Subagent timed out after 150ms.", "Subagent timed out after 150ms."]);
 	});
 
 	it("hard-kills async children that ignore timeout SIGTERM", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
@@ -1620,39 +1622,6 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		assert.equal(payload.workflowGraph?.nodes?.[1]?.kind, "dynamic-parallel-group");
 		assert.deepEqual(payload.workflowGraph?.nodes?.[1]?.children?.map((child) => child.itemKey), ["src/a.ts", "src/b.ts"]);
 		assert.equal(payload.workflowGraph?.nodes?.[2]?.flatIndex, 3);
-	});
-
-	it("async dynamic fanout blocks queued children when hard reported usage is exhausted", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
-		mockPi.onCall({ output: "targets", structuredOutput: { items: [{ path: "src/a.ts" }, { path: "src/b.ts" }] } });
-		mockPi.onCall({ matchArgIncludes: "Review src/a.ts", output: "review-a", structuredOutput: { ok: "a" } });
-		const id = `async-dynamic-usage-budget-${Date.now().toString(36)}`;
-		executeAsyncChain(id, {
-			chain: [
-				{ agent: "producer", task: "Produce targets", as: "targets", outputSchema: { type: "object" } },
-				{
-					expand: { from: { output: "targets", path: "/items" }, item: "target", key: "/path", maxItems: 4 },
-					parallel: { agent: "reviewer", task: "Review {target.path}", outputSchema: { type: "object" } },
-					collect: { as: "reviews" },
-					concurrency: 1,
-				},
-			],
-			usageBudget: { tokens: { hard: 200 } },
-			agents: [makeAgent("producer"), makeAgent("reviewer")],
-			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-dynamic-budget" },
-			artifactConfig: { enabled: false, includeInput: false, includeOutput: false, includeJsonl: false, includeMetadata: false, cleanupDays: 7 },
-			shareEnabled: false,
-			maxSubagentDepth: 2,
-		});
-
-		const payload = await readAsyncPayload(id);
-		const status = JSON.parse(fs.readFileSync(path.join(ASYNC_DIR, id, "status.json"), "utf-8")) as AsyncStatusPayload;
-		assert.equal(mockPi.callCount(), 2);
-		assert.equal(payload.success, false);
-		assert.equal(payload.usageBudget?.exhausted, true);
-		assert.equal(status.steps?.[1]?.status, "complete");
-		assert.equal(status.steps?.[2]?.status, "failed");
-		assert.match(status.steps?.[2]?.error ?? "", /Usage budget exhausted/);
-		assert.equal(payload.results.find((result) => result.agent === "reviewer" && result.skipped)?.skipped, true);
 	});
 
 	it("rejects a shared explicit output before dynamic fanout children start", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {

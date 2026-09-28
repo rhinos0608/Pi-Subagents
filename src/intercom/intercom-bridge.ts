@@ -56,7 +56,7 @@ export function validateIntercomBridgeConfig({ value, label }: { value: unknown;
 	for (const field of Object.keys(bridge)) {
 		if (field !== "mode" && field !== "instructionFile" && field !== "resultDelivery") return { ok: false, error: `${label}.${field} is not supported.` };
 	}
-	if (bridge.mode !== undefined && bridge.mode !== "off" && bridge.mode !== "fork-only" && bridge.mode !== "always") return { ok: false, error: `${label}.mode is invalid.` };
+	if (bridge.mode !== undefined && bridge.mode !== "off" && bridge.mode !== "always") return { ok: false, error: `${label}.mode is invalid.` };
 	if (bridge.instructionFile !== undefined && typeof bridge.instructionFile !== "string") return { ok: false, error: `${label}.instructionFile must be a string.` };
 	if (bridge.resultDelivery !== undefined && typeof bridge.resultDelivery !== "boolean") return { ok: false, error: `${label}.resultDelivery must be a boolean.` };
 	return {
@@ -83,7 +83,6 @@ interface ResolveIntercomBridgeInput {
 	config: ExtensionConfig["intercomBridge"];
 	/** Per-run config replaces the global config when supplied. */
 	override?: IntercomBridgeConfig;
-	context: "fresh" | "fork" | undefined;
 	orchestratorTarget?: string;
 	cwd?: string;
 	settingsDir?: string;
@@ -113,7 +112,7 @@ export function resolveSubagentIntercomTarget(runId: string, agent: string, inde
 }
 
 export function resolveIntercomBridgeMode(value: unknown): IntercomBridgeMode {
-	if (value === "off" || value === "always" || value === "fork-only") return value;
+	if (value === "off" || value === "always") return value;
 	return "always";
 }
 
@@ -152,9 +151,8 @@ function buildIntercomBridgeInstruction(orchestratorTarget: string, template: st
 	return `${INTERCOM_BRIDGE_MARKER}\n${instruction}`;
 }
 
-function inactiveReason(mode: IntercomBridgeMode, context: "fresh" | "fork" | undefined, orchestratorTarget: string | undefined): string | undefined {
+function inactiveReason(mode: IntercomBridgeMode, orchestratorTarget: string | undefined): string | undefined {
 	if (mode === "off") return "bridge mode is off";
-	if (mode === "fork-only" && context !== "fork") return "bridge mode is fork-only and context is not fork";
 	if (!orchestratorTarget) return "orchestrator target is not available";
 	return undefined;
 }
@@ -163,8 +161,8 @@ export function diagnoseIntercomBridge(input: ResolveIntercomBridgeInput): Inter
 	const config = resolveIntercomBridgeConfig(input.config);
 	const mode = config.mode;
 	const orchestratorTarget = input.orchestratorTarget?.trim();
-	const wantsIntercom = mode !== "off" && !(mode === "fork-only" && input.context !== "fork");
-	const reason = inactiveReason(mode, input.context, orchestratorTarget);
+	const wantsIntercom = mode !== "off";
+	const reason = inactiveReason(mode, orchestratorTarget);
 	return {
 		active: reason === undefined,
 		mode,
@@ -182,7 +180,7 @@ export function resolveIntercomBridge(input: ResolveIntercomBridgeInput): Interc
 	const orchestratorTarget = input.orchestratorTarget?.trim();
 	const agentDir = path.resolve(input.agentDir ?? defaultAgentDir());
 	const settingsDir = path.resolve(input.settingsDir ?? defaultSubagentConfigDir(agentDir));
-	const reason = inactiveReason(mode, input.context, orchestratorTarget);
+	const reason = inactiveReason(mode, orchestratorTarget);
 	if (reason || !orchestratorTarget) {
 		return {
 			active: false,

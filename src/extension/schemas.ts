@@ -29,15 +29,6 @@ function isTopLevelParameterDescription(path: string[]): boolean {
 	return path.length === 2 && path[0] === "properties";
 }
 
-const SkillOverride = Type.Unsafe({
-	anyOf: [
-		{ type: "array", items: { type: "string" } },
-		{ type: "boolean" },
-		{ type: "string" },
-	],
-	description: "Skills: names/CSV/array; false disables, true uses default.",
-});
-
 const ReadsOverride = Type.Unsafe({
 	anyOf: [
 		{ type: "array", items: { type: "string" } },
@@ -109,16 +100,6 @@ const ToolBudgetOverride = Type.Object({
 	block: Type.Optional(ToolBudgetBlock),
 }, { additionalProperties: false, description: "soft <= hard; after hard block read/grep/find/ls or '*' for all." });
 
-const UsageBudgetLimitOverride = Type.Object({
-	soft: Type.Optional(Type.Number({ exclusiveMinimum: 0 })),
-	hard: Type.Number({ exclusiveMinimum: 0 }),
-}, { additionalProperties: false });
-
-const UsageBudgetOverride = Type.Object({
-	tokens: Type.Optional(UsageBudgetLimitOverride),
-	costUsd: Type.Optional(UsageBudgetLimitOverride),
-}, { additionalProperties: false, minProperties: 1, description: "tokens or costUsd; soft <= hard. Root-only reported usage; blocks launches. Running children are not stopped." });
-
 const WorkflowPreflightLane = Type.Object({
 	key: Type.String({ minLength: 1, maxLength: 128 }),
 	mode: Type.Optional(Type.String({ enum: ["mutation", "review", "scout", "gate"] })),
@@ -147,7 +128,6 @@ export const ParallelTaskSchema = Type.Object({
 	count: Type.Optional(Type.Integer({ minimum: 1, description: "Repeat this parallel task N times with the same settings." })),
 	reads: Type.Optional(ReadsOverride),
 	progress: Type.Optional(Type.Boolean({ description: "Enable progress.md tracking in {chain_dir}" })),
-	skill: Type.Optional(SkillOverride),
 	model: Type.Optional(Type.String({ description: "Override model for this task" })),
 	fast: Type.Optional(Type.Boolean({ description: "Opt into priority service tier for supported native OpenAI-Codex child models. This can increase quota or cost." })),
 	toolBudget: Type.Optional(ToolBudgetOverride),
@@ -177,7 +157,6 @@ export const DynamicParallelTemplateSchema = Type.Object({
 	machine: Type.Optional(Type.String({ minLength: 1, maxLength: 128, description: "Herdr saved machine id or label." })),
 	reads: Type.Optional(ReadsOverride),
 	progress: Type.Optional(Type.Boolean({ description: "Enable progress.md tracking in {chain_dir}" })),
-	skill: Type.Optional(SkillOverride),
 	model: Type.Optional(Type.String({ description: "Override model for this task" })),
 	fast: Type.Optional(Type.Boolean({ description: "Opt into priority service tier for supported native OpenAI-Codex child models. This can increase quota or cost." })),
 	toolBudget: Type.Optional(ToolBudgetOverride),
@@ -205,7 +184,6 @@ export const ChainItem = Type.Object({
 	machine: Type.Optional(Type.String({ minLength: 1, maxLength: 128, description: "Herdr saved machine id or label." })),
 	reads: Type.Optional(ReadsOverride),
 	progress: Type.Optional(Type.Boolean({ description: "Enable progress.md tracking in {chain_dir}" })),
-	skill: Type.Optional(SkillOverride),
 	model: Type.Optional(Type.String({ description: "Override model for this step" })),
 	fast: Type.Optional(Type.Boolean({ description: "Opt into priority service tier for supported native OpenAI-Codex child models. This can increase quota or cost." })),
 	toolBudget: Type.Optional(ToolBudgetOverride),
@@ -334,17 +312,9 @@ const SubagentParamProperties = {
 	worktree: Type.Optional(Type.Boolean({ description: "Isolate each workflow child in a managed git worktree; child worktree:false overrides default." })),
 	baseRef: Type.Optional(Type.String()),
 	lane: Type.Optional(WorkflowLaneMetadata),
-	context: Type.Optional(Type.String({
-		enum: ["fresh", "fork", "profile"],
-		description: "fresh/fork overrides every child; profile requires agent's declared defaultContext, ignoring config. Omitted: defaultSubagentContext wins over each agent defaultContext; implicit fork needs persisted parent + leaf, else fresh. forkContext may prune forks before spawn.",
-	})),
 	async: Type.Optional(Type.Boolean({ description: "Background; default asyncByDefault. false only to block parent." })),
-	timeoutMs: Type.Optional(Type.Integer({ minimum: 1, description: "Foreground and single async runs use config timeoutMs, else 30m; async composites have no default parent deadline. Alias maxRuntimeMs; must agree." })),
-	maxRuntimeMs: Type.Optional(Type.Integer({ minimum: 1, description: "Alias timeoutMs (same defaults)." })),
-	checkpointBeforeDeadlineMs: Type.Optional(Type.Integer({ minimum: 1, maximum: 2_147_483_647, description: "Async single-agent runs only: the runner requests that the child checkpoint and stop this many ms before the run deadline (best-effort; the deadline kill still applies)." })),
 	toolTimeoutMs: Type.Optional(Type.Integer({ minimum: 1, description: "Per-tool deadline (ms); fast builtins default 5m." })),
 	toolBudget: Type.Optional(ToolBudgetOverride),
-	usageBudget: Type.Optional(UsageBudgetOverride),
 	agentScope: Type.Optional(Type.String({ description: "user/project/both (default); project wins collisions." })),
 	cwd: Type.Optional(Type.String({ description: "Execution/project-pane directory." })),
 	machine: Type.Optional(Type.String({ minLength: 1, maxLength: 128, description: "Herdr saved machine id or label; runs an external CLI agent there. cwd then means the directory on that machine." })),
@@ -356,7 +326,6 @@ const SubagentParamProperties = {
 	),
 	control: Type.Optional(ControlOverrides),
 	// Output routing is tooling-managed; child output fields stay internal.
-	skill: Type.Optional(SkillOverride),
 	model: Type.Optional(Type.String({ description: "Child model provider/id; bare id only if unique. Suffix :off/minimal/low/medium/high/xhigh/max overrides agent thinking default." })),
 	fast: Type.Optional(Type.Boolean({ description: "Native OpenAI-Codex priority tier; default false, may cost more/quota." })),
 	outputSchema: Type.Optional(OutputSchemaOverride),
@@ -381,16 +350,15 @@ export type SubagentParamsProfile = "full" | "compact";
 // (self-explanatory IDs, UI hints, repeated overrides) is stripped to fit the
 // 8,600-char compact budget. Kept descriptions disambiguate validation or
 // surprising semantics:
-// - discriminators: action, context, mode (execution vs management routing)
+// - discriminators: action, mode (execution vs management routing)
 // - dangerous/mutating: additional (grant-spawn-budget), gate (host command),
 //   workflowScript/workflowScriptPath (raw provenance, no runs.host)
 // - opaque formats: acceptance, mission, outputSchema (false-disables/true-invalid
-//   triples), at/every (schedule shapes), timeoutMs/maxRuntimeMs (deadline defaults)
-// - surprising semantics: async (asyncByDefault default), usageBudget (root-only),
-//   toolBudget (block-to-finalize), preflight (display-only), thinking (dispatch ignores)
+//   triples), at/every (schedule shapes)
+// - surprising semantics: async (asyncByDefault default), toolBudget (block-to-finalize),
+//   preflight (display-only), thinking (dispatch ignores)
 const COMPACT_TOP_LEVEL_DESCRIPTION_KEYS = [
 	"action",
-	"context",
 	"mode",
 	"at",
 	"every",
@@ -401,10 +369,7 @@ const COMPACT_TOP_LEVEL_DESCRIPTION_KEYS = [
 	"acceptance",
 	"mission",
 	"outputSchema",
-	"timeoutMs",
-	"maxRuntimeMs",
 	"async",
-	"usageBudget",
 	"toolBudget",
 	"preflight",
 	"thinking",
@@ -413,9 +378,7 @@ const COMPACT_TOP_LEVEL_DESCRIPTION_KEYS = [
 // Shortened where the full text exceeds what the compact budget allows. Meaning
 // is preserved; only examples and restated defaults are trimmed.
 const COMPACT_TOP_LEVEL_DESCRIPTION_OVERRIDES: Record<string, string> = {
-	context: "fresh/fork overrides every child; profile uses agent default. Omitted uses defaultSubagentContext; implicit fork needs a persisted parent leaf.",
 	thinking: "watchdog.configure only; true invalid. Dispatch ignores this; use model suffix.",
-	timeoutMs: "Foreground and single async runs default to config timeoutMs, else 30m; async composites have no parent deadline.",
 	mission: "false disables; object needs title/summary; goal:true requires budget.tokens.",
 	acceptance: "Evidence policy; false disables, true invalid. Prefer object; see guide tool-reference for levels, evidence and review.required.",
 	gate: "Host gate after child completion; JSON stdout may become structuredOutput; cannot be combined with acceptance or outputSchema.",
@@ -455,4 +418,3 @@ export const CompactSubagentParams = toCompactSubagentParamsSchema(SubagentParam
 export function createSubagentParamsSchema(profile: SubagentParamsProfile = "full"): typeof SubagentParams {
 	return profile === "compact" ? CompactSubagentParams : SubagentParams;
 }
-

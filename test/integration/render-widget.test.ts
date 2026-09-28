@@ -598,7 +598,7 @@ describe("subagent async widget rendering", () => {
 		assert.deepEqual(stale?.chips, ["stale"]);
 
 		const blockedJobs: Array<Record<string, unknown>> = [];
-		for (const [index, field] of (["toolBudgetBlocked", "turnBudgetExceeded"] as const).entries()) {
+		for (const [index, field] of (["toolBudgetBlocked"] as const).entries()) {
 			const blockedJob = {
 				asyncId: `blocked-run-${index}`,
 				asyncDir: `/tmp/blocked-run-${index}`,

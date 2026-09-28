@@ -14,18 +14,22 @@ import {
 describe("tool-budget module", () => {
 	it("defaults block tools to read/search tools", () => {
 		const resolved = validateToolBudgetConfig({ hard: 5 });
-		assert.deepEqual(resolved.budget, { hard: 5, block: [...DEFAULT_TOOL_BUDGET_BLOCK] });
+		assert.deepEqual(resolved.budget, { hard: 40, block: [...DEFAULT_TOOL_BUDGET_BLOCK] });
 	});
 
 	it("accepts soft and wildcard block", () => {
-		const resolved = validateToolBudgetConfig({ soft: 2, hard: 4, block: "*" });
-		assert.deepEqual(resolved.budget, { soft: 2, hard: 4, block: "*" });
+		const resolved = validateToolBudgetConfig({ soft: 2, hard: 40, block: "*" });
+		assert.deepEqual(resolved.budget, { soft: 2, hard: 40, block: "*" });
+	});
+
+	it("clamps requested hard limit below floor to 40", () => {
+		assert.equal(validateToolBudgetConfig({ hard: 10 }).budget?.hard, 40);
 	});
 
 	it("accepts a zero hard limit only when the internal minimum opts in", () => {
 		assert.deepEqual(
 			validateToolBudgetConfig({ hard: 0, block: "*" }, "toolBudget", { minimumHard: 0 }).budget,
-			{ hard: 0, block: "*" },
+			{ hard: 0, block: "*" }
 		);
 		assert.equal(
 			validateToolBudgetConfig({ soft: 0, hard: 0, block: "*" }, "toolBudget", { minimumHard: 0 }).error,

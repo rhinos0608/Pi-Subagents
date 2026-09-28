@@ -15,14 +15,34 @@ if (process.platform !== "linux" || process.arch !== "x64") {
 
 const source = fileURLToPath(new URL("../../", import.meta.url));
 const binary = process.argv[2];
-const mode = process.argv[4] ?? "single";
-assert.ok(["single", "workflow", "targeted-controls", "steer", "interrupt", "stop", "child-stop", "child-timeout", "run-timeout", "tool-timeout", "sdk-init-failure", "persistence-failure", "authorization-failure", "missing-bootstrap", "revival", "shared-run", "parallel-stop", "bootstrap-errors"].includes(mode), "unknown standalone smoke mode");
+function parseMode(value) {
+	switch (value ?? "single") {
+		case "single": return "single"; case "workflow": return "workflow"; case "targeted-controls": return "targeted-controls";
+		case "steer": return "steer"; case "interrupt": return "interrupt"; case "stop": return "stop"; case "child-stop": return "child-stop";
+		case "child-timeout": return "child-timeout"; case "run-timeout": return "run-timeout"; case "tool-timeout": return "tool-timeout";
+		case "sdk-init-failure": return "sdk-init-failure"; case "persistence-failure": return "persistence-failure";
+		case "authorization-failure": return "authorization-failure"; case "missing-bootstrap": return "missing-bootstrap";
+		case "revival": return "revival"; case "shared-run": return "shared-run"; case "parallel-stop": return "parallel-stop";
+		case "bootstrap-errors": return "bootstrap-errors"; default: throw new Error("unknown standalone smoke mode");
+	}
+}
+const mode = parseMode(process.argv[4]);
 assert.ok(binary && path.isAbsolute(binary) && fs.existsSync(binary), "an existing absolute Pi binary path is required on Linux x64");
 const release = JSON.parse(fs.readFileSync(new URL("standalone-release.json", import.meta.url), "utf8"));
 assert.equal(process.platform, release.platform, "requires Linux/bubblewrap");
 assert.equal(process.arch, release.arch);
 assert.equal(createHash("sha256").update(fs.readFileSync(binary)).digest("hex"), release.binarySha256);
-const root = process.argv[3] ? path.resolve(process.argv[3]) : fs.mkdtempSync(path.join(os.tmpdir(), "pi-standalone-smoke-"));
+const requestedRoot = process.argv[3];
+let root;
+if (requestedRoot) {
+	const runnerTemp = process.env.RUNNER_TEMP;
+	assert.ok(runnerTemp && path.isAbsolute(runnerTemp), "explicit standalone artifact roots require absolute RUNNER_TEMP");
+	const expectedRoot = path.join(runnerTemp, "standalone-matrix", mode);
+	assert.equal(path.resolve(requestedRoot), expectedRoot, "standalone child artifact path must match the official matrix root");
+	root = expectedRoot;
+} else {
+	root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-standalone-smoke-"));
+}
 fs.mkdirSync(root, { recursive: true });
 assert.deepEqual(fs.readdirSync(root), [], "requires an empty artifact directory");
 const coreSdk = /(?:^|\/)(?:@earendil-works\/(?:pi-coding-agent|pi-agent-core|pi-ai|pi-tui)|typebox)(?:\/|$)/;
@@ -55,6 +75,8 @@ fs.writeFileSync(path.join(root, "work/negative.ts"), 'import "@earendil-works/p
 fs.mkdirSync(path.join(root, "work/.pi/agents"), { recursive: true });
 fs.writeFileSync(path.join(root, "work/.pi/agents/binary-smoke.md"), `---\nname: binary-smoke\ndescription: Isolated native async regression\nmodel: standalone-smoke/local\ntools: ${mode === "tool-timeout" ? "bash" : ""}\nextensions:\n  - /stage/package/test/smoke/standalone-observer.ts\n  - /stage/package/test/smoke/standalone-provider.ts\n---\nReturn the scripted response.\n`);
 fs.writeFileSync(path.join(root, "agent/settings.json"), JSON.stringify({ defaultProvider: "standalone-smoke", defaultModel: "local", packages: [] }));
+fs.mkdirSync(path.join(root, "agent/extensions/subagent"), { recursive: true });
+fs.writeFileSync(path.join(root, "agent/extensions/subagent/config.json"), JSON.stringify({ timeoutMs: mode === "run-timeout" || mode === "child-timeout" ? 8000 : 20000 }));
 fs.mkdirSync(path.join(root, "agent/extensions"), { recursive: true });
 fs.writeFileSync(path.join(root, "agent/extensions/ambient-sentinel.ts"), 'import fs from "node:fs"; export default function () { fs.writeFileSync("/stage/ambient-loaded", String(process.pid)); }\n');
 const sandbox = ["--die-with-parent", "--unshare-net", "--unshare-pid", "--ro-bind", "/usr", "/usr", "--symlink", "usr/bin", "/bin"];

@@ -56,7 +56,7 @@ export default function registerSmoke(pi: ExtensionAPI) {
 			} : mode === "targeted-controls" ? {
 				workflowScript: `const left = runs.run("left", { agent: "binary-smoke", task: "Return LEFT." }); const right = runs.run("right", { agent: "binary-smoke", task: "Return RIGHT." }); let interrupted; try { interrupted = await right; } catch (error) { interrupted = String(error); } return { left: await left, right: interrupted };`,
 			} : mode === "child-timeout" ? {
-				workflowScript: `return await runs.run("child-deadline", { agent: "binary-smoke", task: "Wait for cancellation.", timeoutMs: 8000 });`,
+				workflowScript: `return await runs.run("child-deadline", { agent: "binary-smoke", task: "Wait for cancellation." });`,
 			} : { agent: "binary-smoke", task: "Return the scripted response." };
 			fs.writeFileSync("/stage/parent-initialized", String(process.pid));
 			if (mode === "shared-run" || mode === "parallel-stop") {
@@ -177,7 +177,14 @@ export default function registerSmoke(pi: ExtensionAPI) {
 					}
 					if (mode.endsWith("-timeout")) {
 						assert.equal(status.steps[0].timedOut, true);
-						assert.match(status.steps[0].error, mode === "tool-timeout" ? /Tool 'bash' exceeded its timeout of 1000ms/ : /timed out after 8000ms/);
+						if (mode === "tool-timeout") {
+							assert.match(status.steps[0].error, /Tool 'bash' exceeded its timeout of 1000ms/);
+						} else {
+							const timeout = /timed out after (\d+)ms/.exec(status.steps[0].error ?? "");
+							assert.ok(timeout, status.steps[0].error);
+							const remainingBudget = Number(timeout[1]);
+							assert.ok(remainingBudget > 7_000 && remainingBudget <= 8_000, `expected the shared 8s operator deadline after setup, got ${remainingBudget}ms`);
+						}
 					}
 					if (steered) {
 						const followup = lifecycle.find((entry) => entry.event === "followup" && entry.pid === status.pid);

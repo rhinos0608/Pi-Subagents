@@ -26,7 +26,6 @@ export function resolveSubagentResultStatus(input: {
 	processSignal?: string | null;
 	timedOut?: boolean;
 	stopped?: boolean;
-	turnBudgetExceeded?: boolean;
 }): SubagentResultStatus {
 	if (input.detached) return "detached";
 	if (input.stopped || input.state === "stopped") return "stopped";

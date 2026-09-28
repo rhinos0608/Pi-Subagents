@@ -138,7 +138,7 @@ export function recordRun(
 	task: string,
 	exitCode: number,
 	durationMs: number,
-	terminal: { interrupted?: boolean; processSignal?: string | null; stopped?: boolean; timedOut?: boolean; turnBudgetExceeded?: boolean } = {},
+	terminal: { interrupted?: boolean; processSignal?: string | null; stopped?: boolean; timedOut?: boolean } = {},
 ): void {
 	try {
 		const outcome: RunOutcome = terminal.stopped

@@ -86,7 +86,6 @@ function buildParallelInitialResult(params: SubagentParamsLike): AgentToolResult
 		details: {
 			mode: "parallel",
 			...(params.async ? { background: true } : {}),
-			...(params.context === "fresh" || params.context === "fork" ? { context: params.context } : {}),
 			results: tasks.map((task, index) => createPlaceholderResult(task.agent, task.task, "running", index)),
 			progress: tasks.map((task, index) => {
 				const sessionName = deriveChildSessionName({ agent: task.agent, task: task.task });
@@ -146,7 +145,6 @@ function buildChainInitialResult(params: SubagentParamsLike): AgentToolResult<De
 		details: {
 			mode: "chain",
 			...(params.async ? { background: true } : {}),
-			...(params.context === "fresh" || params.context === "fork" ? { context: params.context } : {}),
 			results,
 			progress: results.map((result, index) => ({
 				index,
@@ -177,7 +175,6 @@ function buildSingleInitialResult(params: SubagentParamsLike): AgentToolResult<D
 		details: {
 			mode: "single",
 			...(params.async ? { background: true } : {}),
-			...(params.context === "fresh" || params.context === "fork" ? { context: params.context } : {}),
 			results: [createPlaceholderResult(agent, task, "running", 0)],
 			progress: [{
 				index: 0,

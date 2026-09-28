@@ -531,7 +531,6 @@ When the task asks for a structured result, keep field names exactly as requeste
 			task,
 			context: "fresh" as const,
 			outputSchema,
-			skill: false,
 			output: false,
 			artifacts: false,
 			// runSync sits below the executor step that applies the bridge.
@@ -600,7 +599,6 @@ Answer only from the supplied synthetic text.
 				context: "fresh",
 				model: "mock/model",
 				outputSchema,
-				skill: false,
 				output: false,
 				artifacts: false,
 			});
@@ -652,7 +650,7 @@ Answer only from the supplied synthetic text.
 		assert.ok(discovered, "expected temporary agent definition to be discovered");
 		const intercomBridge = { mode: "off" as const };
 
-		const preflight = await resolveSubagentLaunchContract({ agent: agentName, cwd: tempDir, task, context: "fresh", model: "mock/model", skill: false, output: false, artifacts: false, intercomBridge });
+		const preflight = await resolveSubagentLaunchContract({ agent: agentName, cwd: tempDir, task, context: "fresh", model: "mock/model", output: false, artifacts: false, intercomBridge });
 		assert.equal(preflight.ok, true);
 		if (!preflight.ok) return;
 		assert.deepEqual(preflight.contract.intercomBridge, { active: false, mode: "off" });
@@ -697,11 +695,11 @@ Answer only from the supplied synthetic text.
 		const ctx = makeMinimalCtx(tempDir);
 		const orchestratorTarget = resolveIntercomSessionTarget(undefined, ctx.sessionManager.getSessionId());
 
-		const withoutTarget = await resolveSubagentLaunchContract({ agent: agentName, cwd: tempDir, task, context: "fresh", model: "mock/model", skill: false, output: false, artifacts: false, intercomBridge });
+		const withoutTarget = await resolveSubagentLaunchContract({ agent: agentName, cwd: tempDir, task, context: "fresh", model: "mock/model", output: false, artifacts: false, intercomBridge });
 		assert.equal(withoutTarget.ok, true);
 		if (!withoutTarget.ok) return;
 		assert.ok(withoutTarget.contract.diagnostics.some((diagnostic) => diagnostic.code === "host_required" && /orchestratorTarget/.test(diagnostic.message)));
-		const preflight = await resolveSubagentLaunchContract({ agent: agentName, cwd: tempDir, task, context: "fresh", model: "mock/model", skill: false, output: false, artifacts: false, intercomBridge, orchestratorTarget });
+		const preflight = await resolveSubagentLaunchContract({ agent: agentName, cwd: tempDir, task, context: "fresh", model: "mock/model", output: false, artifacts: false, intercomBridge, orchestratorTarget });
 		assert.equal(preflight.ok, true);
 		if (!preflight.ok) return;
 		assert.deepEqual(preflight.contract.intercomBridge, { active: true, mode: "always" });
@@ -812,20 +810,6 @@ Answer only from the supplied synthetic text.
 		assert.match(wrongThenRight.content[0]?.text ?? "", /already consumed/);
 		assert.equal(workflowChildPermitConsumed(wrongThenRightPermit), true);
 		assert.equal(mockPi.callCount(), 3, "wrong-then-right must not spawn");
-	});
-
-	it("resolves workflow child profile context from its agent default", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
-		mockPi.onCall({ output: "Workflow child completed" });
-		const result = await makeExecutor([makeAgent("echo", { defaultContext: "fresh" })], { defaultSubagentContext: "fork" }).execute(
-			"workflow-profile-context",
-			{ async: false, workflowScript: `return runs.run("main", { agent: "echo", task: "Use profile context", context: "profile" });` },
-			new AbortController().signal,
-			undefined,
-			makeMinimalCtx(tempDir),
-		);
-
-		assert.equal(result.isError, undefined, result.content[0]?.text ?? "workflow failed");
-		assert.equal(result.details?.results?.[0]?.context, "fresh");
 	});
 
 	it("reports a user-requested foreground detach without supervisor guidance", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
@@ -2253,61 +2237,6 @@ Answer only from the supplied synthetic text.
 		fs.rmSync(resultPath, { force: true });
 	});
 
-	it("rejects an invalid async workflow usage budget before creating run state", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
-		const asyncJobs: SubagentState["asyncJobs"] = new Map();
-		const executor = makeExecutor([makeAgent("echo")], {}, false, undefined, true, asyncJobs);
-		const runId = `scripted-workflow-invalid-budget-${Date.now()}`;
-
-		const result = await executor.execute(
-			runId,
-			{ workflowScript: `return "unreachable";`, usageBudget: { tokens: { hard: 0 } } },
-			new AbortController().signal,
-			undefined,
-			makeMinimalCtx(tempDir),
-		);
-
-		assert.equal(result.isError, true);
-		assert.match(result.content[0]?.text ?? "", /usageBudget\.tokens\.hard must be a positive number/);
-		assert.equal(result.details.asyncId, undefined);
-		assert.equal(asyncJobs.has(runId), false);
-		assert.equal(fs.existsSync(path.join(DIRS.async, runId)), false);
-		assert.equal(fs.existsSync(path.join(DIRS.results, `${runId}.json`)), false);
-	});
-
-	it("rejects async child launches from budgeted async workflows", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
-		const executor = makeExecutor([makeAgent("echo")]);
-		const runId = `scripted-workflow-budget-async-child-${Date.now()}`;
-		const started = await executor.execute(
-			runId,
-			{
-				workflowScript: `await runs.run("background", { agent: "echo", task: "Async child", async: true }); return "unreachable";`,
-				usageBudget: { tokens: { hard: 100 } },
-			},
-			new AbortController().signal,
-			undefined,
-			makeMinimalCtx(tempDir),
-		);
-
-		assert.equal(started.isError, undefined);
-		assert.ok(started.details.asyncId);
-		assert.notEqual(started.details.asyncId, runId);
-		const resultPath = path.join(DIRS.results, `${started.details.asyncId}.json`);
-		let persisted: { state?: string; summary?: string; results?: Array<{ success?: boolean; output?: string }> } = {};
-		for (let attempt = 0; attempt < 100; attempt++) {
-			if (fs.existsSync(resultPath)) persisted = JSON.parse(fs.readFileSync(resultPath, "utf-8"));
-			if (persisted.state === "failed") break;
-			await new Promise((resolve) => setTimeout(resolve, 20));
-		}
-		assert.equal(persisted.state, "failed");
-		assert.match(persisted.summary ?? "", /workflow usageBudget does not support async runs\.run launches/);
-		assert.equal(persisted.results?.length, 1);
-		assert.equal(persisted.results?.[0]?.success, false);
-		assert.match(persisted.results?.[0]?.output ?? "", /workflow usageBudget does not support async runs\.run launches/);
-		assert.equal(mockPi.callCount(), 0);
-		fs.rmSync(started.details.asyncDir!, { recursive: true, force: true });
-		fs.rmSync(resultPath, { force: true });
-	});
-
 	it("honors an omitted agent async default while awaiting the workflow child result", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
 		mockPi.onCall({ output: "default async child done" });
 		const executor = makeExecutor([makeAgent("echo", { defaultAsync: true })], {}, false);
@@ -2470,37 +2399,6 @@ Answer only from the supplied synthetic text.
 		}
 		assert.equal(fs.existsSync(childResultPath), true);
 		assert.equal(fs.existsSync(path.join(childDir, "workflow-result.json")), false);
-		fs.rmSync(childDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
-		fs.rmSync(childResultPath, { force: true });
-	});
-
-	it("applies an agent deadline to a workflow-launched async child", { skip: !createSubagentExecutor ? "executor not importable" : process.platform === "win32" ? "timeout signal delivery intermittent on Windows CI" : undefined }, async () => {
-		mockPi.onCall({ delay: 5_000, output: "too late" });
-		const executor = makeExecutor([makeAgent("slow", { defaultTimeoutMs: 150 })]);
-		const result = await executor.execute(
-			`scripted-workflow-async-child-timeout-${Date.now()}`,
-			{
-				workflowScript: `return await runs.run("background", { agent: "slow", task: "Wait", async: true });`,
-				async: false,
-			},
-			new AbortController().signal,
-			undefined,
-			makeMinimalCtx(tempDir),
-		);
-		const childRunId = (result.details.workflow?.value as { runId?: string } | undefined)?.runId;
-		assert.ok(childRunId, JSON.stringify(result.details.workflow?.value ?? result.content));
-		const childDir = path.join(DIRS.async, childRunId);
-		const childResultPath = path.join(DIRS.results, `${childRunId}.json`);
-		let persisted: { timeoutMs?: number; state?: string; results?: Array<{ timedOut?: boolean; error?: string }> } = {};
-		for (let attempt = 0; attempt < 200; attempt++) {
-			if (fs.existsSync(childResultPath)) persisted = JSON.parse(fs.readFileSync(childResultPath, "utf-8"));
-			if (persisted.state === "failed") break;
-			await new Promise((resolve) => setTimeout(resolve, 20));
-		}
-		assert.equal(persisted.timeoutMs, 150);
-		assert.equal(persisted.state, "failed");
-		assert.deepEqual(persisted.results?.map((entry) => entry.timedOut), [true]);
-		assert.deepEqual(persisted.results?.map((entry) => entry.error), ["Subagent timed out after 150ms."]);
 		fs.rmSync(childDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
 		fs.rmSync(childResultPath, { force: true });
 	});
@@ -2950,57 +2848,6 @@ Answer only from the supplied synthetic text.
 		assert.equal(handoff.groups[0]?.cleanup.state, "complete");
 		assert.equal(handoff.groups[0]?.cleanup.tasks[0]?.worktreeRemoved, true);
 
-	});
-
-	it("aligns a forked workflow child session with its managed worktree cwd", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
-		execFileSync("git", ["init"], { cwd: tempDir, stdio: "ignore" });
-		execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: tempDir });
-		execFileSync("git", ["config", "user.name", "Test User"], { cwd: tempDir });
-		fs.writeFileSync(path.join(tempDir, "base.txt"), "base\n", "utf-8");
-		execFileSync("git", ["add", "base.txt"], { cwd: tempDir });
-		execFileSync("git", ["commit", "-m", "base"], { cwd: tempDir, stdio: "ignore" });
-
-		const parentSessionFile = path.join(mockPi.dir, "parent-session.jsonl");
-		const childSessionFile = path.join(mockPi.dir, "forked-child-session.jsonl");
-		fs.writeFileSync(parentSessionFile, `${JSON.stringify({ type: "session", version: 3, id: "parent", cwd: tempDir })}\n`, "utf-8");
-		const ctx = makeMinimalCtx(tempDir);
-		Object.assign(ctx.sessionManager, {
-			getSessionFile: () => parentSessionFile,
-			getLeafId: () => "parent-leaf",
-			openSession: () => ({
-				createBranchedSession: () => {
-					fs.writeFileSync(childSessionFile, `${JSON.stringify({ type: "session", version: 3, id: "child", cwd: tempDir })}\n`, "utf-8");
-					return childSessionFile;
-				},
-			}),
-		});
-		mockPi.onCall({ output: "isolated fork child" });
-		const executor = makeExecutor([makeAgent("worker", { defaultContext: "fork" })]);
-
-		const result = await executor.execute(
-			"forked-worktree-workflow",
-			{ async: false, workflowScript: `return runs.run("isolated", { agent: "worker", task: "Work in isolation", worktree: true });` },
-			new AbortController().signal,
-			undefined,
-			ctx,
-		);
-
-		assert.equal(result.isError, undefined, result.content[0]?.text ?? "workflow failed");
-		const workflowValue = result.details.workflow?.value as { artifactPaths?: string[] } | undefined;
-		const handoffPath = workflowValue?.artifactPaths?.find((candidate) => candidate.endsWith(".json") && candidate.includes("handoffs"));
-		assert.ok(handoffPath, JSON.stringify(workflowValue));
-		const handoff = JSON.parse(fs.readFileSync(handoffPath, "utf-8")) as {
-			groups: Array<{ cleanup: { tasks: Array<{ path: string }> } }>;
-		};
-		const managedWorktreeCwd = handoff.groups[0]?.cleanup.tasks[0]?.path;
-		assert.ok(managedWorktreeCwd);
-		const callCwd = readCall().cwd;
-		assert.ok(callCwd);
-		assert.notEqual(path.resolve(callCwd), path.resolve(tempDir));
-		assert.equal(path.basename(callCwd), path.basename(managedWorktreeCwd));
-		const sessionHeader = JSON.parse(fs.readFileSync(childSessionFile, "utf-8").split("\n", 1)[0]!) as { cwd?: string };
-		assert.ok(sessionHeader.cwd);
-		assert.equal(path.basename(sessionHeader.cwd), path.basename(callCwd));
 	});
 
 	it("stringifies workflow child results without object placeholders", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {

@@ -46,10 +46,10 @@ const DYNAMIC_STEP_KEYS = new Set(["expand", "parallel", "collect", "concurrency
 const RUNNER_DYNAMIC_STEP_KEYS = new Set([...DYNAMIC_STEP_KEYS, "effectiveAcceptance", "acceptanceInput", "acceptanceRole", "sessionFiles", "thinkingOverrides", "thinkingCeiling"]);
 const DYNAMIC_EXPAND_KEYS = new Set(["from", "item", "key", "maxItems", "onEmpty"]);
 const DYNAMIC_EXPAND_FROM_KEYS = new Set(["output", "path"]);
-const DYNAMIC_PARALLEL_KEYS = new Set(["agent", "task", "phase", "label", "outputSchema", "cwd", "machine", "output", "outputMode", "reads", "progress", "skill", "model", "fast", "toolBudget", "acceptance", "agentContract", "gateOn"]);
+const DYNAMIC_PARALLEL_KEYS = new Set(["agent", "task", "phase", "label", "outputSchema", "cwd", "machine", "output", "outputMode", "reads", "progress", "model", "fast", "toolBudget", "acceptance", "agentContract", "gateOn"]);
 const RUNNER_DYNAMIC_PARALLEL_KEYS = new Set([
 	...DYNAMIC_PARALLEL_KEYS,
-	"outputName", "structured", "inheritProjectContext", "inheritGlobalContext", "inheritSkills", "skills", "outputPath", "namespaceOutputPath", "maxSubagentDepth", "timeoutMs",
+	"outputName", "structured", "inheritProjectContext", "inheritGlobalContext", "inheritSkills", "skills", "outputPath", "namespaceOutputPath", "maxSubagentDepth",
 	"structuredOutput", "structuredOutputSchema", "tools", "excludeTools", "allowNestedSubagents", "extensions", "subagentOnlyExtensions", "mcpDirectTools", "mutationTools", "capabilityCeiling", "systemPrompt",
 	"systemPromptMode", "thinking", "modelCandidates", "requestedModel", "sessionFile", "effectiveAcceptance", "acceptanceInput", "acceptanceRole", "parentSessionId", "requiredExtensions", "launchResolvedExtensions", "requestedCwd", "machineEnv", "modelResolution", "permissionRules", "context", "contextLimit", "thinkingCeiling", "toolTimeoutMs", "runner", "runFanoutPath", "worktree", "skipPrimaryModelVerification", "modelVerificationRegistry", "modelResponseAliases",
 ]);

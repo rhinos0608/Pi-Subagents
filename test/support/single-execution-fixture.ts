@@ -90,8 +90,6 @@ interface RunSyncResult {
 	interrupted?: boolean;
 	timedOut?: boolean;
 	timeoutRecovery?: { changedFiles?: string[]; message?: string; recoveryNeeded?: boolean; reason?: string; reportStatus?: string };
-	turnBudget?: { maxTurns: number; graceTurns: number; outcome: string; turnCount: number; wrapUpRequestedAtTurn?: number; exceededAtTurn?: number };
-	turnBudgetExceeded?: boolean;
 	wrapUpRequested?: boolean;
 	detached?: boolean;
 	detachedReason?: string;
@@ -219,7 +217,6 @@ interface ExecutorToolResult {
 		controlEvents?: Array<{ type?: string }>;
 		asyncId?: string;
 		timeoutMs?: number;
-		turnBudget?: { maxTurns: number; graceTurns: number };
 		artifacts?: { dir: string; files: ArtifactPaths[] };
 	};
 }

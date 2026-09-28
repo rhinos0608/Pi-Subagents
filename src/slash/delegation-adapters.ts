@@ -310,12 +310,10 @@ export function toSubagentDelegationExecutionParams(request: SubagentDelegationR
 	return {
 		agent: request.agent,
 		task: request.task,
-		context: request.context,
+		context: "fresh",
 		cwd: request.cwd,
 		model: request.model,
-		timeoutMs: request.timeoutMs,
 		toolBudget: request.toolBudget,
-		skill: request.skill,
 		...(request.result.kind === "structured" ? { outputSchema: request.result.schema } : {}),
 		acceptance: false,
 		artifacts: request.artifacts,

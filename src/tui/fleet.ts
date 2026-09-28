@@ -142,8 +142,6 @@ function trackedJobSummary(job: AsyncJobState): AsyncRunSummary {
 		...(job.deadlineAt !== undefined ? { deadlineAt: job.deadlineAt } : {}),
 		...(job.timedOut !== undefined ? { timedOut: job.timedOut } : {}),
 		...(job.stopped !== undefined ? { stopped: job.stopped } : {}),
-		...(job.turnBudget ? { turnBudget: job.turnBudget } : {}),
-		...(job.turnBudgetExceeded !== undefined ? { turnBudgetExceeded: job.turnBudgetExceeded } : {}),
 		...(job.wrapUpRequested !== undefined ? { wrapUpRequested: job.wrapUpRequested } : {}),
 		...(job.currentStep !== undefined ? { currentStep: job.currentStep } : {}),
 		...(job.chainStepCount !== undefined ? { chainStepCount: job.chainStepCount } : {}),
