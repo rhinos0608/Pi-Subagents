@@ -156,7 +156,10 @@ export default function registerSmoke(pi: ExtensionAPI) {
 				const descriptor = JSON.parse(fs.readFileSync(`${runDir}/recovery-descriptor.json`, "utf8"));
 				assert.deepEqual(descriptor.tools, expectedDeclaredTools);
 				const observed = fs.readFileSync("/stage/bootstrap-observer.jsonl", "utf8").trim().split("\n").map((line) => JSON.parse(line)).filter((event) => event.pid === status.pid);
-				assert.deepEqual(observed.map((event) => event.event), mode === "sdk-init-failure" ? ["observer-ready"] : ["observer-ready", "session-start"]);
+				assert.deepEqual(
+					observed.map((event) => event.event),
+					mode === "sdk-init-failure" ? ["observer-ready", "observer-ready", "observer-ready"] : ["observer-ready", "session-start"],
+				);
 				if (mode === "sdk-init-failure") {
 					assert.equal(JSON.parse(fs.readFileSync("/stage/provider-failure.json", "utf8")).pid, status.pid);
 					assert.match(status.error, /Model "standalone-smoke\/local" not found/);

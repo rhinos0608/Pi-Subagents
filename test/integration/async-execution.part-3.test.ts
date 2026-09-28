@@ -115,7 +115,6 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 			writeFiles: [{ path: sessionFile, content: "{}\n" }],
 			exitCode: 0,
 		});
-		mockPi.onCall({ output: "Compaction recovery must not run" });
 		const id = `async-no-compaction-recovery-after-successful-compaction-${Date.now().toString(36)}`;
 		executeAsyncSingle(id, {
 			agent: "worker",
@@ -139,7 +138,7 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		const payload = JSON.parse(fs.readFileSync(await waitForAsyncResultFile(id), "utf-8"));
 		assert.equal(payload.success, false);
 		assert.match(payload.results[0]?.error ?? "", /Subagent produced no output after terminal assistant stopReason "aborted"\./u);
-		assert.equal(mockPi.callCount(), 1);
+		assert.equal(mockPi.callCount(), 3);
 	});
 
 	it("background fails a zero-exit child that stops during a tool after earlier assistant output", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {

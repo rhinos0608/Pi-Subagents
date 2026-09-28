@@ -1514,7 +1514,15 @@ export async function runSingleStepInner(
 			}
 		}
 
-		const retryableModelFailure = isRetryableModelFailureAttempt({ error, messages: run.messages, toolCount: run.toolCount });
+		const retryableModelFailure = isRetryableModelFailureAttempt({
+			error,
+			messages: run.messages,
+			toolCount: run.toolCount,
+			taskExecutionStarted: run.observedMutationAttempt === true
+				|| mutationEvidence.attemptedMutation === true
+				|| mutationEvidence.changedFiles.length > 0
+				|| Boolean(structuredError || missingRequiredOutputError || toolAvailabilityError || midToolExitError || hiddenError?.hasError),
+		});
 		if (isContextOverflow(error)) {
 			contextOverflow = true;
 			attemptNotes.push(`[fallback] ${attempt.model} failed: context overflow — the input exceeds this model's context window. Reduce the task input or use a model with a larger context window.`);

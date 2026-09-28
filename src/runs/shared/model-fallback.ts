@@ -631,12 +631,13 @@ export function isAccountExhaustedFailure(error: string | undefined): boolean {
 	return ACCOUNT_EXHAUSTED_PATTERN.test(error ?? "");
 }
 
-export function isRetryableModelFailureAttempt(input: { error: string | undefined; messages?: readonly unknown[]; toolCount?: number }): boolean {
+export function isRetryableModelFailureAttempt(input: { error: string | undefined; messages?: readonly unknown[]; toolCount?: number; taskExecutionStarted?: boolean }): boolean {
 	if (!isRetryableModelFailure(input.error) && !isTransientNoOutputFailure(input.error)) return false;
-	// Once the child has executed tools, its task outcome belongs to that run.
+	// Once the child has executed task work, its outcome belongs to that run.
 	// Never silently repeat real work on another model — no carve-outs, not
-	// even for account-exhaustion signals.
-	if ((input.toolCount ?? 0) > 0) return false;
+	// even when a progress counter missed a tool that still emitted a result.
+	if (input.taskExecutionStarted || (input.toolCount ?? 0) > 0) return false;
+	if (input.messages?.some((message) => Boolean(message && typeof message === "object" && (message as { role?: unknown }).role === "toolResult"))) return false;
 	if (isTransientNoOutputFailure(input.error)) return true;
 	if ((input.toolCount ?? 0) === 0 && (input.messages?.length ?? 0) === 0) return true;
 	const error = input.error?.trim();
