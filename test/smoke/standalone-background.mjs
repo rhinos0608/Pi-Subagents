@@ -55,6 +55,8 @@ fs.writeFileSync(path.join(root, "work/negative.ts"), 'import "@earendil-works/p
 fs.mkdirSync(path.join(root, "work/.pi/agents"), { recursive: true });
 fs.writeFileSync(path.join(root, "work/.pi/agents/binary-smoke.md"), `---\nname: binary-smoke\ndescription: Isolated native async regression\nmodel: standalone-smoke/local\ntools: ${mode === "tool-timeout" ? "bash" : ""}\nextensions:\n  - /stage/package/test/smoke/standalone-observer.ts\n  - /stage/package/test/smoke/standalone-provider.ts\n---\nReturn the scripted response.\n`);
 fs.writeFileSync(path.join(root, "agent/settings.json"), JSON.stringify({ defaultProvider: "standalone-smoke", defaultModel: "local", packages: [] }));
+fs.mkdirSync(path.join(root, "agent/extensions/subagent"), { recursive: true });
+fs.writeFileSync(path.join(root, "agent/extensions/subagent/config.json"), JSON.stringify({ timeoutMs: mode === "run-timeout" || mode === "child-timeout" ? 8000 : 20000 }));
 fs.mkdirSync(path.join(root, "agent/extensions"), { recursive: true });
 fs.writeFileSync(path.join(root, "agent/extensions/ambient-sentinel.ts"), 'import fs from "node:fs"; export default function () { fs.writeFileSync("/stage/ambient-loaded", String(process.pid)); }\n');
 const sandbox = ["--die-with-parent", "--unshare-net", "--unshare-pid", "--ro-bind", "/usr", "/usr", "--symlink", "usr/bin", "/bin"];

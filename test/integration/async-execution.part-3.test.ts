@@ -1344,10 +1344,10 @@ export default function() {
 		];
 		for (const [index, scenario] of cases.entries()) {
 			const parentSessionFile = path.join(tempDir, `alias-parent-${index}.jsonl`);
-			const sessionFile = path.join(tempDir, `alias-child-${index}.jsonl`);
+			const obsoleteForkSessionFile = path.join(tempDir, `alias-child-${index}.jsonl`);
 			const header = JSON.stringify({ type: "session", version: 1, id: `alias-${index}`, cwd: fs.realpathSync(tempDir) });
 			fs.writeFileSync(parentSessionFile, `${header}\n`);
-			fs.writeFileSync(sessionFile, `${header}\n`);
+			fs.writeFileSync(obsoleteForkSessionFile, `${header}\n`);
 			const ctx = {
 				...makeMinimalCtx(tempDir),
 				modelRegistry: { getAvailable: () => [{ provider: "databricks-bedrock", id: "ias-claude-opus-5" }] },
@@ -1355,17 +1355,20 @@ export default function() {
 					getSessionId: () => `alias-session-${index}`,
 					getSessionFile: () => parentSessionFile,
 					getLeafId: () => "leaf",
-					openSession: () => ({ createBranchedSession: () => sessionFile }),
+					openSession: () => ({ createBranchedSession: () => obsoleteForkSessionFile }),
 				},
 			};
 			mockPi.onCall({ jsonl: [events.assistantMessage("Initial work", route)] });
 			const launch = await makeAsyncExecutor(agents, { modelResponseAliases: scenario.original }).execute(
-				`alias-launch-${index}`, { agent: "worker", task: "Do work", async: true, context: "fork", acceptance: false },
+				`alias-launch-${index}`, { agent: "worker", task: "Do work", async: true, acceptance: false },
 				new AbortController().signal, undefined, ctx,
 			) as AsyncExecutionResult;
 			assert.ok(!launch.isError, launch.content[0]?.text);
 			assert.ok(launch.details.asyncId);
-			assert.equal((await readAsyncPayload(launch.details.asyncId)).success, true);
+			const initialPayload = await readAsyncPayload(launch.details.asyncId);
+			assert.equal(initialPayload.success, true);
+			const retainedSessionFile = initialPayload.results[0]?.sessionFile;
+			assert.ok(retainedSessionFile);
 
 			// A new executor must recover the durable launch declaration, not its current settings.
 			mockPi.onCall({ jsonl: [events.assistantMessage("Continued work", scenario.echo)] });
@@ -1380,7 +1383,7 @@ export default function() {
 			if (!scenario.success) assert.match(payload.results[0]?.error ?? "", /model_verification_failed/);
 			const args = readMockPiArgs(mockPi, index * 2 + 1);
 			assert.equal(args[args.indexOf("--model") + 1], route);
-			assert.equal(args[args.indexOf("--session") + 1], sessionFile);
+			assert.equal(args[args.indexOf("--session") + 1], retainedSessionFile);
 		}
 	});
 
@@ -1618,59 +1621,6 @@ syncBuiltinESMExports();
 		);
 	});
 
-	it("aligns initial and resumed background forked sessions with an explicit child cwd", { skip: !isAsyncAvailable() || !createSubagentExecutor ? "jiti or executor not available" : undefined }, async () => {
-		mockPi.onCall({ output: "Forked async work" });
-		const parentCwd = fs.realpathSync(tempDir);
-		const childCwd = path.join(tempDir, "child-cwd");
-		fs.mkdirSync(childCwd);
-		const parentSessionFile = path.join(tempDir, "parent-cross-cwd.jsonl");
-		const forkedSessionFile = path.join(tempDir, "forked-cross-cwd.jsonl");
-		const parentHeader = { type: "session", version: 1, id: "parent", cwd: parentCwd };
-		const childHeader = { type: "session", version: 1, id: "child", cwd: parentCwd, parentSession: parentSessionFile };
-		fs.writeFileSync(parentSessionFile, `${JSON.stringify(parentHeader)}\n`, "utf-8");
-		fs.writeFileSync(forkedSessionFile, `${JSON.stringify(childHeader)}\n`, "utf-8");
-		const ctx = {
-			...makeMinimalCtx(parentCwd),
-			sessionManager: {
-				getSessionId: () => "session-cross-cwd",
-				getSessionFile: () => parentSessionFile,
-				getLeafId: () => "leaf-current",
-				openSession: () => ({ createBranchedSession: () => forkedSessionFile }),
-			},
-		};
-
-		const executor = makeAsyncExecutor([makeAgent("worker")]);
-		const launch = await executor.execute(
-			"forked-cross-cwd",
-			{ agent: "worker", task: "Do work", async: true, context: "fork", cwd: childCwd },
-			new AbortController().signal,
-			undefined,
-			ctx,
-		) as AsyncExecutionResult;
-		assert.ok(!launch.isError, launch.content[0]?.text);
-		assert.ok(launch.details.asyncId);
-		await readAsyncPayload(launch.details.asyncId);
-
-		const sessionHeader = JSON.parse(fs.readFileSync(forkedSessionFile, "utf-8").split("\n", 1)[0]!) as { cwd?: string };
-		assert.equal(sessionHeader.cwd, fs.realpathSync.native(childCwd));
-
-		fs.writeFileSync(forkedSessionFile, `${JSON.stringify(childHeader)}\n`, "utf-8");
-		mockPi.onCall({ output: "Resumed async work" });
-		const resumed = await executor.execute(
-			"resume-cross-cwd",
-			{ action: "resume", id: launch.details.asyncId, message: "Continue" },
-			new AbortController().signal,
-			undefined,
-			ctx,
-		) as AsyncExecutionResult;
-		assert.ok(!resumed.isError, resumed.content[0]?.text);
-		assert.ok(resumed.details.asyncId);
-		await readAsyncPayload(resumed.details.asyncId);
-
-		const resumedHeader = JSON.parse(fs.readFileSync(forkedSessionFile, "utf-8").split("\n", 1)[0]!) as { cwd?: string };
-		assert.equal(resumedHeader.cwd, fs.realpathSync.native(childCwd));
-	});
-
 	it("background forked runs inherit a parent model outside the registry", { skip: !isAsyncAvailable() || !createSubagentExecutor ? "jiti or executor not available" : undefined }, async () => {
 		mockPi.onCall({ output: "Forked async work" });
 		const parentSessionFile = path.join(tempDir, "parent.jsonl");
@@ -1700,38 +1650,6 @@ syncBuiltinESMExports();
 		assert.ok(launch.details.asyncId);
 		const payload = await readAsyncPayload(launch.details.asyncId);
 		assert.equal(payload.results[0]?.model, "gateway/parent-model");
-	});
-
-	it("background forked runs receive the derived fork cache key", { skip: !isAsyncAvailable() || !createSubagentExecutor ? "jiti or executor not available" : undefined }, async () => {
-		mockPi.onCall({ output: "cache affinity inspected" });
-		const parentSessionFile = path.join(tempDir, "parent-cache.jsonl");
-		const forkedSessionFile = path.join(tempDir, "forked-cache.jsonl");
-		const sessionHeader = JSON.stringify({ type: "session", cwd: fs.realpathSync(tempDir) });
-		fs.writeFileSync(parentSessionFile, `${sessionHeader}\n`, "utf-8");
-		fs.writeFileSync(forkedSessionFile, `${sessionHeader}\n`, "utf-8");
-		const ctx = {
-			...makeMinimalCtx(tempDir),
-			sessionManager: {
-				getSessionId: () => "session-cache-parent",
-				getSessionFile: () => parentSessionFile,
-				getLeafId: () => "leaf-current",
-				openSession: () => ({ createBranchedSession: () => forkedSessionFile }),
-			},
-		};
-
-		const launch = await makeAsyncExecutor([makeAgent("worker")]).execute(
-			"forked-cache-key",
-			{ agent: "worker", task: "Inspect cache affinity", async: true, context: "fork" },
-			new AbortController().signal,
-			undefined,
-			ctx,
-		) as AsyncExecutionResult;
-		assert.ok(!launch.isError, launch.content[0]?.text);
-		assert.ok(launch.details.asyncId);
-
-		const payload = await readAsyncPayload(launch.details.asyncId);
-		assert.equal(payload.success, true);
-		assert.equal((await waitForMockPiRuntime(mockPi, 0)).forkCacheKey, deriveForkPromptCacheKey("session-cache-parent"));
 	});
 
 	it("follows up an async run whose recovery descriptor includes fast", { skip: !isAsyncAvailable() || !createSubagentExecutor ? "jiti or executor not available" : undefined }, async () => {
@@ -2146,30 +2064,6 @@ syncBuiltinESMExports();
 		assert.match(result.content[0]?.text ?? "", /Skills not found: pi-subagents/);
 	});
 
-	it("background chains report unavailable pi-subagents skill requests", () => {
-		const id = `async-chain-pi-subagents-skill-${Date.now().toString(36)}`;
-		const result = executeAsyncChain(id, {
-			chain: [{ agent: "worker", task: "Do work", skill: ["pi-subagents"] }],
-			agents: [makeAgent("worker")],
-			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
-			cwd: tempDir,
-			artifactConfig: {
-				enabled: false,
-				includeInput: false,
-				includeOutput: false,
-				includeJsonl: false,
-				includeMetadata: false,
-				cleanupDays: 7,
-			},
-			shareEnabled: false,
-			sessionRoot: path.join(tempDir, "sessions"),
-			maxSubagentDepth: 2,
-		});
-
-		assert.equal(result.isError, true);
-		assert.match(result.content[0]?.text ?? "", /Skills not found: pi-subagents/);
-	});
-
 	it("background chains resolve relative step cwd values against the shared cwd", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
 		mockPi.onCall({ output: "Done asynchronously" });
 		const chainCwd = createTempDir("pi-subagent-async-chain-cwd-");
@@ -2181,8 +2075,8 @@ syncBuiltinESMExports();
 		try {
 			writePackageSkill(path.join(chainCwd, "packages", "app"), "async-chain-step-skill");
 			executeAsyncChain(id, {
-				chain: [{ agent: "worker", task: "Do work", cwd: "packages/app", skill: ["async-chain-step-skill"] }],
-				agents: [makeAgent("worker")],
+				chain: [{ agent: "worker", task: "Do work", cwd: "packages/app" }],
+				agents: [makeAgent("worker", { skills: ["async-chain-step-skill"] })],
 				ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
 				cwd: chainCwd,
 				artifactConfig: {
