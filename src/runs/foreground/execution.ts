@@ -2052,7 +2052,12 @@ async function runSyncCompletionInner(
 			if (intercomDetached || result.timedOut) break modelAttemptsLoop;
 			if (attemptSucceeded) break modelAttemptsLoop;
 
-			const retryableModelFailure = isRetryableModelFailureAttempt({ error: result.error, messages: result.messages, toolCount: result.progressSummary?.toolCount });
+			const retryableModelFailure = isRetryableModelFailureAttempt({
+				error: result.error,
+				messages: result.messages,
+				toolCount: result.progressSummary?.toolCount,
+				taskExecutionStarted: Boolean(result.outputSaveError || result.structuredOutputFailed || result.effects?.fileMutation),
+			});
 			if (isContextOverflow(result.error)) {
 				result.contextOverflow = true;
 				attemptNotes.push(`[fallback] ${attempt.model} failed: context overflow — the input exceeds this model's context window. Reduce the task input or use a model with a larger context window.`);

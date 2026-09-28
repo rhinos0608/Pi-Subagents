@@ -2720,7 +2720,7 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		assert.equal(result.usage.output, 50); // from mock
 	});
 
-	it("returns a provider failure after one foreground model launch", async () => {
+	it("returns a provider failure after bounded foreground retries exhaust", async () => {
 		mockPi.onCall({
 			jsonl: [{
 				type: "message_end",
@@ -2734,7 +2734,6 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 			}],
 			exitCode: 1,
 		});
-		mockPi.onCall({ output: "unexpected second launch" });
 		const agents = [makeAgent("echo", { model: "openai/gpt-5-mini" })];
 
 		const result = await runSync(tempDir, agents, "echo", "Task", {
@@ -2743,12 +2742,12 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 
 		assert.equal(result.exitCode, 1);
 		assert.equal(result.model, "openai/gpt-5-mini");
-		assert.deepEqual(result.attemptedModels, ["openai/gpt-5-mini"]);
-		assert.equal(result.modelAttempts?.length, 1);
+		assert.deepEqual(result.attemptedModels, ["openai/gpt-5-mini", "openai/gpt-5-mini", "openai/gpt-5-mini"]);
+		assert.equal(result.modelAttempts?.length, 3);
 		assert.equal(result.modelAttempts?.[0]?.model, "openai/gpt-5-mini");
 		assert.equal(result.modelAttempts?.[0]?.success, false);
 		assert.match(result.modelAttempts?.[0]?.error ?? "", /rate limit exceeded/);
-		assert.equal(mockPi.callCount(), 1);
+		assert.equal(mockPi.callCount(), 3);
 	});
 
 	it("fails zero-exit provider errors after one launch", async () => {
@@ -2916,7 +2915,6 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 			writeFiles: [{ path: sessionFile, content: "{}\n" }],
 			exitCode: 0,
 		});
-		mockPi.onCall({ output: "Compaction recovery must not run" });
 		const agents = [makeAgent("echo", { model: "openai/gpt-5-mini" })];
 
 		const result = await runSync(tempDir, agents, "echo", "Task", {
@@ -2926,7 +2924,7 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 
 		assert.equal(result.exitCode, 1);
 		assert.match(result.error ?? "", /Subagent produced no output after terminal assistant stopReason "aborted"\./u);
-		assert.equal(mockPi.callCount(), 1);
+		assert.equal(mockPi.callCount(), 3);
 	});
 
 	it("does not use compaction recovery after compaction_end willRetry false and a continued agent turn", async () => {
@@ -2951,7 +2949,6 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 			writeFiles: [{ path: sessionFile, content: "{}\n" }],
 			exitCode: 0,
 		});
-		mockPi.onCall({ output: "Compaction recovery must not run" });
 		const agents = [makeAgent("echo", { model: "openai/gpt-5-mini" })];
 
 		const result = await runSync(tempDir, agents, "echo", "Task", {
@@ -2961,7 +2958,7 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 
 		assert.equal(result.exitCode, 1);
 		assert.match(result.error ?? "", /Subagent produced no output after terminal assistant stopReason "aborted"\./u);
-		assert.equal(mockPi.callCount(), 1);
+		assert.equal(mockPi.callCount(), 3);
 	});
 
 	it("does not use compaction recovery for a generic provider abort after normal settlement", async () => {
@@ -4863,7 +4860,7 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		assert.equal(receiptMessages.length, 2);
 	});
 
-	it("returns a provider failure after one detached model launch", async () => {
+	it("returns a provider failure after bounded detached retries exhaust", async () => {
 		mockPi.onCall({
 			jsonl: [{
 				type: "message_end",
@@ -4877,7 +4874,6 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 			}],
 			exitCode: 1,
 		});
-		mockPi.onCall({ output: "unexpected second launch" });
 		const agents = [makeAgent("echo", { model: "openai/gpt-5-mini" })];
 		let terminal: RunSyncResult | undefined;
 
@@ -4894,7 +4890,7 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		assert.equal(terminal.detached, undefined, "terminal status must not remain detached");
 		assert.equal(terminal.detachedReason, "user request");
 		assert.equal(terminal.exitCode, 1);
-		assert.equal(mockPi.callCount(), 1);
+		assert.equal(mockPi.callCount(), 3);
 	});
 
 	it("terminalizes a post-receipt completion pipeline throw exactly once with strict projections", async () => {
