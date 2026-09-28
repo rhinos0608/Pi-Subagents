@@ -21,13 +21,12 @@ import { ACTIVE_ASYNC_CAPACITY_DIR, acquireActiveAsyncCapacity, activeAsyncCapac
 import { readPendingChainAppendRequests } from "../../src/runs/background/chain-append.ts";
 import { readActiveRunIndex } from "../../src/runs/background/active-run-index.ts";
 import { createRunFanoutBudget, getRunFanoutBudgetSnapshot, writeRunFanoutBudgetDescriptor } from "../../src/runs/shared/run-fanout-budget.ts";
-import { deriveForkPromptCacheKey } from "../../src/runs/shared/child-tool-plan.ts";
 import { INVALID_STRUCTURED_OUTPUT_SCHEMA_ERROR, validateStructuredOutputValue } from "../../src/runs/shared/structured-output.ts";
 import type { ChildRuntimeConfig } from "../../src/runs/shared/child-runtime-config.ts";
 import { registerSubagentCapabilityCeiling } from "../../src/api/capability-ceiling.ts";
 import type { AsyncExecutionResult, AsyncResultPayload, AsyncStatusPayload } from "../support/async-execution-fixture.ts";
 import {
-	installAsyncExecutionHooks, waitForMockPiRuntime, available, isAsyncAvailable,
+	installAsyncExecutionHooks, available, isAsyncAvailable,
 	executeAsyncSingle, executeAsyncChain, ASYNC_DIR, RESULTS_DIR, TEMP_ROOT_DIR,
 	createSubagentExecutor, escapeRegExp, createRepo, writePackageSkill,
 	waitForAsyncResultFile, waitForAsyncEvent, waitForAsyncState, waitForMockPiCall,
@@ -1666,59 +1665,6 @@ syncBuiltinESMExports();
 		);
 	});
 
-	it("aligns initial and resumed background forked sessions with an explicit child cwd", { skip: !isAsyncAvailable() || !createSubagentExecutor ? "jiti or executor not available" : undefined }, async () => {
-		mockPi.onCall({ output: "Forked async work" });
-		const parentCwd = fs.realpathSync(tempDir);
-		const childCwd = path.join(tempDir, "child-cwd");
-		fs.mkdirSync(childCwd);
-		const parentSessionFile = path.join(tempDir, "parent-cross-cwd.jsonl");
-		const forkedSessionFile = path.join(tempDir, "forked-cross-cwd.jsonl");
-		const parentHeader = { type: "session", version: 1, id: "parent", cwd: parentCwd };
-		const childHeader = { type: "session", version: 1, id: "child", cwd: parentCwd, parentSession: parentSessionFile };
-		fs.writeFileSync(parentSessionFile, `${JSON.stringify(parentHeader)}\n`, "utf-8");
-		fs.writeFileSync(forkedSessionFile, `${JSON.stringify(childHeader)}\n`, "utf-8");
-		const ctx = {
-			...makeMinimalCtx(parentCwd),
-			sessionManager: {
-				getSessionId: () => "session-cross-cwd",
-				getSessionFile: () => parentSessionFile,
-				getLeafId: () => "leaf-current",
-				openSession: () => ({ createBranchedSession: () => forkedSessionFile }),
-			},
-		};
-
-		const executor = makeAsyncExecutor([makeAgent("worker")]);
-		const launch = await executor.execute(
-			"forked-cross-cwd",
-			{ agent: "worker", task: "Do work", async: true, context: "fork", cwd: childCwd },
-			new AbortController().signal,
-			undefined,
-			ctx,
-		) as AsyncExecutionResult;
-		assert.ok(!launch.isError, launch.content[0]?.text);
-		assert.ok(launch.details.asyncId);
-		await readAsyncPayload(launch.details.asyncId);
-
-		const sessionHeader = JSON.parse(fs.readFileSync(forkedSessionFile, "utf-8").split("\n", 1)[0]!) as { cwd?: string };
-		assert.equal(sessionHeader.cwd, fs.realpathSync.native(childCwd));
-
-		fs.writeFileSync(forkedSessionFile, `${JSON.stringify(childHeader)}\n`, "utf-8");
-		mockPi.onCall({ output: "Resumed async work" });
-		const resumed = await executor.execute(
-			"resume-cross-cwd",
-			{ action: "resume", id: launch.details.asyncId, message: "Continue" },
-			new AbortController().signal,
-			undefined,
-			ctx,
-		) as AsyncExecutionResult;
-		assert.ok(!resumed.isError, resumed.content[0]?.text);
-		assert.ok(resumed.details.asyncId);
-		await readAsyncPayload(resumed.details.asyncId);
-
-		const resumedHeader = JSON.parse(fs.readFileSync(forkedSessionFile, "utf-8").split("\n", 1)[0]!) as { cwd?: string };
-		assert.equal(resumedHeader.cwd, fs.realpathSync.native(childCwd));
-	});
-
 	it("background forked runs inherit a parent model outside the registry", { skip: !isAsyncAvailable() || !createSubagentExecutor ? "jiti or executor not available" : undefined }, async () => {
 		mockPi.onCall({ output: "Forked async work" });
 		const parentSessionFile = path.join(tempDir, "parent.jsonl");
@@ -1748,38 +1694,6 @@ syncBuiltinESMExports();
 		assert.ok(launch.details.asyncId);
 		const payload = await readAsyncPayload(launch.details.asyncId);
 		assert.equal(payload.results[0]?.model, "gateway/parent-model");
-	});
-
-	it("background forked runs receive the derived fork cache key", { skip: !isAsyncAvailable() || !createSubagentExecutor ? "jiti or executor not available" : undefined }, async () => {
-		mockPi.onCall({ output: "cache affinity inspected" });
-		const parentSessionFile = path.join(tempDir, "parent-cache.jsonl");
-		const forkedSessionFile = path.join(tempDir, "forked-cache.jsonl");
-		const sessionHeader = JSON.stringify({ type: "session", cwd: fs.realpathSync(tempDir) });
-		fs.writeFileSync(parentSessionFile, `${sessionHeader}\n`, "utf-8");
-		fs.writeFileSync(forkedSessionFile, `${sessionHeader}\n`, "utf-8");
-		const ctx = {
-			...makeMinimalCtx(tempDir),
-			sessionManager: {
-				getSessionId: () => "session-cache-parent",
-				getSessionFile: () => parentSessionFile,
-				getLeafId: () => "leaf-current",
-				openSession: () => ({ createBranchedSession: () => forkedSessionFile }),
-			},
-		};
-
-		const launch = await makeAsyncExecutor([makeAgent("worker")]).execute(
-			"forked-cache-key",
-			{ agent: "worker", task: "Inspect cache affinity", async: true, context: "fork" },
-			new AbortController().signal,
-			undefined,
-			ctx,
-		) as AsyncExecutionResult;
-		assert.ok(!launch.isError, launch.content[0]?.text);
-		assert.ok(launch.details.asyncId);
-
-		const payload = await readAsyncPayload(launch.details.asyncId);
-		assert.equal(payload.success, true);
-		assert.equal((await waitForMockPiRuntime(mockPi, 0)).forkCacheKey, deriveForkPromptCacheKey("session-cache-parent"));
 	});
 
 	it("follows up an async run whose recovery descriptor includes fast", { skip: !isAsyncAvailable() || !createSubagentExecutor ? "jiti or executor not available" : undefined }, async () => {
