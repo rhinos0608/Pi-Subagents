@@ -93,7 +93,7 @@ setTimeout(() => { if (phase === "old") fs.writeFileSync(${JSON.stringify(oldDon
 			setTimeout(() => { tick = true; }, 10);
 			const firstPrompt = before({ systemPrompt: "base", systemPromptOptions: { selectedTools: ["subagent"] } }, ctx);
 			const enabled = before({ systemPrompt: "base", systemPromptOptions: { selectedTools: ["subagent"] } }, ctx);
-			const firstExecution = tools.get("subagent").execute("immediate", { agent: "global-specialist", task: "Probe", async: false }, new AbortController().signal, undefined, ctx)
+			const firstExecution = tools.get("subagent").execute("immediate", { agent: "global-specialist", task: "Probe" }, new AbortController().signal, undefined, ctx)
 				.then((result) => JSON.stringify(result), (error) => error.message);
 			const firstList = manageAgents("list");
 			await new Promise((resolve) => setTimeout(resolve, 50));
@@ -119,7 +119,7 @@ setTimeout(() => { if (phase === "old") fs.writeFileSync(${JSON.stringify(oldDon
 			const registration = registerRuntimeAgent({ pi, name: "runtime-test", definition: { description: "Test", systemPrompt: "Test" } });
 			process.env.TEST_NPM_PHASE = "latest";
 			start({ reason: "reload" }, ctx);
-			const mergedExecution = tools.get("subagent").execute("merged-runtime", { agent: "new-specialist", task: "Probe", async: false }, new AbortController().signal, undefined, ctx)
+			const mergedExecution = tools.get("subagent").execute("merged-runtime", { agent: "new-specialist", task: "Probe" }, new AbortController().signal, undefined, ctx)
 				.then((result) => JSON.stringify(result), (error) => error.message);
 			const [latest, reloadedLoader] = await Promise.all([waitingOnOld, waitingLoader]);
 			assert.equal(fs.existsSync(process.env.TEST_OLD_DONE), false, "old lookup held the new session's prompt");
@@ -135,7 +135,7 @@ setTimeout(() => { if (phase === "old") fs.writeFileSync(${JSON.stringify(oldDon
 			assert.match(mergedRuntime, /new-specialist/, "runtime registry must retain the advertised package agent");
 			assert.doesNotMatch(mergedRuntime, /Unknown agent|not found/i);
 			registration.dispose();
-			const runtime = await tools.get("subagent").execute("runtime", { agent: "new-specialist", task: "Probe", async: false }, new AbortController().signal, undefined, ctx)
+			const runtime = await tools.get("subagent").execute("runtime", { agent: "new-specialist", task: "Probe" }, new AbortController().signal, undefined, ctx)
 				.then((result) => JSON.stringify(result), (error) => error.message);
 			assert.match(runtime, /new-specialist/, "execution must resolve the advertised agent");
 			assert.doesNotMatch(runtime, /Unknown agent|not found/i);

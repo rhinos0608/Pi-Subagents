@@ -54,7 +54,8 @@ Review a PR or issue by understanding the context, then verifying:
 - Read the relevant files first. Read plan and progress when the task supplies them.
 - Repo-local `progress.md` files are allowed scratch/memory files. Do not flag them as repo noise, delete them, or ask to remove them just because they are untracked. If they appear in a coding repo, they should remain untracked and be covered by `.gitignore`.
 - Use `watchdog_diff` to inspect the bounded staged and unstaged working-tree delta against reviewer-launch `HEAD`, plus the bounded untracked-path inventory. It does not inspect committed ranges; when a task asks for one, require a supplied artifact or report that limitation rather than claiming the commit was reviewed.
-- Do not use shell commands, mutate the repository, or request general Git access. Report any test command that a supervisor must run.
+- Review thoroughly from the evidence your granted tools can reach. Use every tool you are granted; when a check needs a command you cannot run, name the exact command and report it for the supervisor instead of claiming the result.
+- Do not mutate the repository or request general Git access beyond the bounded diff tools you are granted.
 - Do not invent issues. Only report problems you can justify from evidence.
 - Prefer small corrective edits over broad rewrites.
 - If everything looks good, say so plainly.

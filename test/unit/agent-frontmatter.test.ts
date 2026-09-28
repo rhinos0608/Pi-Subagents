@@ -651,8 +651,8 @@ Do work
 	});
 });
 
-describe("agent frontmatter defaultContext", () => {
-	it("serializes defaultContext into agent frontmatter", () => {
+describe("agent frontmatter defaultContext removal", () => {
+	it("never serializes defaultContext into agent frontmatter", () => {
 		const agent: AgentConfig = {
 			name: "worker",
 			description: "Worker",
@@ -662,14 +662,13 @@ describe("agent frontmatter defaultContext", () => {
 			inheritSkills: false,
 			source: "project",
 			filePath: "/tmp/worker.md",
-			defaultContext: "fork",
 		};
 
 		const serialized = serializeAgent(agent);
-		assert.match(serialized, /defaultContext: fork/);
+		assert.doesNotMatch(serialized, /defaultContext/);
 	});
 
-	it("parses defaultContext from discovered agent frontmatter", () => {
+	it("rejects defaultContext in discovered agent frontmatter", () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-agent-default-context-"));
 		tempDirs.push(dir);
 		const agentsDir = path.join(dir, ".pi", "agents");
@@ -684,18 +683,21 @@ Do work
 `, "utf-8");
 
 		const result = discoverAgents(dir, "project");
-		const worker = result.agents.find((agent) => agent.name === "worker");
-		assert.equal(worker?.defaultContext, "fork");
+		assert.equal(result.agents.some((agent) => agent.name === "worker" && agent.source === "project"), false);
+		assert.ok((result.agentDiagnostics ?? []).some((diagnostic) => /removed defaultContext/.test(diagnostic.error ?? "")));
 	});
 
-	it("loads packaged worker fresh and oracle forked with advisor alias", () => {
+	it("loads packaged worker and oracle always fresh with advisor alias", () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-builtin-default-context-"));
 		tempDirs.push(dir);
 		const agents = discoverAgentsAll(dir).builtin;
 
-		assert.equal(agents.find((candidate) => candidate.name === "worker")?.defaultContext, "fresh");
+		const worker = agents.find((candidate) => candidate.name === "worker");
+		assert.ok(worker);
+		assert.ok(!("defaultContext" in worker));
 		const oracle = agents.find((candidate) => candidate.name === "oracle");
-		assert.equal(oracle?.defaultContext, "fork");
+		assert.ok(oracle);
+		assert.ok(!("defaultContext" in oracle));
 		assert.deepEqual(oracle?.aliases, ["advisor"]);
 		assert.doesNotMatch(oracle?.tools?.join(",") ?? "", /contact_supervisor/);
 		for (const name of ["scout", "researcher", "oracle", "reviewer"]) {

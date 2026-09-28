@@ -389,7 +389,7 @@ describe("async status helpers", () => {
 		}
 	});
 
-	it("formats async run and step context labels", () => {
+	it("formats async run and step context labels without a fork badge (always fresh)", () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-async-status-context-"));
 		try {
 			createAsyncDir(root, "run-context", {
@@ -410,7 +410,9 @@ describe("async status helpers", () => {
 			const text = formatAsyncRunList(runs);
 			assert.match(text, /run-context \| running .* \| parallel \[mixed\]/);
 			assert.match(text, /1\. scout: Scan the auth flow \[fresh\] \| running/);
-			assert.match(text, /2\. worker \[fork\] \| running/);
+			// Always fresh: stale fork context renders no badge.
+			assert.match(text, /2\. worker \| running/);
+			assert.doesNotMatch(text, /\[fork\]/);
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
 		}
@@ -471,7 +473,7 @@ describe("async status helpers", () => {
 	});
 
 	it("ignores legacy turn-budget fields in persisted status data", () => {
-		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-async-turn-budget-removed-"));
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-async-legacy-budget-removed-"));
 		try {
 			createAsyncDir(root, "run-legacy-budget", {
 				runId: "run-legacy-budget",

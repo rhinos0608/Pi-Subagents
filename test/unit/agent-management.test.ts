@@ -1503,9 +1503,8 @@ Drive the failing test first.
 						thinking: "high",
 						fallbackModels: ["openai/gpt-5-mini"],
 						tools: ["bash"],
-						skills: ["override-skill"],
-						defaultContext: "fork",
-						toolBudget: { hard: 3 },
+					skills: ["override-skill"],
+					toolBudget: { hard: 3 },
 					},
 				},
 			},
@@ -1517,7 +1516,6 @@ fallbackModels:
 thinking: off
 tools:
 skills:
-defaultContext:
 toolBudget:
 ---
 
@@ -1542,7 +1540,6 @@ Drive the failing test first.
 		assert.match(content, /^thinking: off$/m);
 		assert.match(content, /^tools: ?$/m);
 		assert.match(content, /^skills: ?$/m);
-		assert.match(content, /^defaultContext: ?$/m);
 		assert.match(content, /^toolBudget: ?$/m);
 
 		const gotAfter = handleManagementAction("get", { agent: "implementer" }, ctx);

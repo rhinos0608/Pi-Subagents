@@ -99,7 +99,6 @@ function buildBuiltinBase(agent: AgentConfig): BuiltinAgentOverrideBase {
 		inheritProjectContext: agent.inheritProjectContext,
 		inheritGlobalContext: agent.inheritGlobalContext,
 		inheritSkills: agent.inheritSkills,
-		...(agent.defaultContext !== undefined ? { defaultContext: agent.defaultContext } : {}),
 		...(agent.acceptanceRole !== undefined ? { acceptanceRole: agent.acceptanceRole } : {}),
 		...(agent.disabled !== undefined ? { disabled: agent.disabled } : {}),
 		systemPrompt: agent.systemPrompt,
@@ -201,7 +200,6 @@ function metadataFor(agent: AgentConfig): string {
 	lines.push(`Inherit project context: ${agent.inheritProjectContext ? "true" : "false"}`);
 	lines.push(`Inherit global context: ${agent.inheritGlobalContext ? "true" : "false"}`);
 	lines.push(`Inherit skills: ${agent.inheritSkills ? "true" : "false"}`);
-	if (agent.defaultContext) lines.push(`Default context: ${agent.defaultContext}`);
 	if (agent.defaultReads?.length) lines.push(`Reads: ${agent.defaultReads.join(", ")}`);
 	if (agent.defaultProgress) lines.push("Progress: true");
 	if (agent.maxSubagentDepth !== undefined) lines.push(`Max subagent depth: ${agent.maxSubagentDepth}`);

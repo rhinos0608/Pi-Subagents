@@ -57,8 +57,6 @@ import { encodeIndexSegment } from "../background/index-segment.ts";
 import { enqueueChainAppendRequest, readPendingChainAppendRequests, runnerStepOutputNames } from "../background/chain-append.ts";
 import { ChainOutputValidationError, validateChainOutputBindingsWithContext } from "../shared/chain-outputs.ts";
 import { acceptanceHasTypedVerify, normalizeGateAcceptance, resolveAcceptanceReportMode, TYPED_VERIFY_OUTPUT_SCHEMA_CONFLICT, validateAcceptanceInput, validateExecutionAcceptance, validateExecutionAcceptancePolicy } from "../shared/acceptance.ts";
-import { canPreferFork, createForkContextResolver, resolveSubagentLaunchContext } from "../../shared/fork-context.ts";
-import { createPrunedForkSessionWriter } from "../../shared/pruned-fork.ts";
 import { resolveCurrentSessionId } from "../../shared/session-identity.ts";
 import { currentCompletionOwnerId } from "../../shared/completion-owner.ts";
 import { SUBAGENT_ASYNC_COMPLETE_EVENT } from "../../shared/types.ts";
@@ -497,7 +495,6 @@ function inheritedRunFanoutBudget(deps: Pick<ExecutorDeps, "childRuntime">): Run
 }
 
 type ForkSessionFileForTask = (agentName: string, idx?: number, modelOverride?: string, modelOverrideFromParent?: boolean, modelOrigin?: ModelOrigin) => string | undefined;
-type PrepareForkSessionForTask = (agentName: string, idx?: number, modelOverride?: string, modelOverrideFromParent?: boolean, modelOrigin?: ModelOrigin) => Promise<void>;
 type ThinkingOverrideForTask = () => AgentConfig["thinking"] | undefined;
 
 interface ExecutionContextData {
@@ -2809,6 +2806,17 @@ function applySingleAgentLaunchDefaults(params: SubagentParamsLike, agents: Agen
 
 function validateLaunchOutputSchemaOverrides(params: SubagentParamsLike): string | undefined {
 	const values: unknown[] = [params.outputSchema, ...(params.tasks ?? []).map((task) => task.outputSchema)];
+	// Chain steps carry outputSchema at runtime for internal callers even though the
+	// shrunken ChainStep type only models orchestration intent; narrow at runtime.
+	for (const rawStep of params.chain ?? []) {
+		const step = (typeof rawStep === "object" && rawStep !== null ? rawStep : {}) as {
+			outputSchema?: unknown;
+			parallel?: unknown;
+		};
+		if (isParallelStep(rawStep as never)) values.push(...(step.parallel as Array<{ outputSchema?: unknown }>).map((task) => task.outputSchema));
+		else if (isDynamicParallelStep(rawStep as never)) values.push((step.parallel as { outputSchema?: unknown }).outputSchema);
+		else values.push(step.outputSchema);
+	}
 	for (const value of values) {
 		if (value === undefined || value === false) continue;
 		try {
@@ -3259,6 +3267,10 @@ async function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 		const modelOverrideFromParent = modelOrigin === "inherited";
 		const launchRuleError = applyWatchdogLaunchRules({ cwd: effectiveCwd, agent: a.name, model: modelOverride ?? (parentModel && `${parentModel.provider}/${parentModel.id}`), warn: (violation) => deps.watchdog?.displayRuleWarning(violation) });
 		if (launchRuleError) return toExecutionErrorResult(params, new Error(launchRuleError), "fresh");
+		// The agent definition deadline is the only per-child timeout carrier
+		// (per-call timeoutMs left the model contract); without this forward the
+		// async runner never sees it.
+		const effectiveTimeoutMs = a.defaultTimeoutMs;
 		const asyncResult = await executeAsyncSingle(id, compactOptional<Parameters<typeof executeAsyncSingle>[1]>({
 			agent: params.agent!,
 			task: params.task ?? "",
@@ -3283,6 +3295,7 @@ async function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 			outputClaimPath: params.workflowOutputClaimPath,
 			...(params.reads !== undefined ? { reads: params.reads } : {}),
 			outputBaseDir: resolveSingleRunOutputBaseDir(deps, artifactsDir, id),
+			...(effectiveTimeoutMs !== undefined ? { timeoutMs: effectiveTimeoutMs } : {}),
 			modelOverride,
 			fast: params.fast,
 			modelOverrideFromParent,
@@ -3381,12 +3394,15 @@ function resolveSingleRunOutputBaseDir(deps: ExecutorDeps, artifactsDir: string,
 	return resolveConfiguredSingleRunOutputBaseDir(deps) ?? path.join(artifactsDir, "outputs", sanitizeRunPathSegment(runId));
 }
 
-function workflowChildDefaultOutput(aggregateOutputPath: string | undefined, artifactsDir: string, workflowRunId: string, workflowKey: string): string {
+function workflowChildDefaultOutput(aggregateOutputPath: string | undefined, artifactsDir: string, workflowRunId: string, workflowKey: string, configuredOutputBaseDir?: string): string {
 	if (aggregateOutputPath) {
 		const parsed = path.parse(aggregateOutputPath);
 		return path.join(parsed.dir, `${parsed.name}.${workflowKey}${parsed.ext || ".md"}`);
 	}
-	return path.join(artifactsDir, "outputs", sanitizeRunPathSegment(workflowRunId), `${workflowKey}.md`);
+	// Colliding inherited outputs isolate under the configured base when one is
+	// set, mirroring the default run-output layout otherwise.
+	const baseDir = configuredOutputBaseDir ?? path.join(artifactsDir, "outputs", sanitizeRunPathSegment(workflowRunId));
+	return path.join(baseDir, `${workflowKey}.md`);
 }
 
 function workflowHostCommandRunner(input: {
@@ -3484,7 +3500,7 @@ function resolveWorkflowChildOutputPath(input: {
 	}
 	const childCwd = resolveWorkflowChildLocalCwd(input);
 	let agentOutput: string | undefined;
-	if (rawOutput === true || rawOutput === "true" || (!hasExplicitOutput && !input.aggregateOutputPath)) {
+	if (rawOutput === true || rawOutput === "true" || !hasExplicitOutput) {
 		if (typeof input.params.agent === "string") {
 			const agentScope = resolveExecutionAgentScope(input.params.agentScope ?? input.workflowAgentScope);
 						const workflowAgents = input.discoverAgents(childCwd, agentScope).agents;
@@ -3498,9 +3514,9 @@ function resolveWorkflowChildOutputPath(input: {
 		? agentOutput
 		: hasExplicitOutput
 			? rawOutput
-			: input.aggregateOutputPath
+			: (agentOutput ?? (input.aggregateOutputPath
 				? workflowChildDefaultOutput(input.aggregateOutputPath, input.artifactsDir, input.workflowRunId, input.key)
-				: agentOutput;
+				: undefined));
 	return {
 		path: resolveSingleOutputPath(output, input.ctxCwd, childCwd, input.configuredOutputBaseDir ?? path.join(input.artifactsDir, "outputs", sanitizeRunPathSegment(input.workflowRunId))),
 		inherited: !hasExplicitOutput && !input.aggregateOutputPath && agentOutput !== undefined,
@@ -3536,7 +3552,7 @@ function workflowChildOutputClaims(input: {
 	const overrides = new Map<string, string>();
 	for (const entry of resolvedEntries) {
 		if (entry.inherited && entry.path && (paths.get(resolveWorkflowHostOutputClaimPath(entry.path)) ?? 0) > 1) {
-			const output = workflowChildDefaultOutput(input.aggregateOutputPath, input.artifactsDir, input.workflowRunId, entry.key);
+			const output = workflowChildDefaultOutput(input.aggregateOutputPath, input.artifactsDir, input.workflowRunId, entry.key, input.configuredOutputBaseDir);
 			overrides.set(entry.key, output);
 			entry.path = output;
 		}
@@ -3581,7 +3597,12 @@ function prepareWorkflowChildLaunchParams(input: {
 	if (usesDefaultOutput && input.outputOverride !== undefined) {
 		childParams = { ...input.childParams, output: input.outputOverride };
 	} else if (usesDefaultOutput && input.aggregateOutputPath !== undefined) {
-		childParams = { ...input.childParams, output: workflowChildDefaultOutput(input.aggregateOutputPath, input.artifactsDir, input.parentWorkflowRunId, input.workflowKey) };
+		// Resolve exactly like admission: an agent-definition default wins under
+		// the aggregate; the sibling-of-aggregate default is only the fallback.
+		// Resolving differently here than in workflowChildOutputClaims trips the
+		// post-claim "Output path changed after it was claimed" guard.
+		const resolvedOutput = resolveWorkflowChildOutputPath({ ctxCwd: input.ctxCwd, workflowCwd: input.workflowCwd, artifactsDir: input.artifactsDir, workflowRunId: input.parentWorkflowRunId, aggregateOutputPath: input.aggregateOutputPath, configuredOutputBaseDir: input.configuredOutputBaseDir, discoverAgents: input.discoverAgents, agents: input.agents, workflowAgentScope: input.workflowAgentScope, key: input.workflowKey, params: input.childParams });
+		if (resolvedOutput.path) childParams = { ...input.childParams, output: resolvedOutput.path };
 	} else if (input.childParams.resume === undefined || input.childParams.output !== undefined) {
 		const resolvedOutput = resolveWorkflowChildOutputPath({ ctxCwd: input.ctxCwd, workflowCwd: input.workflowCwd, artifactsDir: input.artifactsDir, workflowRunId: input.parentWorkflowRunId, aggregateOutputPath: input.aggregateOutputPath, configuredOutputBaseDir: input.configuredOutputBaseDir, discoverAgents: input.discoverAgents, agents: input.agents, workflowAgentScope: input.workflowAgentScope, key: input.workflowKey, params: input.childParams });
 		if (resolvedOutput.path) childParams = { ...input.childParams, output: resolvedOutput.path };
@@ -4852,6 +4873,15 @@ function createScheduledOwnerState(source: SubagentState, ownerSessionId: string
 	};
 }
 
+/**
+ * Scheduled replays ride the internal owner dispatch (e5c053c4) so
+ * scheduler-owned fields (args, scheduleOrigin) survive the public gate.
+ * That dispatch must not inherit internal host authority: raw scheduled
+ * scripts stay host-denied unless a workflow resource grants it.
+ * Module-level so the mark survives the hop to the per-owner executor.
+ */
+const scheduledExecutions = new WeakSet<object>();
+
 export function createSubagentExecutor(deps: ExecutorDeps): {
 	execute: (
 		id: string,
@@ -4910,6 +4940,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		const allowZeroToolBudget = delegatedZeroToolBudgets.has(params);
 		const delegatedExecution = delegatedExecutions.has(params);
 		const publicExecution = publicExecutions.has(params);
+		const scheduledExecution = scheduledExecutions.has(params);
 		const workflowResourcePermit = workflowResourcePermits.get(params);
 		const workflowPermitContext = workflowPermitContexts.get(params);
 		const delegatedWorkflowPermit = workflowPermitContext && "root" in workflowPermitContext ? workflowPermitContext.root : undefined;
@@ -5551,7 +5582,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 					});
 					const workflowHost = workflowResource
 						? workflowResource.authority.host ? runHostCommand : undefined
-						: publicExecution ? undefined : runHostCommand;
+						: (publicExecution || scheduledExecution) ? undefined : runHostCommand;
 					let projectedTraceLength = 0;
 					let projectedTraceTail: NonNullable<Details["workflow"]>["trace"][number] | undefined;
 					const updateTrace = (trace: NonNullable<Details["workflow"]>["trace"]) => {
@@ -5937,7 +5968,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 				? undefined
 				: workflowResource
 					? workflowResource.authority.host ? runHostCommand : undefined
-					: publicExecution ? undefined : runHostCommand;
+					: (publicExecution || scheduledExecution) ? undefined : runHostCommand;
 			const workflowHostSteps = new Map<string, HostStepNode>();
 			let liveWorkflow: NonNullable<Details["workflow"]> = { trace: [], emits: [], console: [], ...(workflowResource ? { resource: workflowResource.provenance } : {}) };
 			const childProgress = new Map<string, ReturnType<typeof workflowChildProgress>>();
@@ -6894,8 +6925,6 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		);
 		if (spawnPreflight.error) return spawnBudgetErrorResult(spawnPreflight.error, foregroundMode);
 
-		let forkSessionFileForIndex: (idx?: number) => string | undefined = () => undefined;
-		let prepareForkSessionForIndex: (idx?: number) => Promise<void> = async () => {};
 		const selectedAgentNames = hasSingle
 			? [effectiveParams.agent!]
 			: hasTasks
@@ -6999,11 +7028,9 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		}
 		const sessionDirForIndex = (idx?: number) =>
 			path.join(sessionRoot, `run-${idx ?? 0}`);
-		const forkSessionFileForTask: ForkSessionFileForTask = () => undefined;
-		const prepareForkSessionForTask: PrepareForkSessionForTask = async () => {};
 		const thinkingOverrideForTask: ThinkingOverrideForTask = () => undefined;
-		const childSessionFileForTask: ForkSessionFileForTask = (agentName, idx, modelOverride, modelOverrideFromParent, modelOrigin) =>
-			forkSessionFileForTask(agentName, idx, modelOverride, modelOverrideFromParent, modelOrigin) ?? path.join(sessionDirForIndex(idx), "session.jsonl");
+		const childSessionFileForTask: ForkSessionFileForTask = (_agentName, idx) =>
+			path.join(sessionDirForIndex(idx), "session.jsonl");
 		const childSessionFileForIndex = (idx?: number) =>
 			path.join(sessionDirForIndex(idx), "session.jsonl");
 		const chainBindingsError = validateExecutionChainBindings(effectiveParams, deps.config.chain?.dynamicFanout?.maxItems);
@@ -7416,6 +7443,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			owner = { state, executor: createSubagentExecutor({ ...deps, state }) };
 			ownerExecutors.set(ownerSessionId, owner);
 		}
+		scheduledExecutions.add(params);
 		return owner.executor.execute(id, params, signal, undefined, ctx);
 	};
 

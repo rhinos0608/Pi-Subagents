@@ -306,7 +306,7 @@ For npm package projects, project-scoped artifacts need a `.npmignore` rule (or 
 
 ## Sessions
 
-Session files are stored under a per-run session directory. A fork-default child starts from a branched session file produced from the parent's current leaf (foreground children open it in-process; background children receive it as `--session`). That is a real session fork, not an injected summary. When the parent session file or current leaf is not available yet, fork-default children start fresh. There is no per-call context field on the model tool.
+Session files are stored under a per-run session directory. Launches are always fresh: each child starts from its assigned brief, not the parent's unfinished conversation. Stale persisted `fork` context values are accepted for old data only and render no badge. There is no per-call context field on the model tool.
 
 ## Completion notifications
 

@@ -16,7 +16,7 @@ import { buildEffectiveSystemPrompt } from "../shared/effective-system-prompt.ts
 import { currentCompletionOwnerId } from "../../shared/completion-owner.ts";
 import { planChildLaunch, projectChainOutputSchemas, resolveStepBehavior, suppressProgressForReadOnlyTask, type ResolvedStepBehavior, type StepOverrides } from "../shared/child-launch-plan.ts";
 import { formatHerdrMachineRunnerUnsupported, resolveHerdrMachinePlacement } from "../shared/herdr-machine.ts";
-import { applyThinkingSuffix, getHostAvailableTools, getHostBuiltinToolNames, projectLaunchResolvedChildExtensions, resolvePiLaunchToolPlan } from "../shared/child-tool-plan.ts";
+import { applyThinkingSuffix, getHostAvailableTools, getHostBuiltinToolNames, projectLaunchResolvedChildExtensions, resolveOperatorCeiling, resolvePiLaunchToolPlan } from "../shared/child-tool-plan.ts";
 import { injectSingleOutputInstruction, normalizeSingleOutputOverride, resolveSingleOutputPath, validateFileOnlyOutputMode } from "../shared/single-output.ts";
 import { applyWatchdogLaunchRules, sendRuleViolationWarning } from "../../watchdog/rules.ts";
 import { buildChainInstructions, isDynamicParallelStep, isParallelStep, resolveExistingReadInstructionPaths, resolveExistingReadPaths, writeInitialProgressFile, type ChainStep, type ParallelTaskItem, type SequentialStep } from "../../shared/settings.ts";
@@ -987,7 +987,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 			if (unsupported.length > 0) throw new AsyncStartValidationError(`Agent '${a.name}' uses runner.type='${externalRunnerType}' and does not support: ${unsupported.join(", ")}.`);
 		}
 		try {
-			assertAgentAllowedByCapabilityCeiling(a.name, intersectSubagentCapabilityCeilings(params.capabilityCeiling, ctx.childRuntime?.capabilityCeiling));
+			assertAgentAllowedByCapabilityCeiling(a.name, params.capabilityCeiling);
 		} catch (error) {
 			throw new AsyncStartValidationError(error instanceof Error ? error.message : String(error));
 		}
@@ -1115,7 +1115,6 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 			model: selectedModel,
 			modelCandidates,
 			capabilityCeiling: params.capabilityCeiling,
-			inheritedCapabilityCeiling: ctx.childRuntime?.capabilityCeiling,
 			agentName: a.name,
 			permissionRules,
 			runtimeSnapshotHost: ctx.pi,
@@ -1468,7 +1467,7 @@ export function executeAsyncChain(
 		timeoutMs: params.timeoutMs,
 		timeoutSource: "call" as const,
 		worktree: chain.some((entry) => "worktree" in entry && entry.worktree === true),
-		allowedTools: capabilityCeiling?.allowedTools,
+		allowedTools: intersectSubagentCapabilityCeilings(capabilityCeiling, resolveOperatorCeiling(undefined, runnerCwd))?.allowedTools ?? capabilityCeiling?.allowedTools,
 		modelCandidates: chainPolicyFirst?.modelCandidates,
 	};
 	let spawnResult: SpawnRunnerResult = {};
@@ -1737,7 +1736,7 @@ export function executeAsyncSingle(
 		if (extensionBindings !== undefined) unsupported.push("extension bindings");
 		if (unsupported.length > 0) return formatAsyncStartError("single", `Agent '${agentConfig.name}' uses runner.type='${externalRunnerType}' and does not support: ${unsupported.join(", ")}.`);
 	}
-	const capabilityCeiling = intersectSubagentCapabilityCeilings(params.capabilityCeiling ?? resolveCurrentSubagentCapabilityCeiling(ctx.currentSessionId), ctx.childRuntime?.capabilityCeiling);
+	const capabilityCeiling = params.capabilityCeiling ?? resolveCurrentSubagentCapabilityCeiling(ctx.currentSessionId);
 	try {
 		assertAgentAllowedByCapabilityCeiling(agentConfig.name, capabilityCeiling);
 	} catch (error) {
@@ -1933,7 +1932,6 @@ export function executeAsyncSingle(
 		model: selectedModel,
 		modelCandidates,
 		capabilityCeiling,
-		inheritedCapabilityCeiling: ctx.childRuntime?.capabilityCeiling,
 		agentName: agentConfig.name,
 		permissionRules: resolvePermissionRules(ctx.permissions, agentConfig.permissions),
 		runtimeSnapshotHost: ctx.pi,
@@ -2177,8 +2175,8 @@ export function executeAsyncSingle(
 					toolBudgetSource: params.toolBudget ? "call" : agentConfig.toolBudget ? "agent" : params.configToolBudget ? "config" : "none",
 					timeoutMs,
 					timeoutSource: params.absoluteDeadlineAt !== undefined || params.timeoutMs !== undefined ? "call" : "none",
-					worktree: params.worktree === true,
-					allowedTools: capabilityCeiling?.allowedTools,
+				worktree: params.worktree === true,
+				allowedTools: intersectSubagentCapabilityCeilings(capabilityCeiling, resolveOperatorCeiling(undefined, runnerCwd))?.allowedTools ?? capabilityCeiling?.allowedTools,
 					modelCandidates,
 			}),
 			},

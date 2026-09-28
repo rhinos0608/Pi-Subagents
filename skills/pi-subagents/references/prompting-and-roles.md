@@ -76,7 +76,7 @@ Use this only within operator-authorized delegation when the Fleet Agents view r
 
 Default guardrails:
 - Keep the fanout small: usually one or two skill-specialist children, never more than the listed recommendations or configured cap.
-- Prefer fresh-context child agents and include only the files, diff, plan, URL, or request details each child needs. Fork-default agents suit threads that need parent session history.
+- Prefer child agents with a tight brief and include only the files, diff, plan, URL, or request details each child needs.
 - Use read-only agents for analysis/review unless implementation was explicitly requested; do not create several writers in the same worktree.
 - Skip proactive skill subagents for tiny questions, direct commands, highly private requests, or when the user asks not to delegate.
 - Make cost and concurrency visible by using an ordinary `subagent(...)` call rather than hidden/background automation.
@@ -97,7 +97,7 @@ subagent({
 
 ### Review-loop technique
 
-Use this when the user wants implementation or current diff review to continue until reviewers stop finding fixes worth doing now. Keep the loop in the parent session: one async `worker` implements or fixes, fresh-context `reviewer` agents inspect the actual repo and diff, the parent synthesizes accepted fixes, and one async forked `worker` applies them. The parent can express the sequence up front as an async/background `workflowScript` when the workflow is known, or continue with explicit follow-up workflowScript runs after each async completion. For an initial workflow, pass `async: true` so the main chat is unblocked. Treat an async implementation worker handoff as an intermediate state, not final completion, unless the user explicitly asked for worker-only work, review-only output, or to stop after implementation. Stop when reviewers find no P0 blockers or P1 fixes worth doing now, remaining P2 feedback is optional or deferred, an unapproved product/scope/architecture decision appears, or the max review-round cap is reached. Default to 3 review rounds unless the user sets a different cap. Do not loop for optional polish, and do not let children launch subagents or decide the loop outcome.
+Use this when the user wants implementation or current diff review to continue until reviewers stop finding fixes worth doing now. Keep the loop in the parent session: one async `worker` implements or fixes, fresh-context `reviewer` agents inspect the actual repo and diff, the parent synthesizes accepted fixes, and one async `worker` applies them. The parent can express the sequence up front as an async/background `workflowScript` when the workflow is known, or continue with explicit follow-up workflowScript runs after each async completion. For an initial workflow, pass `async: true` so the main chat is unblocked. Treat an async implementation worker handoff as an intermediate state, not final completion, unless the user explicitly asked for worker-only work, review-only output, or to stop after implementation. Stop when reviewers find no P0 blockers or P1 fixes worth doing now, remaining P2 feedback is optional or deferred, an unapproved product/scope/architecture decision appears, or the max review-round cap is reached. Default to 3 review rounds unless the user sets a different cap. Do not loop for optional polish, and do not let children launch subagents or decide the loop outcome.
 
 As a conservative orchestration policy, do not set tight tool budgets on an implementation worker, fix worker, reviewer with edit authority, or other mutation-capable child. Tool-call counts do not measure delivery safety. Use a narrow task plus an outer elapsed deadline with enough margin, then request a checkpoint after the current tool returns. The checkpoint should report changed files, build/test state, remaining work, and commit or PR state. An elapsed timeout is not a mutation-safe boundary and must not be used as the checkpoint trigger.
 
@@ -253,7 +253,7 @@ Direct settings example:
 ```
 
 Useful override fields: `description`, `model`, `thinking`,
-`systemPromptMode`, `inheritProjectContext`, `inheritGlobalContext`, `inheritSkills`, `defaultContext`,
+`systemPromptMode`, `inheritProjectContext`, `inheritGlobalContext`, `inheritSkills`,
 `acceptanceRole`, `disabled`, `skills`, `tools`, `extensions`, and `systemPrompt`.
 `description` replaces the discovered description for builtin and custom agents
 in `list` output, which is useful for deployment-specific routing notes.

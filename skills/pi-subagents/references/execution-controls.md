@@ -47,7 +47,9 @@ Use direct single-agent execution for one bounded task when no stable key, branc
 
 Model, thinking, and context resolve from agent definitions plus operator config. There are no per-call model, thinking, tool-budget, timeout, context, or skill parameters.
 
-### Forked context
+### Launch context
+
+Launches are always fresh: each child starts from its assigned brief, not the parent's unfinished conversation. Stale persisted `fork` context values are accepted for old data only and render no badge.
 
 ```typescript
 subagent({
@@ -55,9 +57,9 @@ subagent({
 })
 ```
 
-Context is fresh by default, with operator/agent-level fork defaults where configured. Packaged `worker` defaults to fresh; packaged `oracle` and `advisor` default to fork (falling back to fresh when the parent has no persisted session yet).
+All packaged agents (`worker`, `oracle`, `advisor`) launch fresh.
 
-Foreground results, async status, fleet, and widget surfaces label each child with its resolved launch context as `[fresh]` or `[fork]`. Aggregate headers show `[mixed]` when a run uses both modes.
+Foreground results, async status, fleet, and widget surfaces label fresh children `[fresh]`. Stale persisted `fork` values render no badge. Aggregate headers show `[mixed]` when a run mixes modes.
 
 ### Scripted workflows
 
@@ -221,12 +223,12 @@ When multiple agents might write concurrently, use managed worktree isolation in
 
 ### Oracle consultation loop
 
-For plan, design, or architecture advice, start with one forked oracle run. Read its result. If it challenges the direction or leaves a material tradeoff, resume that same completed child once with a focused follow-up, then synthesize the parent decision. `resume` returns a new run id, but continues the same oracle session and inherited context. Do not force a second round for an explicit one-shot request, a trivial question, or a fully settled first answer.
+For plan, design, or architecture advice, start with one oracle run. Read its result. If it challenges the direction or leaves a material tradeoff, resume that same completed child once with a focused follow-up, then synthesize the parent decision. `resume` returns a new run id, but continues the same oracle session. Do not force a second round for an explicit one-shot request, a trivial question, or a fully settled first answer.
 
 The parent remains the final decision-maker. Oracle advice does not approve a direction or start implementation.
 
 ```typescript
-// Advisory review in a branched thread. Oracle defaults to forked context.
+// Advisory review with a fresh brief. Oracle launches fresh like every child.
 subagent({
   workflowScript: `return runs.run("oracle-check", { agent: "oracle", task: "Review my current direction, challenge assumptions, and propose the best next move." })`
 })

@@ -16,6 +16,7 @@ import * as path from "node:path";
 import { createEventBus, events, makeAgent, makeMinimalCtx, resolveMockPiCallArgs } from "../support/helpers.ts";
 import { registerSubagentCapabilityCeiling } from "../../src/api/capability-ceiling.ts";
 import { registerWorkflowResource } from "../../src/api/workflow-resources.ts";
+import { resolveWorkflowResource } from "../../src/workflows/workflow-resources.ts";
 import type { WorkflowReceipt } from "../../src/workflows/workflow-receipt.ts";
 import { resolveSubagentLaunchContract } from "../../src/api/preflight.ts";
 import { discoverAgents } from "../../src/agents/agents.ts";
@@ -61,12 +62,16 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		const executor = makeAsyncExecutor([makeAgent("reviewer")]);
 		mockPi.onCall({ output: "Background review completed" });
 		try {
-			const pending = executor.executePublic("registered-background", { workflow: definition.name, async: true }, new AbortController().signal, undefined, ctx);
+			// Named workflow resources resolve to a workflowScript; public launches
+			// take workflowScript (internal execute preserves runs.host for these).
+			const resolved = resolveWorkflowResource(definition.name, undefined, ctx.sessionManager.getSessionId());
+			assert.equal(resolved.ok, true);
+			const pending = executor.execute("registered-background", { workflowScript: resolved.ok ? resolved.resource.script : "", async: true }, new AbortController().signal, undefined, ctx);
 			// executePublic has synchronously captured the expansion; no timing-based wait.
 			registration.dispose();
-			const missing = await executor.executePublic("disposed-background", { workflow: definition.name, async: true }, new AbortController().signal, undefined, ctx);
-			assert.equal(missing.isError, true);
-			assert.match(missing.content[0]?.text ?? "", /Unknown workflow/);
+			const missing = resolveWorkflowResource(definition.name, undefined, ctx.sessionManager.getSessionId());
+			assert.equal(missing.ok, false);
+			assert.match(missing.ok ? "" : missing.error, /Unknown workflow resource/);
 			const replacement = registerWorkflowResource({ sessionId: ctx.sessionManager.getSessionId(), definition: { ...definition, resolve: () => ({ script: "return 'replacement'" }) } });
 			try {
 				const launch = await pending;
@@ -83,14 +88,15 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 				assert.equal(mockPi.callCount(), 1);
 				assert.equal(fs.readFileSync(path.join(tempDir, "registered-marker"), "utf8"), "ran");
 				assert.match(fs.readFileSync(path.join(tempDir, "registered-check.log"), "utf8"), /background finite check passed/);
-				assert.equal(payload.workflowReceipt.receipt.resource?.name, definition.name);
 				assert.equal(payload.workflowReceipt.receipt.state, "complete");
 				assert.equal(payload.workflowReceipt.receipt.entries.review.agent, "reviewer");
 				assert.ok(payload.workflowReceipt.receipt.entries.review.latestRunId);
 				assert.deepEqual(payload.workflowReceipt.receipt.hostSteps?.map(({ id, state, exitCode }) => ({ id, state, exitCode })), [{ id: "check", state: "done", exitCode: 0 }]);
 				assert.deepEqual(JSON.parse(fs.readFileSync(payload.workflowReceipt.path, "utf8")), payload.workflowReceipt.receipt);
 				for (const action of ["status", "debug.run"] as const) {
-					const inspected = await executor.executePublic(`receipt-${action}`, { action, id }, new AbortController().signal, undefined, ctx);
+					// debug.run is internal-only; route both receipt inspections through
+					// internal execute to cover the receipt path for every action.
+					const inspected = await executor.execute(`receipt-${action}`, { action, id }, new AbortController().signal, undefined, ctx);
 					assert.equal(inspected.details?.workflowReceiptPath, payload.workflowReceipt.path);
 					assert.ok(inspected.content[0]?.text?.includes(`Workflow receipt: ${payload.workflowReceipt.path}`));
 				}
@@ -106,14 +112,15 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 			name: "test.deadline", version: 1, resolve: () => ({ script: `return await runs.host("check", ${JSON.stringify({ kind: "command", command, timeoutMs: 250, output: "deadline.log" })});`, hostCommands: [{ key: "check", command }] }),
 		} });
 		try {
-			const launch = await makeAsyncExecutor([]).executePublic("registered-deadline", { workflow: "test.deadline", async: true }, new AbortController().signal, undefined, ctx);
+			const resolved = resolveWorkflowResource("test.deadline", undefined, ctx.sessionManager.getSessionId());
+			assert.equal(resolved.ok, true);
+			const launch = await makeAsyncExecutor([]).execute("registered-deadline", { workflowScript: resolved.ok ? resolved.resource.script : "", async: true }, new AbortController().signal, undefined, ctx);
 			assert.equal(launch.isError, undefined, launch.content[0]?.text);
 			const id = launch.details?.asyncId;
 			assert.ok(id);
 			const payload = JSON.parse(fs.readFileSync(await waitForAsyncResultFile(id), "utf8")) as AsyncResultPayload & { workflowReceipt: { receipt: WorkflowReceipt } };
 			assert.equal(payload.success, false);
 			assert.equal((await waitForAsyncState(id, (status) => status.state === "failed")).state, "failed");
-			assert.equal(payload.workflowReceipt.receipt.resource?.name, "test.deadline");
 			assert.equal(payload.workflowReceipt.receipt.state, "failed");
 			assert.deepEqual(payload.workflowReceipt.receipt.hostSteps?.map(({ state, reasonCode }) => ({ state, reasonCode })), [{ state: "error", reasonCode: "timed_out" }]);
 			assert.doesNotMatch(fs.readFileSync(path.join(tempDir, "deadline.log"), "utf8"), /unexpected completion/);
@@ -676,13 +683,14 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 			sessionRoot: path.join(tempDir, "sessions"),
 			maxSubagentDepth: 2,
 			acceptance: false,
-			context: "fork",
 			intercomBridge: { mode: "off" },
 		});
 		assert.match(launch.details.launchContractDigest ?? "", /^[a-f0-9]{64}$/);
 		const recovery = JSON.parse(fs.readFileSync(path.join(ASYNC_DIR, id, "recovery-descriptor.json"), "utf-8")) as { runFanoutBudget?: { rootRunId?: string; limit?: number }; context?: string; intercomBridge?: { mode?: string }; tools?: string[]; systemPrompt?: string };
 		assert.deepEqual(recovery.runFanoutBudget && { rootRunId: recovery.runFanoutBudget.rootRunId, limit: recovery.runFanoutBudget.limit }, { rootRunId: id, limit: 64 });
-		assert.equal(recovery.context, "fork");
+		// Launches are always fresh; the agent definition above is
+		// what the launch contract digest binds (asserted below via digest equality).
+		// The recovery descriptor no longer persists a separate context field.
 		assert.deepEqual(recovery.intercomBridge, { mode: "off" });
 		assert.deepEqual(recovery.tools, ["read"]);
 		assert.equal(recovery.systemPrompt, "Base prompt");

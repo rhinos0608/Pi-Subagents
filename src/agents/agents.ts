@@ -32,7 +32,6 @@ export type AgentScope = "user" | "project" | "both";
 
 export type AgentSource = "builtin" | "package" | "user" | "project" | "runtime";
 type SystemPromptMode = "append" | "replace";
-export type AgentDefaultContext = "fresh" | "fork";
 
 export type AgentMemoryScope = "project" | "user";
 
@@ -68,7 +67,6 @@ export interface BuiltinAgentOverrideBase {
 	inheritProjectContext: boolean;
 	inheritGlobalContext: boolean;
 	inheritSkills: boolean;
-	defaultContext?: AgentDefaultContext;
 	acceptanceRole?: AcceptanceRole;
 	disabled?: boolean;
 	systemPrompt: string;
@@ -100,7 +98,6 @@ interface BuiltinAgentOverrideConfig {
 	inheritProjectContext?: boolean;
 	inheritGlobalContext?: boolean;
 	inheritSkills?: boolean;
-	defaultContext?: AgentDefaultContext | false;
 	acceptanceRole?: AcceptanceRole | false;
 	disabled?: boolean;
 	systemPrompt?: string;
@@ -156,7 +153,6 @@ export interface AgentConfig {
 	inheritProjectContext: boolean;
 	inheritGlobalContext: boolean;
 	inheritSkills: boolean;
-	defaultContext?: AgentDefaultContext;
 	defaultAsync?: boolean;
 	defaultTimeoutMs?: number;
 	defaultToolTimeoutMs?: number;
@@ -209,6 +205,7 @@ interface SubagentSettings {
 	maxThinking?: ThinkingLevel;
 	defaultExtensions?: string[];
 	defaultSubagentOnlyExtensions?: string[];
+	allowedTools?: string[];
 	disableBuiltins?: boolean;
 	disableThinking?: boolean;
 	modelScope?: ModelScopeConfig;
@@ -787,7 +784,6 @@ function cloneOverrideBase(agent: AgentConfig): BuiltinAgentOverrideBase {
 		inheritProjectContext: agent.inheritProjectContext,
 		inheritGlobalContext: agent.inheritGlobalContext,
 		inheritSkills: agent.inheritSkills,
-		...(agent.defaultContext !== undefined ? { defaultContext: agent.defaultContext } : {}),
 		...(agent.acceptanceRole !== undefined ? { acceptanceRole: agent.acceptanceRole } : {}),
 		...(agent.disabled !== undefined ? { disabled: agent.disabled } : {}),
 		systemPrompt: agent.systemPrompt,
@@ -821,7 +817,6 @@ function cloneOverrideValue(override: BuiltinAgentOverrideConfig): BuiltinAgentO
 		...(override.inheritProjectContext !== undefined ? { inheritProjectContext: override.inheritProjectContext } : {}),
 		...(override.inheritGlobalContext !== undefined ? { inheritGlobalContext: override.inheritGlobalContext } : {}),
 		...(override.inheritSkills !== undefined ? { inheritSkills: override.inheritSkills } : {}),
-		...(override.defaultContext !== undefined ? { defaultContext: override.defaultContext } : {}),
 		...(override.acceptanceRole !== undefined ? { acceptanceRole: override.acceptanceRole } : {}),
 		...(override.disabled !== undefined ? { disabled: override.disabled } : {}),
 		...(override.systemPrompt !== undefined ? { systemPrompt: override.systemPrompt } : {}),
@@ -1079,11 +1074,7 @@ function parseBuiltinOverrideEntry(
 	}
 
 	if ("defaultContext" in input) {
-		if (input.defaultContext === "fresh" || input.defaultContext === "fork" || input.defaultContext === false) {
-			override.defaultContext = input.defaultContext;
-		} else {
-			throw new Error(`Builtin override '${name}' in '${filePath}' has invalid 'defaultContext'; expected 'fresh', 'fork', or false.`);
-		}
+		throw new Error(`Builtin override '${name}' in '${filePath}' declares removed 'defaultContext'; the field was removed and launches are always fresh.`);
 	}
 
 	if ("acceptanceRole" in input) {
@@ -1169,6 +1160,12 @@ function readSubagentSettings(filePath: string | null): SubagentSettings {
 	if (!subagents || typeof subagents !== "object" || Array.isArray(subagents)) return EMPTY_SUBAGENT_SETTINGS;
 
 	const subagentsObject = subagents as Record<string, unknown>;
+	if ("defaultSubagentContext" in subagentsObject) {
+		throw new Error(`Subagent settings in '${filePath}' declare removed 'defaultSubagentContext'; the field was removed and launches are always fresh — delete those lines.`);
+	}
+	if ("forkContext" in subagentsObject) {
+		throw new Error(`Subagent settings in '${filePath}' declare removed 'forkContext'; the field was removed and launches are always fresh — delete those lines.`);
+	}
 	let disableBuiltins: boolean | undefined;
 	if ("disableBuiltins" in subagentsObject) {
 		if (typeof subagentsObject.disableBuiltins === "boolean") {
@@ -1238,6 +1235,14 @@ function readSubagentSettings(filePath: string | null): SubagentSettings {
 		}
 		defaultSubagentOnlyExtensions = subagentsObject.defaultSubagentOnlyExtensions.map((item) => item.trim());
 	}
+	let allowedTools: string[] | undefined;
+	if ("allowedTools" in subagentsObject) {
+		if (!Array.isArray(subagentsObject.allowedTools)
+			|| subagentsObject.allowedTools.some((item) => typeof item !== "string" || !item.trim())) {
+			throw new Error(`Subagent settings in '${filePath}' have invalid 'allowedTools'; expected an array of non-empty strings.`);
+		}
+		allowedTools = subagentsObject.allowedTools.map((item) => item.trim());
+	}
 	let agentScanDirs: string[] | undefined;
 	if ("agentScanDirs" in subagentsObject) {
 		if (!Array.isArray(subagentsObject.agentScanDirs)
@@ -1266,6 +1271,7 @@ function readSubagentSettings(filePath: string | null): SubagentSettings {
 		...(maxThinking !== undefined ? { maxThinking } : {}),
 		...(defaultExtensions !== undefined ? { defaultExtensions } : {}),
 		...(defaultSubagentOnlyExtensions !== undefined ? { defaultSubagentOnlyExtensions } : {}),
+		...(allowedTools !== undefined ? { allowedTools } : {}),
 		...(agentScanDirs !== undefined ? { agentScanDirs } : {}),
 		...(agentExcludeDirs !== undefined ? { agentExcludeDirs } : {}),
 		...(disableBuiltins !== undefined ? { disableBuiltins } : {}),
@@ -1374,6 +1380,27 @@ function applySubagentDefaultExtensions(agents: AgentConfig[], defaultExtensions
 	});
 }
 
+function resolveSubagentAllowedToolsSetting(
+	userSettings: SubagentSettings,
+	projectSettings: SubagentSettings,
+	projectSettingsPath: string | null,
+): string[] | undefined {
+	if (projectSettingsPath && projectSettings.allowedTools !== undefined) return projectSettings.allowedTools;
+	return userSettings.allowedTools;
+}
+
+/**
+ * Operator-authored global tool allowlist from settings (`subagents.allowedTools`).
+ * Project settings win over user settings. Absent or empty means no global
+ * restriction. Applies uniformly at every launch; never inherited parent→child.
+ */
+export function resolveSubagentAllowedTools(cwd: string): string[] | undefined {
+	const sources = getAgentDiscoverySources(cwd);
+	const { user, project } = settingsForScope(sources, "both");
+	const list = resolveSubagentAllowedToolsSetting(user, project, sources.projectSettingsPath);
+	return list?.length ? list : undefined;
+}
+
 function resolveSubagentDefaultSubagentOnlyExtensions(
 	userSettings: SubagentSettings,
 	projectSettings: SubagentSettings,
@@ -1462,7 +1489,6 @@ function applyBuiltinOverride(
 	if (override.inheritProjectContext !== undefined) next.inheritProjectContext = override.inheritProjectContext;
 	if (override.inheritGlobalContext !== undefined) next.inheritGlobalContext = override.inheritGlobalContext;
 	if (override.inheritSkills !== undefined) next.inheritSkills = override.inheritSkills;
-	if (override.defaultContext !== undefined) { if (override.defaultContext === false) delete next.defaultContext; else next.defaultContext = override.defaultContext; }
 	if (override.acceptanceRole !== undefined) { if (override.acceptanceRole === false) delete next.acceptanceRole; else next.acceptanceRole = override.acceptanceRole; }
 	if (override.disabled !== undefined) next.disabled = override.disabled;
 	if (override.systemPrompt !== undefined) next.systemPrompt = override.systemPrompt;
@@ -1607,7 +1633,7 @@ export function applyRuntimeAgentSettings(agents: AgentConfig[], context: Runtim
 
 export function buildBuiltinOverrideConfig(
 	base: BuiltinAgentOverrideBase,
-	draft: Pick<AgentConfig, "model" | "modelProvider" | "fallbackModels" | "fast" | "thinking" | "systemPromptMode" | "inheritProjectContext" | "inheritGlobalContext" | "inheritSkills" | "defaultContext" | "acceptanceRole" | "disabled" | "systemPrompt" | "skills" | "tools" | "allowNestedSubagents" | "mcpDirectTools" | "extensions" | "subagentOnlyExtensions" | "mutationTools" | "toolBudget"> & Partial<Pick<AgentConfig, "description" | "machine" | "output" | "outputMode" | "defaultReads" | "excludeTools">>,
+	draft: Pick<AgentConfig, "model" | "modelProvider" | "fallbackModels" | "fast" | "thinking" | "systemPromptMode" | "inheritProjectContext" | "inheritGlobalContext" | "inheritSkills" | "acceptanceRole" | "disabled" | "systemPrompt" | "skills" | "tools" | "allowNestedSubagents" | "mcpDirectTools" | "extensions" | "subagentOnlyExtensions" | "mutationTools" | "toolBudget"> & Partial<Pick<AgentConfig, "description" | "machine" | "output" | "outputMode" | "defaultReads" | "excludeTools">>,
 ): BuiltinAgentOverrideConfig | undefined {
 	const override: BuiltinAgentOverrideConfig = {};
 	if (draft.machine !== base.machine) override.machine = draft.machine ?? false;
@@ -1628,7 +1654,6 @@ export function buildBuiltinOverrideConfig(
 	if (draft.inheritProjectContext !== base.inheritProjectContext) override.inheritProjectContext = draft.inheritProjectContext;
 	if (draft.inheritGlobalContext !== base.inheritGlobalContext) override.inheritGlobalContext = draft.inheritGlobalContext;
 	if (draft.inheritSkills !== base.inheritSkills) override.inheritSkills = draft.inheritSkills;
-	if (draft.defaultContext !== base.defaultContext) override.defaultContext = draft.defaultContext ?? false;
 	if (draft.acceptanceRole !== base.acceptanceRole) override.acceptanceRole = draft.acceptanceRole ?? false;
 	if (draft.disabled !== base.disabled) override.disabled = draft.disabled ?? false;
 	if (draft.systemPrompt !== base.systemPrompt) override.systemPrompt = draft.systemPrompt;
@@ -2120,11 +2145,7 @@ function loadAgentsFromDefinitionFiles(files: AgentDefinitionFile[], source: Age
 			: frontmatter.inheritSkills === "false"
 				? false
 				: defaultInheritSkills();
-		const defaultContext = frontmatter.defaultContext === "fork"
-			? "fork" as const
-			: frontmatter.defaultContext === "fresh"
-				? "fresh" as const
-				: undefined;
+		if (frontmatter.defaultContext !== undefined) throw new Error(`Agent '${localName}' declares removed defaultContext frontmatter; the field was removed and launches are always fresh.`);
 		let defaultAsync: boolean | undefined;
 		if (frontmatter.async !== undefined) {
 			if (frontmatter.async === "true") defaultAsync = true;
@@ -2239,7 +2260,6 @@ function loadAgentsFromDefinitionFiles(files: AgentDefinitionFile[], source: Age
 			inheritProjectContext,
 			inheritGlobalContext,
 			inheritSkills,
-			...(defaultContext !== undefined ? { defaultContext } : {}),
 			...(defaultAsync !== undefined ? { defaultAsync } : {}),
 			...(defaultTimeoutMs !== undefined ? { defaultTimeoutMs } : {}),
 			...(defaultToolTimeoutMs !== undefined ? { defaultToolTimeoutMs } : {}),

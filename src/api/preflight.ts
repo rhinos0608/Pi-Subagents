@@ -14,11 +14,10 @@ import { getArtifactPaths, getArtifactsDir } from "../shared/artifacts.ts";
 import { resolveEffectiveThinking } from "../shared/model-info.ts";
 import { assertThinkingWithinCeiling, intersectThinkingCeilings, type ThinkingLevel } from "../shared/thinking-ceiling.ts";
 import { SUBAGENT_LIFECYCLE_ARTIFACT_VERSION, type ArtifactDirPreference, type ArtifactPaths, type IntercomBridgeConfig, type IntercomBridgeMode, type JsonSchemaObject } from "../shared/types.ts";
-import { capabilityCeilingAgentRestrictionMessage, intersectSubagentCapabilityCeilings, type ResolvedSubagentCapabilityCeiling, type SubagentCapabilityAudit } from "../runs/shared/capability-ceiling.ts";
+import { capabilityCeilingAgentRestrictionMessage, type ResolvedSubagentCapabilityCeiling, type SubagentCapabilityAudit } from "../runs/shared/capability-ceiling.ts";
 import { resolvePermissionRules } from "../runs/shared/permissions.ts";
 import type { ResolvedMcpDirectToolSelection } from "../runs/shared/mcp-direct-tool-allowlist.ts";
 import { resolveStepBehavior } from "../shared/settings.ts";
-import { canPreferForkFromSnapshot, resolveSubagentLaunchContext } from "../shared/fork-context.ts";
 import { loadConfig } from "../extension/config.ts";
 import { applyIntercomBridgeToAgent, resolveIntercomBridge, validateIntercomBridgeConfig } from "../intercom/intercom-bridge.ts";
 import { AGENT_DEFINITION_PROJECTION_VERSION, resolveLaunchBinding, stableJsonDigest } from "../shared/launch-contract.ts";
@@ -75,8 +74,6 @@ export interface SubagentLaunchContractInput {
 	parentSessionFile?: string | null;
 	/** Parent session whose host-required child extension snapshot is preflighted. */
 	parentSessionId?: string;
-	/** Current parent leaf required before an implicit `defaultContext: fork` stays `fork`. */
-	parentLeafId?: string | null;
 	sessionRoot?: string;
 	/** Caller directory used as a root keyed by the child run id ("preflight" placeholder when runId is omitted). */
 	sessionDir?: string;
@@ -84,7 +81,8 @@ export interface SubagentLaunchContractInput {
 	/** Root run id supplied by a host when projecting nested async lifecycle paths. */
 	nestedRootRunId?: string;
 	capabilityCeiling?: ResolvedSubagentCapabilityCeiling;
-	inheritedCapabilityCeiling?: ResolvedSubagentCapabilityCeiling;
+	/** Operator global allowlist override; when omitted it resolves fresh from settings. */
+	operatorAllowedTools?: string[];
 	/** Builtin tool names the host runtime provides; used to intersect agent-declared tools. */
 	hostAvailableBuiltins?: readonly string[];
 	/** `{ name, label }` identities from the host registry; display labels in tool allowlists resolve to internal names. */
@@ -174,7 +172,7 @@ export interface SubagentLaunchContract {
 	version: typeof SUBAGENT_LAUNCH_CONTRACT_VERSION;
 	runId: string;
 	agent: SubagentLaunchContractAgent;
-	context: "fresh" | "fork";
+	context: "fresh";
 	model?: string;
 	modelCandidates: string[];
 	thinking?: string;
@@ -218,16 +216,8 @@ function normalizeAvailableModels(models: SubagentLaunchContractInput["available
 	return (models ?? []).map((model) => ({ ...model, fullId: model.fullId ?? `${model.provider}/${model.id}` }));
 }
 
-function resolveLaunchContractContext(input: SubagentLaunchContractInput, agent: AgentConfig): "fresh" | "fork" {
-	return resolveSubagentLaunchContext({
-		explicitContext: undefined,
-		agentDefaultContext: agent.defaultContext,
-		defaultSubagentContext: loadConfig().defaultSubagentContext,
-		canUseImplicitFork: canPreferForkFromSnapshot({
-			parentSessionFile: input.parentSessionFile,
-			leafId: input.parentLeafId,
-		}),
-	});
+function resolveLaunchContractContext(): "fresh" {
+	return "fresh";
 }
 
 function taskWorkspaceScopeAuthorityDiagnostic(task: string | undefined): SubagentLaunchContractDiagnostic | undefined {
@@ -324,10 +314,7 @@ export async function resolveSubagentLaunchContract(input: SubagentLaunchContrac
 	if (extensionBindings !== undefined && (definitionAgent.runner?.type === "external-cli" || definitionAgent.runner?.type === "external-job")) {
 		return { ok: false, code: "unsupported_mode", message: `extensionBindings is not supported for runner.type='${definitionAgent.runner.type}'.`, diagnostics };
 	}
-	const context = resolveLaunchContractContext(input, definitionAgent);
-	if (context === "fork") {
-		diagnostics.push({ code: "host_required", severity: "host-required", message: "Exact fork session branching requires Pi host session snapshots." });
-	}
+	const context = resolveLaunchContractContext();
 	// Execution rewrites the discovered agent through the bridge before any
 	// other launch resolution, so preflight must hash the same rewritten agent.
 	const bridge = resolveIntercomBridge({
@@ -339,7 +326,7 @@ export async function resolveSubagentLaunchContract(input: SubagentLaunchContrac
 		diagnostics.push({ code: "host_required", severity: "host-required", message: "The intercomBridge instruction file names the supervisor session; supply orchestratorTarget to bind the exact child prompt." });
 	}
 	const agent = applyIntercomBridgeToAgent(definitionAgent, bridge);
-	const effectiveCapabilityCeiling = intersectSubagentCapabilityCeilings(input.capabilityCeiling, input.inheritedCapabilityCeiling);
+	const effectiveCapabilityCeiling = input.capabilityCeiling;
 	const restrictionMessage = capabilityCeilingAgentRestrictionMessage(agent.name, effectiveCapabilityCeiling);
 	if (restrictionMessage) return { ok: false, code: "restricted_agent", message: restrictionMessage, diagnostics };
 	const runId = input.runId ?? "preflight";
@@ -418,6 +405,7 @@ export async function resolveSubagentLaunchContract(input: SubagentLaunchContrac
 			model,
 			modelCandidates,
 			capabilityCeiling: effectiveCapabilityCeiling,
+			...(input.operatorAllowedTools !== undefined ? { operatorAllowedTools: input.operatorAllowedTools } : {}),
 			agentName: agent.name,
 			permissionRules,
 			hostAvailableBuiltins: input.hostAvailableBuiltins,
