@@ -64,7 +64,7 @@ export const RUNTIME_RPC_BOUNDS = {
  * fail-closed. Each entry rides proof: the native suite fails when the
  * real SDK version it finds is not listed here.
  */
-export const VERIFIED_RUNTIME_HOST_VERSIONS: readonly string[] = ["0.85.1"];
+export const VERIFIED_RUNTIME_HOST_VERSIONS: readonly string[] = ["0.85.1", "0.87.1"];
 
 /** Audited provider APIs. Names alone never imply support. */
 export const RUNTIME_RPC_AUDITED_APIS = ["openai-completions", "openai-responses", "anthropic-messages"] as const;

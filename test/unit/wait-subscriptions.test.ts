@@ -10,21 +10,7 @@ import { recordWaitCompletion } from "../../src/runs/background/wait-completions
 import { inspectSubagentStatus } from "../../src/runs/background/run-status.ts";
 import { createRunFanoutBudget } from "../../src/runs/shared/run-fanout-budget.ts";
 import { SUBAGENT_ASYNC_COMPLETE_EVENT, type IntercomEventBus, type SubagentState } from "../../src/shared/types.ts";
-
-function writeStatus(asyncRoot: string, runId: string, state: string, extra: object = {}): void {
-	const dir = path.join(asyncRoot, runId);
-	fs.mkdirSync(dir, { recursive: true });
-	const now = Date.now();
-	fs.writeFileSync(path.join(dir, "status.json"), JSON.stringify({
-		runId,
-		mode: "single",
-		state,
-		startedAt: now,
-		lastUpdate: now,
-		steps: [{ agent: "worker", status: state }],
-		...extra,
-	}), "utf-8");
-}
+import { writeAsyncStatusFixture as writeStatus } from "../support/async-status-fixture.ts";
 
 function writeRecoveryDescriptor(asyncRoot: string, runId: string, agent: string, sessionFile: string, cwd: string): void {
 	fs.writeFileSync(path.join(asyncRoot, runId, "recovery-descriptor.json"), JSON.stringify({
