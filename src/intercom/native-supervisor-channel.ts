@@ -122,7 +122,7 @@ function assertTrustedChannelDir(dir: string, label: string): void {
 	}
 	if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error(`Supervisor ${label} is unsafe.`);
 	if (typeof process.getuid === "function" && stat.uid !== process.getuid()) throw new Error(`Supervisor ${label} is not owned by the current user.`);
-	if ((stat.mode & 0o777) !== 0o700) {
+	if (process.platform !== "win32" && (stat.mode & 0o777) !== 0o700) {
 		fs.chmodSync(dir, 0o700);
 		stat = fs.lstatSync(dir);
 		if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error(`Supervisor ${label} is unsafe.`);
@@ -153,7 +153,7 @@ function assertChannelPathSafe(channelDir: string): void {
 		}
 		if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error("Supervisor channel path traverses an unsafe component.");
 		if (typeof process.getuid === "function" && stat.uid !== process.getuid()) throw new Error("Supervisor channel path traverses an unowned component.");
-		if ((stat.mode & 0o777) !== 0o700) {
+		if (process.platform !== "win32" && (stat.mode & 0o777) !== 0o700) {
 			fs.chmodSync(current, 0o700);
 			stat = fs.lstatSync(current);
 			if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error("Supervisor channel path traverses an unsafe component.");
@@ -165,7 +165,7 @@ function assertChannelPathSafe(channelDir: string): void {
 		const leaf = fs.lstatSync(resolved);
 		if (!leaf.isDirectory() || leaf.isSymbolicLink()) throw new Error("Supervisor channel directory is unsafe.");
 		if (typeof process.getuid === "function" && leaf.uid !== process.getuid()) throw new Error("Supervisor channel directory is not owned by the current user.");
-		if ((leaf.mode & 0o777) !== 0o700) throw new Error("Supervisor channel directory is not a mode-0700 agent-private directory.");
+		if (process.platform !== "win32" && (leaf.mode & 0o777) !== 0o700) throw new Error("Supervisor channel directory is not a mode-0700 agent-private directory.");
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
 		throw error;

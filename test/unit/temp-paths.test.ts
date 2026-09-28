@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import * as fs from "node:fs";
+import fsDefault, * as fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -11,6 +12,7 @@ import {
 	RESULTS_DIR,
 	TEMP_ARTIFACTS_DIR,
 	TEMP_ROOT_DIR,
+	ensureTempRootDir,
 	getAsyncConfigPath,
 	resolveTempScopeId,
 } from "../../src/shared/types.ts";
@@ -57,6 +59,21 @@ describe("resolveTempScopeId", () => {
 });
 
 describe("shared temp paths", () => {
+	it("does not require POSIX temp-root mode bits on Windows", () => {
+		fs.mkdirSync(TEMP_ROOT_DIR, { recursive: true });
+		fs.chmodSync(TEMP_ROOT_DIR, 0o755);
+		const chmodSync = fsDefault.chmodSync;
+		fsDefault.chmodSync = (() => {}) as typeof fsDefault.chmodSync;
+		syncBuiltinESMExports();
+		try {
+			assert.equal(ensureTempRootDir("win32"), TEMP_ROOT_DIR);
+		} finally {
+			fsDefault.chmodSync = chmodSync;
+			syncBuiltinESMExports();
+			fs.chmodSync(TEMP_ROOT_DIR, 0o700);
+		}
+	});
+
 	it("uses the explicit temp root before shared paths resolve", () => {
 		const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-temp-override-"));
 		const override = path.join(fixture, "async state");

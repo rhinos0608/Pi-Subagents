@@ -19,8 +19,9 @@ describe("runtime native compatibility spike", () => {
 		assert.equal(await probeRealLeafHost(), null);
 	});
 
-	it("proven host version allowlisted", () => {
+	it("proven host versions allowlisted", () => {
 		assert.ok([...VERIFIED_RUNTIME_HOST_VERSIONS].includes("0.85.1"));
+		assert.ok([...VERIFIED_RUNTIME_HOST_VERSIONS].includes("0.87.1"));
 	});
 
 	it("gate closed for shim and current dev versions", () => {

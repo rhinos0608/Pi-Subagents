@@ -2784,15 +2784,15 @@ export const DIRS = {
 	artifacts: TEMP_ARTIFACTS_DIR,
 };
 
-/** Provision the shared temp root as a mode-0700 UID-owned non-symlink directory; fail closed otherwise. */
-export function ensureTempRootDir(): string {
+/** Provision the shared temp root as a UID-owned non-symlink directory; enforce mode 0700 where POSIX mode bits are meaningful. */
+export function ensureTempRootDir(platform: NodeJS.Platform = process.platform): string {
 	fs.mkdirSync(TEMP_ROOT_DIR, { recursive: true, mode: 0o700 });
 	const stat = fs.lstatSync(TEMP_ROOT_DIR);
 	if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error("Pi temp root is a symlink or not a directory.");
 	if (typeof process.getuid === "function" && stat.uid !== process.getuid()) throw new Error("Pi temp root is not owned by the current user.");
-	if ((stat.mode & 0o777) !== 0o700) fs.chmodSync(TEMP_ROOT_DIR, 0o700);
+	if (platform !== "win32" && (stat.mode & 0o777) !== 0o700) fs.chmodSync(TEMP_ROOT_DIR, 0o700);
 	const verified = fs.lstatSync(TEMP_ROOT_DIR);
-	if (verified.isSymbolicLink() || !verified.isDirectory() || (verified.mode & 0o777) !== 0o700) throw new Error("Pi temp root could not be secured as a mode-0700 agent-private directory.");
+	if (verified.isSymbolicLink() || !verified.isDirectory() || (platform !== "win32" && (verified.mode & 0o777) !== 0o700)) throw new Error("Pi temp root could not be secured as a mode-0700 agent-private directory.");
 	if (typeof process.getuid === "function" && verified.uid !== process.getuid()) throw new Error("Pi temp root is not owned by the current user.");
 	return TEMP_ROOT_DIR;
 }

@@ -25,6 +25,7 @@ import {
 	writeNestedEvent,
 } from "../../src/runs/shared/nested-events.ts";
 import { SUBAGENT_ASYNC_COMPLETE_EVENT, type SubagentState } from "../../src/shared/types.ts";
+import { writeAsyncStatusFixture as writeStatus } from "../support/async-status-fixture.ts";
 
 const COMPLETION_OWNER_ID = "contract-owner-a";
 
@@ -86,21 +87,6 @@ function makeWaitState(sessionId = "session-a"): SubagentState {
 		watcherRestartTimer: null,
 		resultFileCoalescer: { schedule: () => false, clear: () => {} },
 	} as SubagentState;
-}
-
-function writeStatus(asyncRoot: string, runId: string, state: string, extra: object = {}): void {
-	const dir = path.join(asyncRoot, runId);
-	fs.mkdirSync(dir, { recursive: true });
-	const now = Date.now();
-	fs.writeFileSync(path.join(dir, "status.json"), JSON.stringify({
-		runId,
-		mode: "single",
-		state,
-		startedAt: now,
-		lastUpdate: now,
-		steps: [{ agent: "worker", status: state }],
-		...extra,
-	}), "utf-8");
 }
 
 const nestedRoutes: Array<{ eventSink: string }> = [];
