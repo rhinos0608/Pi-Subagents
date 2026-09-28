@@ -131,14 +131,13 @@ describe("async runner execution", () => {
 		const interactive = formatAsyncStartedMessage("Async: worker [interactive]", true);
 		assert.match(interactive, /interactive session[\s\S]*return control/i);
 		assert.match(interactive, /native completion notification/i);
-		assert.match(interactive, /does not need a wait call/i);
-		assert.match(interactive, /provider, detached, or other background work that lacks a native completion notification/i);
+		assert.match(interactive, /Completion wakes the session automatically, do not poll/i);
 		assert.doesNotMatch(interactive, /bg_wait\(\{ id:/i);
 		assert.doesNotMatch(interactive, /auto-drains current-session background work/i);
 
 		const headless = formatAsyncStartedMessage("Async: worker [headless]", false);
 		assert.match(headless, /non-interactive run.*auto-drains current-session subagent work at agent_end/i);
-		assert.match(headless, /Use bg_wait only.*provider, detached, or other background-work results.*no native completion notification/i);
+		assert.match(headless, /Completion wakes the session automatically, do not poll/i);
 		assert.doesNotMatch(headless, /nonBlocking: true/);
 		assert.doesNotMatch(headless, /By default, return control to the user/i);
 	});
@@ -165,14 +164,12 @@ describe("async runner execution", () => {
 			ctx,
 			asyncDir: path.join(process.cwd(), ".tmp-async-test"),
 			maxSubagentDepth: 2,
-			waitToolEnabled: false,
 			toolBudget: { hard: 3, block: ["find"] },
 			configToolBudget: { hard: 5, block: ["ls"] },
 		});
 
 		assert.ok("steps" in result, "expected successful step build");
 		assert.deepEqual(result.steps[0]?.toolBudget, { hard: 3, block: ["find"] });
-		assert.equal(result.steps[0]?.waitToolEnabled, false);
 		assert.deepEqual(result.steps[1]?.toolBudget, { hard: 2, block: ["grep"] });
 	});
 	it("carries the resolved model context window into async runner steps", () => {

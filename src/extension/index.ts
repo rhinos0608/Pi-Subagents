@@ -65,8 +65,6 @@ import { isRuntimeRpcDisabled, registerRuntimeRpcBridge } from "./runtime-rpc.ts
 import { LeafModelRuntime } from "../runs/runtime/leaf-model-runtime.ts";
 import { probeRealLeafHost } from "../runs/runtime/leaf-model-session.ts";
 import { clearSlashSnapshots, getSlashRenderableSnapshot, resolveSlashMessageDetails, restoreSlashFinalSnapshots, type SlashMessageDetails } from "../slash/slash-live-state.ts";
-import { resolveWaitToolConfig } from "../runs/background/subagent-wait.ts";
-import { registerWaitTool } from "../runs/background/wait-tool.ts";
 import { createWaitSubscriptionManager } from "../runs/background/wait-subscriptions.ts";
 import { drainOutstandingWork } from "../runs/background/auto-drain.ts";
 import registerSubagentNotify, { parseSubagentNotifyContent, type SubagentNotifyDetails } from "../runs/background/notify.ts";
@@ -435,7 +433,6 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	cleanupOldChainDirs();
 
 	const config = loadConfig();
-	const waitToolConfig = resolveWaitToolConfig(config.waitTool);
 	const asyncByDefault = resolveAsyncByDefault(config);
 	const fleetViewEnabled = config.fleetView !== false;
 	const fleetViewPlacement = resolveFleetViewPlacement(config.fleetViewPlacement);
@@ -660,8 +657,6 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		state,
 		config,
 		asyncByDefault,
-		waitToolEnabled: waitToolConfig.enabled,
-		waitToolDefaultTimeoutMs: waitToolConfig.defaultTimeoutMs,
 		handleScheduledRunAction: (params, ctx) => scheduledRunManager.handleToolCall(params, ctx),
 		watchdog: mainWatchdog,
 		tempArtifactsDir,
@@ -902,7 +897,6 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		if (systemPrompt !== event.systemPrompt) return { systemPrompt };
 	});
 
-	registerWaitTool(pi, state, waitToolConfig.enabled, waitSubscriptionManager, waitToolConfig.defaultTimeoutMs, undefined, supervisorChannel.hasPendingRequests);
 
 	pi.on("agent_end", async (_event, ctx) => {
 		if (!ctx.hasUI) await drainOutstandingWork({ state, events: pi.events, hasPendingSupervisorRequest: supervisorChannel.hasPendingRequests });

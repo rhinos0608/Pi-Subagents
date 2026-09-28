@@ -117,7 +117,7 @@ function detailsFromSessionEntry(entry: unknown): Details | undefined {
 	}
 	if (record.type !== "message" || !record.message || typeof record.message !== "object") return undefined;
 	const message = record.message as { role?: unknown; toolName?: unknown; details?: unknown };
-	if (message.role !== "toolResult" || (message.toolName !== "subagent" && message.toolName !== "bg_wait")) return undefined;
+	if (message.role !== "toolResult" || message.toolName !== "subagent") return undefined;
 	return isSubagentDetails(message.details) ? message.details : undefined;
 }
 
@@ -145,7 +145,7 @@ function metadataUsage(
 
 /**
  * Collect parent and child usage for the current session branch. Foreground
- * children come from persisted `subagent`/`bg_wait` tool-result details; async
+ * children come from persisted `subagent` tool-result details; async
  * workflow children are resolved through receipts and artifact metadata.
  */
 export function collectSubagentCost(

@@ -39,8 +39,6 @@ export interface RunnerSubagentStep {
 	model?: string;
 	/** Frozen ordered allowlist resolved by the parent at launch. */
 	modelCandidates?: string[];
-	/** Opaque project-local model-health scope captured by the parent. */
-	modelHealthScope?: string;
 	modelResolution?: import("../../shared/types.ts").ModelResolutionMetadata;
 	contextLimit?: number;
 	fast?: boolean;
@@ -78,8 +76,6 @@ export interface RunnerSubagentStep {
 	timeoutMs?: number;
 	/** Resolved configured hard per-tool-call timeout (ms); fast tools still have a default when undefined. */
 	toolTimeoutMs?: number;
-	waitToolEnabled?: boolean;
-	waitToolDefaultTimeoutMs?: number;
 	structuredOutput?: import("./structured-output.ts").StructuredOutputRuntime;
 	structuredOutputSchema?: import("../../shared/types.ts").JsonSchemaObject;
 	agentContract?: import("../../shared/types.ts").AgentContract;

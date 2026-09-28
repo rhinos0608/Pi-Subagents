@@ -1225,12 +1225,12 @@ describe("subagent extension RPC bridge", () => {
 					details: { mode: "single", results: [{ agent: "reviewer", runId: "run-a", usage: childUsage, sessionFile: "/sessions/child-a.jsonl" }] },
 				},
 			},
-			// The same child completing through bg_wait must not be counted twice.
+			// The same child completing through a second subagent result must not be counted twice.
 			{
 				type: "message",
 				message: {
 					role: "toolResult",
-					toolName: "bg_wait",
+					toolName: "subagent",
 					details: { mode: "single", results: [], completions: [{ mode: "single", runId: "run-a", results: [{ agent: "reviewer", runId: "run-a", usage: childUsage }] }] },
 				},
 			},
@@ -1255,7 +1255,7 @@ describe("subagent extension RPC bridge", () => {
 		const data = (reply as { data: { version: number; parent: Record<string, number>; children: Array<{ agent?: string; runId?: string; usage: Record<string, number> }>; childTotal: Record<string, number>; total: Record<string, number>; unresolvedAsyncChildren: number } }).data;
 		assert.equal(data.version, 1);
 		assert.deepEqual(data.parent, { input: 15, output: 3, cacheRead: 30, cacheWrite: 0, cost: 0.25, turns: 1 });
-		assert.equal(data.children.length, 1, "run identity deduplicates the bg_wait completion");
+		assert.equal(data.children.length, 1, "run identity deduplicates the second completion");
 		assert.equal(data.children[0]?.agent, "reviewer");
 		assert.equal(data.children[0]?.runId, "run-a");
 		assert.deepEqual(data.childTotal, childUsage);

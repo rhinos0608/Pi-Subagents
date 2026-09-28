@@ -1,6 +1,5 @@
 import { splitKnownThinkingSuffix as splitThinkingSuffix, type ModelInfo as AvailableModelInfo } from "../../shared/model-info.ts";
 import type { ModelResolutionMetadata, ModelResolutionSource, Usage } from "../../shared/types.ts";
-import { filterFallbackCandidates, findModelExclusion, parseModelKey, recordModelFailure } from "./model-exclusions.ts";
 import { checkModelScope, type ModelScopeCheckRule, type ModelScopeViolation, type ModelSource } from "./model-scope.ts";
 import { redactSecretValues } from "./permissions.ts";
 
@@ -303,57 +302,70 @@ function enforceModelScopes(
 	for (const violation of violations) (onWarn ?? defaultScopeWarn)(violation);
 }
 
-const MODEL_EXCLUSION_DIAGNOSTIC_MAX_LENGTH = 240;
-const MODEL_EXCLUSION_DIAGNOSTIC_MAX_ENTRIES = 20;
+export const MODEL_MAX_ATTEMPTS_PER_CANDIDATE = 3;
+/**
+ * Bounded backoff between same-candidate retries: ~500ms after the first
+ * retryable startup failure, ~1500ms after the second. Small and boring by
+ * design; no historical state is consulted.
+ */
+export const MODEL_RETRY_BACKOFF_MS = [500, 1500] as const;
 
-function sanitizeModelExclusionDiagnostic(value: string | undefined, fallback: string): string {
-	const normalized = typeof value === "string"
-		? value.replace(/[\u0000-\u001f\u007f\u2028\u2029]+/g, " ").trim()
-		: "";
-	return redactSecretValues(normalized || fallback).slice(0, MODEL_EXCLUSION_DIAGNOSTIC_MAX_LENGTH);
+/** Backoff before re-attempting the same candidate, or undefined when the candidate is spent. */
+export function modelRetryBackoffMs(failuresForCandidate: number): number | undefined {
+	if (failuresForCandidate < 1 || failuresForCandidate >= MODEL_MAX_ATTEMPTS_PER_CANDIDATE) return undefined;
+	return MODEL_RETRY_BACKOFF_MS[failuresForCandidate - 1];
 }
 
-function formatModelExclusionExpiry(expiresAt: number): string {
-	if (!Number.isFinite(expiresAt)) return "unknown";
-	const date = new Date(expiresAt);
-	return Number.isNaN(date.getTime()) ? "unknown" : date.toISOString();
+export function sleepMs(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function formatExcludedCandidateEvidence(candidate: string, exclusion: NonNullable<ReturnType<typeof findModelExclusion>>): string {
-	const { provider, modelId } = parseModelKey(candidate);
-	const displayCandidate = sanitizeModelExclusionDiagnostic(candidate, "unknown");
-	const displayModel = sanitizeModelExclusionDiagnostic(modelId, "unknown");
-	const displayProvider = sanitizeModelExclusionDiagnostic(provider ?? exclusion.provider, "unspecified");
-	const reason = sanitizeModelExclusionDiagnostic(exclusion.reason, "runtime-failure");
-	return `${displayCandidate} — model: ${displayModel}; provider: ${displayProvider}; reason: ${reason}; expires: ${formatModelExclusionExpiry(exclusion.expiresAt)}`;
+export type ModelRetryDecision =
+	| { action: "terminal" }
+	| { action: "retry-same"; backoffMs: number }
+	| { action: "advance" }
+	| { action: "exhausted" };
+
+/**
+ * Stateless retry planner for the configured ordered candidate list.
+ *
+ * - non-retryable failure (the child started executing): terminal, never another model.
+ * - retryable startup/availability failure: same candidate again until it has
+ *   been attempted MODEL_MAX_ATTEMPTS_PER_CANDIDATE times, then advance.
+ * - retryable failure on the last candidate's final attempt: exhausted.
+ *
+ * No state survives between launches: every fresh launch starts at candidate
+ * zero with zero failures.
+ */
+export function planModelRetry(input: {
+	retryable: boolean;
+	failuresForCandidate: number;
+	candidateIndex: number;
+	candidateCount: number;
+}): ModelRetryDecision {
+	if (!input.retryable) return { action: "terminal" };
+	const backoffMs = modelRetryBackoffMs(input.failuresForCandidate);
+	if (backoffMs !== undefined) return { action: "retry-same", backoffMs };
+	return input.candidateIndex >= input.candidateCount - 1 ? { action: "exhausted" } : { action: "advance" };
 }
 
-const MODEL_UNAVAILABLE_PATTERN = /(?:model.*(?:not found|unavailable|disabled)|unknown model)/i;
-
-function ignoreStaleModelUnavailableExclusion(candidate: string, exclusion: NonNullable<ReturnType<typeof findModelExclusion>>, availableModels: AvailableModelInfo[] | undefined): boolean {
-	const reason = exclusion.reason ?? "";
-	const { baseModel } = splitThinkingSuffix(candidate);
-	return MODEL_UNAVAILABLE_PATTERN.test(reason) && availableModels?.some((entry) => entry.fullId === baseModel) === true;
-}
-
-// Transient transport failures must not fail-closed an explicitly requested
-// model: the caller chose it, so attempt anyway and let the call itself fail.
-const TRANSIENT_EXCLUSION_PATTERN = /fetch failed|request timed out|\btimed?\s?out\b|econnreset|etimedout|socket hang up|network(?:work)? (?:error|failure)|econnrefused|enotfound|eai_again|empty response|cold-start|\b429\b|rate\s*limit|too many requests|usage\s*limit/i;
-
-export function isTransientExclusionReason(reason: string | undefined): boolean {
-	return TRANSIENT_EXCLUSION_PATTERN.test(reason ?? "");
-}
-
-function throwForExplicitModelExclusion(model: string, availableModels: AvailableModelInfo[] | undefined, healthScope?: string): void {
-	const exclusion = findModelExclusion(model, {
-		scope: healthScope,
-		ignoreExclusion: (candidate, exclusion) => ignoreStaleModelUnavailableExclusion(candidate, exclusion, availableModels)
-			|| isTransientExclusionReason(exclusion.reason),
+/**
+ * Actionable diagnostic when every configured candidate burned all of its
+ * attempts on retryable startup/availability failures.
+ */
+export function formatExhaustedCandidatesDiagnostic(input: {
+	candidates: Array<string | undefined>;
+	attemptsPerCandidate: number[];
+	lastError?: string;
+}): string {
+	const parts = input.candidates.map((candidate, index) => {
+		const attempts = input.attemptsPerCandidate[index] ?? 0;
+		return `'${candidate ?? "default"}' (${attempts} attempt${attempts === 1 ? "" : "s"})`;
 	});
-	if (!exclusion) return;
-	const reason = redactSecretValues((exclusion.reason ?? "runtime-failure").replace(/[\u0000-\u001f\u007f]+/g, " ")).slice(0, 240);
-	const expiry = Number.isFinite(exclusion.expiresAt) ? `; expires: ${new Date(exclusion.expiresAt).toISOString()}` : "";
-	throw new Error(`Requested subagent model '${model}' is excluded and cannot be replaced by a fallback (reason: ${reason}${expiry}).`);
+	const lastError = input.lastError?.trim()
+		? ` Last error: ${redactSecretValues(input.lastError.trim().replace(/[\u0000-\u001f\u007f]+/g, " ")).slice(0, 240)}.`
+		: "";
+	return `No subagent model could start: all ${input.candidates.length} configured candidate(s) failed after up to ${MODEL_MAX_ATTEMPTS_PER_CANDIDATE} attempts each (${parts.join(", ")}).${lastError} Check provider availability, credentials, and the agent's configured model list, then launch again.`;
 }
 
 /**
@@ -392,7 +404,6 @@ export function resolveSubagentModelOverride(
 		const candidate = resolveSubagentModelCandidate(explicit, availableModels, preferredProvider);
 		if (options?.source === "explicit") {
 			resolved = candidate ?? resolveRequiredSubagentModelCandidate(explicit, availableModels, preferredProvider);
-			throwForExplicitModelExclusion(resolved, availableModels);
 			resolvedFromRegistry = true;
 		} else if (candidate) {
 			resolved = candidate;
@@ -439,17 +450,12 @@ export type ModelOrigin = ModelSource | "configured";
 export interface BuildModelCandidatesOptions {
 	/** Fallback models warn by default and throw when strict scope enforcement is enabled. */
 	scope?: ModelScopeCheckRule | ModelScopeCheckRule[];
-	/** Project-local model health scope. Scoped execution ignores legacy/global exclusions. */
-	healthScope?: string;
 	onWarn?: (violation: ModelScopeViolation) => void;
 	/** The primary model came from the running parent session, not configuration. */
 	primaryModelFromParent?: boolean;
 	/** How the primary model was selected. Explicit stays strict and does not rotate to fallbacks. */
 	origin?: ModelOrigin;
 }
-
-const ZERO_USABLE_MODEL_CANDIDATES_ERROR =
-	"No usable subagent models remain after registry, scope, and cached-exclusion filtering.";
 
 export function resolveModelOrigin(input: {
 	explicitModel?: string | boolean;
@@ -485,19 +491,8 @@ export function buildModelCandidates(
 	if (!primaryModel) throwForUnresolvedEnforcedInheritScope(options?.scope, true);
 	const origin = options?.origin ?? (options?.primaryModelFromParent ? "inherited" : "configured");
 	const scopes = configuredScopes(options?.scope);
-	type ExcludedCandidate = { candidate: string; exclusion: NonNullable<ReturnType<typeof findModelExclusion>> };
-	const excludedCandidates: ExcludedCandidate[] = [];
-	let excludedCandidateCount = 0;
-	const warnCachedExclusion = (candidate: string, exclusion: NonNullable<ReturnType<typeof findModelExclusion>>) => {
-		excludedCandidateCount++;
-		if (excludedCandidates.length < MODEL_EXCLUSION_DIAGNOSTIC_MAX_ENTRIES) excludedCandidates.push({ candidate, exclusion });
-		const displayCandidate = sanitizeModelExclusionDiagnostic(candidate, "unknown");
-		const reason = sanitizeModelExclusionDiagnostic(exclusion.reason, "runtime-failure");
-		console.warn(`[pi-subagents] Skipping model '${displayCandidate}' due to a cached exclusion (reason: ${reason}; expires: ${formatModelExclusionExpiry(exclusion.expiresAt)}).`);
-	};
 	if (origin === "explicit" && primaryModel) {
 		const normalized = resolveRequiredSubagentModelCandidate(primaryModel.trim(), availableModels, preferredProvider);
-		throwForExplicitModelExclusion(normalized, availableModels, options?.healthScope);
 		enforceModelScopes(normalized, scopes, "explicit", options?.onWarn);
 		primaryModel = normalized;
 	}
@@ -528,34 +523,22 @@ export function buildModelCandidates(
 		seen.add(normalized);
 		candidates.push(normalized);
 	}
-	// Directly requested models always run: transient transport exclusions
-	// must not drain an explicit candidate list. Other origins keep
-	// exclusion filtering so fallback rotation still skips bad models fast.
-	const ignoreTransient = origin === "explicit";
-	const resolved = filterFallbackCandidates(candidates, {
-		scope: options?.healthScope,
-		onExcluded: warnCachedExclusion,
-		ignoreExclusion: (candidate, exclusion) => ignoreStaleModelUnavailableExclusion(candidate, exclusion, availableModels)
-			|| (ignoreTransient && isTransientExclusionReason(exclusion.reason)),
-	});
-	if (resolved.length === 0) {
+	// Stateless and deterministic: the ordered list is walked from candidate one
+	// on every fresh launch. No persisted health state filters or reorders it.
+	if (candidates.length === 0) {
 		if (skippedPrimary) resolveRequiredSubagentModelCandidate(skippedPrimary, availableModels, preferredProvider);
-		if (candidates.length === 0 && skippedFallback) resolveRequiredSubagentModelCandidate(skippedFallback, availableModels, preferredProvider);
-		if (candidates.length > 0) {
-			const shownExclusions = excludedCandidates;
-			const omittedExclusions = excludedCandidateCount - shownExclusions.length;
-			const evidence = shownExclusions.length > 0
-				? ` (excluded: ${shownExclusions.map(({ candidate, exclusion }) => formatExcludedCandidateEvidence(candidate, exclusion)).join("; ")}${omittedExclusions > 0 ? `; ... and ${omittedExclusions} more` : ""})`
-				: "";
-			throw new Error(`${ZERO_USABLE_MODEL_CANDIDATES_ERROR}${evidence}`);
-		}
-		return resolved;
+		if (skippedFallback) resolveRequiredSubagentModelCandidate(skippedFallback, availableModels, preferredProvider);
+		// Nothing configured and nothing skipped: return the empty list and let
+		// the launch fail closed downstream with its own diagnostic.
+		return candidates;
 	}
 	if (skippedPrimary) {
 		console.warn(`[pi-subagents] Skipping primary model '${skippedPrimary}' because it is unavailable in this environment.`);
 	}
-	return resolved;
+	return candidates;
 }
+
+const MODEL_UNAVAILABLE_PATTERN = /(?:model.*(?:not found|unavailable|disabled)|unknown model)/i;
 
 const RETRYABLE_MODEL_FAILURE_PATTERNS = [
 	/^REQUEST_LIMIT_EXCEEDED$/,
@@ -603,7 +586,9 @@ const RETRYABLE_MODEL_FAILURE_PATTERNS = [
 	/internal server error/i,
 	/cold.?start/i,
 	/empty response/i,
-	/no output/i,
+	// NOTE: no broad /no output/i here. Only the exact canonical strings in
+	// isTransientNoOutputFailure count as a no-output startup signal; anything
+	// else mentioning "no output" is application prose, not a provider signal.
 	/model.*(?:load|fail|error)/i,
 ];
 
@@ -636,8 +621,9 @@ function isTransientNoOutputFailure(error: string | undefined): boolean {
 /**
  * Account-level exhaustion signals (quota, billing, credits). These identify the
  * provider account — not the task or request shape — as the failure source, so
- * they stay retryable across tool progress and stay cacheable even when wrapped
- * in request-shape (`invalid_request_error`) or rate (`429`) envelopes.
+ * they stay retryable when wrapped in request-shape (`invalid_request_error`)
+ * or rate (`429`) envelopes. They are still subject to the task-execution
+ * boundary below: once the child has run tools, the outcome is terminal.
  */
 const ACCOUNT_EXHAUSTED_PATTERN = /quota[\s_-]*exhausted|resource[\s_-]*exhausted|insufficient[\s_-]*credits?|purchase more credits|billing|\bcredit\b|payment required|\b402\b/i;
 
@@ -645,37 +631,17 @@ export function isAccountExhaustedFailure(error: string | undefined): boolean {
 	return ACCOUNT_EXHAUSTED_PATTERN.test(error ?? "");
 }
 
-export function isRetryableModelFailureAttempt(input: { error: string | undefined; messages?: readonly unknown[]; toolCount?: number }): boolean {
-	if (!isRetryableModelFailure(input.error)) return false;
-	if (isAccountExhaustedFailure(input.error)) return true;
-	if ((input.toolCount ?? 0) > 0) return false;
+export function isRetryableModelFailureAttempt(input: { error: string | undefined; messages?: readonly unknown[]; toolCount?: number; taskExecutionStarted?: boolean }): boolean {
+	if (!isRetryableModelFailure(input.error) && !isTransientNoOutputFailure(input.error)) return false;
+	// Once the child has executed task work, its outcome belongs to that run.
+	// Never silently repeat real work on another model — no carve-outs, not
+	// even when a progress counter missed a tool that still emitted a result.
+	if (input.taskExecutionStarted || (input.toolCount ?? 0) > 0) return false;
+	if (input.messages?.some((message) => Boolean(message && typeof message === "object" && (message as { role?: unknown }).role === "toolResult"))) return false;
 	if (isTransientNoOutputFailure(input.error)) return true;
 	if ((input.toolCount ?? 0) === 0 && (input.messages?.length ?? 0) === 0) return true;
 	const error = input.error?.trim();
 	return Boolean(error && input.messages?.some((message) => messageError(message)?.trim() === error));
-}
-
-// Request-shape failures can match broad fallback signals such as "upstream",
-// but do not establish that the model is unhealthy for subsequent requests.
-const REQUEST_SHAPE_FAILURE_PATTERN = /\b(?:bad[ _]request|invalid[ _]argument|invalid_request_error)\b/i;
-
-// Transient transport blips (fetch failed, timeouts, connection resets) say the
-// network flaked, not that the model is unhealthy. Still retryable within the
-// run (fall through to next candidate), but never cached as an exclusion — a
-// 5h exclusion for a momentary blip wrongly drains good models on later runs.
-const TRANSIENT_TRANSPORT_NO_CACHE_PATTERN = /fetch failed|request timed out|\btimed?\s?out\b|timeout|econnreset|etimedout|socket hang up|network(?:work)? (?:error|failure)|econnrefused|enotfound|eai_again|connection\s+(?:error|reset|closed|aborted|refused)|connection reset by peer|APIConnectionError|\b429\b|rate\s*limit|too many requests|REQUEST_LIMIT_EXCEEDED/i;
-
-export function isNonCacheableTransportFailure(error: string | undefined): boolean {
-	return TRANSIENT_TRANSPORT_NO_CACHE_PATTERN.test(error ?? "");
-}
-
-export function recordRetryableModelFailure(model: string | undefined, error: string | undefined, healthScope?: string): void {
-	if (!model || !error || !isRetryableModelFailure(error) || isContextOverflow(error)) return;
-	const accountExhausted = isAccountExhaustedFailure(error);
-	if (!accountExhausted && (REQUEST_SHAPE_FAILURE_PATTERN.test(error) || isTransientNoOutputFailure(error))) return;
-	if (!accountExhausted && TRANSIENT_TRANSPORT_NO_CACHE_PATTERN.test(error)) return;
-	const { provider, modelId } = parseModelKey(model);
-	recordModelFailure({ modelId, reason: error, ...(provider ? { provider } : {}), ...(healthScope ? { scope: healthScope } : {}) });
 }
 
 /**

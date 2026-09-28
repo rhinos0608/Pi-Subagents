@@ -515,7 +515,7 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 			assert.deepEqual(readCall().runtime?.toolBudget, toolBudget);
 			assert.equal(mockPi.callCount(), 1);
 		} finally {
-			// bg_wait completes at the logical result, not the parent's process-close publication.
+			// The internal wait completes at the logical result, not the parent's process-close publication.
 			// Await that publication even on assertion failure, before reading proof or deleting artifacts.
 			if (asyncDir) {
 				const eventsPath = path.join(asyncDir, "events.jsonl");
@@ -1096,7 +1096,6 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 			const executor = makeExecutor([makeAgent("echo")], {}, false, undefined, true, new Map(), undefined, undefined, createEventBus(), undefined, {
 				fanoutChild: true,
 				depth: 1,
-				waitTool: { enabled: true },
 				fast: false,
 				runFanoutBudget: { ...descriptor, parentPath: "tasks[0]" },
 			});
@@ -1461,7 +1460,6 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 			const executor = makeExecutor([makeAgent("echo", { model: "openai/gpt-5-mini", thinking: "high" })], {}, false, undefined, true, new Map(), undefined, undefined, createEventBus(), undefined, {
 				fanoutChild: true,
 				depth: 1,
-				waitTool: { enabled: true },
 				fast: false,
 				nestedRoute: route,
 				nestedParent: { parentRunId: "parent-run", parentChildIndex: 2, depth: 1, path: [] },
@@ -2722,7 +2720,7 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		assert.equal(result.usage.output, 50); // from mock
 	});
 
-	it("returns a provider failure after one foreground model launch", async () => {
+	it("returns a provider failure after bounded foreground retries exhaust", async () => {
 		mockPi.onCall({
 			jsonl: [{
 				type: "message_end",
@@ -2736,7 +2734,6 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 			}],
 			exitCode: 1,
 		});
-		mockPi.onCall({ output: "unexpected second launch" });
 		const agents = [makeAgent("echo", { model: "openai/gpt-5-mini" })];
 
 		const result = await runSync(tempDir, agents, "echo", "Task", {
@@ -2745,12 +2742,12 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 
 		assert.equal(result.exitCode, 1);
 		assert.equal(result.model, "openai/gpt-5-mini");
-		assert.deepEqual(result.attemptedModels, ["openai/gpt-5-mini"]);
-		assert.equal(result.modelAttempts?.length, 1);
+		assert.deepEqual(result.attemptedModels, ["openai/gpt-5-mini", "openai/gpt-5-mini", "openai/gpt-5-mini"]);
+		assert.equal(result.modelAttempts?.length, 3);
 		assert.equal(result.modelAttempts?.[0]?.model, "openai/gpt-5-mini");
 		assert.equal(result.modelAttempts?.[0]?.success, false);
 		assert.match(result.modelAttempts?.[0]?.error ?? "", /rate limit exceeded/);
-		assert.equal(mockPi.callCount(), 1);
+		assert.equal(mockPi.callCount(), 3);
 	});
 
 	it("fails zero-exit provider errors after one launch", async () => {
@@ -2893,7 +2890,7 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		assert.equal(mockPi.callCount(), 1);
 	});
 
-	it("does not use compaction recovery for a generic empty assistant abort after a compaction retry", async () => {
+	it("does not relaunch a model for a generic empty assistant abort after a compaction retry", async () => {
 		const sessionFile = path.join(tempDir, "generic-empty-after-compaction-retry-session.jsonl");
 		mockPi.onCall({
 			jsonl: [
@@ -2918,7 +2915,6 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 			writeFiles: [{ path: sessionFile, content: "{}\n" }],
 			exitCode: 0,
 		});
-		mockPi.onCall({ output: "Compaction recovery must not run" });
 		const agents = [makeAgent("echo", { model: "openai/gpt-5-mini" })];
 
 		const result = await runSync(tempDir, agents, "echo", "Task", {
@@ -2931,7 +2927,7 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		assert.equal(mockPi.callCount(), 1);
 	});
 
-	it("does not use compaction recovery after compaction_end willRetry false and a continued agent turn", async () => {
+	it("does not relaunch a model after compaction_end willRetry false and a continued agent turn", async () => {
 		const sessionFile = path.join(tempDir, "generic-empty-after-successful-compaction-session.jsonl");
 		mockPi.onCall({
 			jsonl: [
@@ -2953,7 +2949,6 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 			writeFiles: [{ path: sessionFile, content: "{}\n" }],
 			exitCode: 0,
 		});
-		mockPi.onCall({ output: "Compaction recovery must not run" });
 		const agents = [makeAgent("echo", { model: "openai/gpt-5-mini" })];
 
 		const result = await runSync(tempDir, agents, "echo", "Task", {
@@ -4127,16 +4122,6 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		}
 	});
 
-	it("passes the effective wait-tool setting through to child execution", async () => {
-		mockPi.onCall({ output: "ok" });
-		const result = await runSync(tempDir, makeAgentConfigs(["echo"]), "echo", "Task", {
-			runId: "wait-tool-env",
-			waitToolEnabled: false,
-		});
-		assert.equal(result.exitCode, 0);
-		assert.deepEqual(readCall().runtime?.waitTool, { enabled: false });
-	});
-
 	it("passes prompt inheritance flags through to child execution", async () => {
 		mockPi.onCall({ output: "ok" });
 		const agents = [makeAgent("echo", {
@@ -4875,7 +4860,7 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		assert.equal(receiptMessages.length, 2);
 	});
 
-	it("returns a provider failure after one detached model launch", async () => {
+	it("returns a provider failure after bounded detached retries exhaust", async () => {
 		mockPi.onCall({
 			jsonl: [{
 				type: "message_end",
@@ -4889,7 +4874,6 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 			}],
 			exitCode: 1,
 		});
-		mockPi.onCall({ output: "unexpected second launch" });
 		const agents = [makeAgent("echo", { model: "openai/gpt-5-mini" })];
 		let terminal: RunSyncResult | undefined;
 
@@ -4906,7 +4890,7 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		assert.equal(terminal.detached, undefined, "terminal status must not remain detached");
 		assert.equal(terminal.detachedReason, "user request");
 		assert.equal(terminal.exitCode, 1);
-		assert.equal(mockPi.callCount(), 1);
+		assert.equal(mockPi.callCount(), 3);
 	});
 
 	it("terminalizes a post-receipt completion pipeline throw exactly once with strict projections", async () => {

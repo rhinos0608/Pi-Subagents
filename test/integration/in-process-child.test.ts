@@ -53,7 +53,7 @@ describe("in-process foreground child", () => {
 		process.env.PI_SUBAGENT_CHILD_AGENT = "leaked-parent-value";
 		try {
 			mockPi.onCall({ output: "done" });
-			const result = await runSync(tempDir, makeAgentConfigs(["echo"]), "echo", "Task", { runId: "hooks-config", index: 3, waitToolEnabled: false });
+			const result = await runSync(tempDir, makeAgentConfigs(["echo"]), "echo", "Task", { runId: "hooks-config", index: 3 });
 			assert.equal(result.exitCode, 0);
 			const [session] = mockPi.sessions;
 			assert.ok(session, "child session was created");
@@ -61,7 +61,6 @@ describe("in-process foreground child", () => {
 			assert.equal(session.launch.runtime.runId, "hooks-config");
 			assert.equal(session.launch.runtime.childIndex, 3);
 			assert.equal(session.launch.runtime.fanoutChild, false);
-			assert.equal(session.launch.runtime.waitTool.enabled, false);
 			assert.equal(session.launch.runtime.steerInbox, undefined, "in-process children have no steer inbox");
 			assert.equal(session.launch.runtime.depth, 1);
 			assert.equal(session.task?.startsWith("Task: Task"), true);
@@ -74,7 +73,7 @@ describe("in-process foreground child", () => {
 
 	it("projects authoritative native-machine Git evidence into the public foreground result", async () => {
 		mockPi.onCall({ output: "done" }); const base = childSessionFactory(); const wrapped: ChildSessionFactory = { async create(input) { const child = await base.create(input); Object.defineProperty(child, "machineEvidence", { value: { machineId: "remote-machine", initial: { head: "aaa", dirty: false }, final: { head: "bbb", dirty: true } } }); return child; }, dispose: () => base.dispose() };
-		const result = await runSync(tempDir, makeAgentConfigs(["echo"]), "echo", "Task", { runId: "native-git-evidence", waitToolEnabled: false, childSessionFactory: wrapped });
+		const result = await runSync(tempDir, makeAgentConfigs(["echo"]), "echo", "Task", { runId: "native-git-evidence", childSessionFactory: wrapped });
 		assert.deepEqual(result.nativeMachine, { provider: "herdr", machineId: "remote-machine", initialGit: { head: "aaa", dirty: false }, finalGit: { head: "bbb", dirty: true } });
 	});
 
@@ -345,7 +344,7 @@ function stubPi(session: Record<string, unknown> = {}, onReload?: () => void): P
 		createAgentSession: async () => ({ session: { bindExtensions: async () => {}, dispose() {}, extensionRunner: { hasHandlers: () => false }, subscribe: () => () => {}, prompt: async () => {}, abort: async () => {}, steer: async () => {}, followUp: async () => {}, messages: [], sessionId: "s", ...session } }),
 	} as unknown as PiCodingAgentModule;
 }
-const stubLaunch: ChildSessionLaunch = { cwd: process.cwd(), storage: { kind: "memory" }, extensionPaths: [], ambientExtensions: false, hooks: [], noSkills: true, noContextFiles: true, runtime: { fanoutChild: false, depth: 1, waitTool: { enabled: false }, fast: false } as ChildSessionLaunch["runtime"] };
+const stubLaunch: ChildSessionLaunch = { cwd: process.cwd(), storage: { kind: "memory" }, extensionPaths: [], ambientExtensions: false, hooks: [], noSkills: true, noContextFiles: true, runtime: { fanoutChild: false, depth: 1, fast: false } as ChildSessionLaunch["runtime"] };
 
 describe("default child session factory", () => {
 	it("serializes process env through extension loading and session start across concurrent launches", async () => {
