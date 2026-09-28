@@ -13,7 +13,7 @@ import { normalizeSingleOutputOverride, resolveSingleOutputPath } from "../runs/
 import { getArtifactPaths, getArtifactsDir } from "../shared/artifacts.ts";
 import { resolveEffectiveThinking } from "../shared/model-info.ts";
 import { assertThinkingWithinCeiling, intersectThinkingCeilings, type ThinkingLevel } from "../shared/thinking-ceiling.ts";
-import { SUBAGENT_LIFECYCLE_ARTIFACT_VERSION, type ArtifactDirPreference, type ArtifactPaths, type IntercomBridgeConfig, type IntercomBridgeMode, type JsonSchemaObject, type OutputMode } from "../shared/types.ts";
+import { SUBAGENT_LIFECYCLE_ARTIFACT_VERSION, type ArtifactDirPreference, type ArtifactPaths, type IntercomBridgeConfig, type IntercomBridgeMode, type JsonSchemaObject } from "../shared/types.ts";
 import { capabilityCeilingAgentRestrictionMessage, intersectSubagentCapabilityCeilings, type ResolvedSubagentCapabilityCeiling, type SubagentCapabilityAudit } from "../runs/shared/capability-ceiling.ts";
 import { resolvePermissionRules } from "../runs/shared/permissions.ts";
 import type { ResolvedMcpDirectToolSelection } from "../runs/shared/mcp-direct-tool-allowlist.ts";
@@ -62,17 +62,12 @@ export interface SubagentLaunchContractInput {
 	cwd: string;
 	task?: string;
 	agentScope?: AgentScope;
-	context?: "fresh" | "fork";
-	model?: string;
-	fast?: boolean;
-	thinking?: string | false;
 	thinkingCeiling?: ThinkingLevel;
 	inheritedThinkingCeiling?: ThinkingLevel;
 	parentModel?: ParentModel;
 	availableModels?: ReadonlyArray<AvailableModelInfo | { provider: string; id: string; fullId?: string; reasoning?: boolean }>;
 	preferredProvider?: string;
 	output?: string | boolean;
-	outputMode?: OutputMode;
 	outputSchema?: JsonSchemaObject | false;
 	extensionBindings?: ExtensionBindings;
 	artifacts?: boolean;
@@ -225,7 +220,7 @@ function normalizeAvailableModels(models: SubagentLaunchContractInput["available
 
 function resolveLaunchContractContext(input: SubagentLaunchContractInput, agent: AgentConfig): "fresh" | "fork" {
 	return resolveSubagentLaunchContext({
-		explicitContext: input.context,
+		explicitContext: undefined,
 		agentDefaultContext: agent.defaultContext,
 		defaultSubagentContext: loadConfig().defaultSubagentContext,
 		canUseImplicitFork: canPreferForkFromSnapshot({
@@ -280,8 +275,13 @@ export async function resolveSubagentLaunchContract(input: SubagentLaunchContrac
 		const detail = error instanceof Error ? ` ${error.message}` : "";
 		return { ok: false, code: "invalid_cwd", message: `cwd '${effectiveCwd}' is not a directory.${detail}`, diagnostics };
 	}
-	if (input.context !== undefined && input.context !== "fresh" && input.context !== "fork") {
-		return { ok: false, code: "unsupported_mode", message: `Unsupported context '${String(input.context)}'; expected 'fresh' or 'fork'.`, diagnostics };
+	// Per-run tuning/model/context overrides were removed from the delegation API
+	// (Phase 6/Phase 5 cutover); model and thinking resolve from the agent
+	// definition only and context is always fresh. Reject them, never ignore.
+	const removedInput = input as unknown as Record<string, unknown>;
+	const removedFields = ["context", "model", "fast", "thinking", "timeoutMs", "maxRuntimeMs", "checkpointBeforeDeadlineMs", "usageBudget", "skill", "outputMode"].filter((field) => removedInput[field] !== undefined);
+	if (removedFields.length) {
+		return { ok: false, code: "unsupported_mode", message: `Removed subagent field(s) rejected: ${removedFields.join(", ")}. Per-run model/thinking/fast/context/timeout controls were removed; model and thinking resolve from the agent definition only.`, diagnostics };
 	}
 	if (input.artifactDir !== undefined && input.artifactDir !== "project" && input.artifactDir !== "session" && input.artifactDir !== "temp") {
 		return { ok: false, code: "invalid_artifact_dir", message: `Unsupported artifactDir '${String(input.artifactDir)}'; expected 'project', 'session', or 'temp'.`, diagnostics };
@@ -346,7 +346,6 @@ export async function resolveSubagentLaunchContract(input: SubagentLaunchContrac
 	const outputOverride = normalizeSingleOutputOverride(undefined, undefined);
 	const behavior = resolveStepBehavior(agent, {
 		...(outputOverride !== undefined ? { output: outputOverride } : {}),
-		...(input.model !== undefined ? { model: input.model } : {}),
 		...(input.outputSchema !== undefined ? { outputSchema: input.outputSchema } : {}),
 	});
 	const requestedSkills = behavior.skills === false ? [] : behavior.skills;
@@ -369,14 +368,14 @@ export async function resolveSubagentLaunchContract(input: SubagentLaunchContrac
 	const availableModels = normalizeAvailableModels(input.availableModels);
 	const preferredProvider = agent.modelProvider ?? input.preferredProvider ?? input.parentModel?.provider;
 	const modelScopes = resolveModelScopesForAgent(discovered.modelScope, agent.name, input.parentModel);
-	const modelOrigin = resolveModelOrigin({ explicitModel: input.model, agentModel: agent.model, parentModel: input.parentModel });
+	const modelOrigin = resolveModelOrigin({ explicitModel: undefined, agentModel: agent.model, parentModel: input.parentModel });
 	const primaryModel = externalRunner
 		? undefined
-		: resolveEffectiveSubagentModel(input.model, agent.model, input.parentModel, availableModels, preferredProvider, {
+		: resolveEffectiveSubagentModel(undefined, agent.model, input.parentModel, availableModels, preferredProvider, {
 			scope: modelScopes,
 			source: modelOrigin === "explicit" ? "explicit" : "inherited",
 		});
-	const effectiveThinkingConfig = input.thinking !== undefined ? input.thinking : agent.thinking;
+	const effectiveThinkingConfig = agent.thinking;
 	const thinkingCeiling = externalRunner ? undefined : intersectThinkingCeilings(
 		discovered.maxThinking,
 		input.thinkingCeiling,
@@ -386,9 +385,9 @@ export async function resolveSubagentLaunchContract(input: SubagentLaunchContrac
 		? []
 		: buildModelCandidates(primaryModel, agent.fallbackModels, availableModels, preferredProvider, {
 			scope: modelScopes,
-			primaryModelFromParent: modelOrigin === "inherited" || inheritsParentModel(input.model, agent.model, input.parentModel),
+			primaryModelFromParent: modelOrigin === "inherited" || inheritsParentModel(undefined, agent.model, input.parentModel),
 			origin: modelOrigin,
-		}).map((candidate) => applyThinkingSuffix(candidate, effectiveThinkingConfig, input.thinking !== undefined) ?? candidate);
+		}).map((candidate) => applyThinkingSuffix(candidate, effectiveThinkingConfig, false) ?? candidate);
 	const model = modelCandidates[0];
 	if (!externalRunner) {
 		try {
@@ -401,7 +400,7 @@ export async function resolveSubagentLaunchContract(input: SubagentLaunchContrac
 	}
 	let toolPlan: PiLaunchToolPlan;
 	const permissionRules = resolvePermissionRules(loadConfig().permissions, agent.permissions);
-	const fast = input.fast ?? agent.fast;
+	const fast = agent.fast;
 	const requiredExtensions = externalRunner ? [] : resolveRequiredChildExtensions(input.parentSessionId);
 	try {
 		toolPlan = resolvePiLaunchToolPlan({
@@ -445,7 +444,7 @@ export async function resolveSubagentLaunchContract(input: SubagentLaunchContrac
 		? nestedResultsPath(input.nestedRootRunId, runId)
 		: resultFilePath(DIRS.results, runId);
 	if (!sessionDir) diagnostics.push({ code: "host_required", severity: "host-required", message: "No sessionRoot/sessionDir was supplied; exact child session paths require the Pi host session-root policy." });
-	if (!externalRunner && input.availableModels === undefined && (input.model || agent.model || input.parentModel)) {
+	if (!externalRunner && input.availableModels === undefined && (agent.model || input.parentModel)) {
 		diagnostics.push({ code: "host_required", severity: "host-required", message: "No availableModels snapshot was supplied; model resolution may differ from the active Pi host registry." });
 	}
 	if (resolvedSkills.missing.length > 0) {

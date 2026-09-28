@@ -2,7 +2,6 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Compile } from "typebox/compile";
 import { resolveAsyncRunLocation } from "../runs/background/async-resume.ts";
 import { deliverStopRequest } from "../runs/background/control-channel.ts";
 import { reconcileAsyncRun } from "../runs/background/stale-run-reconciler.ts";
@@ -25,7 +24,6 @@ import {
 import { sanitizeDisplayText, truncateDisplayText } from "../shared/display-text.ts";
 import { decodeUtf8Tail } from "../shared/utf8.ts";
 import { readStatus } from "../shared/utils.ts";
-import { SubagentParams } from "./schemas.ts";
 import { normalizePublicSubagentExecution } from "./public-execution.ts";
 import { collectSubagentCost, SUBAGENT_COST_REPORT_VERSION } from "../slash/subagent-cost.ts";
 import { ASYNC_STATUS_SNAPSHOT_KIND, ASYNC_STATUS_SNAPSHOT_VERSION, buildAsyncStatusSnapshotForState } from "../runs/background/async-status-snapshot.ts";
@@ -341,8 +339,6 @@ class SubagentRpcError extends Error {
 	}
 }
 
-const subagentParamsValidator = Compile(SubagentParams);
-
 export function subagentRpcReplyEvent(requestId: string): string {
 	return `${SUBAGENT_RPC_REPLY_EVENT_PREFIX}${requestId}`;
 }
@@ -362,14 +358,6 @@ function assertRecordParams(params: unknown, method: SubagentRpcMethod): Record<
 	if (params === undefined) return {};
 	if (!isRecord(params)) throw new SubagentRpcError("invalid_params", `RPC ${method} params must be an object.`);
 	return params;
-}
-
-function assertSubagentParams(params: SubagentParamsLike, label: string): void {
-	if (subagentParamsValidator.Check(params)) return;
-	const messages = [...subagentParamsValidator.Errors(params)]
-		.slice(0, 4)
-		.map((error) => error.message);
-	throw new SubagentRpcError("invalid_params", `${label}: ${messages.join("; ") || "invalid subagent parameters"}`);
 }
 
 function textFromToolResult(result: AgentToolResult<Details>): string {
@@ -410,8 +398,14 @@ function normalizeTargetParams(params: unknown, method: SubagentRpcMethod): Pick
 function normalizeStatusParams(params: unknown): StatusRpcParams {
 	const input = assertRecordParams(params, "status");
 	const output: StatusRpcParams = normalizeTargetParamsFromRecord(input);
-	if (input.view !== undefined) output.view = input.view as StatusRpcParams["view"];
-	if (input.lines !== undefined) output.lines = input.lines as number;
+	if (input.view !== undefined) {
+		if (input.view !== "fleet" && input.view !== "transcript") throw new SubagentRpcError("invalid_params", "RPC status view must be fleet or transcript.");
+		output.view = input.view;
+	}
+	if (input.lines !== undefined) {
+		if (typeof input.lines !== "number" || !Number.isSafeInteger(input.lines) || input.lines < 1 || input.lines > 500) throw new SubagentRpcError("invalid_params", "RPC status lines must be an integer between 1 and 500.");
+		output.lines = input.lines;
+	}
 	return output;
 }
 
@@ -490,7 +484,10 @@ async function executeChecked(
 	method: SubagentRpcMethod,
 	params: SubagentParamsLike,
 ): Promise<{ text: string; details?: Details; isError?: boolean }> {
-	assertSubagentParams(params, `RPC ${method} params`);
+	// Internal/system params (runId/dir/index/view/lines/mode/steeringRecovery/
+	// async/worktree/output/quiet) are validated per-method above and enforced by
+	// the executor boundary; they must NOT be checked against the model-facing
+	// 7-field public schema here.
 	const controller = new AbortController();
 	const result = await options.execute(`rpc-${method}-${requestId}`, params, controller.signal, undefined, ctx);
 	failIfToolError(result);
@@ -521,7 +518,6 @@ function manageParams(params: unknown): SubagentParamsLike {
 		...(typeof input.id === "string" ? { id: input.id.trim() } : {}),
 		...(action === "schedule.run" && input.quiet === true ? { quiet: true } : {}),
 	};
-	assertSubagentParams(output, "RPC manage params");
 	return output;
 }
 
@@ -584,7 +580,6 @@ function stopAsyncRun(
 	}
 	const childId = typeof rawChildId === "string" ? rawChildId : undefined;
 	const target = normalizeTargetParams(input, "stop");
-	assertSubagentParams({ action: "status", ...target }, "RPC stop target params");
 	const asyncDirRoot = options.asyncDirRoot ?? DIRS.async;
 	const resultsDir = options.resultsDir ?? DIRS.results;
 	let location;

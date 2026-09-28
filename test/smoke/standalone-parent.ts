@@ -56,6 +56,8 @@ export default function registerSmoke(pi: ExtensionAPI) {
 			} : mode === "targeted-controls" ? {
 				workflowScript: `const left = runs.run("left", { agent: "binary-smoke", task: "Return LEFT." }); const right = runs.run("right", { agent: "binary-smoke", task: "Return RIGHT." }); let interrupted; try { interrupted = await right; } catch (error) { interrupted = String(error); } return { left: await left, right: interrupted };`,
 			} : mode === "child-timeout" ? {
+				// Per-child timeout overrides are gone; the flat operator deadline configured
+				// by the standalone harness bounds this workflow child.
 				workflowScript: `return await runs.run("child-deadline", { agent: "binary-smoke", task: "Wait for cancellation." });`,
 			} : { agent: "binary-smoke", task: "Return the scripted response." };
 			fs.writeFileSync("/stage/parent-initialized", String(process.pid));
@@ -67,11 +69,9 @@ export default function registerSmoke(pi: ExtensionAPI) {
 			}
 			const startupFailure = mode === "persistence-failure" || mode === "authorization-failure";
 			if (startupFailure) assert.equal(JSON.parse(fs.readFileSync("/stage/startup-hook-ready.json", "utf8")).pid, process.pid);
-			const launching = tool.execute("standalone-smoke", {
-				...request, context: "fresh", async: true,
-				model: "standalone-smoke/local", acceptance: false, timeoutMs: mode === "run-timeout" ? 8000 : 20000,
-				...(mode === "tool-timeout" ? { toolTimeoutMs: 1000 } : {}),
-			}, new AbortController().signal, undefined, ctx);
+			// Exercise the exact seven-field public surface. Model, async policy,
+			// context, acceptance, and deadlines resolve from agent/operator config.
+			const launching = tool.execute("standalone-smoke", request, new AbortController().signal, undefined, ctx);
 			if (mode === "missing-bootstrap") {
 				assert.ok(fs.existsSync("/stage/withheld-binary-bootstrap.js"));
 				await assert.rejects(launching, /Background runner bootstrap not found/);

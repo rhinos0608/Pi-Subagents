@@ -87,12 +87,14 @@ describe("subagent extension child mode", () => {
 			}, theme).text;
 			const foregroundWorkflow = registeredTool.renderCall({ workflowScript: "return runs.run('publish', {agent:'worker'});", async: false }, theme).text;
 			const templateWorkflow = registeredTool.renderCall({ workflowScript: "return runs.run(\`template\`, {agent:'worker'});", async: false }, theme).text;
+			// Phase 6 trimmed renderCall to the 7-field public vocabulary: async is
+			// no longer model-supplied, so the manifest always renders background.
 			const commentedWorkflow = registeredTool.renderCall({ workflowScript: "// runs.run('ignored', {agent:'worker'})\nconst note = \"key: 'also-ignored'\"; return runs.run('real', {agent:'worker'});" }, theme).text;
 			const dynamicKeyWorkflow = registeredTool.renderCall({ workflowScript: "return runs.all([{key: 'review-' + item, agent: 'reviewer'}]);" }, theme).text;
 			const ordinaryKeyWorkflow = registeredTool.renderCall({ workflowScript: "const config = {key: 'secret'}; return runs.all([{agent: 'reviewer', config: {key: 'nested'}, key: 'review'}]);" }, theme).text;
 			if (!workflow.includes("background · 3 lanes: scan, correctness, tests")) throw new Error("expected workflow manifest, got " + workflow);
-			if (!foregroundWorkflow.includes("foreground · 1 lane: publish")) throw new Error("expected foreground workflow manifest, got " + foregroundWorkflow);
-			if (!templateWorkflow.includes("foreground · 1 lane: template")) throw new Error("expected static template lane, got " + templateWorkflow);
+			if (!foregroundWorkflow.includes("background · 1 lane: publish")) throw new Error("expected background workflow manifest, got " + foregroundWorkflow);
+			if (!templateWorkflow.includes("background · 1 lane: template")) throw new Error("expected static template lane, got " + templateWorkflow);
 			if (!commentedWorkflow.includes("background · 1 lane: real")) throw new Error("expected lexical lane filtering, got " + commentedWorkflow);
 			if (!dynamicKeyWorkflow.includes("workflow script · background")) throw new Error("expected dynamic key fallback, got " + dynamicKeyWorkflow);
 			if (!ordinaryKeyWorkflow.includes("background · 1 lane: review") || ordinaryKeyWorkflow.includes("secret") || ordinaryKeyWorkflow.includes("nested")) throw new Error("expected only runs.all child key, got " + ordinaryKeyWorkflow);
@@ -124,7 +126,9 @@ describe("subagent extension child mode", () => {
 					async: false,
 				}, theme).text;
 				if (!result.includes("background · 1 lane: scan")) throw new Error("expected workflow executor background manifest, got " + result);
-				if (!explicitForeground.includes("foreground · 1 lane: publish")) throw new Error("expected workflow executor foreground manifest, got " + explicitForeground);
+				// Phase 6 trimmed renderCall to the 7-field public vocabulary, so even
+				// an explicit async:false renders the background manifest.
+				if (!explicitForeground.includes("background · 1 lane: publish")) throw new Error("expected workflow executor background manifest, got " + explicitForeground);
 			`;
 			const env = parentToolEnv();
 			env.PI_CODING_AGENT_DIR = agentDir;
@@ -363,8 +367,7 @@ describe("subagent extension child mode", () => {
 				registerSubagentExtension(fakePi);
 				if (!registeredTool) throw new Error("tool not registered");
 				const theme = { fg(_name, text) { return text; }, bold(text) { return text; } };
-				const call = registeredTool.renderCall({ agent: "worker", async: true }, theme).render(120).map((line) => line.trimEnd());
-				if (call.length !== 1 || call[0] !== "subagentworker[async]") throw new Error("unexpected call row: " + JSON.stringify(call));
+				if (registeredTool.renderCall({ agent: "worker" }, theme).render(120).map((line) => line.trimEnd()).join("\n") !== "subagentworker") throw new Error("configured zero horizontal spacing did not join the call row");
 			`;
 			const env = parentToolEnv();
 			env.PI_CODING_AGENT_DIR = agentDir;

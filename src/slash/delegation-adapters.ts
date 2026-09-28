@@ -2,7 +2,6 @@ import {
 	type SubagentDelegationRequest,
 	type SubagentDelegationResponse,
 	type SubagentDelegationStatus,
-	type SubagentDelegationThinking,
 	type SubagentDelegationUpdate,
 	type SubagentDelegationUpdateUsage,
 	type SubagentDelegationValue,
@@ -14,8 +13,6 @@ export interface PromptTemplateDelegationRequest {
 	requestId: string;
 	agent: string;
 	task: string;
-	context: "fresh" | "fork";
-	model: string;
 	cwd: string;
 }
 
@@ -123,11 +120,8 @@ export interface DelegatedSubagentExecutionParams {
 	agent?: string;
 	task?: string;
 	context: "fresh" | "fork";
-	model?: string;
 	cwd: string;
-	timeoutMs?: number;
 	toolBudget?: ToolBudgetConfig;
-	skill?: string | string[] | boolean;
 	output?: string | boolean;
 	outputMode?: "inline" | "file-only";
 	outputSchema?: JsonSchemaObject;
@@ -135,8 +129,6 @@ export interface DelegatedSubagentExecutionParams {
 	acceptance?: AcceptanceInput;
 	artifacts?: boolean;
 	intercomBridge?: IntercomBridgeConfig;
-	/** Internal-only thinking override accepted by executeDelegated. */
-	delegatedThinkingOverride?: SubagentDelegationThinking;
 	/** Internal-only capability accepted and stripped by executeDelegated. */
 	delegatedAllowZeroToolBudget?: true;
 	async: false;
@@ -151,15 +143,11 @@ export function parsePromptTemplateRequest(data: unknown): PromptTemplateDelegat
 	if (typeof value.requestId !== "string" || !value.requestId) return undefined;
 	if (typeof value.agent !== "string" || !value.agent) return undefined;
 	if (typeof value.task !== "string" || !value.task) return undefined;
-	if (typeof value.model !== "string" || !value.model) return undefined;
 	if (typeof value.cwd !== "string" || !value.cwd) return undefined;
-	if (value.context !== "fresh" && value.context !== "fork") return undefined;
 	return {
 		requestId: value.requestId,
 		agent: value.agent,
 		task: value.task,
-		context: value.context,
-		model: value.model,
 		cwd: value.cwd,
 	};
 }
@@ -312,13 +300,11 @@ export function toSubagentDelegationExecutionParams(request: SubagentDelegationR
 		task: request.task,
 		context: "fresh",
 		cwd: request.cwd,
-		model: request.model,
 		toolBudget: request.toolBudget,
 		...(request.result.kind === "structured" ? { outputSchema: request.result.schema } : {}),
 		acceptance: false,
 		artifacts: request.artifacts,
 		...(request.intercomBridge !== undefined ? { intercomBridge: request.intercomBridge } : {}),
-		delegatedThinkingOverride: request.thinking,
 		delegatedAllowZeroToolBudget: true,
 		async: false,
 		foregroundOnly: true,

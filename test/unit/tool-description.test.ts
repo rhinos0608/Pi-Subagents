@@ -76,13 +76,13 @@ describe("registered subagent tool description", () => {
 		}
 		for (const description of [FULL_SUBAGENT_TOOL_DESCRIPTION]) {
 			for (const contract of [
-				/one child with \{agent,task\?\}/,
-				/exactly one of \{workflowScript,args\?\}, \{workflowScriptPath,args\?\} or \{workflow,args\}/,
+				/delegate one child with \{agent,task\?,cwd\?\}/i,
+			/pass exactly one workflow call with \{workflowScript,cwd\?\}/,
 				/agent\/task exclude workflow inputs; task excludes action.*agent may target management actions/,
-				/workflowScriptPath loads from request cwd before sandbox/,
+				/validate accepts workflowScript without launching/,
 				/Raw-script sandboxes add deeply frozen args/,
 				/raw-script args persist as evidence, so never include secrets/,
-				/action is management\/control; validate accepts either script without launching/,
+				/action is management\/control;/,
 				/action:"list",capabilities:true.*executable, non-disabled.*runner.available === true/,
 				/Passive PATH\/PATHEXT\/X_OK.*not authentication\/version\/launch proof/,
 				/exactly one top-level subagent workflow call with async:true/,
@@ -98,10 +98,10 @@ describe("registered subagent tool description", () => {
 				/children.list is workflow-only, not an exhaustive list of direct native children.*exact run id.*action:"status",id.*status identifies the candidate.*action:"resume",id,message.*authoritatively checks eligibility, may reject it.*labeled same-role fallback only when no known candidate exists or resume rejects eligibility/,
 				/latest returned runId.*distinct resume pass needs a new stable key.*identical launch parameters/,
 				/Oracle\/advisor.*supervisor dialogue/,
-				/raw workflowScript\/workflowScriptPath cannot use runs.host/,
+				/raw workflowScript cannot use runs.host/,
 				/Granted commands\/relative outputs use workflow cwd, never per-step cwd/,
-				/worktree:true requires clean source.*baseRef defaults to HEAD at allocation.*named ref, never full 40\/64-character commit IDs or revision expressions/,
-				/External CLI agents support native options only when their runner declares them.*tool budget, fast, fork context/,
+				/model and thinking resolve from the agent definition and operator config, never per-call fields/i,
+				/read guide tool-reference before passing structured output, acceptance\/agentContract, or output routing/,
 				/child launch, prompt runtime, extension load or child tooling failure is a lane infrastructure blocker/,
 				/exact failure.*run\/status.*repo\/cwd\/worktree\/branch\/ref.*clean worktree.*partial diff.*same-protocol retry/,
 				/interactive_shell, pi -ne, Codex\/Claude\/Cursor CLI.*explicit owner approval/,
@@ -110,6 +110,18 @@ describe("registered subagent tool description", () => {
 				/Before advanced orchestration.*action:"guide",topic:"workflows".*pi-subagents skill/,
 				/action:"guide",topic:"tool-reference".*controls\/evidence gates/,
 			]) assert.match(description, contract);
+			for (const stale of [
+				/workflowScriptPath/,
+				/\{workflow,args\}/,
+				/\{workflow:/,
+				/model override/i,
+				/thinking uses model suffix/i,
+				/worktree:true/,
+				/baseRef/,
+				/tool budget, fast, fork context/,
+				/subagents_enable/,
+				/bg_wait/,
+			]) assert.doesNotMatch(description, stale);
 		}
 	});
 
@@ -347,7 +359,7 @@ describe("registered subagent tool description", () => {
 		assert.equal(readRegisteredTool(invalidAgentDir).description, FULL_SUBAGENT_TOOL_DESCRIPTION);
 	});
 
-	it("registers the compact schema for default/compact modes and the full schema for full/custom", () => {
+	it("registers the single 7-field schema for every description mode", () => {
 		const defaultAgentDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-schema-profile-default-"));
 		writeExtensionConfig(defaultAgentDir, {});
 		const compactAgentDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-schema-profile-compact-"));
@@ -366,15 +378,17 @@ describe("registered subagent tool description", () => {
 		const customParams = readRegisteredTool(customAgentDir).parameters as { properties: Record<string, { description?: string }> };
 		const invalidParams = readRegisteredTool(invalidAgentDir).parameters as { properties: Record<string, { description?: string }> };
 
-		assert.deepEqual(withoutDescriptions(defaultParams), withoutDescriptions(fullParams));
-		assert.deepEqual(withoutDescriptions(compactParams), withoutDescriptions(fullParams));
-		assert.ok(JSON.stringify(defaultParams).length <= JSON.stringify(fullParams).length);
-		assert.ok(JSON.stringify(compactParams).length <= JSON.stringify(fullParams).length);
-		assert.equal(defaultParams.properties.agent?.description, undefined);
-		assert.equal(compactParams.properties.agent?.description, undefined);
-		assert.ok(fullParams.properties.agent?.description);
-		assert.match(String(defaultParams.properties.acceptance?.description ?? ""), /Evidence policy/);
-		assert.deepEqual(withoutDescriptions(customParams), withoutDescriptions(fullParams));
-		assert.deepEqual(withoutDescriptions(invalidParams), withoutDescriptions(fullParams));
+		// Phase 6a: every description mode registers the same single 7-field
+		// public schema (SubagentParams); the compact/full schema branching is gone.
+		const expectedKeys = ["action", "agent", "cwd", "id", "message", "task", "workflowScript"];
+		for (const [mode, params] of [["default", defaultParams], ["compact", compactParams], ["full", fullParams], ["custom", customParams], ["invalid", invalidParams]] as const) {
+			assert.deepEqual(Object.keys(params.properties).sort(), expectedKeys, `${mode} mode registers the 7-field vocabulary`);
+		}
+		assert.deepEqual(defaultParams, compactParams);
+		assert.deepEqual(defaultParams, fullParams);
+		assert.deepEqual(defaultParams, customParams);
+		assert.deepEqual(defaultParams, invalidParams);
+		assert.match(String(defaultParams.properties.agent?.description ?? ""), /one-child/i);
+		assert.match(String(defaultParams.properties.workflowScript?.description ?? ""), /no runs\.host/);
 	});
 });

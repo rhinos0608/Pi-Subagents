@@ -307,9 +307,31 @@ interface TaskParam {
 	toolBudget?: ToolBudgetConfig;
 }
 
-export interface SubagentParamsLike {
+/**
+ * Model-authored public vocabulary (Phase 6a cutover): agent, task, cwd,
+ * workflowScript, action, id, message ONLY. executePublic rejects any other
+ * model-supplied key; the tool schema sets additionalProperties:false so
+ * providers reject them before dispatch.
+ */
+export interface PublicSubagentParamsLike {
+	agent?: string;
+	task?: string;
+	cwd?: string;
+	workflowScript?: string;
 	action?: string;
 	id?: string;
+	message?: string;
+}
+
+// ---- Internal boundary: everything below is NEVER model-authored. ----
+// Internal recovery/control fields (runId/dir/index targeting, resume,
+// delegated launch state) stay on SubagentParamsLike so model input cannot
+// reach them; executePublic validates at the boundary and rejects removed
+// per-run tuning/model fields (model, fast, thinking, context, timeoutMs,
+// maxRuntimeMs, checkpointBeforeDeadlineMs, usageBudget, skill) outright.
+// model/fast/thinking remain here ONLY for internal launch resolution reads
+// outside Phase 6a scope; they must never be set from model input.
+export interface SubagentParamsLike extends PublicSubagentParamsLike {
 	runId?: string;
 	dir?: string;
 	handoffPath?: string;
@@ -325,8 +347,6 @@ export interface SubagentParamsLike {
 	config?: unknown;
 	name?: string;
 	type?: string;
-	agent?: string;
-	task?: string;
 	capabilities?: boolean;
 	extensionBindings?: ExtensionBindings;
 	/** Retained async child run id. Valid only on workflow runs.run items. */
@@ -527,6 +547,38 @@ interface ExecutionContextData {
 
 function resolveRequestedCwd(runtimeCwd: string, requestedCwd: string | undefined): string {
 	return requestedCwd ? path.resolve(runtimeCwd, requestedCwd) : runtimeCwd;
+}
+
+/** Phase 6a: per-run tuning/model fields killed at the backend or cut from the model vocabulary. Model input carrying any of these is rejected, never ignored. */
+const REMOVED_PUBLIC_SUBAGENT_FIELDS = [
+	"context",
+	"timeoutMs",
+	"maxRuntimeMs",
+	"checkpointBeforeDeadlineMs",
+	"usageBudget",
+	"skill",
+	"model",
+	"fast",
+	"thinking",
+] as const;
+
+function rejectRemovedPublicSubagentFields(params: PublicSubagentParamsLike): string | undefined {
+	const record = params as Record<string, unknown>;
+	const rejected = (REMOVED_PUBLIC_SUBAGENT_FIELDS as readonly string[]).filter((field) => record[field] !== undefined);
+	if (!rejected.length) return undefined;
+	return `Removed subagent field(s) rejected: ${rejected.join(", ")}. The public subagent vocabulary is agent, task, cwd, workflowScript, action, id, message only.`;
+}
+
+/** Control actions target a live run, so they require a non-empty run id. Launch mode omits action and id legitimately. */
+const CONTROL_RUN_ID_ACTIONS = new Set(["steer", "resume", "interrupt"]);
+
+export function rejectMissingControlRunId(params: PublicSubagentParamsLike): string | undefined {
+	const action = typeof params.action === "string" ? params.action.trim().toLowerCase() : undefined;
+	if (!action || !CONTROL_RUN_ID_ACTIONS.has(action)) return undefined;
+	if (typeof params.id !== "string" || !params.id.trim()) {
+		return `Action '${params.action}' requires id to be a non-empty run id string.`;
+	}
+	return undefined;
 }
 
 function loadWorkflowScriptPath(params: SubagentParamsLike, runtimeCwd: string): { params?: SubagentParamsLike; error?: string } {
@@ -2769,11 +2821,6 @@ function applySingleAgentLaunchDefaults(params: SubagentParamsLike, agents: Agen
 
 function validateLaunchOutputSchemaOverrides(params: SubagentParamsLike): string | undefined {
 	const values: unknown[] = [params.outputSchema, ...(params.tasks ?? []).map((task) => task.outputSchema)];
-	for (const step of params.chain ?? []) {
-		if (isParallelStep(step)) values.push(...step.parallel.map((task) => task.outputSchema));
-		else if (isDynamicParallelStep(step)) values.push(step.parallel.outputSchema);
-		else values.push(step.outputSchema);
-	}
 	for (const value of values) {
 		if (value === undefined || value === false) continue;
 		try {
@@ -2849,7 +2896,7 @@ function expandChainParallelCounts(chain: ChainStep[]): { chain?: ChainStep[]; e
 			if (rawCount !== undefined && (typeof rawCount !== "number" || !Number.isInteger(rawCount) || rawCount < 1)) {
 				return { error: `chain[${stepIndex}].parallel[${taskIndex}].count must be an integer >= 1` };
 			}
-			const { count, ...concreteTask } = task;
+			const { count, ...concreteTask } = task as typeof task & { count?: unknown };
 			for (let repeat = 0; repeat < (rawCount ?? 1); repeat++) {
 				expandedParallel.push({ ...concreteTask });
 			}
@@ -2985,7 +3032,7 @@ function collectStaticLaunchSummaries(input: {
 		for (const step of input.params.chain) {
 			if (isParallelStep(step)) {
 				for (const task of step.parallel) {
-					launches.push(summary(task.agent, flatIndex, task.model));
+					launches.push(summary(task.agent, flatIndex, undefined));
 					flatIndex++;
 				}
 				continue;
@@ -2993,13 +3040,13 @@ function collectStaticLaunchSummaries(input: {
 			if (isDynamicParallelStep(step)) {
 				const maxItems = step.expand.maxItems ?? input.dynamicFanoutMaxItems ?? 0;
 				for (let itemIndex = 0; itemIndex < maxItems; itemIndex++) {
-					launches.push(summary(step.parallel.agent, flatIndex, step.parallel.model));
+					launches.push(summary(step.parallel.agent, flatIndex, undefined));
 					flatIndex++;
 				}
 				continue;
 			}
 			const sequential = step as SequentialStep;
-			launches.push(summary(sequential.agent, flatIndex, sequential.model));
+			launches.push(summary(sequential.agent, flatIndex, undefined));
 			flatIndex++;
 		}
 		return launches;
@@ -4808,6 +4855,12 @@ function createScheduledOwnerState(source: SubagentState, ownerSessionId: string
 	};
 }
 
+/**
+ * Scheduler-owned launches bypass the model schema but not the public authority boundary:
+ * raw scheduled scripts remain host-denied unless a workflow resource grants that authority.
+ */
+const scheduledExecutions = new WeakSet<object>();
+
 export function createSubagentExecutor(deps: ExecutorDeps): {
 	execute: (
 		id: string,
@@ -4868,6 +4921,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		const allowZeroToolBudget = delegatedZeroToolBudgets.has(params);
 		const delegatedExecution = delegatedExecutions.has(params);
 		const publicExecution = publicExecutions.has(params);
+		const scheduledExecution = scheduledExecutions.has(params);
 		const workflowResourcePermit = workflowResourcePermits.get(params);
 		const workflowPermitContext = workflowPermitContexts.get(params);
 		const delegatedWorkflowPermit = workflowPermitContext && "root" in workflowPermitContext ? workflowPermitContext.root : undefined;
@@ -5501,7 +5555,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 					});
 					const workflowHost = workflowResource
 						? workflowResource.authority.host ? runHostCommand : undefined
-						: publicExecution ? undefined : runHostCommand;
+						: (publicExecution || scheduledExecution) ? undefined : runHostCommand;
 					let projectedTraceLength = 0;
 					let projectedTraceTail: NonNullable<Details["workflow"]>["trace"][number] | undefined;
 					const updateTrace = (trace: NonNullable<Details["workflow"]>["trace"]) => {
@@ -5887,7 +5941,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 				? undefined
 				: workflowResource
 					? workflowResource.authority.host ? runHostCommand : undefined
-					: publicExecution ? undefined : runHostCommand;
+					: (publicExecution || scheduledExecution) ? undefined : runHostCommand;
 			const workflowHostSteps = new Map<string, HostStepNode>();
 			let liveWorkflow: NonNullable<Details["workflow"]> = { trace: [], emits: [], console: [], ...(workflowResource ? { resource: workflowResource.provenance } : {}) };
 			const childProgress = new Map<string, ReturnType<typeof workflowChildProgress>>();
@@ -7293,12 +7347,20 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 
 	const executePublic = (
 		id: string,
-		params: SubagentParamsLike,
+		params: PublicSubagentParamsLike,
 		signal: AbortSignal,
 		onUpdate: ((r: AgentToolResult<Details>) => void) | undefined,
 		ctx: ExtensionContext,
 	): Promise<AgentToolResult<Details>> => {
-		const normalized = normalizePublicSubagentExecution(params);
+		const removedFieldError = rejectRemovedPublicSubagentFields(params);
+		if (removedFieldError) {
+			return Promise.resolve({ content: [{ type: "text", text: removedFieldError }], isError: true, details: { mode: "management", results: [] } });
+		}
+		const missingControlRunIdError = rejectMissingControlRunId(params);
+		if (missingControlRunIdError) {
+			return Promise.resolve({ content: [{ type: "text", text: missingControlRunIdError }], isError: true, details: { mode: "management", results: [] } });
+		}
+		const normalized = normalizePublicSubagentExecution(params as SubagentParamsLike);
 		if (!normalized.ok) {
 			return Promise.resolve({ content: [{ type: "text", text: normalized.error }], isError: true, details: { mode: normalized.mode, results: [] } });
 		}
@@ -7367,7 +7429,8 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			owner = { state, executor: createSubagentExecutor({ ...deps, state }) };
 			ownerExecutors.set(ownerSessionId, owner);
 		}
-		return owner.executor.executePublic(id, params, signal, undefined, ctx);
+		scheduledExecutions.add(params);
+		return owner.executor.execute(id, params, signal, undefined, ctx);
 	};
 
 	function* getCurrentSupervisorOwnerStates(): Iterable<SubagentState> {

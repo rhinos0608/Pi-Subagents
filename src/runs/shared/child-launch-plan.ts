@@ -18,6 +18,7 @@ export interface ResolvedStepBehavior {
 export type OutputOverrideInput = string | boolean;
 
 export interface StepOverrides {
+	async?: boolean;
 	output?: OutputOverrideInput;
 	outputMode?: OutputMode;
 	reads?: string[] | false;

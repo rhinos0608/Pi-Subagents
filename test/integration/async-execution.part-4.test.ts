@@ -206,7 +206,7 @@ setTimeout(() => process.exit(90), 15000).unref();
 				mockPi.onCall({ output: "finite setup completed", writeFiles: [{ path: marker, content: "launched" }] });
 				const connection = once(server, "connection", { signal: AbortSignal.timeout(20_000) });
 				const receipt = executeAsyncChain(id, {
-					chain: [{ agent: "worker", task: "Do work", worktree: true }],
+					chain: [{ parallel: [{ agent: "worker", task: "Do work" }], worktree: true }],
 					agents: [makeAgent("worker")],
 					ctx: { pi: { events: bus }, cwd: repo, currentSessionId: "session-1" },
 					artifactConfig: { enabled: false, includeInput: false, includeOutput: false, includeJsonl: false, includeMetadata: false, cleanupDays: 7 },

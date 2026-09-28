@@ -252,14 +252,16 @@ Worker.
 `);
 		const availableModels = [{ provider: "openai-codex", id: "gpt-5.6-luna", fullId: "openai-codex/gpt-5.6-luna" }];
 		const enabled = await resolveSubagentLaunchContract({ agent: "fast-worker", cwd, task: "Run", availableModels });
-		const disabled = await resolveSubagentLaunchContract({ agent: "fast-worker", cwd, task: "Run", availableModels, fast: false });
-
 		assert.equal(enabled.ok, true);
-		assert.equal(disabled.ok, true);
-		if (enabled.ok && disabled.ok) {
+		if (enabled.ok) {
 			assert.ok(enabled.contract.tools.runtimeExtensions.some((entry) => entry.endsWith("fast-mode-extension.ts")));
-			assert.equal(disabled.contract.tools.runtimeExtensions.some((entry) => entry.endsWith("fast-mode-extension.ts")), false);
-			assert.notEqual(enabled.contract.launchContractDigest, disabled.contract.launchContractDigest);
+		}
+		// Per-call fast overrides were removed; model input carrying fast is rejected, never ignored.
+		const perCall = await resolveSubagentLaunchContract({ agent: "fast-worker", cwd, task: "Run", availableModels, fast: false as never });
+		assert.equal(perCall.ok, false);
+		if (!perCall.ok) {
+			assert.equal(perCall.code, "unsupported_mode");
+			assert.match(perCall.message, /Removed subagent field.*fast/);
 		}
 	});
 
@@ -271,11 +273,19 @@ Worker.
 		const accepted = await resolveSubagentLaunchContract({ agent: "worker", cwd, task: "Inspect", availableModels: [{ provider: "test", id: "worker", fullId: "test/worker" }] });
 		assert.equal(accepted.ok, true);
 		if (accepted.ok) assert.equal(accepted.contract.thinkingCeiling, "xhigh");
-		const rejected = await resolveSubagentLaunchContract({ agent: "worker", cwd, task: "Inspect", thinking: "max", availableModels: [{ provider: "test", id: "worker", fullId: "test/worker" }] });
+		// Per-call thinking overrides were removed; the ceiling still applies to agent-declared thinking.
+		writeAgent(path.join(cwd, ".pi", "agents", "ceiling-worker.md"), `---\nname: ceiling-worker\ndescription: Project worker\nmodel: test/worker\nthinking: max\n---\nWorker.\n`);
+		const rejected = await resolveSubagentLaunchContract({ agent: "ceiling-worker", cwd, task: "Inspect", availableModels: [{ provider: "test", id: "worker", fullId: "test/worker" }] });
 		assert.equal(rejected.ok, false);
 		if (!rejected.ok) {
 			assert.equal(rejected.code, "thinking_ceiling");
-			assert.match(rejected.message, /max.*xhigh.*worker/);
+			assert.match(rejected.message, /max.*xhigh.*ceiling-worker/);
+		}
+		const perCallThinking = await resolveSubagentLaunchContract({ agent: "worker", cwd, task: "Inspect", thinking: "max" as never, availableModels: [{ provider: "test", id: "worker", fullId: "test/worker" }] });
+		assert.equal(perCallThinking.ok, false);
+		if (!perCallThinking.ok) {
+			assert.equal(perCallThinking.code, "unsupported_mode");
+			assert.match(perCallThinking.message, /Removed subagent field.*thinking/);
 		}
 	});
 
@@ -300,7 +310,7 @@ Project prompt.
 		);
 	});
 
-	it("rejects an explicit per-call unknown model before launch", async () => {
+	it("rejects an explicit per-call model override before launch", async () => {
 		const cwd = path.join(tempDir, "repo-explicit-unknown-model");
 		fs.mkdirSync(cwd, { recursive: true });
 		writeAgent(path.join(cwd, ".pi", "agents", "worker.md"), `---
@@ -311,15 +321,19 @@ model: test/primary
 Project prompt.
 `);
 
-		await assert.rejects(
-			resolveSubagentLaunchContract({
-				agent: "worker",
-				cwd,
-				model: "test/unknown",
-				availableModels: [{ provider: "test", id: "primary", fullId: "test/primary" }],
-			}),
-			/Unknown subagent model 'test\/unknown'/,
-		);
+		// Per-run model selection was removed; the model resolves from the agent
+		// definition only, so per-call model input is rejected, never resolved.
+		const rejected = await resolveSubagentLaunchContract({
+			agent: "worker",
+			cwd,
+			model: "test/unknown" as never,
+			availableModels: [{ provider: "test", id: "primary", fullId: "test/primary" }],
+		});
+		assert.equal(rejected.ok, false);
+		if (!rejected.ok) {
+			assert.equal(rejected.code, "unsupported_mode");
+			assert.match(rejected.message, /Removed subagent field.*model/);
+		}
 	});
 
 	it("trusts an inherited parent model outside the host registry", async () => {
@@ -907,10 +921,14 @@ Project prompt.
 		const explicitFork = await resolveSubagentLaunchContract({
 			agent: "worker",
 			cwd,
-			context: "fork",
+			context: "fork" as never,
 		});
-		assert.equal(explicitFork.ok, true);
-		assert.equal(explicitFork.contract.context, "fork");
+		// Per-call context overrides were removed; explicit context input is rejected.
+		assert.equal(explicitFork.ok, false);
+		if (!explicitFork.ok) {
+			assert.equal(explicitFork.code, "unsupported_mode");
+			assert.match(explicitFork.message, /Removed subagent field.*context/);
+		}
 	});
 
 	it("applies defaultSubagentContext fork without overriding explicit fresh", async () => {
@@ -941,12 +959,16 @@ Project prompt.
 		const explicitFresh = await resolveSubagentLaunchContract({
 			agent: "worker",
 			cwd,
-			context: "fresh",
+			context: "fresh" as never,
 			parentSessionFile,
 			parentLeafId: "leaf-current",
 		});
-		assert.equal(explicitFresh.ok, true);
-		assert.equal(explicitFresh.contract.context, "fresh");
+		// Per-call context overrides were removed; explicit context input is rejected.
+		assert.equal(explicitFresh.ok, false);
+		if (!explicitFresh.ok) {
+			assert.equal(explicitFresh.code, "unsupported_mode");
+			assert.match(explicitFresh.message, /Removed subagent field.*context/);
+		}
 
 		const unavailableFork = await resolveSubagentLaunchContract({ agent: "worker", cwd });
 		assert.equal(unavailableFork.ok, true);
