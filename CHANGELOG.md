@@ -34,6 +34,7 @@ First npm release of the fork: `v0.71.0-fork.1` (published as `@rhinos0608/pi-su
 - `fast: true` now accepts any native `openai-codex/*` model instead of a fixed list of two model IDs, so newer Codex models no longer fail before launch. Other providers are still rejected. Thanks to [@jtabke](https://github.com/jtabke) for [#2452](https://github.com/nicobailon/pi-subagents/issues/2452).
 - External-job agents that a child session launches no longer stay queued. Only the root session serviced external-job bridge requests, so a child's own external-job run never started. A child session now services the bridges of the external-job runs it launches. Thanks to [@juanpprieto](https://github.com/juanpprieto) for [#2449](https://github.com/nicobailon/pi-subagents/issues/2449).
 - Worktree naming labels stay within the 256-byte limit when truncated at a multi-byte UTF-8 boundary, so async status remains readable. Thanks to [@chenhaoxiang](https://github.com/chenhaoxiang) for [#2446](https://github.com/nicobailon/pi-subagents/pull/2446).
+- Machine-generated worktree patches now use explicit `a/` and `b/` prefixes instead of Git's newer `--default-prefix` option, so diff capture works on older Git releases while still overriding `diff.noprefix`. Thanks to [@quifox](https://github.com/quifox) for [#2527](https://github.com/nicobailon/pi-subagents/pull/2527).
 
 ## [0.71.0] - 2026-09-23
 
