@@ -30,7 +30,6 @@ import { backgroundProcessOptions } from "../shared/background-process-options.t
 import { normalizeSkillInput, resolveSkillsWithFallback } from "../../agents/skills.ts";
 import { PI_CODING_AGENT_PACKAGE_ROOT_ENV, PROMPT_REDACTED, resolveChildCwd } from "../../shared/utils.ts";
 import { buildModelCandidates, buildModelResolutionMetadata, resolveEffectiveSubagentModel, resolveModelOrigin, resolveModelResolutionSource, resolveSubagentModelOverride, type AvailableModelInfo, type ModelOrigin, type ParentModel } from "../shared/model-fallback.ts";
-import { modelExclusionScopeForCwd } from "../shared/model-exclusions.ts";
 import { resolveModelSelection } from "../shared/model-resolution.ts";
 import { resolveToolTimeoutMs, toolTimeoutFromEnv } from "../shared/tool-timeout.ts";
 import { resolveModelScopesForAgent, type ModelScopeConfig } from "../shared/model-scope.ts";
@@ -218,8 +217,6 @@ interface AsyncChainParams {
 	progressDir?: string;
 	dynamicFanoutMaxItems?: number;
 	maxSubagentDepth: number;
-	waitToolEnabled?: boolean;
-	waitToolDefaultTimeoutMs?: number;
 	worktreeSetupHook?: string;
 	worktreeSetupHookTimeoutMs?: number;
 	worktreeBaseDir?: string;
@@ -286,10 +283,8 @@ interface AsyncSingleParams {
 	agentContract?: AgentContract;
 	structuredOutputSchema?: JsonSchemaObject;
 	modelOverride?: string;
-	/** Revival-only frozen ordered allowlist. When present, do not rebuild from current settings or health cache. */
+	/** Revival-only frozen ordered allowlist. When present, do not rebuild from current settings. */
 	modelCandidatesOverride?: string[];
-	/** Launch-time project health scope paired with modelCandidatesOverride. */
-	modelHealthScopeOverride?: string;
 	modelOverrideFromParent?: boolean;
 	modelOrigin?: ModelOrigin;
 	modelResolutionSource?: import("../../shared/types.ts").ModelResolutionSource;
@@ -298,8 +293,6 @@ interface AsyncSingleParams {
 	thinkingOverride?: AgentConfig["thinking"];
 	availableModels?: AvailableModelInfo[];
 	maxSubagentDepth: number;
-	waitToolEnabled?: boolean;
-	waitToolDefaultTimeoutMs?: number;
 	worktreeSetupHook?: string;
 	worktreeSetupHookTimeoutMs?: number;
 	worktreeBaseDir?: string;
@@ -372,8 +365,6 @@ export interface AsyncRunnerStepBuildParams {
 	agentContract?: AgentContract;
 	dynamicFanoutMaxItems?: number;
 	maxSubagentDepth: number;
-	waitToolEnabled?: boolean;
-	waitToolDefaultTimeoutMs?: number;
 	worktreeBaseDir?: string;
 	worktreeProvider?: import("../../shared/types.ts").WorktreeProvider;
 	worktreeBranchPrefix?: string;
@@ -407,14 +398,12 @@ export function formatAsyncStartedMessage(headline: string, interactive: boolean
 	const guidance = interactive
 		? [
 			"The async run is detached and running in the background.",
-			"You are in an interactive session. Return control to the user now; Pi will wake you through the native completion notification when this subagent completes or needs attention. Do not run sleep/polling loops to wait for this async subagent; it does not need a wait call.",
-			"Use bg_wait only for provider, detached, or other background work that lacks a native completion notification.",
-			"If the current turn must receive results from work without a native notification before it ends, call blocking bg_wait(); ordinary async subagent runs do not need a wait call because their completion is delivered natively.",
+			"You are in an interactive session. Return control to the user now; Pi will wake you through the native completion notification when this subagent completes or needs attention. Completion wakes the session automatically, do not poll.",
 			"Otherwise, continue any independent work or return control to the user. Use subagent({ action: \"status\", id: \"...\" }) for a one-shot status/result or to inspect a blocked/stale run, never as a wait loop.",
 		]
 		: [
 			"The async run is detached. Do not run sleep timers or polling loops just to wait for it.",
-			"This is a non-interactive run: Pi auto-drains current-session subagent work at agent_end so detached children are not abandoned. Use bg_wait only when this turn must receive provider, detached, or other background-work results that have no native completion notification.",
+			"This is a non-interactive run: Pi auto-drains current-session subagent work at agent_end so detached children are not abandoned. Completion wakes the session automatically, do not poll.",
 			"Use subagent({ action: \"status\", id: \"...\" }) when you need a one-shot status/result or to inspect a blocked/stale run; do not poll in a loop.",
 		];
 	return [headline, "", ...guidance].join("\n");
@@ -1088,7 +1077,6 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 		}
 		const agentContract = s.agentContract ?? params.agentContract;
 		const permissionRules = resolvePermissionRules(ctx.permissions, a.permissions);
-		const modelHealthScope = modelExclusionScopeForCwd(stepCwd);
 		let modelCandidates: string[] = [];
 		let requestedModel: string | undefined;
 		if (!externalRunner) {
@@ -1101,7 +1089,6 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 				requestedModel = modelEvidence.requestedModel;
 				modelCandidates = buildModelCandidates(primaryModel, a.fallbackModels, availableModels, a.modelProvider ?? ctx.currentModelProvider, {
 					scope: modelScopes,
-					healthScope: modelHealthScope,
 					primaryModelFromParent,
 					origin: modelOrigin,
 				}).flatMap((candidate) => {
@@ -1175,7 +1162,6 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 			...(thinkingCeiling ? { thinkingCeiling } : {}),
 			launchResolvedExtensions,
 			modelCandidates: externalRunner ? undefined : modelCandidates,
-			modelHealthScope: externalRunner ? undefined : modelHealthScope,
 			...(requestedModel ? { requestedModel } : {}),
 			...(primaryModelFromParent ? { skipPrimaryModelVerification: true } : {}),
 			...(availableModels && availableModels.length > 0 ? { modelVerificationRegistry: availableModels } : {}),
@@ -1202,8 +1188,6 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 			maxSubagentDepth: resolveChildMaxSubagentDepth(maxSubagentDepth, a.maxSubagentDepth),
 			timeoutMs: a.defaultTimeoutMs ?? DEFAULT_ASYNC_TIMEOUT_MS,
 			toolTimeoutMs: resolvedToolTimeout.toolTimeoutMs,
-			waitToolEnabled: params.waitToolEnabled,
-			waitToolDefaultTimeoutMs: params.waitToolDefaultTimeoutMs,
 			effectiveAcceptance: resolveEffectiveAcceptance({
 				explicit: s.acceptance,
 				agentName: s.agent,
@@ -1438,8 +1422,6 @@ export function executeAsyncChain(
 		outputBaseDir: artifactsDir ? path.join(artifactsDir, "outputs", id) : undefined,
 		dynamicFanoutMaxItems: params.dynamicFanoutMaxItems,
 		maxSubagentDepth,
-		waitToolEnabled: params.waitToolEnabled,
-		waitToolDefaultTimeoutMs: params.waitToolDefaultTimeoutMs,
 		worktreeBaseDir,
 		worktreeProvider,
 		worktreeBranchPrefix,
@@ -1915,7 +1897,6 @@ export function executeAsyncSingle(
 	const structuredOutput = params.structuredOutputSchema
 		? createStructuredOutputRuntime(params.structuredOutputSchema, path.join(asyncDir, "structured-output"), { acceptanceReport: resolveAcceptanceReportMode(params.acceptance) })
 		: undefined;
-	const modelHealthScope = params.modelHealthScopeOverride ?? modelExclusionScopeForCwd(runnerCwd);
 	let modelCandidates: string[] = frozenModelCandidates ? [...frozenModelCandidates] : [];
 	let requestedModel: string | undefined;
 	if (!externalRunner) {
@@ -1931,7 +1912,6 @@ export function executeAsyncSingle(
 				requestedModel = modelEvidence.requestedModel;
 				modelCandidates = buildModelCandidates(primaryModel, agentConfig.fallbackModels, availableModels, agentConfig.modelProvider ?? ctx.currentModelProvider, {
 					scope: modelScopes,
-					healthScope: modelHealthScope,
 					primaryModelFromParent: modelOrigin === "inherited",
 					origin: modelOrigin,
 				}).flatMap((candidate) => {
@@ -2014,7 +1994,6 @@ export function executeAsyncSingle(
 		cwd: runnerCwd,
 		...(selectedModel ? { model: selectedModel } : {}),
 		...(modelCandidates.length > 0 ? { modelCandidates: [...modelCandidates] } : {}),
-		modelHealthScope,
 		...(recoveryAgentConfig.fallbackModels ? { fallbackModels: [...recoveryAgentConfig.fallbackModels] } : {}),
 		...(params.fast ?? recoveryAgentConfig.fast ? { fast: params.fast ?? recoveryAgentConfig.fast } : {}),
 		...(recoveryAgentConfig.modelProvider ? { modelProvider: recoveryAgentConfig.modelProvider } : {}),
@@ -2089,7 +2068,6 @@ export function executeAsyncSingle(
 						requestedCwd: machine?.cwd ?? params.requestedCwd ?? runnerCwd,
 						model: selectedModel,
 						modelCandidates,
-						modelHealthScope,
 						modelResolution: buildModelResolutionMetadata({
 							...(params.modelResolutionRequested !== undefined ? { requested: params.modelResolutionRequested } : params.modelOverrideFromParent ? {} : (params.modelOverride ?? agentConfig.model ? { requested: params.modelOverride ?? agentConfig.model } : {})),
 							...(selectedModel ? { resolved: selectedModel } : {}),
@@ -2122,9 +2100,7 @@ export function executeAsyncSingle(
 						outputMode,
 						...(!externalRunner && sessionFile ? { sessionFile } : {}),
 						maxSubagentDepth: resolveChildMaxSubagentDepth(maxSubagentDepth, agentConfig.maxSubagentDepth),
-						waitToolEnabled: params.waitToolEnabled,
-						waitToolDefaultTimeoutMs: params.waitToolDefaultTimeoutMs,
-						...(params.agentContract ? { agentContract: params.agentContract } : {}),
+												...(params.agentContract ? { agentContract: params.agentContract } : {}),
 						definitionDigest,
 						launchBindingTask: task,
 						launchContractDigest,

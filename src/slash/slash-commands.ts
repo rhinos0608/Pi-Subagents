@@ -23,7 +23,6 @@ import { encodeInspectReply, handleInspectRpcArgs, INSPECT_WIDGET_KEY } from "..
 import { listScheduledRunSummaries } from "../runs/background/scheduled-runs.ts";
 import { resolveAsyncStatusChild } from "../runs/shared/child-identity.ts";
 import { readStatus } from "../shared/utils.ts";
-import { clearExclusions, flushPersist, getExcludedCount } from "../runs/shared/model-exclusions.ts";
 import type { SlashSubagentResponse, SlashSubagentUpdate } from "./slash-bridge.ts";
 import { registerPromptWorkflowCommands } from "./prompt-workflows.ts";
 import { collectSubagentCost, formatSubagentCostReport } from "./subagent-cost.ts";
@@ -686,16 +685,6 @@ export function registerSlashCommands(
 		},
 	});
 
-	pi.registerCommand("subagents-clear-model-exclusions", {
-		description: "Clear cached subagent model exclusions (e.g. after fixing quota or credentials)",
-		handler: async (_args, ctx) => {
-			const cleared = getExcludedCount();
-			clearExclusions();
-			flushPersist();
-			ctx.ui.notify(`Cleared ${cleared} cached model exclusion${cleared === 1 ? "" : "s"}.`, "info");
-		},
-	});
-
 	pi.registerCommand("subagents-inspect-rpc", {
 		description: "Host integration bridge: answer an async child inspection request with a correlated widget payload (no model turn)",
 		handler: async (args, ctx) => {
@@ -767,7 +756,7 @@ export function registerSlashCommands(
 			ctx.ui.notify(`Foreground run ${control.runId} is not currently detachable.`, "info");
 			return;
 		}
-		sendSlashText(pi, `Detached foreground run ${control.runId} without terminating its child. Use subagent({ action: "status", id: ${JSON.stringify(control.runId)} }) or bg_wait({ id: ${JSON.stringify(control.runId)} }) to recover the eventual result. This does not daemonize the process or guarantee survival across Pi reload/restart.`);
+		sendSlashText(pi, `Detached foreground run ${control.runId} without terminating its child. Use subagent({ action: "status", id: ${JSON.stringify(control.runId)} }) to recover the eventual result. This does not daemonize the process or guarantee survival across Pi reload/restart.`);
 	};
 
 	pi.registerCommand("subagents-detach", {

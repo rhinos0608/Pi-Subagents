@@ -12,7 +12,6 @@ import { createChildHooks, isReadonlyChildHookProfile } from "../../src/runs/sha
 import { buildInProcessChildLaunch, createReportedChildSessionInput } from "../../src/runs/shared/child-launch.ts";
 import { runSync } from "../../src/runs/foreground/execution.ts";
 import { createSubagentExecutor } from "../../src/runs/foreground/subagent-executor.ts";
-import { flushPersist, getExcludedCount, getExclusionsFilePath } from "../../src/runs/shared/model-exclusions.ts";
 import { buildRunnerChildLaunch } from "../../src/runs/background/runner-child-launch.ts";
 import { runChildSession } from "../../src/runs/background/run-child-session.ts";
 import { runSingleStepInner, runSubagent } from "../../src/runs/background/subagent-runner.ts";
@@ -31,7 +30,7 @@ import { getHostBuiltinToolNames } from "../../src/runs/shared/child-tool-plan.t
 function launch(cwd: string): ChildSessionLaunch & { storage: Extract<ChildSessionLaunch["storage"], { kind: "file" }> } {
 	return { cwd, storage: { kind: "file", sessionFile: join(cwd, "session.jsonl") }, model: "baseten/model-a", tools: ["read"], extensionPaths: [],
 		ambientExtensions: false, hooks: [], noSkills: true, noContextFiles: true,
-		runtime: { fanoutChild: false, fast: false, depth: 1, waitTool: { enabled: false } } };
+		runtime: { fanoutChild: false, fast: false, depth: 1 } };
 }
 
 it("has no duck-typed receipt or caller-issued checkpoint", () => {
@@ -68,31 +67,25 @@ it("ordinary startup fallback retains its fresh per-attempt timeout without a ca
 	} finally { Date.now = realNow; }
 });
 
-it("rejects runtime and wait accessors without invoking getters during admission or revalidation", () => {
-	for (const target of ["runtime", "wait object", "wait enabled"] as const) {
-		for (const afterCapture of [false, true]) {
-			const l = launch("/not-opened");
-			if (afterCapture) l.hooks = createChildHooks(l.runtime);
-			let calls = 0;
-			const object = target === "wait enabled" ? l.runtime.waitTool : l.runtime;
-			const key = target === "runtime" ? "sessionName" : target === "wait object" ? "waitTool" : "enabled";
-			Object.defineProperty(object, key, { enumerable: true, get() { calls++; throw new Error("getter must not run"); } });
-			if (!afterCapture) l.hooks = createChildHooks(l.runtime);
-			assert.equal(isReadonlyChildHookProfile(l.hooks, l.runtime), false);
-			assert.equal(calls, 0);
-		}
+it("rejects runtime accessors without invoking getters during admission or revalidation", () => {
+	for (const afterCapture of [false, true]) {
+		const l = launch("/not-opened");
+		if (afterCapture) l.hooks = createChildHooks(l.runtime);
+		let calls = 0;
+		Object.defineProperty(l.runtime, "sessionName", { enumerable: true, get() { calls++; throw new Error("getter must not run"); } });
+		if (!afterCapture) l.hooks = createChildHooks(l.runtime);
+		assert.equal(isReadonlyChildHookProfile(l.hooks, l.runtime), false);
+		assert.equal(calls, 0);
 	}
 });
 
-it("rejects hidden and symbol data keys in runtime and wait profiles", () => {
-	for (const nested of [false, true]) {
-		for (const key of ["hiddenOption", nested ? "enabled" : "sessionName", Symbol("unknown")]) {
-			const l = launch("/not-opened");
-			const value = key === "enabled" ? false : key === "sessionName" ? "hidden" : true;
-			Object.defineProperty(nested ? l.runtime.waitTool : l.runtime, key, { value, enumerable: typeof key === "symbol" });
-			l.hooks = createChildHooks(l.runtime);
-			assert.equal(isReadonlyChildHookProfile(l.hooks, l.runtime), false);
-		}
+it("rejects hidden and symbol data keys in the runtime profile", () => {
+	for (const key of ["hiddenOption", "sessionName", Symbol("unknown")]) {
+		const l = launch("/not-opened");
+		const value = key === "sessionName" ? "hidden" : true;
+		Object.defineProperty(l.runtime, key, { value, enumerable: typeof key === "symbol" });
+		l.hooks = createChildHooks(l.runtime);
+		assert.equal(isReadonlyChildHookProfile(l.hooks, l.runtime), false);
 	}
 });
 
@@ -189,7 +182,7 @@ describe("native 0.85.1 factory evidence (synthetic transport, real configured M
 	function resolvedLaunch(l: ReturnType<typeof launch>, model = "baseten/model-a") {
 		return buildInProcessChildLaunch({
 			cwd: l.cwd, host: "parent", sessionEnabled: true, sessionFile: l.storage.sessionFile,
-			model, tools: ["read"], requireReadTool: true, allowNestedSubagents: false, waitToolEnabled: false,
+			model, tools: ["read"], requireReadTool: true, allowNestedSubagents: false,
 			inheritProjectContext: false, inheritGlobalContext: false, inheritSkills: false,
 			parentSessionId: "resolved-parent", runId: "resolved-run", childAgentName: "reader", childIndex: 0,
 			sessionName: "resolved reader", forkCacheKey: "resolved-cache", systemPrompt: "Retain the completed read.",
@@ -218,7 +211,7 @@ export default function (pi) {
 
 		const launch = buildInProcessChildLaunch({
 			cwd: l.cwd, host: "runner", sessionEnabled: false, model: l.model,
-			tools: ["read"], hostAvailableBuiltins: discovered, allowNestedSubagents: false, waitToolEnabled: false,
+			tools: ["read"], hostAvailableBuiltins: discovered, allowNestedSubagents: false,
 			inheritProjectContext: false, inheritGlobalContext: false, inheritSkills: false,
 			parentSessionId: "tool-proof-parent", runId: "auto-builtin-override", childAgentName: "reviewer", childIndex: 0,
 			systemPrompt: "Read marker.txt exactly once.",
@@ -231,17 +224,13 @@ export default function (pi) {
 		await child.dispose();
 	}, {}, true));
 
-	for (const scenario of ["success", "retained", "cross-provider-skip", "no-sibling", "second429", "sibling-startup", "sibling-abort", "unverified-sibling", "wrong-model", "changed-file", "missing-file", "cancel-at-create", "deadline-at-create", "usage-budget", "tool-budget", "wait-profile", "directory", "text429", "stop-at-settlement", "steer-at-settlement", "smaller-model"] as const) {
+	for (const scenario of ["success", "retained", "cross-provider-skip", "no-sibling", "second429", "sibling-startup", "sibling-abort", "unverified-sibling", "wrong-model", "changed-file", "missing-file", "cancel-at-create", "deadline-at-create", "usage-budget", "tool-budget", "directory", "text429", "stop-at-settlement", "steer-at-settlement", "smaller-model"] as const) {
 		it(`actual foreground owned continuation loop: ${scenario}`, async (test) => fixture(async ({ pi, l, factory, requests, setResponses, captured, cwd, agentDir }) => {
 			const file = l.storage.sessionFile;
 			if (scenario === "retained") {
 				const manager = pi.SessionManager.open(file, undefined, cwd);
 				manager.appendMessage({ role: "assistant", content: [{ type: "text", text: "Earlier billed answer" }], api: "openai-completions", provider: "baseten", model: "model-a", stopReason: "stop", timestamp: 3, usage: { ...usage, input: 100, output: 100, totalTokens: 200 } });
 			}
-			const exclusionCount = getExcludedCount();
-			flushPersist();
-			const exclusionFile = getExclusionsFilePath();
-			const exclusionBefore = existsSync(exclusionFile) ? readFileSync(exclusionFile, "utf8") : undefined;
 			if (scenario === "smaller-model") {
 				const config = JSON.parse(readFileSync(join(agentDir, "models.json"), "utf8"));
 				config.providers.baseten.models[1].contextWindow = 100;
@@ -266,7 +255,7 @@ export default function (pi) {
 			}, () => scenario === "second429" ? http(429) : sse(false, 11)]);
 			const result = await runSync(cwd, [agent], "reader", "ORIGINAL_TASK read marker.txt once", {
 				cwd, runId: "owned-foreground", sessionDir: cwd, sessionFile: scenario === "directory" ? undefined : file,
-				waitToolEnabled: scenario === "wait-profile", signal: controller.signal,
+				signal: controller.signal,
 				...(scenario === "deadline-at-create" ? { timeoutMs: 10000 } : {}),
 				...(scenario === "usage-budget" ? { usageBudget: { tokens: { hard: 100000 } } } : {}),
 				...(scenario === "tool-budget" ? { toolBudget: { hard: 10, block: ["read"] } } : {}),
@@ -306,7 +295,7 @@ export default function (pi) {
 					return child;
 				} },
 			}).finally(() => { Date.now = realNow; });
-			const denied = ["no-sibling", "usage-budget", "tool-budget", "wait-profile", "directory", "text429", "stop-at-settlement", "steer-at-settlement", "smaller-model"].includes(scenario);
+			const denied = ["no-sibling", "usage-budget", "tool-budget", "directory", "text429", "stop-at-settlement", "steer-at-settlement", "smaller-model"].includes(scenario);
 			assert.equal(creates, denied ? 1 : 2, result.error);
 			assert.equal(result.modelAttempts?.length, denied ? 1 : 2);
 			assert.equal(requests.length, ["success", "retained", "cross-provider-skip", "second429"].includes(scenario) ? 3 : 2, "no dispatch after a handoff veto and no third model dispatch");
@@ -327,9 +316,6 @@ export default function (pi) {
 				assert.equal(captured.length, 2);
 				test.diagnostic(JSON.stringify({ scenario, historyBytes: Buffer.byteLength(readFileSync(file, "utf8")), createMs, shutdownAndValidationMs: disposeMs, logicalMs: Date.now() - start }));
 			} else assert.notEqual(result.exitCode, 0, "negative cannot report success");
-			flushPersist();
-			assert.equal(getExcludedCount(), exclusionCount);
-			assert.equal(existsSync(exclusionFile) ? readFileSync(exclusionFile, "utf8") : undefined, exclusionBefore, "midrun recovery never changes exclusions");
 		}, {}, scenario !== "retained"));
 	}
 
@@ -344,7 +330,7 @@ export default function (pi) {
 				const executor = createSubagentExecutor({
 					pi: { events: { emit() {}, on() { return () => {}; } }, getSessionName() { return "parent"; } } as any,
 					state: state as any, config: { maxSubagentDepth: 2, control: {}, intercomBridge: { mode: "off" } } as any,
-					asyncByDefault: false, waitToolEnabled: false, tempArtifactsDir: join(cwd, "artifacts"), getSubagentSessionRoot: () => join(cwd, "sessions"), expandTilde: (value) => value,
+					asyncByDefault: false, tempArtifactsDir: join(cwd, "artifacts"), getSubagentSessionRoot: () => join(cwd, "sessions"), expandTilde: (value) => value,
 					discoverAgents: () => ({ agents: [agent] }),
 				});
 				setResponses([() => sse(true), () => http(429), () => sse()]);
@@ -384,7 +370,6 @@ export default function (pi) {
 			assert.equal(typeof input.onExtensionError, "function", "mandatory real host reporting retained");
 			assert.equal(input.runtime.watchdogStatus, undefined, "only absent-watchdog sink is omitted");
 			assert.equal(input.runtime.childWatchdog, undefined);
-			assert.deepEqual(input.runtime.waitTool, { enabled: false });
 			assert.deepEqual(input.runtime.requiredTools, ["read"], "actual no-skills requireReadTool=false output is not modified");
 			assert.equal(typeof input.runtime.toolDiagnostic, "function");
 			assert.equal(typeof input.runtime.runtimeAcknowledgements, "function");
@@ -405,7 +390,7 @@ export default function (pi) {
 			input.onExtensionError!({ extensionPath: "<fixture>", event: "test", error: new Error("mandatory report retained") });
 			return child;
 		} };
-		const options = { cwd, sessionFile: file, sessionDir: cwd, artifactsDir: join(cwd, "artifacts"), parentSessionId: "foreground-parent", runId: "foreground-read", waitToolEnabled: false, childSessionFactory: hostFactory };
+		const options = { cwd, sessionFile: file, sessionDir: cwd, artifactsDir: join(cwd, "artifacts"), parentSessionId: "foreground-parent", runId: "foreground-read", childSessionFactory: hostFactory };
 		assert.deepEqual(io, { scans: 0, reads: 0, stats: 0 });
 		setResponses([() => { assert.deepEqual(io, { scans: 0, reads: 0, stats: 0 }); return sse(true); },
 			() => { assert.deepEqual(io, { scans: 0, reads: 0, stats: 0 }); return http(429); }]);
@@ -433,7 +418,7 @@ export default function (pi) {
 		const step: RunnerSubagentStep = {
 			agent: "reader", task: "Runner original task: read marker.txt once", context: "fresh",
 			sessionFile: l.storage.sessionFile, parentSessionId: "runner-parent",
-			tools: ["read"], extensions: [], allowNestedSubagents: false, waitToolEnabled: false,
+			tools: ["read"], extensions: [], allowNestedSubagents: false,
 			inheritProjectContext: false, inheritGlobalContext: false, inheritSkills: false,
 			systemPrompt: "Retain the completed read.", ...overrides,
 		};
@@ -451,7 +436,7 @@ export default function (pi) {
 			modelCandidates: ["baseten/model-a", "other-provider/untried", "baseten/model-b", "baseten/model-c"],
 			tools: agent.tools, extensions: agent.extensions, allowNestedSubagents: agent.allowNestedSubagents,
 			inheritProjectContext: agent.inheritProjectContext, inheritGlobalContext: agent.inheritGlobalContext, inheritSkills: agent.inheritSkills,
-			systemPrompt: agent.systemPrompt, waitToolEnabled: false };
+			systemPrompt: agent.systemPrompt };
 	}
 
 	function enlargeRunnerSibling(agentDir: string) {
@@ -466,9 +451,6 @@ export default function (pi) {
 	for (const kind of ["success", "fresh success", "second429", "sibling startup", "sibling abort", "model mismatch", "stop after settlement", "deadline after settlement", "stop during create", "changed file", "missing file", "steer", "late shutdown", "fake factory", "ambient", "tool budget", "unknown token budget", "equal window", "retained image", "retained context too large", "no sibling", "false429"] as const) {
 		it(`owned native runner loop: ${kind}`, async () => fixture(async ({ pi, cwd, agentDir, l, factory, captured, requests, setResponses }) => {
 			const success = kind === "success" || kind === "fresh success";
-			flushPersist();
-			const exclusionsPath = getExclusionsFilePath();
-			const exclusionsBefore = existsSync(exclusionsPath) ? readFileSync(exclusionsPath, "utf8") : undefined;
 			if (kind !== "equal window") enlargeRunnerSibling(agentDir);
 			const file = l.storage.sessionFile;
 			const step = ownedRunnerStep(cwd, file);
@@ -522,8 +504,6 @@ export default function (pi) {
 			setResponses([() => sse(true, 7), () => { if (kind === "false429") throw new Error("429: synthetic rate limit"); return http(429); },
 				() => kind === "second429" ? http(429) : sse(false, 11)]);
 			const result = await runSingleStepInner(step, context);
-			flushPersist();
-			assert.equal(existsSync(exclusionsPath) ? readFileSync(exclusionsPath, "utf8") : undefined, exclusionsBefore, "continuation never changes startup exclusions");
 			assert.equal(result.sessionFile, file);
 			assert.ok(inputs.length <= 2, "shared token forbids third creation");
 			assert.ok(requests.length <= 3, "shared token forbids third model dispatch");
@@ -738,9 +718,9 @@ export default function (pi) {
 		assert.match(readFileSync(file, "utf8"), /"stopReason":"error"/);
 	}, {}, true)));
 
-	for (const kind of ["completion replacement", "completion removal", "reporter replacement", "routing", "inheritance", "wait timeout", "default ambient"] as const) {
+	for (const kind of ["completion replacement", "completion removal", "reporter replacement", "routing", "inheritance", "default ambient"] as const) {
 		it(`keeps runner profile fail-closed: ${kind}`, async () => fixture(async ({ l, factory, captured }) => {
-			const built = runnerLaunch(l, "baseten/model-a", kind === "wait timeout" ? { waitToolDefaultTimeoutMs: 10 } : kind === "default ambient" ? { extensions: undefined } : {},
+			const built = runnerLaunch(l, "baseten/model-a", kind === "default ambient" ? { extensions: undefined } : {},
 				kind === "routing" ? { childIntercomTarget: "configured-child", orchestratorIntercomTarget: "configured-parent" }
 					: kind === "inheritance" ? { inheritedChildRuntime: { depth: 1, thinkingCeiling: "low" } } : {});
 			if (kind === "completion replacement") built.session.hooks[1] = { name: "pi-subagents:completion-intent", factory: (api) => api.on("session_start", () => {}) };
@@ -760,7 +740,7 @@ export default function (pi) {
 		assert.ok(childWatchdog);
 		const sink = () => {};
 		const built = buildRunnerChildLaunch({ agent: "reader", task: "read", sessionFile: l.storage.sessionFile,
-			tools: ["read"], extensions: [], allowNestedSubagents: false, waitToolEnabled: false,
+			tools: ["read"], extensions: [], allowNestedSubagents: false,
 			inheritProjectContext: false, inheritGlobalContext: false, inheritSkills: false },
 			{ cwd: l.cwd, id: "runner-watchdog", flatIndex: 0 }, { sessionEnabled: true, childWatchdog, watchdogStatus: sink });
 		assert.equal(built.config.childWatchdog, childWatchdog);
@@ -976,7 +956,7 @@ export default function (pi) {
 		process.env.PI_CACHE_RETENTION = "long";
 		try {
 			requestReadonlySessionEvidence(l); const child = await factory.create(l);
-			assert.deepEqual(captured[0].session.getAllTools().map((tool) => tool.name), ["read"], "registered bg_wait must not be executable");
+			assert.deepEqual(captured[0].session.getAllTools().map((tool) => tool.name), ["read"], "only read must be executable");
 			setResponses([() => sse(true), () => http(429)]);
 			await child.prompt("Read marker.txt once for the original task"); await child.dispose();
 			const receipt = getReadonlySessionEvidence(child); assert.ok(receipt);
@@ -996,12 +976,11 @@ export default function (pi) {
 		} finally { if (previous === undefined) delete process.env.PI_CACHE_RETENTION; else process.env.PI_CACHE_RETENTION = previous; }
 	}));
 
-	for (const kind of ["name spoof", "copied config", "mutated config", "callback", "inherited callback", "unknown option", "wait", "extra hook"] as const) {
+	for (const kind of ["name spoof", "copied config", "mutated config", "callback", "inherited callback", "unknown option", "extra hook"] as const) {
 		it(`denies uncertified hook profile: ${kind}`, async () => fixture(async ({ l, factory, captured }) => {
 			if (kind === "callback") l.runtime.runtimeAcknowledgements = () => {};
 			if (kind === "inherited callback") Object.setPrototypeOf(l.runtime, { runtimeAcknowledgements: () => {} });
 			if (kind === "unknown option") Object.assign(l.runtime, { unknownOption: true });
-			if (kind === "wait") l.runtime.waitTool.enabled = true;
 			l.hooks = createChildHooks(l.runtime);
 			if (kind === "name spoof") l.hooks = [{ name: "pi-subagents:prompt-runtime", factory() {} }];
 			if (kind === "copied config") l.runtime = { ...l.runtime };

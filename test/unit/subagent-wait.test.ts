@@ -8,7 +8,7 @@ import { nestedRunScope } from "../../src/runs/shared/nested-events.ts";
 import { updateActiveRunIndex } from "../../src/runs/background/active-run-index.ts";
 import { writeAsyncResultFile } from "../../src/runs/background/result-files.ts";
 import { createRunFanoutBudget } from "../../src/runs/shared/run-fanout-budget.ts";
-import { WAIT_TOOL_DEFAULT_TIMEOUT_MS_ENV, WAIT_TOOL_ENABLED_ENV, resolveWaitToolConfig, waitForSubagents, type SubagentWaitDeps } from "../../src/runs/background/subagent-wait.ts";
+import { waitForSubagents, type SubagentWaitDeps } from "../../src/runs/background/subagent-wait.ts";
 import { recordWaitCompletion } from "../../src/runs/background/wait-completions.ts";
 import type { AsyncStatus, SubagentState } from "../../src/shared/types.ts";
 
@@ -98,7 +98,7 @@ function baseDeps(root: string, state: SubagentState, overrides: Partial<Subagen
 	};
 }
 
-describe("bg_wait tool", () => {
+describe("internal subagent wait", () => {
 	for (const alreadyTerminal of [false, true]) {
 		for (const prefix of [false, true]) {
 			it(`collects nested results by ${prefix ? "prefix" : "exact id"} ${alreadyTerminal ? "after early completion" : "across active-to-terminal transition"}`, async (t) => {
@@ -221,23 +221,8 @@ describe("bg_wait tool", () => {
 		assert.match(textOf(changed), /session changed/);
 	});
 
-	it("resolves waitTool config and environment overrides strictly", () => {
-		assert.deepEqual(resolveWaitToolConfig(undefined, {}), { enabled: true });
-		assert.deepEqual(resolveWaitToolConfig(false, {}), { enabled: false });
-		assert.deepEqual(resolveWaitToolConfig({ enabled: false }, {}), { enabled: false });
-		assert.deepEqual(resolveWaitToolConfig({ defaultTimeoutMs: 120_000 }, {}), { enabled: true, defaultTimeoutMs: 120_000 });
-		assert.deepEqual(resolveWaitToolConfig({ defaultTimeoutMs: 120_000 }, { [WAIT_TOOL_DEFAULT_TIMEOUT_MS_ENV]: "3000" }), { enabled: true, defaultTimeoutMs: 3_000 });
-		assert.deepEqual(resolveWaitToolConfig({ enabled: false }, { [WAIT_TOOL_ENABLED_ENV]: "true" }), { enabled: true });
-		assert.deepEqual(resolveWaitToolConfig(true, { [WAIT_TOOL_ENABLED_ENV]: "off" }), { enabled: false });
-		assert.throws(() => resolveWaitToolConfig("false" as never, {}), /config\.waitTool/);
-		assert.throws(() => resolveWaitToolConfig({ enabled: "false" } as never, {}), /config\.waitTool\.enabled/);
-		assert.throws(() => resolveWaitToolConfig({ defaultTimeoutMs: 0 }, {}), /config\.waitTool\.defaultTimeoutMs/);
-		assert.throws(() => resolveWaitToolConfig({ defaultTimeoutMs: 1.5 }, {}), /config\.waitTool\.defaultTimeoutMs/);
-		assert.throws(() => resolveWaitToolConfig(undefined, { [WAIT_TOOL_DEFAULT_TIMEOUT_MS_ENV]: "0" }), /PI_SUBAGENT_WAIT_TOOL_DEFAULT_TIMEOUT_MS/);
-		assert.throws(() => resolveWaitToolConfig(undefined, { [WAIT_TOOL_ENABLED_ENV]: "maybe" }), /PI_SUBAGENT_WAIT_TOOL_ENABLED/);
-	});
 
-	it("returns immediately without polling when waitTool is disabled", async () => {
+	it("returns immediately without polling when the internal wait is disabled", async () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-wait-disabled-"));
 		try {
 			const asyncRoot = path.join(root, "runs");
@@ -248,7 +233,7 @@ describe("bg_wait tool", () => {
 				enabled: false,
 				sleep: async () => {
 					slept = true;
-					throw new Error("disabled bg_wait should not sleep");
+					throw new Error("disabled internal wait should not sleep");
 				},
 			}));
 
@@ -444,7 +429,7 @@ describe("bg_wait tool", () => {
 
 			const text = textOf(result);
 			assert.match(text, /Reply to the supervisor request first/);
-			assert.match(text, /wait with bg_wait/);
+			assert.match(text, /end your turn/);
 			assert.match(text, /do not resume or launch a replacement/);
 			assert.doesNotMatch(text, /Resume-first/);
 		} finally {
@@ -1733,7 +1718,7 @@ describe("bg_wait tool", () => {
 
 			const result = await Promise.race([
 				p,
-				new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error("event wake did not resolve bg_wait")), 1_000)),
+				new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error("event wake did not resolve internal wait")), 1_000)),
 			]);
 			assert.equal(result.isError, undefined);
 			assert.match(textOf(result), /done/i);

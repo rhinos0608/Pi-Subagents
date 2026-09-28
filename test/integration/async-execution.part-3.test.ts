@@ -93,7 +93,7 @@ function waitForJson<T>(file: string, predicate: (value: T) => boolean, asyncDir
 describe("async execution utilities", { skip: !available ? "pi packages not available" : undefined }, () => {
 	installAsyncExecutionHooks();
 
-	it("background does not use compaction recovery after compaction_end willRetry false and a continued agent turn", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
+	it("background does not relaunch a model after compaction_end willRetry false and a continued agent turn", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
 		const sessionFile = path.join(tempDir, "async-generic-empty-after-successful-compaction-session.jsonl");
 		mockPi.onCall({
 			jsonl: [
@@ -115,7 +115,6 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 			writeFiles: [{ path: sessionFile, content: "{}\n" }],
 			exitCode: 0,
 		});
-		mockPi.onCall({ output: "Compaction recovery must not run" });
 		const id = `async-no-compaction-recovery-after-successful-compaction-${Date.now().toString(36)}`;
 		executeAsyncSingle(id, {
 			agent: "worker",

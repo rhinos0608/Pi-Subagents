@@ -69,7 +69,6 @@ import { formatChildToolDiagnostic, formatChildToolDisabledWarning, hasFatalMiss
 import { formatChildModelResolutionDiagnostic, isChildModelResolutionFailure } from "../shared/model-resolution-diagnostic.ts";
 import { planAbortRecovery } from "../shared/abort-recovery.ts";
 import { planReadonlyModelContinuation, type LogicalRecoveryState } from "../shared/readonly-model-continuation.ts";
-import { modelExclusionScopeForCwd } from "../shared/model-exclusions.ts";
 import { getReadonlySessionEvidence, requestReadonlySessionEvidence, type SettledReadonlyEvidence } from "../shared/readonly-session-evidence.ts";
 import { buildTimeoutRecoverySummary, collectTrackedMutationEvidence, snapshotTrackedMutations } from "../shared/mutation-evidence.ts";
 import { captureSingleOutputSnapshot, extractChildWrittenOutput, finalizeSingleOutput, formatSavedOutputReference, hasSingleOutputChangedSinceSnapshot, resolveSingleOutput, validateFileOnlyOutputMode, type SingleOutputSnapshot } from "../shared/single-output.ts";
@@ -81,9 +80,12 @@ import {
 	buildModelCandidates,
 	buildModelResolutionMetadata,
 	resolveModelResolutionSource,
+	formatExhaustedCandidatesDiagnostic,
 	formatModelAttemptNote,
 	isRetryableModelFailureAttempt,
-	recordRetryableModelFailure,
+	MODEL_MAX_ATTEMPTS_PER_CANDIDATE,
+	modelRetryBackoffMs,
+	sleepMs,
 } from "../shared/model-fallback.ts";
 import {
 	createMutatingFailureState,
@@ -347,7 +349,8 @@ function isCompleteUsageCounter(value: unknown): value is number {
 
 const STOPPED_BEFORE_COMPLETION_ERROR = "Subagent stopped before completion.";
 const AFTER_COMPACTION_SETTLEMENT = Symbol("afterCompactionSettlement");
-type AbortRecoverySingleResult = SingleResult & { [AFTER_COMPACTION_SETTLEMENT]?: true };
+const COMPACTION_OBSERVED = Symbol("compactionObserved");
+type AbortRecoverySingleResult = SingleResult & { [AFTER_COMPACTION_SETTLEMENT]?: true; [COMPACTION_OBSERVED]?: true };
 const settledReadonlySource = new WeakMap<SingleResult, ChildSession>();
 
 
@@ -445,8 +448,6 @@ async function runSingleAttempt(
 		childWatchdog,
 		// registerChildWatchdog returns before reading the sink when no watchdog exists.
 		watchdogStatus: childWatchdog ? (event) => onWatchdogStatus?.(event) : undefined,
-		waitToolEnabled: options.waitToolEnabled,
-		waitToolDefaultTimeoutMs: options.waitToolDefaultTimeoutMs,
 		capabilityCeiling: options.capabilityCeiling,
 		thinkingCeiling: options.thinkingCeiling,
 		maxSubagentDepth: options.maxSubagentDepth,
@@ -567,6 +568,7 @@ async function runSingleAttempt(
 	let structuredOutputMessageStartIndex: number | undefined;
 	let toolAvailabilityError: string | undefined;
 	let abortedBySignal = options.signal?.aborted === true;
+	let compactionObserved = false;
 	let afterCompactionSettlement = false;
 
 	if (options.workflowChildPermitLaunch) {
@@ -991,7 +993,10 @@ async function runSingleAttempt(
 			jsonlWriter.writeLine(JSON.stringify(projectChildSessionEventForJson(evt)));
 			shared.transcriptWriter?.writeChildEvent(evt);
 			shared.orcaProgressTab?.event(evt);
-			if (evt.type === "compaction_start") compactionStartedReceived = true;
+			if (evt.type === "compaction_start") {
+				compactionStartedReceived = true;
+				compactionObserved = true;
+			}
 			if (evt.type === "compaction_end" && evt.willRetry === true) {
 				compactionStartedReceived = false;
 				afterCompactionSettlement = false;
@@ -1456,6 +1461,9 @@ async function runSingleAttempt(
 	if (afterCompactionSettlement) {
 		(result as AbortRecoverySingleResult)[AFTER_COMPACTION_SETTLEMENT] = true;
 	}
+	if (compactionObserved) {
+		(result as AbortRecoverySingleResult)[COMPACTION_OBSERVED] = true;
+	}
 	if (interruptedByControl) {
 		result.exitCode = 0;
 		result.interrupted = true;
@@ -1778,7 +1786,6 @@ async function runSyncCompletionInner(
 	const systemPrompt = buildEffectiveSystemPrompt({ agent, resolvedSkills, cwd: skillCwd, ...(options.outputPath ? { outputPath: options.outputPath } : {}) });
 
 	const requestedModel = options.modelOverrideFromParent ? undefined : (options.modelOverride ?? agent.model);
-	const modelHealthScope = modelExclusionScopeForCwd(options.cwd ?? runtimeCwd);
 	const candidates = buildModelCandidates(
 		options.modelOverride ?? agent.model,
 		agent.fallbackModels,
@@ -1786,7 +1793,6 @@ async function runSyncCompletionInner(
 		agent.modelProvider ?? options.preferredModelProvider,
 		{
 			scope: options.modelScope,
-			healthScope: modelHealthScope,
 			primaryModelFromParent: options.modelOverrideFromParent,
 			origin: options.modelOrigin ?? (options.modelOverrideFromParent ? "inherited" : "configured"),
 		},
@@ -1922,6 +1928,11 @@ async function runSyncCompletionInner(
 		&& (!readonlySource || getReadonlySessionEvidence(readonlySource) === readonlyExpected)
 		&& !readonlySource?.detached && !readonlySource?.shutDown;
 	let nextAttemptTask = task;
+	// Stateless bounded retry bookkeeping: per-candidate consecutive retryable
+	// startup-failure counts and per-candidate dispatch counts. Both reset on
+	// every fresh launch; nothing survives between launches.
+	const failuresForCandidate: number[] = modelsToTry.map(() => 0);
+	const attemptsPerCandidate: number[] = modelsToTry.map(() => 0);
 	modelAttemptsLoop: for (let modelIndex = 0; modelIndex < modelsToTry.length; modelIndex++) {
 		const candidate = modelsToTry[modelIndex];
 		// The inner loop re-runs the same candidate at most once, for abort recovery.
@@ -1954,6 +1965,7 @@ async function runSyncCompletionInner(
 				readonlyHandoffAllowed: readonlyExpected ? readonlyHandoffAllowed : undefined,
 			});
 			lastResult = result;
+			attemptsPerCandidate[modelIndex] = (attemptsPerCandidate[modelIndex] ?? 0) + 1;
 			if (!recoveringAbort) {
 				if (result.model) attemptedModels.push(result.model);
 				else if (candidate) attemptedModels.push(candidate);
@@ -2048,14 +2060,38 @@ async function runSyncCompletionInner(
 			if (intercomDetached || result.timedOut) break modelAttemptsLoop;
 			if (attemptSucceeded) break modelAttemptsLoop;
 
-			const retryableModelFailure = isRetryableModelFailureAttempt({ error: result.error, messages: result.messages, toolCount: result.progressSummary?.toolCount });
-			if (retryableModelFailure) recordRetryableModelFailure(result.model ?? candidate, result.error, modelHealthScope);
+			const retryableModelFailure = isRetryableModelFailureAttempt({
+				error: result.error,
+				messages: result.messages,
+				toolCount: result.progressSummary?.toolCount,
+				taskExecutionStarted: Boolean(
+					result.outputSaveError
+					|| result.structuredOutputFailed
+					|| result.effects?.fileMutation
+					|| (result as AbortRecoverySingleResult)[COMPACTION_OBSERVED],
+				),
+			});
 			if (isContextOverflow(result.error)) {
 				result.contextOverflow = true;
 				attemptNotes.push(`[fallback] ${attempt.model} failed: context overflow — the input exceeds this model's context window. Reduce the task input or use a model with a larger context window.`);
 				break modelAttemptsLoop;
 			}
-			if (!retryableModelFailure || modelIndex === modelsToTry.length - 1) break modelAttemptsLoop;
+			if (!retryableModelFailure) break modelAttemptsLoop;
+			// Retryable startup/availability failure: same candidate again until it
+			// has been attempted three times, then advance. Task-execution
+			// outcomes never reach here.
+			failuresForCandidate[modelIndex] = (failuresForCandidate[modelIndex] ?? 0) + 1;
+			const backoffMs = modelRetryBackoffMs(failuresForCandidate[modelIndex] ?? 0);
+			if (backoffMs !== undefined) {
+				attemptNotes.push(`[retry] ${attempt.model} failed (attempt ${failuresForCandidate[modelIndex]}/${MODEL_MAX_ATTEMPTS_PER_CANDIDATE}) with a retryable startup failure; backing off ${backoffMs}ms before retrying the same candidate.`);
+				await sleepMs(backoffMs);
+				continue;
+			}
+			if (modelIndex === modelsToTry.length - 1) {
+				attemptNotes.push(`[exhausted] ${formatExhaustedCandidatesDiagnostic({ candidates: modelsToTry, attemptsPerCandidate, lastError: result.error })}`);
+				break modelAttemptsLoop;
+			}
+			failuresForCandidate[modelIndex] = 0;
 			attemptNotes.push(formatModelAttemptNote(attempt, modelsToTry[modelIndex + 1]));
 			break;
 		}

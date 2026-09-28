@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
 import { waitForSubagents } from "../../src/runs/background/subagent-wait.ts";
-import { registerWaitTool } from "../../src/runs/background/wait-tool.ts";
+import { registerBackgroundWorkProvider } from "../../src/api/background-work.ts";
 import { createWaitSubscriptionManager } from "../../src/runs/background/wait-subscriptions.ts";
 import { recordWaitCompletion } from "../../src/runs/background/wait-completions.ts";
 import { inspectSubagentStatus } from "../../src/runs/background/run-status.ts";
@@ -66,6 +66,45 @@ function textOf(result: { content: Array<{ type: string; text?: string }> }): st
 	return result.content.map((entry) => entry.text ?? "").join("");
 }
 
+function createBackgroundWorkWakeHarness(input: {
+	prefix: string;
+	provider: string;
+	channel: string;
+	itemId: string;
+	pollIntervalMs: number;
+}) {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), input.prefix));
+	let active = [{ id: input.itemId, sessionId: "session-a" }];
+	const disposeProvider = registerBackgroundWorkProvider({
+		name: input.provider,
+		wakeChannels: [input.channel],
+		listActiveWork: () => active,
+	});
+	const delivered: Array<{ message: { content?: unknown }; options?: { triggerTurn?: boolean } }> = [];
+	const bus = new TestBus();
+	const manager = createWaitSubscriptionManager({
+		events: bus,
+		sendMessage(message: { content?: unknown }, options?: { triggerTurn?: boolean }) { delivered.push({ message, options }); },
+	} as never, makeState("session-a"), {
+		asyncDirRoot: path.join(root, "runs"),
+		subscriptionsDir: path.join(root, "subscriptions"),
+		pollIntervalMs: input.pollIntervalMs,
+		now: Date.now,
+		kill: () => true,
+	});
+	return {
+		delivered,
+		manager,
+		finish() { active = []; bus.emit(input.channel); },
+		emit() { bus.emit(input.channel); },
+		dispose() {
+			manager.dispose();
+			disposeProvider();
+			fs.rmSync(root, { recursive: true, force: true });
+		},
+	};
+}
+
 describe("non-blocking wait subscriptions", () => {
 	it("returns immediately and binds an id prefix to one exact run", async () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-wait-subscribe-arm-"));
@@ -93,34 +132,6 @@ describe("non-blocking wait subscriptions", () => {
 		}
 	});
 
-	it("registers bg_wait and rejects non-blocking subscriptions from headless tool calls", async () => {
-		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-wait-subscribe-headless-"));
-		try {
-			const state = makeState();
-			state.foregroundRuns = new Map([["run-headless", {
-				runId: "run-headless",
-				mode: "single",
-				cwd: root,
-				sessionId: "session-a",
-				updatedAt: Date.now(),
-				children: [{ agent: "worker", index: 0, status: "detached" }],
-			}]]);
-			const registered: Array<{ name: string; description: string; execute: (...args: unknown[]) => Promise<{ content: Array<{ text?: string }>; isError?: boolean }> }> = [];
-			registerWaitTool({
-				events: new TestBus(),
-				registerTool(value: unknown) { registered.push(value as typeof registered[number]); },
-			} as never, state, true, {
-				arm() { throw new Error("headless calls must not arm subscriptions"); },
-			});
-			assert.deepEqual(registered.map((entry) => entry.name), ["bg_wait"]);
-			await assert.rejects(
-				registered[0]!.execute("wait", { id: "run-headless", nonBlocking: true }, undefined, undefined, { hasUI: false }),
-				/long-lived interactive subagent runtime/,
-			);
-		} finally {
-			fs.rmSync(root, { recursive: true, force: true });
-		}
-	});
 
 	it("restores durable registrations and wakes on exact completion", () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-wait-subscribe-restore-"));
@@ -270,7 +281,7 @@ describe("non-blocking wait subscriptions", () => {
 
 			const message = sent[0] ?? "";
 			assert.match(message, /Reply to the supervisor request first/);
-			assert.match(message, /wait with bg_wait/);
+			assert.match(message, /end your turn/);
 			assert.match(message, /do not resume or launch a replacement/);
 			assert.doesNotMatch(message, /Resume-first/);
 		} finally {
@@ -646,6 +657,51 @@ describe("wait subscriptions armed by another session", () => {
 			}
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("wakes the owning session once when a background-work item goes inactive, with no polling", () => {
+		const harness = createBackgroundWorkWakeHarness({
+			prefix: "pi-wait-subscribe-bgwork-",
+			provider: "test-bg-wait-provider",
+			channel: "test-bg-wait:job-finished",
+			itemId: "job-1",
+			pollIntervalMs: 60_000,
+		});
+		try {
+			harness.manager.restore();
+			harness.manager.reconcile();
+			assert.deepEqual(harness.delivered, [], "first reconcile only baselines active work");
+			harness.finish();
+			assert.equal(harness.delivered.length, 1, "exactly one native wake for the finished provider item");
+			assert.equal(harness.delivered[0]!.options?.triggerTurn, true);
+			assert.match(String(harness.delivered[0]!.message.content), /test-bg-wait-provider\/job-1/);
+			harness.emit();
+			assert.equal(harness.delivered.length, 1, "no duplicate wake once the item is baselined");
+		} finally {
+			harness.dispose();
+		}
+	});
+
+	it("wakes for an item active at first discovery that finishes before any periodic tick", () => {
+		const harness = createBackgroundWorkWakeHarness({
+			prefix: "pi-wait-subscribe-bgwork-first-sight-",
+			provider: "test-bg-wait-first-sight-provider",
+			channel: "test-bg-wait:first-sight-finished",
+			itemId: "job-early",
+			pollIntervalMs: 3_600_000,
+		});
+		try {
+			harness.manager.start();
+			assert.deepEqual(harness.delivered, [], "start subscribes and baselines without waking");
+			harness.finish();
+			assert.equal(harness.delivered.length, 1, "exactly one native wake before any periodic tick");
+			assert.equal(harness.delivered[0]!.options?.triggerTurn, true);
+			assert.match(String(harness.delivered[0]!.message.content), /test-bg-wait-first-sight-provider\/job-early/);
+			harness.emit();
+			assert.equal(harness.delivered.length, 1, "no duplicate wake");
+		} finally {
+			harness.dispose();
 		}
 	});
 });

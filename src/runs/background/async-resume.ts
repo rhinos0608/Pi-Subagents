@@ -342,7 +342,7 @@ export function readAsyncRecoveryDescriptor(asyncDir: string | undefined): Steer
 	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`Invalid async recovery descriptor '${descriptorPath}': expected an object.`);
 	const parsed = value as Record<string, unknown>;
 	const allowedFields = new Set([
-		"modelResponseAliases", "version", "launchContractDigest", "sourceRunId", "agentContract", "agent", "sessionFile", "cwd", "model", "modelCandidates", "modelHealthScope", "modelProvider", "modelOverrideFromParent", "modelOrigin", "fallbackModels", "fast", "thinking", "thinkingCeiling", "tools", "allowNestedSubagents", "allowedAgents", "extensions",
+		"modelResponseAliases", "version", "launchContractDigest", "sourceRunId", "agentContract", "agent", "sessionFile", "cwd", "model", "modelCandidates", "modelProvider", "modelOverrideFromParent", "modelOrigin", "fallbackModels", "fast", "thinking", "thinkingCeiling", "tools", "allowNestedSubagents", "allowedAgents", "extensions",
 		"subagentOnlyExtensions", "mcpDirectTools", "excludeTools", "mutationTools", "systemPrompt", "systemPromptMode", "inheritProjectContext", "inheritGlobalContext", "inheritSkills", "skills",
 		"skillPath", "agentFilePath", "memory", "outputPath", "outputMode", "structuredOutputSchema", "acceptance", "sessionDir", "artifactConfig",
 		"artifactsDir", "maxOutput", "controlConfig", "context", "intercomBridge", "absoluteDeadlineAt", "initialTurnBudget", "initialToolBudget", "maxSubagentDepth", "share", "capabilityCeiling",
@@ -400,7 +400,7 @@ export function readAsyncRecoveryDescriptor(asyncDir: string | undefined): Steer
 		if (item !== undefined && (!Array.isArray(item) || item.some((entry) => typeof entry !== "string" || !entry.trim()))) throw new Error(`Invalid async recovery descriptor '${descriptorPath}': ${field} must contain non-empty strings.`);
 	}
 	if (parsed.systemPrompt !== undefined && typeof parsed.systemPrompt !== "string") throw new Error(`Invalid async recovery descriptor '${descriptorPath}': systemPrompt must be a string.`);
-	for (const field of ["launchContractDigest", "sessionFile", "model", "modelHealthScope", "modelProvider", "thinking", "agentFilePath", "outputPath", "sessionDir", "artifactsDir"] as const) {
+	for (const field of ["launchContractDigest", "sessionFile", "model", "modelProvider", "thinking", "agentFilePath", "outputPath", "sessionDir", "artifactsDir"] as const) {
 		if (parsed[field] !== undefined && (typeof parsed[field] !== "string" || !(parsed[field] as string).trim())) throw new Error(`Invalid async recovery descriptor '${descriptorPath}': ${field} must be a non-empty string.`);
 	}
 	if (parsed.baseRef !== undefined) {

@@ -104,8 +104,6 @@ export interface BuildInProcessChildLaunchInput {
 	permissionAuditPath?: string;
 	childWatchdog?: ChildWatchdogConfig;
 	watchdogStatus?: (event: ChildWatchdogStatusEvent) => void;
-	waitToolEnabled?: boolean;
-	waitToolDefaultTimeoutMs?: number;
 	allowNestedSubagents?: boolean;
 	descendantAllowedAgents?: string[];
 	capabilityCeiling?: ResolvedSubagentCapabilityCeiling;
@@ -284,10 +282,6 @@ export function buildInProcessChildLaunch(input: BuildInProcessChildLaunchInput)
 		...(input.toolBudget ? { toolBudget: input.toolBudget } : {}),
 		...(input.childWatchdog ? { childWatchdog: input.childWatchdog } : {}),
 		...(input.watchdogStatus ? { watchdogStatus: input.watchdogStatus } : {}),
-		waitTool: {
-			enabled: input.waitToolEnabled ?? true,
-			...(input.waitToolDefaultTimeoutMs !== undefined ? { defaultTimeoutMs: input.waitToolDefaultTimeoutMs } : {}),
-		},
 		...(input.structuredOutput
 			? {
 				structuredOutput: {

@@ -167,12 +167,10 @@ function getPropertySchema(schema: JsonSchemaNode | undefined, path: string[]): 
 
 let schemas: Record<string, JsonSchemaNode> = {};
 let SubagentParams: SubagentParamsSchema | undefined;
-let SubagentWaitParams: JsonSchemaNode | undefined;
 let schemasAvailable = true;
 try {
 	schemas = await import("../../src/extension/schemas.ts") as Record<string, JsonSchemaNode>;
 	SubagentParams = schemas.SubagentParams as SubagentParamsSchema;
-	SubagentWaitParams = schemas.SubagentWaitParams as JsonSchemaNode;
 } catch (error) {
 	if (missingPackageName(error) !== "typebox") throw error;
 	schemasAvailable = false;
@@ -406,27 +404,8 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 		assert.deepEqual(controlSchema.properties?.notifyChannels?.items?.enum, ["event", "async", "intercom"]);
 	});
 
-	it("exposes tolerant wait mode on bg_wait", () => {
-		const properties = SubagentWaitParams?.properties as Record<string, JsonSchemaNode> | undefined;
-		const id = properties?.id;
-		const nonBlocking = properties?.nonBlocking;
-		const all = properties?.all;
-		const stopOnAttention = properties?.stopOnAttention;
-		const timeoutMs = properties?.timeoutMs;
-		assert.ok(id, "id schema should exist");
-		assert.match(String(id.description ?? ""), /ordinary async subagent runs already notify this session natively/i);
-		assert.match(String(id.description ?? ""), /same-turn blocking results are truly needed/);
-		assert.ok(nonBlocking, "nonBlocking schema should exist");
-		assert.match(String(nonBlocking.description ?? ""), /provider, detached, or other background work without a native completion notification/i);
-		assert.match(String(nonBlocking.description ?? ""), /do not need a subscription/);
-		assert.ok(all, "all schema should exist");
-		assert.match(String(all.description ?? ""), /same-turn result.*truly needed/);
-		assert.doesNotMatch(String(all.description ?? ""), /spawn a replacement/);
-		assert.ok(stopOnAttention, "stopOnAttention schema should exist");
-		assert.equal(stopOnAttention.type, "boolean");
-		assert.match(String(stopOnAttention.description ?? ""), /idle or long-thinking attention/);
-		assert.match(String(timeoutMs?.description ?? ""), /waitTool\.defaultTimeoutMs/);
-		assert.match(String(timeoutMs?.description ?? ""), /non-error active-work result/);
+	it("bg_wait is gone: no model-facing wait schema remains", () => {
+		assert.equal(schemas.SubagentWaitParams, undefined);
 	});
 
 	it("does not emit description-only schema nodes", () => {

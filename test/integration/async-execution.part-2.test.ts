@@ -305,7 +305,7 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 					assert.ok(transcript);
 					assert.match(fs.readFileSync(transcript, "utf-8"), /Blocked by policy/);
 				}
-				assert.equal(mockPi.callCount(), 1);
+				assert.equal(mockPi.callCount(), diagnostic === "empty" && !interrupted ? 3 : 1);
 			});
 		}
 	}
@@ -1080,7 +1080,7 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		});
 		assert.match(singleResult.content[0]?.text ?? "", /Async: worker \[/);
 		assert.match(singleResult.content[0]?.text ?? "", /Do not run sleep timers or polling loops/);
-		assert.match(singleResult.content[0]?.text ?? "", /Use bg_wait only/i);
+		assert.match(singleResult.content[0]?.text ?? "", /Completion wakes the session automatically, do not poll/i);
 		assert.match(singleResult.content[0]?.text ?? "", /non-interactive run: Pi auto-drains current-session subagent work at agent_end/);
 		assert.equal(startedEvent(singleId).task, "[prompt redacted]");
 		assert.equal(startedEvent(singleId).goal, "[prompt redacted]");
@@ -1097,7 +1097,7 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		});
 		assert.match(interactiveResult.content[0]?.text ?? "", /interactive session/);
 		assert.match(interactiveResult.content[0]?.text ?? "", /return control to the user/);
-		assert.match(interactiveResult.content[0]?.text ?? "", /does not need a wait call/);
+		assert.match(interactiveResult.content[0]?.text ?? "", /Use subagent\(\{ action: "status"/);
 		assert.match(interactiveResult.content[0]?.text ?? "", /native completion notification/);
 		assert.doesNotMatch(interactiveResult.content[0]?.text ?? "", /bg_wait\(\{ id:/);
 		assert.doesNotMatch(interactiveResult.content[0]?.text ?? "", /auto-drain/);
@@ -1114,7 +1114,7 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		});
 		assert.match(parallelResult.content[0]?.text ?? "", /Async parallel:/);
 		assert.match(parallelResult.content[0]?.text ?? "", /Do not run sleep timers or polling loops/);
-		assert.match(parallelResult.content[0]?.text ?? "", /Use bg_wait only/i);
+		assert.match(parallelResult.content[0]?.text ?? "", /Completion wakes the session automatically, do not poll/i);
 		assert.equal(startedEvent(parallelId).goal, "[prompt redacted]");
 		const parallelResultPath = await waitForAsyncResultFile(parallelId, 10_000);
 		const parallelPayload = JSON.parse(fs.readFileSync(parallelResultPath, "utf-8")) as { agent?: string; mode?: string };
