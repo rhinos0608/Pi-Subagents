@@ -3,7 +3,7 @@ name: pi-subagents
 description: |
   Technical guidance for operator-requested delegation to builtin or custom
   subagents: bounded handoffs, parallel review, scripted workflows, async work,
-  forked context, isolation, and coordinated execution.
+  fresh launch context, isolation, and coordinated execution.
 ---
 
 # Pi Subagents
@@ -65,30 +65,26 @@ stay async.
 
 In an ordinary interactive session, yield after launching or triaging useful
 async lanes and let Pi wake the parent on completion; ordinary async subagents
-already have native completion notifications, so do not call `bg_wait()` merely
-because a child is active. Use blocking `bg_wait()` only for provider,
-detached, or other background work without a native notification when a
-headless/run-to-completion contract or a required same-turn artifact makes the
-result necessary before this turn ends. For
-“continue/orchestrate/work until done,” keep the lane board moving while a safe
+already have native completion notifications, so never poll status to wait.
+For “continue/orchestrate/work until done,” keep the lane board moving while a safe
 immediate action remains; if only async lanes are running, record the revisit
 trigger and yield.
 
-Package agents appear in `subagent({ action: "list" })`. External CLI/job agents
+Package agents appear in the Fleet Agents view. External CLI/job agents
 use their own runner contract. Do not pass native Pi child options to them unless
 that runner explicitly supports the option.
 
 ## Read the reference for the branch
 
-For exact API fields and worked examples, call `subagent({action:"guide",topic:"tool-reference"})` or `topic:"workflows"`. The compact tool definition is not the recipe catalog; use `topic:"missions"` for mission updates and schedules. Default and explicit compact modes share the compact description and schema; `"full"` restores full detail (see `toolDescriptionMode` in docs/configuration.md).
+For exact API fields and worked examples, call `subagent({action:"guide",message:"tool-reference"})` or `message:"workflows"`. The model tool has exactly 7 fields (`agent`, `task`, `cwd`, `workflowScript`, `action`, `id`, `message`); management lives in Fleet and slash commands.
 
 | Branch | Read |
 | --- | --- |
 | Delegate or choose roles, prompts, models, or slash commands | `references/prompting-and-roles.md` |
-| Execute single, scripted, async, scheduled, mission, forked, watchdog, oracle, or intercom workflows | `references/execution-controls.md` |
+| Execute single, scripted, async, forked, watchdog, oracle, or intercom workflows | `references/execution-controls.md` |
 | Review, validate, triage gate failures, or prepare delivery | `references/review-and-validation.md` |
 | Coordinate lanes, worktrees, repositories, or writer waves | `references/multi-lane-orchestration.md` |
-| List, create, edit, disable, eject, or expose agents/RPC | `references/management-authoring-rpc.md` |
+| Create, edit, disable, eject, or expose agents/RPC via Fleet and slash | `references/management-authoring-rpc.md` |
 | Check safety constraints, recipes, or error handling | `references/constraints-and-recipes.md` |
 
 For an authorized complex delegated workflow, read `prompting-and-roles.md` and
@@ -113,4 +109,4 @@ For an authorized complex delegated workflow, read `prompting-and-roles.md` and
 - Preserve parent authority and escalate unresolved choices.
 - Treat receipts, CI, review bots, and external-run records as evidence, not authority.
 - For backlog maintenance, releases, merge queues, or other public-repo mutation policy, load the matching user/project skill. This package defines delegation primitives, not private policy.
-- As a conservative orchestration policy, do not pass a hard `toolBudget` or tight `usageBudget` to mutation-capable workers. The default tool budget blocks read/search tools rather than mutation tools. If interrupted after a tool call starts, checkpoint after the current tool returns with changed files, build/test state, and commit or PR state.
+- As a conservative orchestration policy, do not set tight tool budgets on mutation-capable workers. If interrupted after a tool call starts, checkpoint after the current tool returns with changed files, build/test state, and commit or PR state.

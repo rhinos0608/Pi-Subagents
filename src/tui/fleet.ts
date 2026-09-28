@@ -12,6 +12,7 @@ import { readStatus } from "../shared/utils.ts";
 import { formatAsyncRunTranscript } from "../runs/background/fleet-view.ts";
 import { listAsyncRuns, type AsyncRunSummary } from "../runs/background/async-status.ts";
 import { steerAsyncRun } from "../runs/foreground/async-steering-action.ts";
+import { deliverInterruptRequest } from "../runs/background/control-channel.ts";
 import type { SteerDeliveryMode } from "../runs/background/control-channel.ts";
 import { stopAsyncRun } from "../runs/foreground/async-stop-action.ts";
 import { resolveWorkflowForegroundSteeringTarget, steerWorkflowForegroundTarget } from "../runs/foreground/workflow-foreground-steering.ts";
@@ -44,6 +45,8 @@ export const DEFAULT_FLEET_KEYBINDINGS: Record<FleetKeybindingAction, string[]> 
 	steer: ["s"],
 	inspect: ["return", "H"],
 	stop: ["D"],
+	interrupt: ["i"],
+	resume: ["u"],
 	toggleTools: ["x", "X", "ctrl+o"],
 };
 
@@ -97,6 +100,8 @@ export interface FleetActionResult {
 export interface FleetActionHandlers {
 	steer(input: { runId: string; asyncDir: string; index?: number; message: string; mode: SteerDeliveryMode }): Promise<FleetActionResult>;
 	stop(input: { runId: string; asyncDir: string; index?: number }): Promise<FleetActionResult> | FleetActionResult;
+	interrupt?(input: { runId: string; asyncDir: string; index?: number }): Promise<FleetActionResult> | FleetActionResult;
+	resume?(input: { runId: string; asyncDir: string; index?: number; message: string }): Promise<FleetActionResult> | FleetActionResult;
 	inspect?(input: { runId: string; asyncDir: string; index?: number }): Promise<FleetActionResult>;
 	redoPrompt?(input: { runId: string; index: number; guidance: string; control?: ForegroundRunControl }): Promise<FleetActionResult>;
 }
@@ -108,6 +113,7 @@ export interface FleetViewOptions {
 	initialKey?: string;
 	markdownTheme?: MarkdownTheme;
 	fleetKeybindings?: FleetKeybindingsConfig;
+	resumeRun?: (input: { runId: string; asyncDir: string; index?: number; message: string }) => Promise<AgentToolResult<Details>> | AgentToolResult<Details>;
 	actions?: FleetActionHandlers;
 	copyText?: (text: string) => Promise<void> | void;
 	inspectorPlugins?: readonly InspectorPlugin[];
@@ -407,7 +413,9 @@ function foregroundActiveDetail(item: Extract<FleetItem, { kind: "foreground-act
 		control.sourceRunId ? `Redo source: ${control.sourceRunId}` : undefined,
 		control.supersededByRunId ? `Superseded by: ${control.supersededByRunId}` : undefined,
 		item.index !== undefined ? `Child: ${item.index} (${item.agent})` : `Agent: ${item.agent}`,
+		control.cwd ? `Cwd: ${control.cwd}` : undefined,
 		modelThinking ? `Model: ${modelThinking}` : undefined,
+		live.modelResolution ? `Model resolution: ${live.modelResolution.source}${live.modelResolution.requested ? ` (requested ${live.modelResolution.requested})` : ""}${live.modelResolution.fallbackReason ? ` · ${live.modelResolution.fallbackReason}` : ""}` : undefined,
 		promptSummary ? `Task: ${promptSummary}` : undefined,
 		`Started: ${new Date(live.startedAt).toISOString()}`,
 		live.currentTool ? `Current tool: ${live.currentTool}${live.currentPath ? ` · ${shortenPath(live.currentPath)}` : ""}` : undefined,
@@ -484,6 +492,7 @@ function foregroundRecentDetail(item: Extract<FleetItem, { kind: "foreground-rec
 		`Run: ${item.runId}`,
 		"Source: foreground",
 		`State: ${child.status}`,
+		run.cwd ? `Cwd: ${run.cwd}` : undefined,
 		`Mode: ${run.mode}`,
 		`Child: ${child.index} (${child.agent})${contextModeLabel(child.context) ? ` ${contextModeLabel(child.context)}` : ""}`,
 		modelThinking ? `Model: ${modelThinking}` : undefined,
@@ -576,6 +585,8 @@ function asyncDetail(item: Extract<FleetItem, { kind: "async" }>, state: Subagen
 		`Run: ${item.runId}`,
 		"Source: async",
 		`State: ${item.state}`,
+		item.run.cwd ? `Cwd: ${item.run.cwd}` : undefined,
+		item.run.pendingAppends ? `Pending appends: ${item.run.pendingAppends}` : undefined,
 		`Mode: ${item.run.mode}${contextModeLabel(item.run.context) ? ` ${contextModeLabel(item.run.context)}` : ""}`,
 		item.index !== undefined ? `Child: ${item.index} (${item.agent})${contextModeLabel(item.step?.context) ? ` ${contextModeLabel(item.step?.context)}` : ""}` : `Agent: ${item.agent}${contextModeLabel(item.run.context) ? ` ${contextModeLabel(item.run.context)}` : ""}`,
 		outputPath ? `Output: ${outputPath}` : undefined,
@@ -704,6 +715,17 @@ function itemSource(item: FleetItem): string {
 	return item.kind === "foreground-active" ? "foreground · live" : "foreground · recent";
 }
 
+function itemDeliveryMarkers(item: FleetItem): string[] {
+	if (item.kind !== "async") return [];
+	const markers: string[] = [];
+	if (item.run.pendingAppends) markers.push(`${item.run.pendingAppends} pending append${item.run.pendingAppends === 1 ? "" : "s"}`);
+	if (item.run.wrapUpRequested ?? item.step?.wrapUpRequested) markers.push("wrap-up requested");
+	if (item.run.stopped) markers.push("stopped");
+	if (item.step?.toolBudgetBlocked) markers.push("budget hard-blocked");
+	if (item.step?.stopped) markers.push("child stopped");
+	return markers;
+}
+
 function itemStats(item: FleetItem): string[] {
 	let model: string | undefined;
 	let tokens: number | undefined;
@@ -738,6 +760,7 @@ function itemStats(item: FleetItem): string[] {
 		tokenUsage ? formatTokenUsage(tokenUsage) : tokens !== undefined ? `${formatTokens(tokens)} tok` : undefined,
 		tools !== undefined ? `${tools} tool${tools === 1 ? "" : "s"}` : undefined,
 		durationMs !== undefined ? formatDuration(durationMs) : undefined,
+		...itemDeliveryMarkers(item),
 	].filter((value): value is string => Boolean(value));
 }
 
@@ -803,6 +826,7 @@ export class SubagentFleetComponent implements Component {
 	private promptAuditView: PromptAuditView = "authored";
 	private actionNotice: FleetActionResult | undefined;
 	private steerDraft: string | undefined;
+	private resumeDraft: string | undefined;
 	private redoGuidanceDraft: string | undefined;
 	private steerMode: SteerDeliveryMode = "steer";
 	private stopConfirming = false;
@@ -919,6 +943,7 @@ export class SubagentFleetComponent implements Component {
 
 	private resetActionInput(): void {
 		this.steerDraft = undefined;
+		this.resumeDraft = undefined;
 		this.redoGuidanceDraft = undefined;
 		this.steerMode = "steer";
 		this.stopConfirming = false;
@@ -943,6 +968,14 @@ export class SubagentFleetComponent implements Component {
 		const target = this.selectedAsyncAction();
 		if ("reason" in target) return target;
 		return { runId: target.item.runId, asyncDir: target.item.run.asyncDir, ...(target.item.index !== undefined ? { index: target.item.index } : {}) };
+	}
+
+	private selectedResumeAction(): { runId: string; asyncDir: string; index?: number } | { reason: string } {
+		const item = this.snapshot.items[this.selected];
+		if (!item) return { reason: "No child is selected." };
+		if (item.kind === "external") return { reason: "External jobs are display-only and remain controlled by their owning extension." };
+		if (item.kind !== "async") return { reason: "Fleet resume is available for current-session top-level async runs only." };
+		return { runId: item.runId, asyncDir: item.run.asyncDir, ...(item.index !== undefined ? { index: item.index } : {}) };
 	}
 
 	private selectedInspectAction(): { runId: string; asyncDir: string; index?: number } | { reason: string } {
@@ -971,6 +1004,9 @@ export class SubagentFleetComponent implements Component {
 		if (this.steerDraft !== undefined) {
 			lines.push(this.theme.fg("accent", `Steer message (${this.steerMode}): ${this.steerDraft}${this.theme.fg("dim", "▌")}`));
 			lines.push(this.theme.fg("dim", "Enter sends · Tab changes mode · Esc cancels · Backspace edits"));
+		} else if (this.resumeDraft !== undefined) {
+			lines.push(this.theme.fg("accent", `Resume message: ${this.resumeDraft}${this.theme.fg("dim", "▌")}`));
+			lines.push(this.theme.fg("dim", "Enter resumes with a follow-up · Esc cancels · Backspace edits"));
 		} else if (this.redoGuidanceDraft !== undefined) {
 			lines.push(this.theme.fg("accent", `Redo guidance: ${this.redoGuidanceDraft}${this.theme.fg("dim", "▌")}`));
 			lines.push(this.theme.fg("dim", "Enter rewrites and reruns · Esc cancels · Backspace edits"));
@@ -1133,6 +1169,37 @@ export class SubagentFleetComponent implements Component {
 			}
 			return;
 		}
+		if (this.resumeDraft !== undefined) {
+			if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) {
+				this.resetActionInput();
+				this.tui.requestRender();
+				return;
+			}
+			if (matchesKey(data, "return") || data === "\r" || data === "\n") {
+				const message = this.resumeDraft.trim();
+				if (!message) {
+					this.setActionNotice({ text: "Resume message cannot be empty.", isError: true });
+					return;
+				}
+				const target = this.selectedResumeAction();
+				if ("reason" in target || !this.options.actions?.resume) {
+					this.setActionNotice({ text: "reason" in target ? target.reason : "Resume controls are unavailable in this context.", isError: true });
+					return;
+				}
+				this.runAction(() => Promise.resolve(this.options.actions!.resume!({ ...target, message })));
+				return;
+			}
+			if (matchesKey(data, "backspace") || data === "\x7f") {
+				this.resumeDraft = this.resumeDraft.slice(0, -1);
+				this.tui.requestRender();
+				return;
+			}
+			if (data.length === 1 && data >= " " && data !== "\x7f") {
+				this.resumeDraft += data;
+				this.tui.requestRender();
+			}
+			return;
+		}
 		if (this.stopConfirming) {
 			if (matchesKey(data, "return") || data.toLowerCase() === "y") {
 				const target = this.selectedAsyncAction();
@@ -1198,6 +1265,24 @@ export class SubagentFleetComponent implements Component {
 			else {
 				this.actionNotice = undefined;
 				this.stopConfirming = true;
+				this.detailAutoFollow = false;
+				this.detailScroll = 0;
+				this.tui.requestRender();
+			}
+			return;
+		}
+		if (matchesFleetAction(data, this.keybindings, "interrupt")) {
+			const target = this.selectedAsyncAction();
+			if ("reason" in target || !this.options.actions?.interrupt) this.setActionNotice({ text: "reason" in target ? target.reason : "Interrupt controls are unavailable in this context.", isError: true });
+			else this.runAction(() => Promise.resolve(this.options.actions!.interrupt!({ runId: target.item.runId, asyncDir: target.item.run.asyncDir, ...(target.item.index !== undefined ? { index: target.item.index } : {}) })));
+			return;
+		}
+		if (matchesFleetAction(data, this.keybindings, "resume")) {
+			const target = this.selectedResumeAction();
+			if ("reason" in target || !this.options.actions?.resume) this.setActionNotice({ text: "reason" in target ? target.reason : "Resume controls are unavailable in this context.", isError: true });
+			else {
+				this.actionNotice = undefined;
+				this.resumeDraft = "";
 				this.detailAutoFollow = false;
 				this.detailScroll = 0;
 				this.tui.requestRender();
@@ -1366,7 +1451,7 @@ export class SubagentFleetComponent implements Component {
 			? ` j/k child · 1/2/3 view · g redo with guidance · c copy · Esc close Prompt Audit · ${position}`
 			: selected?.kind === "external"
 				? ` ${bindingLabel(this.keybindings, "selectUp")}/${bindingLabel(this.keybindings, "selectDown")} job · display-only · ${bindingLabel(this.keybindings, "refresh")} refresh · ${bindingLabel(this.keybindings, "close")} close · ${position}`
-				: ` ${bindingLabel(this.keybindings, "selectUp")}/${bindingLabel(this.keybindings, "selectDown")} agent · p Prompt Audit · ${bindingLabel(this.keybindings, "inspect")} Inspect · ${bindingLabel(this.keybindings, "steer")} steer · ${bindingLabel(this.keybindings, "stop")} stop · ${bindingLabel(this.keybindings, "toggleTools")} tools · ${bindingLabel(this.keybindings, "refresh")} refresh · ${bindingLabel(this.keybindings, "close")} close · ${position}`;
+				: ` ${bindingLabel(this.keybindings, "selectUp")}/${bindingLabel(this.keybindings, "selectDown")} agent · p Prompt Audit · ${bindingLabel(this.keybindings, "inspect")} Inspect · ${bindingLabel(this.keybindings, "steer")} steer · ${bindingLabel(this.keybindings, "stop")} stop · ${bindingLabel(this.keybindings, "interrupt")} interrupt · ${bindingLabel(this.keybindings, "resume")} resume · ${bindingLabel(this.keybindings, "toggleTools")} tools · ${bindingLabel(this.keybindings, "refresh")} refresh · ${bindingLabel(this.keybindings, "close")} close · ${position}`;
 		lines.push(this.theme.fg("border", "│") + fit(this.theme.fg("dim", footer), innerWidth) + this.theme.fg("border", "│"));
 		lines.push(this.theme.fg("border", `╰${"─".repeat(innerWidth)}╯`));
 		return lines.map((line) => truncateToWidth(line, width));
@@ -1392,9 +1477,24 @@ export async function openSubagentFleet(ctx: ExtensionContext, state: SubagentSt
 		if (!copyToClipboard) throw new Error("Clipboard is unavailable in this Pi version.");
 		await copyToClipboard(text);
 	});
-	const actions = options.actions ?? {
-		steer: async (input: { runId: string; asyncDir: string; index?: number; message: string; mode: SteerDeliveryMode }) => {
-			const status = readStatus(input.asyncDir);
+	const actions = options.actions ?? buildDefaultFleetActions(state, options);
+	try {
+		await ctx.ui.custom<undefined>(
+			(tui, theme, _keybindings, done) => new SubagentFleetComponent(tui, theme, state, done, { ...options, actions, copyText }),
+			{
+				overlay: true,
+				overlayOptions: { anchor: "center", width: "95%", minWidth: 60, maxHeight: "85%", margin: 1 },
+			},
+		);
+	} finally {
+		state.fleetInspectorOpen = wasOpen;
+	}
+}
+
+export function buildDefaultFleetActions(state: SubagentState, options: FleetViewOptions = {}): FleetActionHandlers {
+	return {
+			steer: async (input: { runId: string; asyncDir: string; index?: number; message: string; mode: SteerDeliveryMode }) => {
+				const status = readStatus(input.asyncDir);
 			const liveWorkflowRunId = status?.mode === "workflow" && state.workflowControllers?.has(status.runId || input.runId)
 				? status.runId || input.runId
 				: undefined;
@@ -1415,6 +1515,41 @@ export async function openSubagentFleet(ctx: ExtensionContext, state: SubagentSt
 			}), `Failed to steer async run ${input.runId}.`);
 		},
 		stop: (input: { runId: string; asyncDir: string; index?: number }) => firstToolResultText(stopAsyncRun(state, input.runId, undefined, { asyncDir: input.asyncDir, resolvedId: input.runId }), `Failed to stop async run ${input.runId}.`),
+		// Phase 7c: interrupt-as-pause is distinct from stop (stop ends the run;
+		// interrupt requests a resumable pause via the run control inbox).
+		interrupt: (input: { runId: string; asyncDir: string; index?: number }) => {
+			const status = readStatus(input.asyncDir);
+			if (!status || status.state !== "running" || typeof status.pid !== "number") {
+				return { text: `No running async run with an interrupt-capable pid was found for '${input.runId}'.`, isError: true };
+			}
+			if (status.mode === "workflow") {
+				return { text: `Interrupt is unsupported for async workflow ${status.runId ?? input.runId}; use stop instead.`, isError: true };
+			}
+			const activeSteps = status.steps?.filter((step) => step.status === "running") ?? [];
+			if (activeSteps.length > 0 && activeSteps.every((step) => step.runner?.type === "external-cli" || step.runner?.type === "external-job")) {
+				return { text: `Interrupt is unsupported for external async run ${status.runId ?? input.runId}; use stop instead.`, isError: true };
+			}
+			try {
+				deliverInterruptRequest({ asyncDir: input.asyncDir, source: "fleet-interrupt" });
+			} catch (error) {
+				return { text: `Failed to interrupt async run ${status.runId ?? input.runId}: ${error instanceof Error ? error.message : String(error)}`, isError: true };
+			}
+			const tracked = state.asyncJobs.get(status.runId || input.runId);
+			if (tracked) {
+				delete tracked.activityState;
+				tracked.updatedAt = Date.now();
+			}
+			return { text: `Interrupt requested for async run ${status.runId || input.runId}.` };
+		},
+		// Resume detaches a follow-up through the executor when a resumeRun delegate is
+		// wired (extension/slash entries). No delegate means no resume slot: never fake it.
+		...(options.resumeRun ? {
+			resume: async (input: { runId: string; asyncDir: string; index?: number; message: string }): Promise<FleetActionResult> =>
+				firstToolResultText(
+					await options.resumeRun!({ runId: input.runId, asyncDir: input.asyncDir, ...(input.index !== undefined ? { index: input.index } : {}), message: input.message }),
+					`Resume started for async run ${input.runId}.`,
+				),
+		} : {}),
 		inspect: async (input: { runId: string; asyncDir: string; index?: number }) => firstToolResultText(await handleInspectorAction("inspector.open", {
 			id: input.runId,
 			dir: input.asyncDir,
@@ -1435,15 +1570,4 @@ export async function openSubagentFleet(ctx: ExtensionContext, state: SubagentSt
 			return control.promptAuditRedo(input.index, input.guidance);
 		},
 	} satisfies FleetActionHandlers;
-	try {
-		await ctx.ui.custom<undefined>(
-			(tui, theme, _keybindings, done) => new SubagentFleetComponent(tui, theme, state, done, { ...options, actions, copyText }),
-			{
-				overlay: true,
-				overlayOptions: { anchor: "center", width: "95%", minWidth: 60, maxHeight: "85%", margin: 1 },
-			},
-		);
-	} finally {
-		state.fleetInspectorOpen = wasOpen;
-	}
 }

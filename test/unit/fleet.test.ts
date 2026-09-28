@@ -47,7 +47,7 @@ function writeAsyncRun(root: string, input: {
 	lastUpdate?: number;
 	startedAt?: number;
 	agents?: string[];
-	contexts?: Array<"fresh" | "fork">;
+	contexts?: Array<"fresh">;
 	models?: string[];
 	thinking?: string[];
 	output?: string;
@@ -525,8 +525,12 @@ describe("native subagent fleet", () => {
 				models: ["openai-codex/gpt-5.5"],
 				thinking: ["high"],
 			});
+			// WS-A lengthened the run-detail header (cwd, budgets, worktree,
+			// delivery, effective policy); the detail pane tail-follows, so a
+			// 32-row viewport scrolls the model line out of view. Use a tall
+			// viewport so the header metadata stays visible.
 			const component = new SubagentFleetComponent(
-				{ terminal: { rows: 32, columns: 100 }, requestRender() {} } as never,
+				{ terminal: { rows: 60, columns: 100 }, requestRender() {} } as never,
 				theme as never,
 				stateForTest(),
 				() => {},
@@ -1037,7 +1041,7 @@ describe("native subagent fleet", () => {
 	it("renders selectable transcript detail and completed artifact paths within terminal width", () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-fleet-render-"));
 		try {
-			const asyncDir = writeAsyncRun(root, { id: "async-finished", state: "complete", contexts: ["fork"], output: "FINAL ASYNC OUTPUT" });
+			const asyncDir = writeAsyncRun(root, { id: "async-finished", state: "complete", contexts: ["fresh"], output: "FINAL ASYNC OUTPUT" });
 			const state = stateForTest();
 			let closed = false;
 			let renderRequests = 0;
@@ -1053,7 +1057,7 @@ describe("native subagent fleet", () => {
 				const lines = component.render(100);
 				assert.ok(lines.some((line) => line.includes("FINAL ASYNC OUTPUT")));
 				assert.ok(lines.some((line) => line.includes("output-0.log")));
-				assert.ok(lines.some((line) => line.includes("worker") && line.includes("[fork]")));
+				assert.ok(lines.some((line) => line.includes("worker") && line.includes("[fresh]")));
 				assert.ok(lines.some((line) => line.includes("worker.jsonl")));
 				for (const line of lines) assert.ok(visibleWidth(line) <= 100, `line exceeded width: ${line}`);
 				tui.terminal.rows = 10;
@@ -1822,6 +1826,48 @@ describe("native subagent fleet", () => {
 				assert.ok(lines.some((line) => line.includes("LATEST LIVE OUTPUT")), "live transcript should keep following new output");
 				assert.ok(renderRequests > 0);
 				assert.ok(invalidations > 0, "live refresh must invalidate cached TUI frames before rendering");
+			} finally {
+				component.dispose();
+			}
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("renders run-detail gaps, fallback history, and effective policy in the fleet inspector", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-fleet-run-details-"));
+		try {
+			const asyncDir = writeAsyncRun(root, { id: "async-details", output: "DONE" });
+			const statusPath = path.join(asyncDir, "status.json");
+			const status = JSON.parse(fs.readFileSync(statusPath, "utf-8")) as Record<string, unknown>;
+			status.cwd = "/work/repo";
+			status.timeoutMs = 600000;
+			status.toolBudget = { soft: 40, hard: 80, block: ["read"], toolCount: 3, outcome: "within-budget" };
+			status.pendingAppends = 1;
+			status.launchContractDigest = "digest-1";
+			const steps = status.steps as Array<Record<string, unknown>>;
+			steps[0]!.worktreePath = "/work/wt-1";
+			steps[0]!.branch = "feature/x";
+			steps[0]!.modelAttempts = [{ model: "openai/gpt-5", success: false, error: "boom" }];
+			fs.writeFileSync(statusPath, JSON.stringify(status), "utf-8");
+			const component = new SubagentFleetComponent(
+				{ terminal: { rows: 40, columns: 120 }, requestRender() {} } as never,
+				theme as never,
+				stateForTest(),
+				() => {},
+				{ asyncDirRoot: root, resultsDir: path.join(root, "results"), refreshMs: 60_000 },
+			);
+			try {
+				const rendered = component.render(120).join("\n");
+				assert.match(rendered, /Cwd: \/work\/repo/);
+				assert.match(rendered, /Timeout: 10m0s/);
+				assert.match(rendered, /Tool budget: 3\/80 used \(soft 40\) · within-budget/);
+				assert.match(rendered, /Worktree: \/work\/wt-1 · branch feature\/x/);
+				assert.match(rendered, /Delivery: 1 pending append/);
+				assert.match(rendered, /Effective policy \(reachable fragments/);
+				assert.match(rendered, /Launch contract: digest-1/);
+				assert.match(rendered, /Model attempts \(1\):/);
+				assert.match(rendered, /\[fallback\] openai\/gpt-5 failed: boom\./);
 			} finally {
 				component.dispose();
 			}

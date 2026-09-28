@@ -4,7 +4,7 @@ Where running subagents show up, how to inspect them, and the files and events t
 
 ## Foreground runs
 
-Foreground runs stream progress in the conversation while they run. They default to a generous 30-minute wall-clock timeout when neither the call nor the selected agent provides a timeout; a global [`timeoutMs`](configuration.md#timeoutms) config replaces that default, and explicit `timeoutMs`/`maxRuntimeMs` and agent defaults win.
+Foreground runs stream progress in the conversation while they run. They default to a generous 30-minute wall-clock timeout when neither the agent default nor operator config provides one; a global [`timeoutMs`](configuration.md#timeoutms) config replaces that default.
 
 A foreground child is a pi session created inside the parent Pi process, not a second `pi` process. A run timeout, tool timeout, interrupt, or stop aborts the child session and disposes it. Detach keeps the session running inside the parent and publishes the same receipt and completion notification as before.
 
@@ -103,6 +103,16 @@ FleetView and the under-editor async widget are both enabled by default; set `as
 
 `/subagents-fleet` opens the live fleet inspector with current-session foreground work, recent async children, structured Markdown/tool transcripts, and completed output/session paths.
 
+## Agents view
+
+The Agents view lists every discovered agent with source, enabled state, model, thinking level, and fallback models. Keys: `↑↓`/`jk` select, `c` create (name, description, user/project scope), `e` edit (model, thinking, prompt, description), `d` delete (user/project definitions only; builtins and package agents offer disable via `x` instead), `x` disable/enable, `Esc` close. Headless use goes through the same management handlers, never the model tool.
+
+## Run details and controls
+
+Run details show cwd, budgets, worktree/branch, delivery state, fallback-attempt history, and policy blocks. Controls: `s` compose an acknowledged steer message to a live child (Tab cycles `steer`, `follow_up`, `auto`), `D` stop a run after confirmation, `Enter`/`H` open the child inspector. Fleet resume is not a button: resume via `subagent({ action: "resume", id, message })`, via `runs.run(newKey, { resume: runId, task })` inside a workflow, or via slash. Global default-model settings (`subagents.defaultModel`, `defaultProvider`, `defaultThinking`) have no Fleet writer; hand-edit settings files.
+
+Run details render the persisted resolved-policy snapshot from `status.json`: resolved model + thinking + origin, toolBudget soft/hard + source, timeoutMs + source, context, isolation/worktree, allowedTools union (supervisor decision: persist-policy-snapshot), via `formatResolvedPolicySnapshotLines` (`src/policy/snapshot.ts`). When no snapshot was persisted, run details fall back to reachable live fragments with an explicit header.
+
 Default keys:
 
 - `↑`/`↓` or `j`/`k` — select a child
@@ -118,11 +128,11 @@ Default keys:
 
 Set `fleetKeybindings` in the extension config to replace inspector-level keys when a terminal intercepts keys such as `PgUp`, `PgDn`, `Home`, or `End`. Prompt modes keep fixed keys such as `Esc`, `Enter`, `Tab`, and stop-confirmation `Y`/`N`.
 
-Enter and `H` use the available Inspect plugin. On macOS with Ghostty 1.3+ (TERM_PROGRAM=ghostty), this includes the other bundled open-only plugin using Ghostty's preview AppleScript API; status and close are unavailable because no binding is written. In a child-specific inspector, type ordinary guidance and press Enter to send it through the acknowledged steer channel; `steer <message>`, `status`, and `stop` remain available as explicit controls. The bundled Herdr plugin uses Herdr 0.7.5+.
+Enter and `H` use the available Inspect plugin. On macOS with Ghostty 1.3+ (TERM_PROGRAM=ghostty), this includes the other bundled open-only plugin using Ghostty's preview AppleScript API; status and close are unavailable because no binding is written. In a child-specific inspector, type ordinary guidance and press Enter to send it through the acknowledged steer channel; `steer <message>`, `status`, `stop`, and `interrupt` remain available as explicit controls. The bundled Herdr plugin uses Herdr 0.7.5+.
 
-Without a TUI, `/subagents-fleet` retains the textual `subagent({ action: "status", view: "fleet" })` fallback, and mutations use explicit commands: run `/subagents-stop` and pick from the selector, or use `/subagents-stop <run-id>` / `subagent({ action: "stop", id: "..." })` when you already know the id.
+Without a TUI, `/subagents-fleet` retains the textual `subagent({ action: "status" })` fallback, and run control uses explicit commands: run `/subagents-stop` and pick from the selector, or use `/subagents-stop <run-id>` when you already know the id.
 
-Use `/subagents-detach [run-id]` only for an active foreground single-subagent run you want to leave running without terminating; the eventual result remains available through status/wait.
+Use `/subagents-detach [run-id]` only for an active foreground single-subagent run you want to leave running without terminating; the eventual result arrives via the completion notice and remains available through status.
 
 Set `foregroundDetachShortcut` in `~/.pi/agent/extensions/subagent/config.json` to bind the same action to a shortcut. The running foreground card shows the configured shortcut beside its live-detail hint:
 
@@ -140,7 +150,7 @@ Pi binds `Ctrl+B` to editor cursor-left by default. The extension shortcut takes
 }
 ```
 
-If something feels misconfigured, run `/subagents-doctor` or ask: "Check whether subagents and intercom are set up correctly."
+If something feels misconfigured, run `/subagents-doctor` or ask: "Check whether subagents and intercom are set up correctly." Diagnostics live in slash commands and Fleet, not the model tool.
 
 ## Host inspection protocol (RPC)
 
@@ -296,7 +306,7 @@ For npm package projects, project-scoped artifacts need a `.npmignore` rule (or 
 
 ## Sessions
 
-Session files are stored under a per-run session directory. With `context: "fork"`, each child starts from a branched session file produced from the parent's current leaf (foreground children open it in-process; background children receive it as `--session`). That is a real session fork, not an injected summary. An omitted launch `context` that resolves through `defaultContext: fork` uses the same branch when the parent session file and current leaf exist, and otherwise starts fresh.
+Session files are stored under a per-run session directory. Launches are always fresh: each child starts from its assigned brief, not the parent's unfinished conversation. Stale persisted `fork` context values are accepted for old data only and render no badge. There is no per-call context field on the model tool.
 
 ## Completion notifications
 

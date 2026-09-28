@@ -4,7 +4,7 @@ This file is a detailed reference loaded from `skills/pi-subagents/SKILL.md`.
 
 ## Capability ceilings
 
-Parent extensions may register a session-scoped, out-of-band ceiling through `pi-subagents/capability-ceiling`. Child tools and eligible canonical agent names are intersected with every active registration and inherited snapshot; `denyExtensions` removes ambient/provider extension loading while retaining package protocol runtime. `{ action: "list" }` marks non-allowlisted agents as restricted, and launch rejects them before spawn. Do not add a model-visible ceiling field or rely on unrestricted role selection for enforcement. Restricted schedules are rejected until their ceiling can be persisted safely.
+Parent extensions may register a session-scoped, out-of-band ceiling through `pi-subagents/capability-ceiling`. Child tools and eligible canonical agent names are intersected with every active registration and inherited snapshot; `denyExtensions` removes ambient/provider extension loading while retaining package protocol runtime. Fleet agent output marks non-allowlisted agents as restricted, and launch rejects them before spawn. Do not add a model-visible ceiling field or rely on unrestricted role selection for enforcement. Restricted schedules are rejected until their ceiling can be persisted safely.
 
 ## When to Use
 
@@ -72,11 +72,11 @@ Use this when the user wants adversarial review of a diff, plan, issue, file, or
 
 ### Proactive skill-specialist technique
 
-Use this only within operator-authorized delegation when `{ action: "list" }` reports skill subagent suggestions relevant to the requested handoff. Availability is a selection hint, not authority or a command to fan out.
+Use this only within operator-authorized delegation when the Fleet Agents view reports skill subagent suggestions relevant to the requested handoff. Availability is a selection hint, not authority or a command to fan out.
 
 Default guardrails:
 - Keep the fanout small: usually one or two skill-specialist children, never more than the listed recommendations or configured cap.
-- Prefer `context: "fresh"` and include only the files, diff, plan, URL, or request details each child needs. Use forked context only when private/session history is essential and appropriate to share.
+- Prefer child agents with a tight brief and include only the files, diff, plan, URL, or request details each child needs.
 - Use read-only agents for analysis/review unless implementation was explicitly requested; do not create several writers in the same worktree.
 - Skip proactive skill subagents for tiny questions, direct commands, highly private requests, or when the user asks not to delegate.
 - Make cost and concurrency visible by using an ordinary `subagent(...)` call rather than hidden/background automation.
@@ -87,20 +87,19 @@ Example shape:
 subagent({
   workflowScript: `
     const results = await runs.all([
-      { key: "deslop", agent: "reviewer", task: "Apply the available 'deslop' skill to review the current diff for concrete cleanup findings only. Do not modify files.", skill: "deslop" },
-      { key: "accessibility", agent: "reviewer", task: "Apply the available 'accessibility' skill to review the UI changes for concrete issues only. Do not modify files.", skill: "accessibility" }
+      { key: "deslop", agent: "reviewer", task: "Review the current diff for concrete cleanup findings only. Do not modify files." },
+      { key: "accessibility", agent: "reviewer", task: "Review the UI changes for concrete issues only. Do not modify files." }
     ]);
     return results.map(result => result.output);
-  `,
-  context: "fresh"
+  `
 })
 ```
 
 ### Review-loop technique
 
-Use this when the user wants implementation or current diff review to continue until reviewers stop finding fixes worth doing now. Keep the loop in the parent session: one async `worker` implements or fixes, fresh-context `reviewer` agents inspect the actual repo and diff, the parent synthesizes accepted fixes, and one async forked `worker` applies them. The parent can express the sequence up front as an async/background `workflowScript` when the workflow is known, or continue with explicit follow-up workflowScript runs after each async completion. For an initial workflow, pass `async: true` so the main chat is unblocked. Treat an async implementation worker handoff as an intermediate state, not final completion, unless the user explicitly asked for worker-only work, review-only output, or to stop after implementation. Stop when reviewers find no P0 blockers or P1 fixes worth doing now, remaining P2 feedback is optional or deferred, an unapproved product/scope/architecture decision appears, or the max review-round cap is reached. Default to 3 review rounds unless the user sets a different cap. Do not loop for optional polish, and do not let children launch subagents or decide the loop outcome.
+Use this when the user wants implementation or current diff review to continue until reviewers stop finding fixes worth doing now. Keep the loop in the parent session: one async `worker` implements or fixes, fresh-context `reviewer` agents inspect the actual repo and diff, the parent synthesizes accepted fixes, and one async `worker` applies them. The parent can express the sequence up front as an async/background `workflowScript` when the workflow is known, or continue with explicit follow-up workflowScript runs after each async completion. For an initial workflow, pass `async: true` so the main chat is unblocked. Treat an async implementation worker handoff as an intermediate state, not final completion, unless the user explicitly asked for worker-only work, review-only output, or to stop after implementation. Stop when reviewers find no P0 blockers or P1 fixes worth doing now, remaining P2 feedback is optional or deferred, an unapproved product/scope/architecture decision appears, or the max review-round cap is reached. Default to 3 review rounds unless the user sets a different cap. Do not loop for optional polish, and do not let children launch subagents or decide the loop outcome.
 
-As a conservative orchestration policy, do not pass a hard `toolBudget` to an implementation worker, fix worker, reviewer with edit authority, or other mutation-capable child. The default tool budget blocks read/search tools rather than mutation tools, but count limits still do not measure delivery safety. Use a narrow task plus an outer elapsed deadline with enough margin, then request a checkpoint after the current tool returns. The checkpoint should report changed files, build/test state, remaining work, and commit or PR state. An elapsed timeout is not a mutation-safe boundary and must not be used as the checkpoint trigger.
+As a conservative orchestration policy, do not set tight tool budgets on an implementation worker, fix worker, reviewer with edit authority, or other mutation-capable child. Tool-call counts do not measure delivery safety. Use a narrow task plus an outer elapsed deadline with enough margin, then request a checkpoint after the current tool returns. The checkpoint should report changed files, build/test state, remaining work, and commit or PR state. An elapsed timeout is not a mutation-safe boundary and must not be used as the checkpoint trigger.
 
 ### Parallel research technique
 
@@ -131,7 +130,7 @@ stage; keep sequencing and synthesis with the parent.
 3. Use one writer for the complete fix only when the accepted fixes are one tightly coupled existing diff/seam and the lane board records evidence that splitting would create overlapping ownership or artificial handoffs. Give that writer the planning summaries, accepted scope, stop rules, and verification contract.
 4. Run fresh-context, read-only validation against the integrated or single-seam result. Validators use distinct angles and report pass/fail, remaining blockers, and missing verification.
 
-Prefer `async: true`, `context: "fresh"` for reviewers/validators, `outputMode: "file-only"` for large summaries, and per-stage output names that will not collide. Use stable `runs` keys plus `phase` and `label` on each launch item to make async status readable, and hold each awaited result in an ordinary JavaScript variable when a later step needs that specific result — interpolate it (or the durable output path you declared for that child) into the later task text instead of passing a whole aggregate blob. Use this pattern instead of launching several writer workers into a dirty worktree. Include non-blocking suggestions in the writer prompt only when they are small, safe, and do not expand product scope; otherwise record them as deferred.
+Prefer `async: true`, fresh-context reviewer/validator agents, `outputMode: "file-only"` for large summaries, and per-stage output names that will not collide. Use stable `runs` keys plus `phase` and `label` on each launch item to make async status readable, and hold each awaited result in an ordinary JavaScript variable when a later step needs that specific result — interpolate it (or the durable output path you declared for that child) into the later task text instead of passing a whole aggregate blob. Use this pattern instead of launching several writer workers into a dirty worktree. Include non-blocking suggestions in the writer prompt only when they are small, safe, and do not expand product scope; otherwise record them as deferred.
 
 When one child returns a structured target list, use ordinary JavaScript to validate/filter it and map bounded entries into `runs.all`; do not use the removed chain fanout DSL.
 
@@ -140,7 +139,6 @@ Single-seam example shape (the lane board records that these are review angles o
 ```typescript
 subagent({
   async: true,
-  context: "fresh",
   workflowScript: `
     // Stage 1: parallel read-only review angles on one recorded single seam
     const plans = await runs.all([
@@ -255,7 +253,7 @@ Direct settings example:
 ```
 
 Useful override fields: `description`, `model`, `thinking`,
-`systemPromptMode`, `inheritProjectContext`, `inheritGlobalContext`, `inheritSkills`, `defaultContext`,
+`systemPromptMode`, `inheritProjectContext`, `inheritGlobalContext`, `inheritSkills`,
 `acceptanceRole`, `disabled`, `skills`, `tools`, `extensions`, and `systemPrompt`.
 `description` replaces the discovered description for builtin and custom agents
 in `list` output, which is useful for deployment-specific routing notes.
@@ -277,4 +275,4 @@ override can opt one builtin back in or replace custom-agent frontmatter thinkin
 
 Set `subagents.defaultExtensions` to give agents without an `extensions` field a shared child extension allowlist. Omit it to preserve ambient extension discovery, set it to `[]` to disable ambient extensions by default, or use `agentOverrides.<name>.extensions` for one agent. Set `subagents.defaultSubagentOnlyExtensions` to add shared child-only paths without disabling ambient discovery. For either field, explicit frontmatter suppresses the default and a matching override replaces or false-clears it; lists are not combined.
 
-Tool description modes live in `~/.pi/agent/extensions/subagent/config.json`, not `subagents` settings. The default uses split prompt metadata: a short tool description plus active `promptSnippet` and `promptGuidelines`. Set `toolDescriptionMode` to `full` or `compact` to force one description string, or `custom` to read `subagent-tool-description.md` from the project config dir or agent dir; invalid custom files fall back to full mode and the safety guidance is still appended.
+The model tool registers one fixed description and schema (7 fields). Extended recipes live in `subagent({ action: "guide", message: "<topic>" })` and this skill, not in selectable description modes.

@@ -9,7 +9,7 @@
  * Toggle: async parameter (default: true; set asyncByDefault:false in config.json to opt out)
  *
  * Config file: ~/.pi/agent/extensions/subagent/config.json
- *   { "asyncByDefault": true, "defaultSubagentContext": "fork", "forkContext": { "mode": "pruned", "model": "provider/model" }, "forceTopLevelAsync": true, "maxSubagentDepth": 1, "intercomBridge": { "mode": "always", "instructionFile": "./intercom-bridge.md" }, "worktreeSetupHook": "./scripts/setup-worktree.mjs" }
+ *   { "asyncByDefault": true, "forceTopLevelAsync": true, "maxSubagentDepth": 1, "intercomBridge": { "mode": "always", "instructionFile": "./intercom-bridge.md" }, "worktreeSetupHook": "./scripts/setup-worktree.mjs" }
  */
 
 import { randomUUID } from "node:crypto";
@@ -36,7 +36,7 @@ import { openSubagentFleet } from "../tui/fleet.ts";
 import { createBuiltinInspectorPlugins } from "../inspectors/plugins.ts";
 import { SubagentFleetStatus, resolveFleetViewPlacement } from "../tui/fleet-status.ts";
 import { SubagentParams } from "./schemas.ts";
-import { createSubagentExecutor, type SubagentParamsLike } from "../runs/foreground/subagent-executor.ts";
+import { createSubagentExecutor, resumeFleetRun, type SubagentParamsLike } from "../runs/foreground/subagent-executor.ts";
 import { createAsyncJobTracker } from "../runs/background/async-job-tracker.ts";
 import { getActiveAsyncCapacitySnapshot, resolveAbandonedSlotReleaseAfterMs, resolveMaxActiveAsyncRunsPerSession } from "../runs/background/active-async-capacity.ts";
 import { cleanupResultIndexes, missionObserverResultCandidateFiles } from "../runs/background/result-files.ts";
@@ -495,12 +495,23 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	const resultDeliveryOwnership = createResultDeliveryOwnership(state);
 	const completionNotifier = registerSubagentNotify(pi, state, { batchConfig: config.completionBatch, ownership: resultDeliveryOwnership });
 	let retainedNestedRouteTracker: ReturnType<typeof createRetainedNestedRouteTracker> | undefined;
+	// Deferred executor binding: the Fleet UI callbacks below are registered before the
+	// executor exists, but only fire on user interaction (after assignment).
+	// Deferred executor binding: the Fleet UI callbacks below are registered before the
+	// executor exists, but only fire on user interaction (after assignment).
+	let fleetExecutor: ReturnType<typeof createSubagentExecutor> | undefined;
+	const fleetResumeRun = (input: { runId: string; asyncDir: string; index?: number; message: string }): Promise<AgentToolResult<Details>> | AgentToolResult<Details> => {
+		const ctx = withLastUiContext((current) => current);
+		if (!ctx) return { content: [{ type: "text", text: "Resume unavailable: no active UI context." }], isError: true, details: { mode: "management" as const, results: [] } };
+		if (!fleetExecutor) return { content: [{ type: "text", text: "Resume unavailable: executor is not ready." }], isError: true, details: { mode: "management" as const, results: [] } };
+		return resumeFleetRun(fleetExecutor, ctx, { runId: input.runId, message: input.message });
+	};
 	const fleetStatus = fleetViewEnabled
 		? new SubagentFleetStatus(state, async (itemKey) => {
 			const ctx = withLastUiContext((current) => current);
 			if (!ctx) return;
 			try {
-				await openSubagentFleet(ctx, state, { initialKey: itemKey, asyncDirRoot: DIRS.async, resultsDir: DIRS.results, fleetKeybindings: config.fleetKeybindings, inspectorPlugins: createBuiltinInspectorPlugins() });
+				await openSubagentFleet(ctx, state, { initialKey: itemKey, asyncDirRoot: DIRS.async, resultsDir: DIRS.results, fleetKeybindings: config.fleetKeybindings, inspectorPlugins: createBuiltinInspectorPlugins(), resumeRun: fleetResumeRun });
 			} catch (error) {
 				if (isStaleExtensionContextError(error)) {
 					if (state.lastUiContext === ctx) state.lastUiContext = null;
@@ -677,7 +688,8 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		refreshResultDelivery: () => refreshResultDelivery(),
 		trackRetainedNestedRoute: undefined,
 	};
-	const executor = createSubagentExecutor(executorDeps);
+	fleetExecutor = createSubagentExecutor(executorDeps);
+	const executor = fleetExecutor;
 	executorScheduled = executor.executeScheduled;
 
 	pi.registerMessageRenderer<SupervisorRequestMessageDetails>(SUPERVISOR_REQUEST_MESSAGE_TYPE, renderSupervisorRequest);
@@ -773,11 +785,30 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		return executeSubagentReady(id, params, signal, onUpdate, ctx);
 	};
 
+	const executeRpcCollapsed = (id: string, params: SubagentParamsLike, signal: AbortSignal, onUpdate: ((result: AgentToolResult<Details>) => void) | undefined, ctx: ExtensionContext) => {
+		// RPC is an internal caller and rides the internal dispatch,
+		// never the model-visible executePublic gate (which rejects schedule.* management).
+		return (async () => {
+			await waitForAdvertisement();
+			return executor.execute(id, params, signal, onUpdate, ctx);
+		})();
+	};
+
+	const executeSlashCollapsed = (id: string, params: SubagentParamsLike, signal: AbortSignal, onUpdate: ((result: AgentToolResult<Details>) => void) | undefined, ctx: ExtensionContext) => {
+		if (ctx.hasUI) ctx.ui.setToolsExpanded(false);
+		// Phase 7c: slash is an internal caller and rides the internal dispatch,
+		// never the model-visible executePublic gate.
+		return (async () => {
+			await waitForAdvertisement();
+			return executor.execute(id, params, signal, onUpdate, ctx);
+		})();
+	};
+
 	const slashBridge = registerSlashSubagentBridge({
 		events: pi.events,
 		getContext: () => state.lastUiContext,
 		execute: (id, params, signal, onUpdate, ctx) =>
-			executeSubagentCollapsed(id, params, signal, onUpdate, ctx),
+			executeSlashCollapsed(id, params, signal, onUpdate, ctx),
 	});
 
 	const promptTemplateBridge = registerPromptTemplateDelegationBridge({
@@ -795,7 +826,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	const rpcBridge = registerSubagentRpcBridge({
 		events: pi.events,
 		getContext: () => state.lastUiContext,
-		execute: executeSubagentReady,
+		execute: executeRpcCollapsed,
 		state,
 	});
 	// Portable leaf-model runtime: separate versioned namespace. The host probe
@@ -913,6 +944,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	const disposeSlashCommands = registerSlashCommands(pi, state, {
 		fleetKeybindings: config.fleetKeybindings,
 		foregroundDetachShortcut: config.foregroundDetachShortcut,
+		fleetResume: fleetResumeRun,
 	});
 
 	let visibleControlNotices = new Set<string>();

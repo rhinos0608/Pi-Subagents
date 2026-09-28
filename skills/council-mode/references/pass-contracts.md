@@ -142,7 +142,6 @@ thinking: high
 systemPromptMode: replace
 inheritProjectContext: true
 inheritSkills: false
-defaultContext: fresh
 acceptanceRole: read-only
 ---
 

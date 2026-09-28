@@ -2,7 +2,7 @@
 
 `pi-subagents` reads optional JSON config from `~/.pi/agent/extensions/subagent/config.json`. This page lists every key, plus the environment variables and the settings-file keys that affect config resolution.
 
-Settings-level keys (`subagents.defaultModel`, `defaultProvider`, `defaultThinking`, `defaultExtensions`, `defaultSubagentOnlyExtensions`, `agentOverrides`, `machines`, `agentScanDirs`, `agentExcludeDirs`, `modelScope`, `disableThinking`, `disableBuiltins`, watchdog settings) live in Pi settings files, not this config file. `modelScope.agents.<name>` adds per-agent restrictions, and `allow: ["inherit"]` permits the current parent model. See [models.md](models.md), [agents.md](agents.md), and [watchdog.md](watchdog.md).
+Settings-level keys (`subagents.defaultModel`, `defaultProvider`, `defaultThinking`, `defaultExtensions`, `defaultSubagentOnlyExtensions`, `agentOverrides`, `machines`, `agentScanDirs`, `agentExcludeDirs`, `modelScope`, `disableThinking`, `disableBuiltins`, watchdog settings) live in Pi settings files, not this config file. (The flat `agentOverrides` operator layer is kept deliberately per supervisor decision; the provider-scoped layer stays deleted.) `modelScope.agents.<name>` adds per-agent restrictions, and `allow: ["inherit"]` permits the current parent model. See [models.md](models.md), [agents.md](agents.md), and [watchdog.md](watchdog.md).
 
 ## Project root resolution (settings)
 
@@ -48,6 +48,20 @@ Entries are literal directory paths (no globs), supporting `~` and absolute path
 
 User and nearest-project exclusions are combined for every discovery scope, including all-source diagnostics. They apply before traversal and definition reads; explicit scan roots, environment roots, and installed packages cannot re-include an excluded tree. Normalized and real-path containment also excludes symlink aliases without matching sibling directory prefixes. Settings changes invalidate cached discovery. Excluded agent trees are not fingerprinted; chain discovery keeps its own unchanged watches when it shares a directory. Skills, chains, and the extension's bundled builtin snapshot are outside this setting's scope.
 
+## Global tool allowlist (settings)
+
+Restrict every child launch to an operator-authored tool set with `subagents.allowedTools` in Pi settings:
+
+```json
+{
+  "subagents": {
+    "allowedTools": ["read", "grep", "bash"]
+  }
+}
+```
+
+Absent or empty means no global restriction. Project settings win over user settings. It composes by dumb intersection: effective tools = agent `tools` ∩ `allowedTools` (plus any external host ceiling, applied separately). The list never inherits parent→child; each launch resolves it fresh from settings.
+
 ## `modelResponseAliases`
 
 In `~/.pi/agent/extensions/subagent/config.json` (top-level, not under `subagents`):
@@ -76,14 +90,6 @@ For a native Pi `model_verification_failed` where your proxy accepts `claude-hai
 
 Replace `YOUR_PROVIDER` with the resolved Pi provider ID. Keep the outgoing model alias unchanged. This native remedy already exists in v0.65.1; it does not infer equivalence from provider prefixes or dates. The built-in external `claude-code` adapter does not invoke this verifier or use this setting. If an external run shows this diagnostic, identify the installed version, resolved runner kind/adapter, and error location before applying a native remedy. Thanks to [sixtus](https://github.com/sixtus) for the concrete request-ID/response-ID example in [#1922](https://github.com/nicobailon/pi-subagents/issues/1922).
 
-## `toolDescriptionMode`
-
-```json
-{ "toolDescriptionMode": "compact" }
-```
-
-Controls the parent-facing `subagent` tool description and parameter schema registered at startup. The default registers the compact description (1,120 chars, safety kernel included) with the compact schema (8,460 chars serialized: same properties as the full schema, trimmed descriptions), plus separate `promptSnippet` and `promptGuidelines`. Explicit `"compact"` uses the same description and schema without that extra metadata; `"full"` uses the full description with workflow and management detail and the full schema. Combined default payload is 9,580 chars. Extended examples and recipes are available on demand through `action:"guide"` and the bundled pi-subagents skill; full mode is not an exhaustive manual. Count the separate default metadata as well as the tool definition when comparing prompt footprints.
-`custom` reads `subagent-tool-description.md` from the project config directory, then from `~/.pi/agent/subagent-tool-description.md`. Missing, empty, unreadable, or oversized custom files fall back to the compact description. Custom templates may use `{{fullDescription}}`, `{{compactDescription}}`, `{{safetyGuidance}}`, `{{agentDir}}`, and `{{projectConfigDir}}`; the safety guidance is always present so custom prose cannot remove the runtime guardrails. Restart Pi after changing the mode or custom file.
 
 ## `inlineToolDisplay`
 
@@ -158,32 +164,15 @@ Set `enabled` to `false` (or remove the block) as a kill switch. In that state, 
 
 WorkflowScript calls use background execution when the request omits `async`. Set `asyncByDefault` to `false` to restore foreground-by-default behavior for tool launches that still use the internal single-run primitive. Callers can still force foreground with `async: false` unless `forceTopLevelAsync` is enabled.
 
-## `defaultSubagentContext`
+## `defaultSubagentContext` (removed)
 
-```json
-{ "defaultSubagentContext": "fresh" }
-```
+Removed. All launches use fresh context. A settings file that still carries `subagents.defaultSubagentContext` fails config loading — delete those lines.
 
-Sets `fresh` or `fork` for every subagent launch that omits `context`. This global preference replaces each agent-level `defaultContext`. Explicit `context: "fresh"` or `context: "fork"` still wins.
+## `forkContext` (removed)
 
-With `"fork"`, the setting uses the existing implicit-fork behavior. A launch starts fresh when the parent session file or current leaf is not available. `"fresh"` starts fresh even when the selected agent defaults to fork. Scheduled runs continue to set fresh context explicitly. A runner or provider that does not support fork context keeps its existing rejection behavior.
+Removed. There is no fork preparation, no `full`/`pruned` mode, and no fork summary model. A settings file that still carries `subagents.forkContext` fails config loading — delete those lines.
 
-## `forkContext`
-
-```json
-{
-  "forkContext": {
-    "mode": "pruned",
-    "model": "openai-codex/gpt-5.6-luna:max"
-  }
-}
-```
-
-Controls how resolved fork launches prepare the inherited session. The default `"full"` mode keeps the complete fork. `"pruned"` mode keeps inherited context exact while it fits the code-owned 64 KiB session budget. On overflow, the required `model` returns short JSON summaries keyed by stable item ids. Tool results spill first, then older assistant and tool context, and user text only when required. It applies to explicit `context: "fork"`, global and agent fork defaults, and `context: "profile"` when the selected profile resolves to fork.
-
-Child-visible spilled items contain only the model summary and a stable `{ batchId, itemId }` recovery ref. Raw bodies and their digests, source entry ids, labels, sizes, and tool metadata go to a private `0600` sidecar next to the child session. This release does not add a recovery command or expose that payload to the child model.
-
-Pruned forks keep the normal `parentSession` link, child cwd alignment, and fork thinking-block sanitization (signed Anthropic thinking blocks are stripped; the child keeps its requested thinking level). Missing model or auth, invalid or incomplete summary JSON, budget overflow, recovery validation failure, and raw overflow leakage all stop the launch before child spawn. The extension never falls back to a full fork or refs-only context after a prune failure.
+Migration: delete every `defaultContext`, `defaultSubagentContext`, and `forkContext` key from Pi settings files, extension config, agent frontmatter, and `agentOverrides`. Agent frontmatter or overrides that still declare `defaultContext` hard-error on load. Launches are always fresh; stale persisted `fork` context values are accepted for old data only and render no badge.
 
 ## `fleetView`
 
@@ -256,7 +245,7 @@ Forces depth-0 internal single, parallel, and chain runs into background mode an
 { "timeoutMs": 3600000 }
 ```
 
-Global default runtime deadline, in milliseconds, for subagent runs. It replaces the built-in 30-minute backstop for foreground launches (single, parallel, chain, and workflowScript) and plain single-agent async runs whenever no call-level `timeoutMs`/`maxRuntimeMs` applies. For single-agent launches, selected agent frontmatter `timeoutMs` still wins. This only moves the *default*. Expiring this run-level deadline is terminal.
+Global default runtime deadline, in milliseconds, for subagent runs. It replaces the built-in 30-minute backstop for foreground launches (single, parallel, chain, and workflowScript) and plain single-agent async runs. There is no per-call timeout: the model tool rejects `timeoutMs`/`maxRuntimeMs` outright. For single-agent launches, the selected agent's frontmatter `timeoutMs` still wins over this default. This only moves the *default*. Expiring this run-level deadline is terminal.
 
 This deadline bounds the whole run. The wait for a single model response is bounded separately by Pi's `httpIdleTimeoutMs` setting (default 300000; `0` disables it), which Pi applies both as the SDK request timeout and as the undici header/body idle timeout. Detached async runners read the same setting from `~/.pi/agent/settings.json` and the project `.pi/settings.json` for their own HTTP dispatcher, so a local model that queues or prefills for longer than five minutes needs `httpIdleTimeoutMs` raised or disabled in Pi settings, plus a `timeoutMs` long enough for the run.
 
@@ -270,7 +259,7 @@ Composite async runs (async chains, parallel tasks, and scripted workflows) stay
 { "toolTimeoutMs": 600000 }
 ```
 
-Optional hard per-tool-call deadline in milliseconds. When configured, a child that emits `tool_execution_start` but not `tool_execution_end` is terminated with `timedOut: true` and a tool-specific error. The effective value is resolved per child: explicit `subagent` call value, then agent frontmatter, then this config value, then `PI_SUBAGENT_TOOL_TIMEOUT_MS`.
+Optional hard per-tool-call deadline in milliseconds. When configured, a child that emits `tool_execution_start` but not `tool_execution_end` is terminated with `timedOut: true` and a tool-specific error. There is no per-call tool timeout on the model tool. The effective value resolves from operator sources per child: agent frontmatter, then this config value, then `PI_SUBAGENT_TOOL_TIMEOUT_MS`.
 
 Without a configured value, Pi still applies a five-minute hard timeout to known-fast built-in tools: `read`, `grep`, `find`, `ls`, `edit`, `write`, and `structured_output`. Long-running tools such as `bash`, custom tools, and MCP tools do not get a hard default. They get the normal open-tool attention notice after `activeNoticeAfterMs` and remain bounded by the run-level deadline.
 
@@ -304,7 +293,7 @@ Inline or file-backed top-level workflow calls may set a positive safe-integer `
 
 Optionally caps the total number of child subagent launches during one parent session, including completed and failed children, parallel task counts, static chain steps, and bounded dynamic fanout children. Sessions are unlimited by default. Set this value to `0` to disable a configured cap. `PI_SUBAGENT_MAX_SPAWNS_PER_SESSION` overrides the config for a process and follows the same positive-cap/zero-unlimited semantics.
 
-`subagent({ action: "status" })`, fleet status, and `subagent({ action: "doctor" })` expose used, effective limit, remaining capacity, grants, and the remaining grant allowance for this budget. A user may explicitly call `subagent({ action: "grant-spawn-budget", additional: 10 })` from the root interactive parent after all children settle and confirm the native prompt. Grants are additive: they never erase cumulative usage, are rejected for unlimited sessions and child/headless callers, and total granted capacity cannot exceed the original configured cap. Compaction remains part of the same logical parent session and does not reset usage or grants; starting a new parent session does.
+`subagent({ action: "status" })` and fleet status expose used, effective limit, remaining capacity, grants, and the remaining grant allowance for this budget. A user may explicitly call `subagent({ action: "grant-spawn-budget", additional: 10 })` from the root interactive parent after all children settle and confirm the native prompt. Grants are additive: they never erase cumulative usage, are rejected for unlimited sessions and child/headless callers, and total granted capacity cannot exceed the original configured cap. Compaction remains part of the same logical parent session and does not reset usage or grants; starting a new parent session does.
 
 ## `maxSubagentSpawnsPerRun`
 
@@ -338,7 +327,7 @@ The default is `1200000` milliseconds (20 minutes). The policy releases only a f
 
 This limit bounds current top-level async load. It is separate from cumulative `maxSubagentSpawnsPerSession`, `maxSubagentSpawnsPerRun`, and `globalConcurrencyLimit`.
 
-`subagent({ action: "status" })`, fleet status, and `subagent({ action: "doctor" })` expose used, effective limit, and remaining active capacity. Static chains and parallel calls fail before creating run artifacts or starting partial work when their declared capacity cannot fit. Later retries or unbounded dynamic work are not guaranteed by that preflight.
+`subagent({ action: "status" })` and fleet status expose used, effective limit, and remaining active capacity. Static chains and parallel calls fail before creating run artifacts or starting partial work when their declared capacity cannot fit. Later retries or unbounded dynamic work are not guaranteed by that preflight.
 
 ## `scheduledRuns`
 
@@ -437,7 +426,7 @@ Controls whether subagents receive runtime coordination instructions and whether
 
 Fields:
 
-- `mode`: default `always`; use `fork-only` to inject only for forked runs, or `off` to disable the bridge.
+- `mode`: default `always`; use `off` to disable the bridge.
 - `instructionFile`: optional Markdown template replacing the default bridge instructions. `{orchestratorTarget}` is interpolated with the parent session target. Relative paths resolve from `~/.pi/agent/extensions/subagent/`. The default template does not name the session, because `contact_supervisor` resolves it from the child runtime config; a template that does name it ties `launchContractDigest` to the parent session, and launch-contract preflight then needs `orchestratorTarget` to match.
 - `resultDelivery`: default `false`; set `true` only when an external listener consumes `subagent:result-intercom` and acknowledges the grouped completion payload. This is optional external result delivery, not native supervisor messaging. Enabled delivery waits for acknowledgement and reports acknowledgement failures. It does not change supervisor asks or progress updates.
 
@@ -465,7 +454,7 @@ Selects the managed worktree allocator: `auto` (the default) uses Worktrunk when
 
 `worktreeBranchPrefix` is normalized as a Git ref namespace and defaults to `pi-subagents/`. Branch names include readable task/lane identity plus run and fan-out indexes. Pi continues to own setup hooks, launch, handoff/diff evidence, resume, and cleanup; Worktrunk is used only to allocate and report the worktree path.
 
-Set `worktree` to `true` to make managed worktree isolation the default for launches that omit the per-call `worktree` flag. A per-call value still takes precedence.
+Set `worktree` to `true` to make managed worktree isolation the default for launches. Workflow children inherit the workflow default unless they opt out.
 
 ## `worktreeSetupHook`
 
@@ -528,7 +517,7 @@ Automatic missions are enabled by default for ordinary launches with a task. Use
 
 Each fixed action resolves to `"auto"`, `"confirm"`, or `"forbid"`. This is intentionally a small action map, not a generic policy language. Confirm-required control actions fail closed without an interactive UI.
 
-`inspectorOpen` and `projectOpen` cover the `inspector.open` and `project.open` tool actions, which launch an external inspector host or a Herdr project pane. `inspector.open` only reaches a plugin that reports itself available, so it defaults to `"auto"`; `project.open` runs `herdr` (or `HERDR_BIN`) with no such check and opens a pane that hosts its own Pi session, so it defaults to `"confirm"`. Set `"projectOpen": "auto"` to restore the previous unprompted behavior. The policy applies to the tool actions; opening an inspector from the fleet TUI is already an explicit operator keypress and is unaffected.
+`inspectorOpen` and `projectOpen` cover opening an external inspector host or a Herdr project pane from Fleet. Inspector opening only reaches a plugin that reports itself available, so it defaults to `"auto"`; project-pane opening runs `herdr` (or `HERDR_BIN`) with no such check and opens a pane that hosts its own Pi session, so it defaults to `"confirm"`. Set `"projectOpen": "auto"` to restore the previous unprompted behavior. Opening an inspector from the fleet TUI is already an explicit operator keypress and is unaffected.
 
 ## `artifactDir`
 

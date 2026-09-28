@@ -78,24 +78,24 @@ describe("registered subagent tool description", () => {
 			for (const contract of [
 				/delegate one child with \{agent,task\?,cwd\?\}/i,
 			/pass exactly one workflow call with \{workflowScript,cwd\?\}/,
-				/agent\/task exclude workflow inputs; task excludes action.*agent may target management actions/,
+				/agent\/task exclude workflow inputs; task excludes action.*all other management lives in Fleet, not in this tool/,
 				/validate accepts workflowScript without launching/,
 				/Raw-script sandboxes add deeply frozen args/,
 				/raw-script args persist as evidence, so never include secrets/,
-				/action is management\/control;/,
-				/action:"list",capabilities:true.*executable, non-disabled.*runner.available === true/,
+				/action is management\/control \(steer, resume, interrupt, status, guide, validate\);/,
+				/action:"guide",topic:"agents".*executable, non-disabled.*runner.available === true/,
 				/Passive PATH\/PATHEXT\/X_OK.*not authentication\/version\/launch proof/,
-				/exactly one top-level subagent workflow call with async:true/,
+				/exactly one top-level subagent workflow call; children launch only inside it/,
 				/explicit return, top-level await.*nested async function\/arrow\/method helpers are rejected/,
 				/Await runs.run.*before .output.*ordered array, not a key map/,
 				/every stored run promise with direct await, Promise.race or Promise.all/,
 				/Await\/return runs.steer\(key,message,options\?\) for a prior key, never raw run ids/,
 				/Consume results at dependency barriers/,
 				/Native async completion wakes this session.*return control.*merely for a wake/,
-				/not for final reviews\/gates/,
+				/there is no model-passed async flag/,
 				/one writer per cwd\/worktree.*fresh-context read-only reviewers/i,
 				/output on runs.run\/runs.all, not task filename prose.*outputReference.*outputPathMapping.*artifactPaths/,
-				/children.list is workflow-only, not an exhaustive list of direct native children.*exact run id.*action:"status",id.*status identifies the candidate.*action:"resume",id,message.*authoritatively checks eligibility, may reject it.*labeled same-role fallback only when no known candidate exists or resume rejects eligibility/,
+				/When an intended child's exact run id is known.*action:"status",id.*status identifies the candidate.*action:"resume",id,message.*authoritatively checks eligibility, may reject it.*labeled same-role fallback only when no known candidate exists or resume rejects eligibility/,
 				/latest returned runId.*distinct resume pass needs a new stable key.*identical launch parameters/,
 				/Oracle\/advisor.*supervisor dialogue/,
 				/raw workflowScript cannot use runs.host/,
@@ -121,6 +121,13 @@ describe("registered subagent tool description", () => {
 				/tool budget, fast, fork context/,
 				/subagents_enable/,
 				/bg_wait/,
+				/Management discovery/,
+				/children\.list is workflow-only/,
+				/status\/debug\.run/,
+				/control with interrupt\/stop\/resume\/steer/,
+				/async:true/,
+			/async:false only to block/,
+			/agent may target management actions/,
 			]) assert.doesNotMatch(description, stale);
 		}
 	});
@@ -146,9 +153,9 @@ describe("registered subagent tool description", () => {
 		assert.match(FULL_SUBAGENT_TOOL_DESCRIPTION, /mission:false.*state.get.*state.set/);
 		const workflows = fs.readFileSync(path.join(projectRoot, "docs/workflows.md"), "utf8");
 		const reference = fs.readFileSync(path.join(projectRoot, "docs/tool-reference.md"), "utf8");
-		for (const heading of ["Parallel sequential lanes", "Host command steps", "Advanced rolling child runs", "Worktree isolation"]) assert.ok(workflows.includes(heading));
-		for (const heading of ["Acceptance gates", "Retained children", "Management actions", "Workflow steering"]) assert.ok(reference.includes(heading));
-		assert.match(reference, /JSON-encoded object strings/);
+		for (const heading of ["Parallel sequential lanes", "Workflow steering", "Output routing", "Retained children and follow-ups"]) assert.ok(workflows.includes(heading));
+		for (const heading of ["Acceptance gates", "Retained children", "Management lives outside the model tool", "Workflow steering"]) assert.ok(reference.includes(heading));
+		assert.match(reference, /passing command's stdout becomes the child's `structuredOutput`/);
 	});
 
 	it("renders a custom project description with placeholders and mandatory safety guidance", () => {
@@ -359,7 +366,7 @@ describe("registered subagent tool description", () => {
 		assert.equal(readRegisteredTool(invalidAgentDir).description, FULL_SUBAGENT_TOOL_DESCRIPTION);
 	});
 
-	it("registers the single 7-field schema for every description mode", () => {
+	it("registers the single 8-field schema for every description mode", () => {
 		const defaultAgentDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-schema-profile-default-"));
 		writeExtensionConfig(defaultAgentDir, {});
 		const compactAgentDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-schema-profile-compact-"));
@@ -378,11 +385,11 @@ describe("registered subagent tool description", () => {
 		const customParams = readRegisteredTool(customAgentDir).parameters as { properties: Record<string, { description?: string }> };
 		const invalidParams = readRegisteredTool(invalidAgentDir).parameters as { properties: Record<string, { description?: string }> };
 
-		// Phase 6a: every description mode registers the same single 7-field
+		// Every description mode registers the same single 8-field
 		// public schema (SubagentParams); the compact/full schema branching is gone.
-		const expectedKeys = ["action", "agent", "cwd", "id", "message", "task", "workflowScript"];
+		const expectedKeys = ["action", "agent", "cwd", "id", "message", "task", "topic", "workflowScript"];
 		for (const [mode, params] of [["default", defaultParams], ["compact", compactParams], ["full", fullParams], ["custom", customParams], ["invalid", invalidParams]] as const) {
-			assert.deepEqual(Object.keys(params.properties).sort(), expectedKeys, `${mode} mode registers the 7-field vocabulary`);
+			assert.deepEqual(Object.keys(params.properties).sort(), expectedKeys, `${mode} mode registers the 8-field vocabulary`);
 		}
 		assert.deepEqual(defaultParams, compactParams);
 		assert.deepEqual(defaultParams, fullParams);

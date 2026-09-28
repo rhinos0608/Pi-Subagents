@@ -46,7 +46,7 @@ export const MCP_DIRECT_TOOLS_ENV = "MCP_DIRECT_TOOLS";
  * launches inherits. Serialized into the background runner config; the
  * foreground path passes the executor's full `ChildRuntimeConfig`.
  */
-export type InheritedChildRuntime = Pick<ChildRuntimeConfig, "depth" | "maxDepth" | "nestedRoute" | "nestedParent" | "capabilityCeiling" | "thinkingCeiling" | "runFanoutBudget" | "requiredExtensions">;
+export type InheritedChildRuntime = Pick<ChildRuntimeConfig, "depth" | "maxDepth" | "nestedRoute" | "nestedParent" | "thinkingCeiling" | "runFanoutBudget" | "requiredExtensions">;
 
 export function inheritedChildRuntime(config: ChildRuntimeConfig | undefined): InheritedChildRuntime | undefined {
 	if (!config) return undefined;
@@ -55,7 +55,6 @@ export function inheritedChildRuntime(config: ChildRuntimeConfig | undefined): I
 		...(config.maxDepth !== undefined ? { maxDepth: config.maxDepth } : {}),
 		...(config.nestedRoute ? { nestedRoute: config.nestedRoute } : {}),
 		...(config.nestedParent ? { nestedParent: config.nestedParent } : {}),
-		...(config.capabilityCeiling ? { capabilityCeiling: config.capabilityCeiling } : {}),
 		...(config.thinkingCeiling ? { thinkingCeiling: config.thinkingCeiling } : {}),
 		...(config.runFanoutBudget ? { runFanoutBudget: config.runFanoutBudget } : {}),
 		...(config.requiredExtensions ? { requiredExtensions: config.requiredExtensions } : {}),
@@ -162,10 +161,6 @@ function escapeXmlAttr(value: string): string {
 		.replace(/>/g, "&gt;");
 }
 
-function inheritedCapabilityCeiling(inherited: InheritedChildRuntime | undefined): ResolvedSubagentCapabilityCeiling | undefined {
-	return inherited?.capabilityCeiling;
-}
-
 /** Environment values external child extensions read; only the runner applies them. */
 function childProcessEnv(input: BuildInProcessChildLaunchInput, toolPlan: PiLaunchToolPlan): Record<string, string | undefined> {
 	const env: Record<string, string | undefined> = {};
@@ -195,8 +190,7 @@ export function buildInProcessChildLaunch(input: BuildInProcessChildLaunchInput)
 	const agentCapabilityCeiling: ResolvedSubagentCapabilityCeiling | undefined = input.descendantAllowedAgents === undefined
 		? undefined
 		: { version: 1, allowedAgents: [...input.descendantAllowedAgents], denyExtensions: false, sources: [`agent:${input.childAgentName}`] };
-	const inheritedCeiling = inheritedCapabilityCeiling(input.inherited);
-	const capabilityCeilingForPlanning = agentCapabilityCeiling && !input.capabilityCeiling && !inheritedCeiling
+	const capabilityCeilingForPlanning = agentCapabilityCeiling && !input.capabilityCeiling
 		? { version: 1 as const, denyExtensions: false, sources: [] }
 		: input.capabilityCeiling;
 	const toolPlan = resolvePiLaunchToolPlan({
@@ -214,7 +208,6 @@ export function buildInProcessChildLaunch(input: BuildInProcessChildLaunchInput)
 		model: input.model,
 		modelCandidates: input.modelCandidates,
 		capabilityCeiling: capabilityCeilingForPlanning,
-		inheritedCapabilityCeiling: inheritedCeiling,
 		agentName: input.childAgentName,
 		permissionRules: input.permissionRules,
 		runtimeSnapshotHost: input.runtimeSnapshotHost,

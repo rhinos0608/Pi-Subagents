@@ -359,7 +359,7 @@ describe("nested control routing", () => {
 			})();
 
 			const execution = Promise.resolve().then(() => executor.execute("resume", workflow
-				? { async: false, workflowScript: `return runs.run("live", { resume: "nested-live-resume", task: "continue please", output: false });` }
+				? { async: false, workflowScript: `return runs.run("live", { resume: "nested-live-resume", task: "continue please" });` }
 				: { action: "resume", id: "nested-live-resume", message: "continue please" }, new AbortController().signal, undefined, ctx(root)));
 			const [response, executed] = await Promise.allSettled([responder, execution]);
 			if (response.status === "rejected") throw response.reason;
@@ -372,6 +372,28 @@ describe("nested control routing", () => {
 				const payload = event.payload as { to?: unknown };
 				return payload.to === "attacker-target" || payload.to === "attacker-leaf";
 			}), false);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("rejects nested-id prefixes at workflow claim admission with the exact not-found error", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-nested-resume-prefix-"));
+		try {
+			const route = createNestedRun("nested-live-prefix-target-abcdef");
+			const executor = createExecutor(stateWithNestedRoute(route), [{ name: "worker", description: "Worker", prompt: "Do work" }]);
+			const run = (resume: string) => executor.execute("resume", {
+				async: false,
+				workflowScript: `return runs.run("p", { resume: ${JSON.stringify(resume)}, task: "continue" });`,
+			}, new AbortController().signal, undefined, ctx(root));
+			const prefix = await run("nested-live-prefix-target");
+			const unknown = await run("no-such-run-anywhere");
+			for (const result of [prefix, unknown]) {
+				assert.equal(result.isError, true);
+				assert.match(text(result), /Async run not found\. Provide id or dir\./);
+			}
+			const stable = (value: string) => value.split("\n").filter((line) => !line.startsWith("Mission:")).join("\n");
+			assert.equal(stable(text(prefix)), stable(text(unknown)));
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
 		}
@@ -447,7 +469,7 @@ describe("nested control routing", () => {
 
 			const result = await createExecutor(stateWithNestedRoute(route), [{ name: "worker", description: "Worker", prompt: "Do work" }])
 				.execute("resume", workflow
-					? { async: false, workflowScript: `return runs.run("stopped", { resume: "nested-stopped-resume", task: "continue", output: false });` }
+					? { async: false, workflowScript: `return runs.run("stopped", { resume: "nested-stopped-resume", task: "continue" });` }
 					: { action: "resume", id: "nested-stopped-resume", message: "continue" }, new AbortController().signal, undefined, ctx(root));
 
 			assert.equal(result.isError, true);

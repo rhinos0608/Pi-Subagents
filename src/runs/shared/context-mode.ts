@@ -2,6 +2,7 @@ export type ContextMode = "fresh" | "fork";
 export type ContextSummary = ContextMode | "mixed";
 
 export function isContextMode(value: unknown): value is ContextMode {
+	// Accept "fork" for old persisted data only; launches are always fresh and nothing renders fork.
 	return value === "fresh" || value === "fork";
 }
 
@@ -17,7 +18,6 @@ export function summarizeContextModes(modes: Array<ContextMode | undefined>): Co
 }
 
 export function contextModeLabel(mode: ContextMode | ContextSummary | undefined): string {
-	if (mode === "fork") return "[fork]";
 	if (mode === "fresh") return "[fresh]";
 	if (mode === "mixed") return "[mixed]";
 	return "";
@@ -29,7 +29,6 @@ export function contextModeBadge(
 ): string {
 	const label = contextModeLabel(mode);
 	if (!label) return "";
-	if (mode === "fork") return theme.fg("warning", ` ${label}`);
 	return theme.fg("dim", ` ${label}`);
 }
 
@@ -39,6 +38,5 @@ export function contextModePrefix(
 ): string {
 	const label = contextModeLabel(mode);
 	if (!label) return "";
-	if (mode === "fork") return `${theme.fg("warning", label)} `;
 	return `${theme.fg("dim", label)} `;
 }

@@ -290,6 +290,24 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 		assert.doesNotMatch(result.content[0]?.text ?? "", /Delivered single subagent result via intercom\./);
 	});
 
+	it("rejects workflow child bridge overrides outside the orchestration allowlist", async () => {
+		const { executor } = makeExecutor({ resultDelivery: true, agents: [makeAgent("worker", { tools: ["read"] })] });
+
+		const result = await executor.execute(
+			"workflow-intercom-override",
+			{
+				workflowScript: `const isolated = await runs.run("isolated", { agent: "worker", task: "isolated task", intercomBridge: { mode: "off" } }); return { isolated: isolated.output };`,
+				async: false,
+			},
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+
+		assert.equal(result.isError, true);
+		assert.match(result.content[0]?.text ?? "", /unsupported fields: intercomBridge/);
+		assert.equal(mockPi.callCount(), 0);
+	});
 
 	it("waits for retained workflow resume loops and returns each completed revived child", async () => {
 		mockPi.onCall({ output: "Completed retained follow-up one" });
@@ -394,7 +412,7 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 
 
 
-	it("suppresses successful worktree child receipts for live-card workflows", { skip: process.platform === "win32" ? "git worktree cleanup differs on Windows" : undefined }, async () => {
+	it("suppresses successful child receipts for live-card workflows", { skip: process.platform === "win32" ? "git worktree cleanup differs on Windows" : undefined }, async () => {
 		execFileSync("git", ["init"], { cwd: tempDir, stdio: "ignore" });
 		execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: tempDir });
 		execFileSync("git", ["config", "user.name", "Test User"], { cwd: tempDir });
@@ -406,7 +424,7 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 
 		const result = await executor.execute(
 			"workflow-worktree-live-card",
-			{ worktree: true, workflowScript: "const result = await runs.run('worker', { agent: 'worker', task: 'task' }); return result.output;", async: false, chatProgress: "live-card" },
+			{ workflowScript: "const result = await runs.run('worker', { agent: 'worker', task: 'task' }); return result.output;", async: false, chatProgress: "live-card" },
 			new AbortController().signal,
 			undefined,
 			makeMinimalCtx(tempDir),
@@ -731,6 +749,45 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 		}
 	});
 
+	it("resume action rejects explicit reviewed acceptance before launching", async () => {
+		for (const [index, params] of [
+			{ message: "Continue", acceptance: "reviewed" },
+			{ chain: [{ agent: "reviewer", task: "Review {previous}", acceptance: { level: "reviewed" } }] },
+		].entries()) {
+			const { executor, events } = makeExecutor({ agents: [makeAgent("reviewer")] });
+			const result = await executor.execute(
+				`resume-invalid-acceptance-${index}`,
+				{ action: "resume", id: "missing-source-run", ...params },
+				new AbortController().signal,
+				undefined,
+				makeMinimalCtx(tempDir),
+			);
+
+			assert.equal(result.isError, true);
+			assert.match(result.content[0]?.text ?? "", /Cannot resume:.*achieved status.*acceptance\.review\.required/i);
+			assert.equal(events.emitted.some((entry) => entry.channel === SUBAGENT_ASYNC_STARTED_EVENT), false);
+		}
+	});
+
+	it("resume action rejects malformed explicit output schemas before lookup", async () => {
+		for (const [index, params] of [
+			{ message: "Continue", outputSchema: true },
+			{ message: "Continue", outputSchema: null },
+			{ chain: [{ agent: "worker", task: "Continue", outputSchema: [] }] },
+		].entries()) {
+			const { executor, events } = makeExecutor();
+			const result = await executor.execute(
+				`resume-invalid-schema-${index}`,
+				{ action: "resume", id: "missing-source-run", ...params },
+				new AbortController().signal,
+				undefined,
+				makeMinimalCtx(tempDir),
+			);
+			assert.equal(result.isError, true);
+			assert.match(result.content[0]?.text ?? "", /Cannot resume: outputSchema must be a JSON Schema object/);
+			assert.equal(events.emitted.some((entry) => entry.channel === SUBAGENT_ASYNC_STARTED_EVENT), false);
+		}
+	});
 
 	it("rejects either false-schema report polarity before acquiring resume capacity", async () => {
 		const schema = { type: "object", required: ["ok"], properties: { ok: { type: "boolean" } } };
@@ -886,7 +943,7 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 				summary: "completed root output",
 				results: [{ agent: "worker", output: "completed root output", success: true }],
 			}, null, 2), "utf-8");
-			const reviewer = { ...makeAgent("reviewer"), outputSchema: { type: "object", required: ["ok"], properties: { ok: { type: "boolean" } } }, defaultAcceptance: { level: "checked", report: "on" } };
+			const reviewer = { ...makeAgent("reviewer"), outputSchema: { type: "object", required: ["ok"], properties: { ok: { type: "boolean" } } } };
 			const { executor, events } = makeExecutor({ agents: [makeAgent("worker"), reviewer], maxActiveAsyncRunsPerSession: 1 });
 			const ctx = makeMinimalCtx(tempDir);
 			ctx.sessionManager.getSessionId = () => parentSessionId;
@@ -901,13 +958,30 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 			assert.equal(reviveOnly.isError, true);
 			assert.match(reviveOnly.content[0]?.text ?? "", /does not have a persisted session file/);
 
+			for (const [name, params] of [
+				["top-level", { outputSchema: false, acceptance: { level: "checked", report: "on" }, chain: [{ agent: "reviewer", task: "Review" }] }],
+				["child", { chain: [{ agent: "reviewer", task: "Review", outputSchema: false, acceptance: { level: "checked", report: "off" } }] }],
+			] as const) {
+				const rejected = await executor.execute(
+					`resume-chain-invalid-${name}`,
+					{ action: "resume", id: sourceRunId, ...params },
+					new AbortController().signal,
+					undefined,
+					ctx,
+				);
+				assert.equal(rejected.isError, true);
+				assert.match(rejected.content[0]?.text ?? "", /Cannot resume: .*acceptance\.report requires outputSchema/);
+				assert.deepEqual(getActiveAsyncCapacitySnapshot(parentSessionId, 1), { used: 0, limit: 1 });
+				assert.equal(mockPi.callCount(), 0);
+				assert.equal(events.emitted.some((entry) => entry.channel === SUBAGENT_ASYNC_STARTED_EVENT), false);
+			}
 
 			const attached = await executor.execute(
 				"resume-chain-complete-root",
 				{
 					action: "resume",
 					id: sourceRunId,
-					chain: [{ agent: "reviewer", task: "Review this completed root result: {previous}" }],
+					chain: [{ agent: "reviewer", task: "Review this completed root result: {previous}", acceptance: { level: "checked", report: "on" } }],
 				},
 				new AbortController().signal,
 				undefined,
@@ -955,7 +1029,7 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 			const result = await executor.execute(
 				"resume-revive-multi",
 				workflow
-					? { async: false, workflowScript: `return runs.run("indexed", { resume: ${JSON.stringify(runId)}, index: 1, task: "What did b find?", output: false });` }
+					? { async: false, workflowScript: `return runs.run("indexed", { resume: ${JSON.stringify(runId)}, index: 1, task: "What did b find?" });` }
 					: { action: "resume", id: runId, index: 1, message: "What did b find?" },
 				new AbortController().signal,
 				undefined,
@@ -1266,8 +1340,9 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 			const failed = await executor.execute(
 				"workflow-prep-capacity-release",
 				{
-					workflowScript: `return await runs.run("missing", { agent: "missing-agent", task: "run" });`,
+					workflowScript: `return await runs.run("gated", { agent: "missing-worker", task: "run" });`,
 					async: true,
+					acceptance: "checked",
 				},
 				new AbortController().signal,
 				undefined,
@@ -1280,7 +1355,8 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 			const status = await waitForStatus(statusPath, (value) => value?.state === "failed") as { state?: string; steps?: Array<{ async?: boolean }>; error?: string };
 
 			assert.equal(status.state, "failed");
-			assert.match(status.error ?? "", /Unknown agent: missing-agent/);
+			assert.equal(status.steps?.[0]?.async, false);
+			assert.match(status.error ?? "", /Unknown agent: missing-worker/);
 			assert.deepEqual(getActiveAsyncCapacitySnapshot(parentSessionId, 1), { used: 0, limit: 1 });
 
 			const next = await executor.execute(
@@ -1855,7 +1931,7 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 		}
 	});
 
-	it("resume action reports async ambiguity even when foreground has one prefix match", async () => {
+	it("resume action rejects prefixes on the exact-only control path", async () => {
 		const base = `namespace-ambiguous-${Date.now()}`;
 		const foregroundSession = path.join(tempDir, "foreground-prefix.jsonl");
 		const firstAsyncSession = path.join(tempDir, "async-a.jsonl");
@@ -1898,14 +1974,15 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 			);
 
 			assert.equal(result.isError, true);
-			assert.match(result.content[0]?.text ?? "", /Ambiguous subagent run id prefix/);
+			assert.doesNotMatch(result.content[0]?.text ?? "", /Ambiguous subagent run id prefix/);
+			assert.match(result.content[0]?.text ?? "", /not found/i);
 		} finally {
 			fs.rmSync(firstAsyncDir, { recursive: true, force: true });
 			fs.rmSync(secondAsyncDir, { recursive: true, force: true });
 		}
 	});
 
-	it("resume action reports ambiguous ids across remembered foreground and async runs", async () => {
+	it("resume action rejects ambiguous prefixes on the exact-only control path", async () => {
 		const base = `ambiguous-${Date.now()}`;
 		const foregroundSession = path.join(tempDir, "foreground.jsonl");
 		const asyncSession = path.join(tempDir, "async.jsonl");
@@ -1945,7 +2022,8 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 			);
 
 			assert.equal(result.isError, true);
-			assert.match(result.content[0]?.text ?? "", /ambiguous between foreground run/);
+			assert.doesNotMatch(result.content[0]?.text ?? "", /ambiguous between foreground run/);
+			assert.match(result.content[0]?.text ?? "", /not found/i);
 		} finally {
 			fs.rmSync(asyncDir, { recursive: true, force: true });
 		}

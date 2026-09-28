@@ -91,23 +91,22 @@ describe("PI_CODING_AGENT_DIR runtime paths", () => {
 
 		process.env.PI_CODING_AGENT_DIR = agentDir;
 		const configPath = path.join(agentDir, "extensions", "subagent", "config.json");
-		writeFile(configPath, JSON.stringify({ asyncByDefault: true, defaultSubagentContext: "fresh", maxSubagentDepth: 3, artifactDir: "session", artifactConfig: { cleanupDays: 9007199254740991 } }));
+		writeFile(configPath, JSON.stringify({ asyncByDefault: true, maxSubagentDepth: 3, artifactDir: "session", artifactConfig: { cleanupDays: 9007199254740991 } }));
 
 		const config = loadConfig();
 		assert.equal(config.asyncByDefault, true);
-		assert.equal(config.defaultSubagentContext, "fresh");
 		assert.equal(config.maxSubagentDepth, 3);
 		assert.equal(config.artifactDir, "session");
 		assert.equal(config.artifactConfig?.cleanupDays, Number.MAX_SAFE_INTEGER);
 	});
 
-	it("requires a pruning model when pruned fork mode is enabled", () => {
+	it("rejects removed fork context config", () => {
 		const configPath = path.join(agentDir, "extensions", "subagent", "config.json");
 		writeFile(configPath, JSON.stringify({ forkContext: { mode: "pruned" } }));
-		assert.throws(() => loadConfig(), /forkContext\.model is required/);
+		assert.throws(() => loadConfig(), /config\.forkContext was removed; launches are always fresh/);
 
 		writeFile(configPath, JSON.stringify({ forkContext: { mode: "pruned", model: "openai-codex/gpt-5.6-luna:max" } }));
-		assert.deepEqual(loadConfig().forkContext, { mode: "pruned", model: "openai-codex/gpt-5.6-luna:max" });
+		assert.throws(() => loadConfig(), /config\.forkContext was removed; launches are always fresh/);
 	});
 
 	it("discovers user agents, chains, and settings under the configured agent dir", () => {
@@ -282,13 +281,13 @@ Package skill content.
 		assert.throws(() => getArtifactsDir(sessionFile, cwd, "workspace" as never), /Unsupported artifactDir/);
 	});
 
-	it("validates default subagent context values", () => {
+	it("rejects removed default subagent context values", () => {
 		const configPath = path.join(agentDir, "extensions", "subagent", "config.json");
 		writeFile(configPath, JSON.stringify({ defaultSubagentContext: "fresh" }));
-		assert.equal(loadConfig().defaultSubagentContext, "fresh");
+		assert.throws(() => loadConfig(), /config\.defaultSubagentContext was removed; launches are always fresh/);
 
 		writeFile(configPath, JSON.stringify({ defaultSubagentContext: "other" }));
-		assert.throws(() => updateConfig((config) => config), /config\.defaultSubagentContext must be "fresh" or "fork"/);
+		assert.throws(() => loadConfig(), /config\.defaultSubagentContext was removed; launches are always fresh/);
 	});
 
 	it("accepts valid global checkpoint offsets and rejects invalid config before execution", () => {
@@ -344,6 +343,14 @@ Package skill content.
 		const configPath = path.join(agentDir, "extensions", "subagent", "config.json");
 		writeFile(configPath, JSON.stringify({ modelExclusions: { defaultTtlMs: 300_000 }, asyncByDefault: false }));
 		assert.throws(() => loadConfig(), /config\.modelExclusions was removed/);
+	});
+
+	it("fails closed when loadConfig reads removed fork default config", () => {
+		const configPath = path.join(agentDir, "extensions", "subagent", "config.json");
+		writeFile(configPath, JSON.stringify({ defaultSubagentContext: "fork", asyncByDefault: false }));
+		assert.throws(() => loadConfig(), /config\.defaultSubagentContext was removed; launches are always fresh/);
+		writeFile(configPath, JSON.stringify({ forkContext: { mode: "full" }, asyncByDefault: false }));
+		assert.throws(() => loadConfig(), /config\.forkContext was removed; launches are always fresh/);
 	});
 
 	it("rejects invalid artifactDir config values", () => {

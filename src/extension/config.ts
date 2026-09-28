@@ -19,23 +19,6 @@ const BASE_KEY_IDS = new Set([
 	...Object.values(Key).flatMap((value) => typeof value === "string" ? [value.toLowerCase()] : []),
 ]);
 
-class PrunedForkConfigError extends Error {}
-
-function validateForkContextConfig(value: unknown): void {
-	if (value === undefined) return;
-	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("config.forkContext must be a JSON object");
-	const config = value as Record<string, unknown>;
-	if (config.mode !== undefined && config.mode !== "full" && config.mode !== "pruned") {
-		throw new Error('config.forkContext.mode must be "full" or "pruned"');
-	}
-	if (config.model !== undefined && (typeof config.model !== "string" || !config.model.trim())) {
-		throw new PrunedForkConfigError("config.forkContext.model must be a non-empty string");
-	}
-	if (config.mode === "pruned" && config.model === undefined) {
-		throw new PrunedForkConfigError('config.forkContext.model is required when config.forkContext.mode is "pruned"');
-	}
-}
-
 function isValidKeyId(value: string): boolean {
 	if (value !== value.trim()) return false;
 	const parts = value.toLowerCase().split("+");
@@ -138,10 +121,6 @@ function validateConfig(config: Record<string, unknown>): void {
 		if (typeof config.worktreeBranchPrefix !== "string") throw new Error("config.worktreeBranchPrefix must be a string");
 		normalizeWorktreeBranchPrefix(config.worktreeBranchPrefix);
 	}
-	if (config.defaultSubagentContext !== undefined && config.defaultSubagentContext !== "fresh" && config.defaultSubagentContext !== "fork") {
-		throw new Error('config.defaultSubagentContext must be "fresh" or "fork"');
-	}
-	validateForkContextConfig(config.forkContext);
 	if (config.checkpointBeforeDeadlineMs !== undefined
 		&& (typeof config.checkpointBeforeDeadlineMs !== "number"
 			|| !Number.isInteger(config.checkpointBeforeDeadlineMs)
@@ -173,6 +152,8 @@ function validateConfig(config: Record<string, unknown>): void {
 	validateArtifactConfig(config.artifactConfig);
 	validateCapacityConfig(config.capacity);
 	if (config.modelExclusions !== undefined) throw new Error("config.modelExclusions was removed; model failures are no longer persisted or used for automatic switching");
+	if (config.defaultSubagentContext !== undefined) throw new Error("config.defaultSubagentContext was removed; launches are always fresh — delete this key");
+	if (config.forkContext !== undefined) throw new Error("config.forkContext was removed; launches are always fresh — delete this key");
 	validateModelResponseAliases(config.modelResponseAliases);
 	validateMainWindowRendererConfig(config.mainWindowRenderer);
 	validateOrcaProgressTabsConfig(config.orcaProgressTabs);
@@ -214,13 +195,12 @@ export function loadConfig(): ExtensionConfig {
 	try {
 		return readConfigForUpdate(configPath);
 	} catch (error) {
-		if (error instanceof PrunedForkConfigError) throw error;
 		// Explicit route identity, worktree, and checkpoint policies must not be silently
 		// discarded and replaced by the built-in defaults after validation fails.
 		try {
 			const raw = JSON.parse(fs.readFileSync(configPath, "utf-8")) as unknown;
 			if (raw && typeof raw === "object" && !Array.isArray(raw)
-				&& (Object.hasOwn(raw, "worktreeProvider") || Object.hasOwn(raw, "worktreeBranchPrefix") || Object.hasOwn(raw, "modelResponseAliases") || Object.hasOwn(raw, "modelExclusions") || Object.hasOwn(raw, "checkpointBeforeDeadlineMs"))) throw error;
+				&& (Object.hasOwn(raw, "worktreeProvider") || Object.hasOwn(raw, "worktreeBranchPrefix") || Object.hasOwn(raw, "modelResponseAliases") || Object.hasOwn(raw, "modelExclusions") || Object.hasOwn(raw, "defaultSubagentContext") || Object.hasOwn(raw, "forkContext") || Object.hasOwn(raw, "checkpointBeforeDeadlineMs"))) throw error;
 		} catch (readError) {
 			if (readError === error) throw error;
 		}

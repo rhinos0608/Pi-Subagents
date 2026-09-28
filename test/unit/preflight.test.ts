@@ -709,7 +709,7 @@ Project prompt.
 		assert.equal(invalidArtifactDir.code, "invalid_artifact_dir");
 	});
 
-	it("projects MCP, extension, fanout, structured-output, and fork diagnostics", async () => {
+	it("projects MCP, extension, fanout, and structured-output diagnostics with always-fresh context", async () => {
 		const cwd = path.join(tempDir, "repo");
 		fs.mkdirSync(cwd, { recursive: true });
 		writeMcpFixture();
@@ -725,7 +725,6 @@ extensions:
   - /tmp/config-ext.ts
 subagentOnlyExtensions:
   - /tmp/subagent-only.ts
-defaultContext: fork
 ---
 Project prompt.
 `);
@@ -737,11 +736,10 @@ Project prompt.
 			cwd,
 			outputSchema: { type: "object", additionalProperties: false },
 			parentSessionFile,
-			parentLeafId: "leaf-current",
 		});
 		assert.equal(result.ok, true);
-		assert.equal(result.contract.context, "fork");
-		assert.ok(result.contract.diagnostics.some((diagnostic) => diagnostic.code === "host_required"));
+		assert.equal(result.contract.context, "fresh");
+		assert.equal(result.contract.diagnostics.some((diagnostic) => /fork/i.test(diagnostic.message)), false);
 		assert.deepEqual(result.contract.tools.declaredBuiltin, ["read", "subagent", "contact_supervisor"]);
 		assert.equal(result.contract.tools.explicitAllowlist, true);
 		assert.equal(result.contract.tools.fanoutAuthorized, true);
@@ -883,13 +881,12 @@ Project prompt.
 		}
 	});
 
-	it("falls back implicit default fork to fresh when the parent session is not forkable", async () => {
+	it("always resolves fresh context without fork plumbing", async () => {
 		const cwd = path.join(tempDir, "repo-implicit-fork");
 		fs.mkdirSync(cwd, { recursive: true });
 		writeAgent(path.join(cwd, ".pi", "agents", "worker.md"), `---
 name: worker
 description: Project worker
-defaultContext: fork
 ---
 Project prompt.
 `);
@@ -903,7 +900,6 @@ Project prompt.
 			agent: "worker",
 			cwd,
 			parentSessionFile: missingFile,
-			parentLeafId: "leaf-current",
 		});
 		assert.equal(unpersisted.ok, true);
 		assert.equal(unpersisted.contract.context, "fresh");
@@ -931,13 +927,12 @@ Project prompt.
 		}
 	});
 
-	it("applies defaultSubagentContext fork without overriding explicit fresh", async () => {
+	it("rejects removed defaultSubagentContext config loud", async () => {
 		const cwd = path.join(tempDir, "repo-global-fork");
 		fs.mkdirSync(cwd, { recursive: true });
 		writeAgent(path.join(cwd, ".pi", "agents", "worker.md"), `---
 name: worker
 description: Project worker
-defaultContext: fresh
 ---
 Project prompt.
 `);
@@ -947,36 +942,15 @@ Project prompt.
 		const parentSessionFile = path.join(tempDir, "global-parent.jsonl");
 		fs.writeFileSync(parentSessionFile, '{"type":"session","version":1,"id":"parent","timestamp":"2026-04-16T00:00:00.000Z","cwd":"/tmp"}\n', "utf-8");
 
-		const implicit = await resolveSubagentLaunchContract({
+		await assert.rejects(() => resolveSubagentLaunchContract({
 			agent: "worker",
 			cwd,
 			parentSessionFile,
-			parentLeafId: "leaf-current",
-		});
-		assert.equal(implicit.ok, true);
-		assert.equal(implicit.contract.context, "fork");
-
-		const explicitFresh = await resolveSubagentLaunchContract({
-			agent: "worker",
-			cwd,
-			context: "fresh" as never,
-			parentSessionFile,
-			parentLeafId: "leaf-current",
-		});
-		// Per-call context overrides were removed; explicit context input is rejected.
-		assert.equal(explicitFresh.ok, false);
-		if (!explicitFresh.ok) {
-			assert.equal(explicitFresh.code, "unsupported_mode");
-			assert.match(explicitFresh.message, /Removed subagent field.*context/);
-		}
-
-		const unavailableFork = await resolveSubagentLaunchContract({ agent: "worker", cwd });
-		assert.equal(unavailableFork.ok, true);
-		assert.equal(unavailableFork.contract.context, "fresh");
+		}), /config\.defaultSubagentContext was removed; launches are always fresh/);
 	});
 
-	it("applies defaultSubagentContext fresh over an agent fork default", async () => {
-		const cwd = path.join(tempDir, "repo-global-fresh");
+	it("rejects removed agent defaultContext frontmatter", async () => {
+		const cwd = path.join(tempDir, "repo-removed-default-context");
 		fs.mkdirSync(cwd, { recursive: true });
 		writeAgent(path.join(cwd, ".pi", "agents", "worker.md"), `---
 name: worker
@@ -985,18 +959,10 @@ defaultContext: fork
 ---
 Project prompt.
 `);
-		writeJson(path.join(process.env.PI_CODING_AGENT_DIR!, "extensions", "subagent", "config.json"), {
-			defaultSubagentContext: "fresh",
-		});
 
-		const implicit = await resolveSubagentLaunchContract({
-			agent: "worker",
-			cwd,
-			parentSessionFile: path.join(tempDir, "global-parent.jsonl"),
-			parentLeafId: "leaf-current",
-		});
-		assert.equal(implicit.ok, true);
-		assert.equal(implicit.contract.context, "fresh");
+		const result = await resolveSubagentLaunchContract({ agent: "worker", cwd });
+		assert.equal(result.ok, false);
+		if (!result.ok) assert.match(result.message, /removed defaultContext/);
 	});
 
 	it("fails closed when a capability ceiling denies read required for child skills", async () => {

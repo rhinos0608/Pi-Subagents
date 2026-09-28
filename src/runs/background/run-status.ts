@@ -7,7 +7,8 @@ import { readFleetTranscript } from "../../tui/fleet-transcript.ts";
 import { formatAsyncRunList, formatAsyncRunOutputPath, formatAsyncRunProgressLabel, formatWorkflowStageLine, listAsyncRuns } from "./async-status.ts";
 import { formatAsyncResultTranscript, formatAsyncRunTranscript, formatNestedRunTranscript, inspectSubagentFleet } from "./fleet-view.ts";
 import { formatNestedRunStatusLines } from "../shared/nested-render.ts";
-import { formatModelThinking } from "../../shared/formatters.ts";
+import { formatDuration, formatModelThinking } from "../../shared/formatters.ts";
+import { formatDeliverySummary, formatEffectivePolicyLines, formatModelAttemptLines, formatRunTimeoutSummary, formatToolBudgetSummary, formatWorktreeSummary } from "./fleet-view.ts";
 import { formatActivityLabel } from "../../shared/status-format.ts";
 import { DIRS, type AsyncStatus, type Details, type ForegroundRunControl, type ForegroundResumeRun, type NestedRunSummary, type SteeringStatus, type SubagentState } from "../../shared/types.ts";
 import { inspectActiveAsyncCapacityOwner, type ActiveAsyncCapacityInspection } from "./active-async-capacity.ts";
@@ -115,6 +116,8 @@ interface RunStatusDeps {
 	now?: () => number;
 	state?: SubagentState;
 	nested?: NestedRunResolutionScope;
+	// Model/Fleet control callers set exactOnly; human/debug surfaces omit it.
+	exactOnly?: boolean;
 	sessionRoots?: string[];
 	activeCapacityRoot?: string;
 	abandonedSlotReleaseAfterMs?: number | false;
@@ -408,7 +411,7 @@ export function inspectSubagentStatus(params: RunStatusParams, deps: RunStatusDe
 		if (params.action === "debug.run") {
 			location = resolveAsyncRunLocation(params, asyncDirRoot, resultsDir);
 		} else if (!params.dir && requestedId) {
-			const resolved = resolveSubagentRunId(requestedId, { asyncDirRoot, resultsDir, state: deps.state, nested: deps.nested });
+			const resolved = resolveSubagentRunId(requestedId, { asyncDirRoot, resultsDir, state: deps.state, nested: deps.nested, ...(deps.exactOnly ? { exactOnly: true as const } : {}) });
 			if (resolved?.kind === "foreground") {
 				const control = deps.state?.foregroundControls.get(resolved.id);
 				if (control && deps.state && params.view === "transcript") {
@@ -432,7 +435,7 @@ export function inspectSubagentStatus(params: RunStatusParams, deps: RunStatusDe
 			}
 			if (resolved?.kind === "nested") {
 				reconcileNestedAsyncDescendants(resolved.match.route, { resultsDir, kill: deps.kill, now: deps.now });
-				const refreshed = resolveSubagentRunId(requestedId, { asyncDirRoot, resultsDir, state: deps.state, nested: deps.nested });
+				const refreshed = resolveSubagentRunId(requestedId, { asyncDirRoot, resultsDir, state: deps.state, nested: deps.nested, ...(deps.exactOnly ? { exactOnly: true as const } : {}) });
 				const nested = refreshed?.kind === "nested" ? refreshed : resolved;
 				if (params.view === "transcript") {
 					try {
@@ -603,6 +606,12 @@ export function inspectSubagentStatus(params: RunStatusParams, deps: RunStatusDe
 					now: status.lastUpdate ?? status.endedAt ?? Date.now(),
 				}), "", { includeItems: false }) : []),
 				status.pendingAppends ? `Pending appends: ${status.pendingAppends}` : undefined,
+				status.cwd ? `Cwd: ${status.cwd}` : undefined,
+				status.turnCount !== undefined || status.toolCount !== undefined ? `Turns: ${status.turnCount ?? "?"} · Tools: ${status.toolCount ?? "?"}` : undefined,
+				formatRunTimeoutSummary(status),
+				formatToolBudgetSummary(status.toolBudget),
+				formatWorktreeSummary(status.steps),
+				formatDeliverySummary({ wrapUpRequested: status.wrapUpRequested, stopped: status.stopped, toolBudgetBlocked: status.toolBudgetBlocked }),
 				`Started: ${started}`,
 				`Updated: ${updated}`,
 				`Dir: ${asyncDir}`,
@@ -669,6 +678,9 @@ export function inspectSubagentStatus(params: RunStatusParams, deps: RunStatusDe
 						lines.push(`  Follow-up: subagent({ action: "resume", id: "${status.runId}", index: ${index}, message: "..." })`);
 					}
 				}
+				for (const attemptLine of formatModelAttemptLines(step.modelAttempts, "  ")) {
+					if (!attemptLine.endsWith("Model attempts: none recorded")) lines.push(attemptLine);
+				}
 				lines.push(...formatNestedRunStatusLines(step.children, { indent: "  ", commandHints: true, maxLines: 20 }));
 				const stepOutputPath = path.join(asyncDir, `output-${index}.log`);
 				if (stepOutputPath !== outputPath && fs.existsSync(stepOutputPath)) lines.push(`  Output: ${stepOutputPath}`);
@@ -697,6 +709,7 @@ export function inspectSubagentStatus(params: RunStatusParams, deps: RunStatusDe
 				lines.push(...workflowAsyncChildSteeringGuidance(status, deps.state));
 			}
 			if (nestedWarning) lines.push(`Warning: ${nestedWarning}`);
+			lines.push(...formatEffectivePolicyLines(status));
 			if (status.workflowReceiptPath) lines.push(`Workflow receipt: ${status.workflowReceiptPath}`);
 			if (status.sessionFile) lines.push(`Session: ${status.sessionFile}`);
 			const allExternal = (status.steps?.length ?? 0) > 0 && status.steps!.every((step) => step.runner?.type === "external-cli" || step.runner?.type === "external-job");

@@ -122,7 +122,7 @@ describe("retained child roster", () => {
 			const formatted = formatRetainedChildren(children);
 
 			assert.deepEqual(children, []);
-			assert.match(formatted, /children\.list is workflow-only and is not an exhaustive list of direct native children/);
+			assert.match(formatted, /retained roster is workflow-only and internal-only \(children\.list is not model-visible\) and is not an exhaustive list of direct native children/);
 			assert.match(formatted, /action: "status".*status identifies the candidate.*action: "resume".*authoritatively checks eligibility and may reject it/);
 			assert.match(formatted, /fallback.*only when there is no known candidate or resume rejects eligibility/);
 		} finally {

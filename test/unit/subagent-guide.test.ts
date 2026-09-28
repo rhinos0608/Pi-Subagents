@@ -28,33 +28,33 @@ describe("subagent guide", () => {
 		assert.match(guide, /# Council Mode/);
 		assert.match(guide, /skills\/council-mode\/references\/pass-contracts\.md -->/);
 		assert.match(guide, /skills\/pi-subagents\/references\/execution-controls\.md -->/);
-		assert.match(guide, /Completed external-job runs can use `action: "resume"` for provider follow-up when the registered provider exposes `followUp\(input\)`/);
+		assert.match(guide, /External-job\/package advisors may join only when their provider is registered/);
+		assert.match(guide, /use a fresh-context fallback when they cannot resume for cross-exam/);
 		assert.doesNotMatch(guide, /External job profiles do not support[^.\n]*steer\/resume/);
 	});
 
 	it("documents external CLI runner limits in packaged guide topics", () => {
-		assert.match(readSubagentGuide("tool-reference"), /External CLI agent profiles[\s\S]*native Pi child options[\s\S]*model override[\s\S]*native Pi tools/);
-		assert.match(readSubagentGuide("agents"), /External CLI agents use their own runner contract[\s\S]*native Pi child options/);
+		assert.match(readSubagentGuide("agents"), /External CLI agents use their own runner contract[\s\S]*native Pi child options[\s\S]*model override[\s\S]*native Pi tools/);
+		assert.match(readSubagentGuide("workflows"), /There are no per-child model, thinking, tool-budget/);
 	});
 
 	it("documents failed-lane recovery boundaries in packaged guide topics", () => {
 		const workflows = readSubagentGuide("workflows");
-		const toolReference = readSubagentGuide("tool-reference");
-		assert.match(workflows, /subagent workflow[\s\S]*child launch[\s\S]*prompt runtime[\s\S]*extension loading[\s\S]*child tooling setup[\s\S]*lane infrastructure blocker/);
-		assert.match(workflows, /exact failure[\s\S]*run\/status[\s\S]*(?:repo|repository)\/cwd\/worktree\/branch\/ref/);
-		assert.match(workflows, /clean[\s\S]*partial diff/);
-		assert.match(workflows, /same-protocol retry/);
-		assert.match(workflows, /asking the owner/);
-		assert.match(workflows, /external\/foreground\/CLI fallback requires explicit owner approval/);
-		assert.match(workflows, /Pi core[\s\S]*pi -ne[\s\S]*out-of-repo hint[\s\S]*not protocol-approved fallback/);
-		assert.match(toolReference, /lane infrastructure blocker[\s\S]*external\/foreground\/CLI fallback requires explicit owner approval[\s\S]*interactive_shell[\s\S]*pi -ne/);
+		const agents = readSubagentGuide("agents");
+		assert.match(workflows, /subagent workflow[\s\S]*child launch[\s\S]*prompt runtime[\s\S]*extension loading[\s\S]*child tooling setup[\s\S]*infrastructure blocker/);
+		assert.match(workflows, /exact failure[\s\S]*run\/status[\s\S]*repository\/cwd/);
+		assert.match(workflows, /same-protocol action/);
+		assert.match(workflows, /External or foreground fallback requires explicit owner approval/);
+		assert.match(agents, /exact failure\/run\/worktree state/);
+		assert.match(agents, /clean[\s\S]*partial diff/);
+		assert.match(agents, /external, foreground, or CLI runner requires explicit owner approval/);
 	});
 
 	it("keeps advanced workflow details in the packaged guide", () => {
 		const guide = readSubagentGuide("workflows");
 
 		assert.match(guide, /### Parallel sequential lanes[\s\S]*runs\.lanes/);
-		assert.match(guide, /### Host command steps[\s\S]*runs\.host/);
-		assert.match(guide, /### Advanced rolling child runs[\s\S]*Promise\.race[\s\S]*Promise\.all/);
+		assert.match(guide, /### Workflow steering[\s\S]*runs\.steer/);
+		assert.match(guide, /For advanced rolling fanout[\s\S]*Promise\.race[\s\S]*Promise\.all/);
 	});
 });

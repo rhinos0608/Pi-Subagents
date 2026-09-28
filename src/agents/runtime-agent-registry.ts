@@ -5,7 +5,7 @@ import { validateAcceptanceInput } from "../runs/shared/acceptance.ts";
 import { validatePermissionRules, type PermissionRules } from "../runs/shared/permissions.ts";
 import { validateToolBudgetConfig } from "../runs/shared/tool-budget.ts";
 import { BUILTIN_AGENT_NAMES } from "./builtin-names.ts";
-import { applyRuntimeAgentSettings, type AgentConfig, type AgentDefaultContext, type AgentDiscoveryDiagnostic, type RuntimeAgentSettingsContext } from "./agents.ts";
+import { applyRuntimeAgentSettings, type AgentConfig, type AgentDiscoveryDiagnostic, type RuntimeAgentSettingsContext } from "./agents.ts";
 
 export const RUNTIME_AGENT_REGISTRY_KEY = "pi-subagents.runtime-agents.v1";
 
@@ -30,7 +30,6 @@ export interface RuntimeAgentDefinition {
 	inheritProjectContext?: boolean;
 	inheritGlobalContext?: boolean;
 	inheritSkills?: boolean;
-	defaultContext?: AgentDefaultContext;
 	defaultAsync?: boolean;
 	defaultTimeoutMs?: number;
 	defaultToolTimeoutMs?: number;
@@ -198,7 +197,7 @@ function validateDefinition(value: unknown): RuntimeAgentDefinition {
 	const definition = value as Record<string, unknown>;
 	const supported = new Set([
 		"description", "systemPrompt", "aliases", "tools", "excludeTools", "allowNestedSubagents", "mcpDirectTools", "model", "fallbackModels", "thinking",
-		"systemPromptMode", "inheritProjectContext", "inheritGlobalContext", "inheritSkills", "defaultContext", "defaultAsync", "defaultTimeoutMs",
+		"systemPromptMode", "inheritProjectContext", "inheritGlobalContext", "inheritSkills", "defaultAsync", "defaultTimeoutMs",
 		"defaultToolTimeoutMs", "defaultAcceptance", "acceptanceRole", "runner", "machine", "skills", "skillPath",
 		"extensions", "subagentOnlyExtensions", "mutationTools", "output", "outputMode", "defaultReads", "defaultProgress", "interactive",
 		"maxSubagentDepth", "toolBudget", "permissions",
@@ -207,8 +206,6 @@ function validateDefinition(value: unknown): RuntimeAgentDefinition {
 	if (unknown.length > 0) throw new Error(`Runtime agent definition has unknown fields: ${unknown.join(", ")}.`);
 	const systemPromptMode = definition.systemPromptMode;
 	if (systemPromptMode !== undefined && systemPromptMode !== "append" && systemPromptMode !== "replace") throw new Error("Runtime agent definition systemPromptMode must be 'append' or 'replace'.");
-	const defaultContext = definition.defaultContext;
-	if (defaultContext !== undefined && defaultContext !== "fresh" && defaultContext !== "fork") throw new Error("Runtime agent definition defaultContext must be 'fresh' or 'fork'.");
 	const thinking = definition.thinking;
 	if (thinking !== undefined && thinking !== false && typeof thinking !== "string") throw new Error("Runtime agent definition thinking must be a string or false when provided.");
 	const acceptanceRole = definition.acceptanceRole;
@@ -255,7 +252,6 @@ function validateDefinition(value: unknown): RuntimeAgentDefinition {
 		...(inheritProjectContext !== undefined ? { inheritProjectContext } : {}),
 		...(inheritGlobalContext !== undefined ? { inheritGlobalContext } : {}),
 		...(inheritSkills !== undefined ? { inheritSkills } : {}),
-		...(defaultContext !== undefined ? { defaultContext: defaultContext as AgentDefaultContext } : {}),
 		...(defaultAsync !== undefined ? { defaultAsync } : {}),
 		...(defaultTimeoutMs !== undefined ? { defaultTimeoutMs } : {}),
 		...(defaultToolTimeoutMs !== undefined ? { defaultToolTimeoutMs } : {}),
@@ -333,7 +329,6 @@ function toAgentConfig(name: string, definition: RuntimeAgentDefinition): AgentC
 		inheritProjectContext: definition.inheritProjectContext ?? defaultInheritProjectContext(name),
 		inheritGlobalContext: definition.inheritGlobalContext ?? false,
 		inheritSkills: definition.inheritSkills ?? defaultInheritSkills(),
-		...(definition.defaultContext !== undefined ? { defaultContext: definition.defaultContext } : {}),
 		...(definition.defaultAsync !== undefined ? { defaultAsync: definition.defaultAsync } : {}),
 		...(definition.defaultTimeoutMs !== undefined ? { defaultTimeoutMs: definition.defaultTimeoutMs } : {}),
 		...(definition.defaultToolTimeoutMs !== undefined ? { defaultToolTimeoutMs: definition.defaultToolTimeoutMs } : {}),

@@ -55,7 +55,15 @@ describe("async run status inspection", () => {
 			const record = (role: string, text: string) => JSON.stringify({ message: { role, content: [{ type: "text", text }] } });
 			fs.writeFileSync(sessionFile, record("assistant", "Short 世界 😀\nsecond line") + "\n");
 			assert.equal(inspect(), [
-				"Run: preview", "State: complete", "Mode: single", "Step: 0 (worker) | complete", "Artifacts:",
+				"Run: preview", "State: complete", "Mode: single", "Step: 0 (worker) | complete",
+				"Effective policy (reachable fragments; no persisted policy snapshot):",
+				"  Model: default (no per-step model recorded)",
+				"  Timeout: not set",
+				"  Tool budget: not set",
+				"  Tool ceiling: not recorded",
+				"  Launch contract: digest not recorded",
+				"Model attempts: none recorded",
+				"Artifacts:",
 				`  Session: ${sessionFile}`, `Session transcript tail from ${sessionFile}:`, "  assistant: Short 世界 😀", "  second line",
 			].join("\n"));
 			const payload = JSON.stringify({ output: "😀世界\n".repeat(8_000) });
@@ -1926,5 +1934,53 @@ describe("async run status inspection", () => {
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
 		}
+	});
+
+	it("renders run-detail gaps, fallback history, and effective policy in the transcript header", () => {
+		const text = formatAsyncRunTranscript({
+			runId: "run-details",
+			mode: "single",
+			state: "running",
+			startedAt: 100,
+			lastUpdate: 200,
+			cwd: "/work/repo",
+			turnCount: 7,
+			toolCount: 12,
+			timeoutMs: 600000,
+			toolBudget: { soft: 40, hard: 80, block: ["read"], toolCount: 12, outcome: "within-budget" },
+			pendingAppends: 2,
+			wrapUpRequested: true,
+			launchContractDigest: "abc123",
+			steps: [{
+				agent: "worker", status: "running", startedAt: 100,
+				worktreePath: "/work/wt-1", branch: "feature/x",
+				model: "anthropic/claude-haiku-4-5", thinking: "low",
+				modelResolution: { source: "explicit-child", requested: "haiku", resolved: "anthropic/claude-haiku-4-5" },
+				modelAttempts: [
+					{ model: "openai/gpt-5", success: false, error: "429 rate limited" },
+					{ model: "anthropic/claude-haiku-4-5", success: true },
+				],
+			}],
+		}, os.tmpdir(), {});
+		assert.match(text, /Cwd: \/work\/repo/);
+		assert.match(text, /Turns: 7 · Tools: 12/);
+		assert.match(text, /Timeout: 10m0s/);
+		assert.match(text, /Tool budget: 12\/80 used \(soft 40\) · within-budget/);
+		assert.match(text, /Worktree: \/work\/wt-1 · branch feature\/x/);
+		assert.match(text, /Delivery: 2 pending appends · wrap-up requested/);
+		assert.match(text, /Effective policy \(reachable fragments/);
+		assert.match(text, /explicit-child/);
+		assert.match(text, /Launch contract: abc123/);
+		assert.match(text, /Model attempts \(2\):/);
+		assert.match(text, /\[fallback\] openai\/gpt-5 failed: 429 rate limited\. Retrying with anthropic\/claude-haiku-4-5\./);
+		assert.match(text, /claude-haiku-4-5 ok/);
+	});
+
+	it("renders the model-attempt empty state when no fallback history exists", () => {
+		const text = formatAsyncRunTranscript({
+			runId: "run-no-fallback", mode: "single", state: "running", startedAt: 100,
+			steps: [{ agent: "worker", status: "running", startedAt: 100 }],
+		}, os.tmpdir(), {});
+		assert.match(text, /Model attempts: none recorded/);
 	});
 });
