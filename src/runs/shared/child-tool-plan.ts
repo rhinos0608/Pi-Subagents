@@ -442,9 +442,17 @@ export function resolveOperatorCeiling(
 	explicit: readonly string[] | undefined,
 	cwd: string | undefined,
 ): ResolvedSubagentCapabilityCeiling | undefined {
-	const operatorAllowed = normalizeOperatorAllowedTools(
-		explicit ?? (cwd ? resolveSubagentAllowedTools(cwd) : undefined),
-	);
+	let fromSettings: string[] | undefined;
+	if (explicit === undefined && cwd) {
+		// Best-effort: settings validation belongs to agent discovery, which
+		// reports malformed settings with context. The plan must stay hermetic.
+		try {
+			fromSettings = resolveSubagentAllowedTools(cwd);
+		} catch {
+			fromSettings = undefined;
+		}
+	}
+	const operatorAllowed = normalizeOperatorAllowedTools(explicit ?? fromSettings);
 	return operatorAllowed === undefined
 		? undefined
 		: { version: 1 as const, allowedTools: operatorAllowed, denyExtensions: false, sources: ["settings:subagents.allowedTools"] };
