@@ -2629,6 +2629,13 @@ export async function runSubagent(
 		exitCode: 1,
 		stopped: true,
 	});
+	const runTerminalStepResult = (index: number, agent: string, sessionName?: string): SingleStepResult | undefined => {
+		if (timedOut) return timedOutStepResult(agent, sessionName);
+		if (stopped) return stoppedStepResult(agent, sessionName);
+		if (childStopRequests.has(index)) return childStopResult(index, agent);
+		if (interrupted) return pausedStepResult(agent, sessionName);
+		return undefined;
+	};
 	const consumePendingAppendRequests = (): void => {
 		if (statusPayload.mode !== "chain" || statusPayload.state !== "running") return;
 		const requests = consumeChainAppendRequests(asyncDir);
@@ -3776,10 +3783,8 @@ export async function runSubagent(
 			let aborted = false;
 			const parallelResults = await mapConcurrent(dynamicSteps, concurrency, async (task, taskIdx): Promise<StepResult> => {
 				const fi = groupStartFlatIndex + taskIdx;
-				if (timedOut) return timedOutStepResult(task.agent, task.sessionName);
-				if (stopped) return stoppedStepResult(task.agent, task.sessionName);
-				if (childStopRequests.has(fi)) return childStopResult(fi, task.agent);
-				if (interrupted) return pausedStepResult(task.agent, task.sessionName);
+				const terminalResult = runTerminalStepResult(fi, task.agent, task.sessionName);
+				if (terminalResult) return terminalResult;
 				if (aborted && failFast) {
 					const skippedAt = Date.now();
 					requiredStatusStep(statusPayload, fi).status = "failed";
@@ -4147,10 +4152,8 @@ export async function runSubagent(
 					concurrency,
 					async (task, taskIdx): Promise<StepResult> => {
 						const fi = groupStartFlatIndex + taskIdx;
-						if (timedOut) return timedOutStepResult(task.agent, task.sessionName);
-						if (stopped) return stoppedStepResult(task.agent, task.sessionName);
-						if (childStopRequests.has(fi)) return childStopResult(fi, task.agent);
-						if (interrupted) return pausedStepResult(task.agent, task.sessionName);
+						const terminalResult = runTerminalStepResult(fi, task.agent, task.sessionName);
+						if (terminalResult) return terminalResult;
 						if (aborted && failFast) {
 							const skippedAt = Date.now();
 							requiredStatusStep(statusPayload, fi).status = "failed";
