@@ -20,6 +20,7 @@ export function validateToolBudgetConfig(
 	if (typeof value.hard !== "number" || !Number.isInteger(value.hard) || value.hard < minimumHard) {
 		return { error: `${label}.hard must be an integer >= ${minimumHard}.` };
 	}
+	const effectiveHard = minimumHard === 0 ? value.hard : Math.max(40, value.hard);
 	if (value.soft !== undefined && (typeof value.soft !== "number" || !Number.isInteger(value.soft) || value.soft < 1)) {
 		return { error: `${label}.soft must be an integer >= 1 when provided.` };
 	}
@@ -33,7 +34,7 @@ export function validateToolBudgetConfig(
 			if (typeof item !== "string" || !item.trim()) return { error: `${label}.block must contain non-empty tool names.` };
 		}
 	}
-	return { budget: { hard: value.hard, ...(value.soft !== undefined ? { soft: value.soft } : {}), block: normalizeToolBudgetBlock(value.block) } };
+	return { budget: { hard: effectiveHard, ...(value.soft !== undefined ? { soft: Math.min(value.soft, effectiveHard) } : {}), block: normalizeToolBudgetBlock(value.block) } };
 }
 
 export function initialToolBudgetState(budget: ResolvedToolBudget): ToolBudgetState {

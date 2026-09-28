@@ -39,7 +39,6 @@ describe("resolveIntercomBridgeMode", () => {
 
 	it("accepts explicit modes", () => {
 		assert.equal(resolveIntercomBridgeMode("off"), "off");
-		assert.equal(resolveIntercomBridgeMode("fork-only"), "fork-only");
 		assert.equal(resolveIntercomBridgeMode("always"), "always");
 	});
 });
@@ -95,8 +94,8 @@ describe("diagnoseIntercomBridge", () => {
 describe("resolveIntercomBridge", () => {
 	it("activates when mode/context permit and an orchestrator target exists", () => {
 		const bridge = resolveIntercomBridge({
-			config: { mode: "fork-only" },
-			context: "fork",
+			config: { mode: "always" },
+			context: "fresh",
 			orchestratorTarget: "main",
 		});
 
@@ -129,9 +128,9 @@ describe("resolveIntercomBridge", () => {
 		assert.equal(bridge.resultDelivery, false);
 	});
 
-	it("stays inactive for fresh context when mode is fork-only", () => {
+	it("stays inactive for fresh context when mode is off", () => {
 		const bridge = resolveIntercomBridge({
-			config: { mode: "fork-only" },
+			config: { mode: "off" },
 			context: "fresh",
 			orchestratorTarget: "main",
 		});
@@ -245,8 +244,8 @@ describe("applyIntercomBridgeToAgent", () => {
 
 describe("validateIntercomBridgeConfig", () => {
 	it("accepts the documented fields and drops nothing", () => {
-		const result = validateIntercomBridgeConfig({ value: { mode: "fork-only", instructionFile: "./bridge.md", resultDelivery: true }, label: "intercomBridge" });
-		assert.deepEqual(result, { ok: true, value: { mode: "fork-only", instructionFile: "./bridge.md", resultDelivery: true } });
+		const result = validateIntercomBridgeConfig({ value: { mode: "always", instructionFile: "./bridge.md", resultDelivery: true }, label: "intercomBridge" });
+		assert.deepEqual(result, { ok: true, value: { mode: "always", instructionFile: "./bridge.md", resultDelivery: true } });
 		assert.deepEqual(validateIntercomBridgeConfig({ value: {}, label: "intercomBridge" }), { ok: true, value: {} });
 	});
 

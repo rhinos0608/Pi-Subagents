@@ -441,7 +441,6 @@ function sanitizeTarget(params: SubagentParamsLike): { target?: ScheduleTarget; 
 	if (params.tasks || params.chain) return { error: "Recurring schedules require workflowScript; legacy tasks and chain inputs are unsupported." };
 	if (params.agent !== undefined || params.task !== undefined) return { error: "schedule.create requires workflowScript. Use workflowScript: \"return runs.run('main', { agent, task })\"." };
 	if (typeof params.workflowScript !== "string" || !params.workflowScript.trim()) return { error: "schedule.create requires a non-empty workflowScript." };
-	if (params.context === "fork") return { error: "Scheduled runs require fresh context." };
 	if (params.async === false) return { error: "Scheduled runs are always async." };
 	let baseRef: string | undefined;
 	try {
@@ -460,7 +459,6 @@ function executionParams(schedule: ScheduleRecord, quiet = false): SubagentParam
 	return {
 		...schedule.target,
 		async: true,
-		context: "fresh",
 		cwd: schedule.cwd,
 		mission: false,
 		// Scheduled fires have no operator watching, so completions must name the origin.
@@ -651,7 +649,6 @@ export class ScheduledRunManager {
 			target: target.target!,
 			overlap: "skip",
 			catchUp: params.catchUp ?? "latest",
-			...(params.timeoutMs === undefined ? {} : { timeoutMs: params.timeoutMs }),
 			paused: false,
 			...(sessionOnly ? { sessionOnly: true, ownerSessionFile: path.resolve(ownerSessionFile!) } : {}),
 			...(trigger.kind === "interval" && params.quiet === true ? { quiet: true } : {}),

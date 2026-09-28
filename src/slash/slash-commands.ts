@@ -54,7 +54,6 @@ import {
 interface InlineConfig {
 	reads?: string[] | false;
 	model?: string;
-	skill?: string[] | false;
 }
 
 const parseInlineConfig = (raw: string): InlineConfig => {
@@ -69,7 +68,6 @@ const parseInlineConfig = (raw: string): InlineConfig => {
 		switch (key) {
 			case "reads": config.reads = val === "false" ? false : val.split("+").filter(Boolean); break;
 			case "model": config.model = val || undefined; break;
-			case "skill": case "skills": config.skill = val === "false" ? false : val.split("+").filter(Boolean); break;
 		}
 	}
 	return config;
@@ -82,10 +80,9 @@ const parseAgentToken = (token: string): { name: string; config: InlineConfig } 
 	return { name: token.slice(0, bracket), config: parseInlineConfig(token.slice(bracket + 1, end !== -1 ? end : undefined)) };
 };
 
-const extractExecutionFlags = (rawArgs: string): { args: string; bg: boolean; fork: boolean } => {
+const extractExecutionFlags = (rawArgs: string): { args: string; bg: boolean } => {
 	let args = rawArgs.trim();
 	let bg = false;
-	let fork = false;
 
 	while (true) {
 		if (args.endsWith(" --bg") || args === "--bg") {
@@ -93,15 +90,8 @@ const extractExecutionFlags = (rawArgs: string): { args: string; bg: boolean; fo
 			args = args === "--bg" ? "" : args.slice(0, -5).trim();
 			continue;
 		}
-		if (args.endsWith(" --fork") || args === "--fork") {
-			fork = true;
-			args = args === "--fork" ? "" : args.slice(0, -7).trim();
-			continue;
-		}
-		break;
+		return { args, bg };
 	}
-
-	return { args, bg, fork };
 };
 
 function discoverSlashAgents(pi: ExtensionAPI, cwd: string, scope: AgentScope): { agents: AgentConfig[]; agentDiagnostics?: AgentDiscoveryDiagnostic[]; unknownAgentDiagnosticContext: UnknownAgentDiagnosticContext } {
@@ -636,13 +626,13 @@ export function registerSlashCommands(
 	});
 
 	pi.registerCommand("run", {
-		description: "Run one subagent through workflowScript: /run agent[output=file] [task] [--bg] [--fork]",
+		description: "Run one subagent through workflowScript: /run agent[output=file] [task] [--bg]",
 		getArgumentCompletions: makeAgentCompletions(pi, state),
 		handler: async (args, ctx) => {
-			const { args: cleanedArgs, bg, fork } = extractExecutionFlags(args);
+			const { args: cleanedArgs, bg } = extractExecutionFlags(args);
 			const input = cleanedArgs.trim();
 			const firstSpace = input.indexOf(" ");
-			if (!input) { ctx.ui.notify("Usage: /run <agent> [task] [--bg] [--fork]", "error"); return; }
+			if (!input) { ctx.ui.notify("Usage: /run <agent> [task] [--bg]", "error"); return; }
 			const { name: agentName, config: inline } = parseAgentToken(firstSpace === -1 ? input : input.slice(0, firstSpace));
 			const task = firstSpace === -1 ? "" : input.slice(firstSpace + 1).trim();
 
@@ -664,9 +654,7 @@ export function registerSlashCommands(
 				if (existingReads.length > 0) finalTask = `[Read from: ${existingReads.join(", ")}]\n\n${finalTask}`;
 			}
 			const child: Record<string, unknown> = { agent: agentName, task: finalTask, agentScope: "both" };
-			if (inline.skill !== undefined) child.skill = inline.skill;
 			if (inline.model) child.model = inline.model;
-			if (fork) child.context = "fork";
 			launchCommand(ctx, { workflowScript: slashRunWorkflowScript("run", child), async: bg ? true : false });
 		},
 	});

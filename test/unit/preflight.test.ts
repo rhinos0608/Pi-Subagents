@@ -816,13 +816,6 @@ Project prompt.
 		assert.equal(off.contract.tools.effectiveAllowlist.includes("contact_supervisor"), false);
 		assert.notEqual(off.contract.launchContractDigest, base.contract.launchContractDigest);
 		assert.equal(off.contract.agent.definitionDigest, base.contract.agent.definitionDigest);
-
-		// Inactive fork-only for a fresh launch hashes exactly like off: activation, not the mode label, is bound.
-		const forkOnly = await resolveSubagentLaunchContract({ ...input, context: "fresh", intercomBridge: { mode: "fork-only" } });
-		assert.equal(forkOnly.ok, true);
-		if (!forkOnly.ok) return;
-		assert.deepEqual(forkOnly.contract.intercomBridge, { mode: "fork-only", active: false });
-		assert.equal(forkOnly.contract.launchContractDigest, off.contract.launchContractDigest);
 	});
 
 	it("requires a host target only when the bridge instruction file names the session", async () => {

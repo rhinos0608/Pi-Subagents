@@ -183,8 +183,6 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 			deadlineAt: run.deadlineAt,
 			timedOut: run.timedOut,
 			stopped: run.stopped,
-			turnBudget: run.turnBudget,
-			turnBudgetExceeded: run.turnBudgetExceeded,
 			wrapUpRequested: run.wrapUpRequested,
 			sessionDir: run.sessionDir,
 			outputFile: run.outputFile,
@@ -493,8 +491,6 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 				job.deadlineAt = status.deadlineAt ?? job.deadlineAt;
 				job.timedOut = status.timedOut ?? job.timedOut;
 				job.stopped = status.stopped ?? job.stopped;
-				job.turnBudget = status.turnBudget ?? job.turnBudget;
-				job.turnBudgetExceeded = status.turnBudgetExceeded ?? job.turnBudgetExceeded;
 				job.wrapUpRequested = status.wrapUpRequested ?? job.wrapUpRequested;
 				job.sessionFile = status.sessionFile ?? job.sessionFile;
 				if (isTerminalJobStatus(job.status)) {
@@ -714,7 +710,6 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 			updatedAt: now,
 			timeoutMs: info.timeoutMs,
 			deadlineAt: info.deadlineAt,
-			turnBudget: info.turnBudget,
 			parentWorkflowRunId: info.parentWorkflowRunId,
 			workflowKey: info.workflowKey,
 			...(info.mode === "workflow" && info.workflowGraph ? { workflowGraph: info.workflowGraph } : {}),

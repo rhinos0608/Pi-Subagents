@@ -169,9 +169,9 @@ export function workflowRecoveryActions(receipt: WorkflowReceipt | undefined): W
 		: []);
 }
 
-export function workflowTerminalOutcomeForResult(result: { timedOut?: boolean; turnBudgetExceeded?: boolean; toolBudgetBlocked?: boolean }): WorkflowTerminalOutcome | undefined {
+export function workflowTerminalOutcomeForResult(result: { timedOut?: boolean; toolBudgetBlocked?: boolean }): WorkflowTerminalOutcome | undefined {
 	if (result.timedOut) return { state: "partial", reason: "timeout" };
-	if (result.turnBudgetExceeded || result.toolBudgetBlocked) return { state: "partial", reason: "budget_exhausted" };
+	if (result.toolBudgetBlocked) return { state: "partial", reason: "budget_exhausted" };
 	return undefined;
 }
 

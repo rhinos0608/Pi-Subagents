@@ -166,7 +166,6 @@ function statusStepForTask(task: RunnerSubagentStep): StatusStep {
 		agent: task.agent,
 		...(sessionName ? { sessionName } : {}),
 		...(description ? { description } : {}),
-		...(task.context ? { context: task.context } : {}),
 		phase: task.phase,
 		label: task.label,
 		outputName: task.outputName,
@@ -189,7 +188,6 @@ function statusStepsForRunnerStep(step: RunnerStep): StatusStep[] {
 	if (isDynamicRunnerGroup(step)) {
 		return [{
 			agent: `expand:${step.parallel.agent}`,
-			...(step.parallel.context ? { context: step.parallel.context } : {}),
 			phase: step.phase ?? step.parallel.phase,
 			label: step.label ?? step.parallel.label ?? `Dynamic fanout (${step.collect.as})`,
 			outputName: step.collect.as,

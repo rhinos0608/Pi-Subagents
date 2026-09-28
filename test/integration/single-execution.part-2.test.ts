@@ -391,35 +391,6 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		for (const worktreePath of worktreePaths) assert.equal(fs.existsSync(worktreePath), false);
 	});
 
-	it("applies a workflow usage budget across scripted child launches", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
-		mockPi.onCall({ output: "first result" });
-		const executor = makeExecutor([makeAgent("echo")]);
-
-		const result = await executor.execute(
-			"scripted-workflow-usage-budget",
-			{
-				async: false,
-				workflowScript: `
-					await runs.run("first", { agent: "echo", task: "First task" });
-					await runs.run("second", { agent: "echo", task: "Second task" });
-				`,
-				usageBudget: { tokens: { hard: 10 } },
-			},
-			new AbortController().signal,
-			undefined,
-			makeMinimalCtx(tempDir),
-		);
-
-		assert.equal(result.isError, true);
-		assert.match(result.content[0]?.text ?? "", /Usage budget exhausted/);
-		assert.equal(result.details.mode, "workflow");
-		assert.equal(mockPi.callCount(), 1);
-		assert.equal(result.details.usageBudget?.exhausted, true);
-		assert.deepEqual(result.details.workflow?.receipt?.terminalOutcome, { state: "partial", reason: "budget_exhausted" });
-		assert.equal(result.details.workflow?.receipt?.entries.first?.terminalOutcome, undefined);
-		assert.deepEqual(result.details.workflow?.receipt?.entries.second?.terminalOutcome, { state: "partial", reason: "budget_exhausted" });
-	});
-
 	it("admits a zero run-level tool budget only for marked structured delegated execution", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
 		const zeroBudget = { hard: 0, block: "*" as const };
 		const params = { agent: "echo", task: "Answer without tools", toolBudget: zeroBudget };
@@ -3747,170 +3718,35 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		assert.equal(mockPi.callCount(), 0);
 	});
 
-	it("rejects mismatched foreground timeout aliases before spawning", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
-		const executor = makeExecutor();
-
-		const result = await executor.execute(
-			"timeout-alias-validation",
-			{ agent: "echo", task: "Task", timeoutMs: 100, maxRuntimeMs: 200 },
-			new AbortController().signal,
-			undefined,
-			makeMinimalCtx(tempDir),
-		);
-
-		assert.equal(result.isError, true);
-		assert.match(result.content[0]?.text ?? "", /aliases/);
-		assert.equal(mockPi.callCount(), 0);
-	});
-
-	it("applies the foreground timeout default without overriding explicit or agent values", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
-		mockPi.onCall({ output: "package default" });
-		mockPi.onCall({ output: "explicit timeout" });
-		mockPi.onCall({ output: "max runtime alias" });
-		mockPi.onCall({ output: "agent timeout" });
-
-		const defaultExecutor = makeExecutor();
-		const defaultResult = await defaultExecutor.execute(
-			"foreground-timeout-default",
-			{ agent: "echo", task: "Task" },
-			new AbortController().signal,
-			undefined,
-			makeMinimalCtx(tempDir),
-		);
-		assert.equal(defaultResult.details?.timeoutMs, executorMod?.DEFAULT_FOREGROUND_TIMEOUT_MS);
-		assert.equal(defaultResult.details?.timeoutMs, 30 * 60 * 1000);
-
-		const explicitResult = await defaultExecutor.execute(
-			"foreground-timeout-explicit",
-			{ agent: "echo", task: "Task", async: false, timeoutMs: 2_000 },
-			new AbortController().signal,
-			undefined,
-			makeMinimalCtx(tempDir),
-		);
-		assert.equal(explicitResult.details?.timeoutMs, 2_000);
-
-		const aliasResult = await defaultExecutor.execute(
-			"foreground-timeout-alias",
-			{ agent: "echo", task: "Task", async: false, maxRuntimeMs: 3_000 },
-			new AbortController().signal,
-			undefined,
-			makeMinimalCtx(tempDir),
-		);
-		assert.equal(aliasResult.details?.timeoutMs, 3_000);
-
-		const agentResult = await makeExecutor([
-			makeAgent("echo", { defaultTimeoutMs: 4_000 }),
-		]).execute(
-			"foreground-timeout-agent-default",
-			{ agent: "echo", task: "Task", async: false },
-			new AbortController().signal,
-			undefined,
-			makeMinimalCtx(tempDir),
-		);
-		assert.equal(agentResult.details?.timeoutMs, 4_000);
-	});
-
-	it("threads the global config timeout default from deps.config, without overriding explicit or agent values", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
-		const NINETY_MIN = 90 * 60 * 1000;
-		mockPi.onCall({ output: "config default" });
-		mockPi.onCall({ output: "explicit over config" });
-		mockPi.onCall({ output: "agent over config" });
-		mockPi.onCall({ output: "invalid config ignored" });
-
-		// A global config.timeoutMs replaces the built-in 30-minute foreground backstop.
-		const configExecutor = makeExecutor([makeAgent("echo")], { timeoutMs: NINETY_MIN });
-		const configResult = await configExecutor.execute(
-			"config-timeout-default",
-			{ agent: "echo", task: "Task", async: false },
-			new AbortController().signal,
-			undefined,
-			makeMinimalCtx(tempDir),
-		);
-		assert.equal(configResult.details?.timeoutMs, NINETY_MIN);
-
-		// An explicit call value still wins over the global config default.
-		const explicitResult = await configExecutor.execute(
-			"config-timeout-explicit",
-			{ agent: "echo", task: "Task", async: false, timeoutMs: 2_000 },
-			new AbortController().signal,
-			undefined,
-			makeMinimalCtx(tempDir),
-		);
-		assert.equal(explicitResult.details?.timeoutMs, 2_000);
-
-		// An agent frontmatter default still wins over the global config default (single launches).
-		const agentResult = await makeExecutor([makeAgent("echo", { defaultTimeoutMs: 4_000 })], { timeoutMs: NINETY_MIN }).execute(
-			"config-timeout-agent-default",
-			{ agent: "echo", task: "Task", async: false },
-			new AbortController().signal,
-			undefined,
-			makeMinimalCtx(tempDir),
-		);
-		assert.equal(agentResult.details?.timeoutMs, 4_000);
-
-		// An invalid config value is ignored -> falls back to the built-in 30-minute default.
-		const invalidResult = await makeExecutor([makeAgent("echo")], { timeoutMs: -1 }).execute(
-			"config-timeout-invalid",
-			{ agent: "echo", task: "Task", async: false },
-			new AbortController().signal,
-			undefined,
-			makeMinimalCtx(tempDir),
-		);
-		assert.equal(invalidResult.details?.timeoutMs, executorMod?.DEFAULT_FOREGROUND_TIMEOUT_MS);
-	});
-
-	it("applies the global config timeout default to foreground workflow scripts", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+	it("operator config owns the foreground single-run deadline over legacy call and agent values", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
 		mockPi.onCall({ delay: 5_000, output: "too late" });
+		const executor = makeExecutor([makeAgent("echo", { defaultTimeoutMs: 4_000 })], { timeoutMs: 150 });
+		const result = await executor.execute(
+			"operator-timeout-single",
+			{ agent: "echo", task: "Wait", async: false, timeoutMs: 2_000, maxRuntimeMs: 3_000 },
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+		assert.equal(result.isError, true);
+		assert.equal(result.details?.results?.[0]?.timedOut, true);
+		assert.match(result.content[0]?.text ?? "", /Subagent timed out after 150ms/);
+	});
+
+	it("operator config owns the foreground workflow deadline over a legacy call override", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
 		mockPi.onCall({ delay: 5_000, output: "too late" });
 		const executor = makeExecutor([makeAgent("echo")], { timeoutMs: 250 });
-
-		const configResult = await executor.execute(
-			"workflow-config-timeout-default",
-			{ async: false, workflowScript: `return await runs.run("slow", { agent: "echo", task: "Wait" });` },
-			new AbortController().signal,
-			undefined,
-			makeMinimalCtx(tempDir),
-		);
-		assert.equal(configResult.isError, true);
-		assert.match(configResult.content[0]?.text ?? "", /Workflow script timed out after 250ms/);
-		assert.deepEqual(configResult.details.workflow?.receipt?.terminalOutcome, { state: "partial", reason: "timeout" });
-
-		const explicitResult = await executor.execute(
-			"workflow-config-timeout-explicit",
+		const result = await executor.execute(
+			"operator-timeout-workflow",
 			{ async: false, timeoutMs: 150, workflowScript: `return await runs.run("slow", { agent: "echo", task: "Wait" });` },
 			new AbortController().signal,
 			undefined,
 			makeMinimalCtx(tempDir),
 		);
-		assert.equal(explicitResult.isError, true);
-		assert.match(explicitResult.content[0]?.text ?? "", /Workflow script timed out after 150ms/);
-		assert.deepEqual(explicitResult.details.workflow?.receipt?.terminalOutcome, { state: "partial", reason: "timeout" });
-
-		const childLocalExecutor = makeExecutor([makeAgent("echo")], { timeoutMs: 10_000 });
-		mockPi.onCall({ matchArgIncludes: "Fail normally", stderr: "upstream request timed out", exitCode: 1 });
-		const ordinaryFailure = await childLocalExecutor.execute(
-			"workflow-child-timeout-prose",
-			{ async: false, workflowScript: `return await runs.run("failed", { agent: "echo", task: "Fail normally" });` },
-			new AbortController().signal,
-			undefined,
-			makeMinimalCtx(tempDir),
-		);
-		assert.equal(ordinaryFailure.isError, true);
-		assert.equal(ordinaryFailure.details.workflow?.receipt?.terminalOutcome, undefined);
-
-		mockPi.onCall({ matchArgIncludes: "Child local timeout", delay: 5_000, output: "too late" });
-		const childTimeout = await childLocalExecutor.execute(
-			"workflow-child-local-timeout",
-			{ async: false, workflowScript: `return await runs.run("slow-child", { agent: "echo", task: "Child local timeout", timeoutMs: 150 });` },
-			new AbortController().signal,
-			undefined,
-			makeMinimalCtx(tempDir),
-		);
-		assert.equal(childTimeout.isError, true);
-		assert.equal(childTimeout.details.workflow?.receipt?.terminalOutcome, undefined);
-		assert.deepEqual(childTimeout.details.workflow?.receipt?.entries["slow-child"]?.terminalOutcome, { state: "partial", reason: "timeout" });
+		assert.equal(result.isError, true);
+		assert.match(result.content[0]?.text ?? "", /Workflow script timed out after 250ms/);
+		assert.deepEqual(result.details.workflow?.receipt?.terminalOutcome, { state: "partial", reason: "timeout" });
 	});
-
 	it("runs omitted async launches in the background when the global default is enabled", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
 		const executor = makeExecutor([makeAgent("echo")], {}, true);
 
@@ -3944,13 +3780,8 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		assert.equal(result.details?.asyncId, undefined);
 	});
 
-	it("applies agent frontmatter defaults to single-agent launches", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
-		const executor = makeExecutor([
-			makeAgent("echo", {
-				defaultAsync: true,
-				defaultTimeoutMs: 2_000,
-			}),
-		]);
+	it("applies the agent async default to single-agent launches", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		const executor = makeExecutor([makeAgent("echo", { defaultAsync: true })]);
 
 		const result = await executor.execute(
 			"agent-launch-defaults",
@@ -3963,7 +3794,6 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		assert.equal(result.isError, undefined);
 		assert.match(result.content[0]?.text ?? "", /Async:/);
 		assert.equal(typeof result.details?.asyncId, "string");
-		assert.equal(result.details?.timeoutMs, 2_000);
 	});
 
 	it("applies agent acceptance defaults and lets explicit calls override them", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
@@ -4018,12 +3848,7 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 
 	it("lets explicit single-agent launch values override frontmatter defaults", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
 		mockPi.onCall({ output: "explicit foreground finished" });
-		const executor = makeExecutor([
-			makeAgent("echo", {
-				defaultAsync: true,
-				defaultTimeoutMs: 1,
-			}),
-		]);
+		const executor = makeExecutor([makeAgent("echo", { defaultAsync: true })]);
 
 		const result = await executor.execute(
 			"explicit-launch-values",
@@ -4031,7 +3856,6 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 				agent: "echo",
 				task: "Task",
 				async: false,
-				timeoutMs: 2_000,
 			},
 			new AbortController().signal,
 			undefined,
@@ -4041,22 +3865,6 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		assert.equal(result.isError, undefined);
 		assert.match(result.content[0]?.text ?? "", /explicit foreground finished/);
 		assert.equal(result.details?.asyncId, undefined);
-	});
-
-	it("allows timeout settings for async runs before spawning", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
-		const executor = makeExecutor();
-
-		const result = await executor.execute(
-			"timeout-async-validation",
-			{ agent: "echo", task: "Task", async: true, timeoutMs: 1_000 },
-			new AbortController().signal,
-			undefined,
-			makeMinimalCtx(tempDir),
-		);
-
-		assert.equal(result.isError, undefined);
-		assert.match(result.content[0]?.text ?? "", /Async:/);
-		assert.equal(result.details?.timeoutMs, 1_000);
 	});
 
 	it("rejects file-only mode without an output path before spawning", async () => {

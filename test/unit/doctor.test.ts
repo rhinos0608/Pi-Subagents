@@ -215,13 +215,13 @@ describe("buildDoctorReport", () => {
 					},
 					discoverAvailableSkills: () => [],
 					diagnoseIntercomBridge: () => ({
-						active: false,
-						mode: "fork-only",
-						wantsIntercom: false,
-						supervisorChannelAvailable: true,
-						extensionDir: "native:pi-subagents-supervisor-channel",
-						reason: "bridge mode is fork-only and context is not fork",
-					}),
+					active: false,
+					mode: "off",
+					wantsIntercom: false,
+					supervisorChannelAvailable: true,
+					extensionDir: "native:pi-subagents-supervisor-channel",
+					reason: "bridge mode is off",
+				}),
 				},
 			});
 
@@ -230,7 +230,7 @@ describe("buildDoctorReport", () => {
 			assert.match(report, /- results: missing /);
 			assert.match(report, /- agents: failed — Error: discovery exploded/);
 			assert.match(report, /- skills: total 0 \(none\)/);
-			assert.match(report, /- bridge: inactive \(bridge mode is fork-only and context is not fork\)/);
+			assert.match(report, /- bridge: inactive \(bridge mode is off\)/);
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
 		}

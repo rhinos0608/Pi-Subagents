@@ -86,7 +86,6 @@ export interface CompletionNotification {
 	interrupted?: boolean;
 	timedOut?: boolean;
 	stopped?: boolean;
-	turnBudgetExceeded?: boolean;
 	results?: Array<{
 		runId?: string;
 		workflowKey?: string;
@@ -108,7 +107,6 @@ export interface CompletionNotification {
 		interrupted?: boolean;
 		timedOut?: boolean;
 		stopped?: boolean;
-		turnBudgetExceeded?: boolean;
 		watchdog?: ChildWatchdogProgress;
 	}>;
 	watchdog?: ChildWatchdogProgress;
@@ -225,7 +223,6 @@ function childStatus(child: CompletionChild, workflowState?: string): string {
 		processSignal: child.processSignal,
 		timedOut: child.timedOut,
 		stopped: child.stopped,
-		turnBudgetExceeded: child.turnBudgetExceeded,
 		exitCode: typeof child.exitCode === "number" ? child.exitCode : undefined,
 	});
 }

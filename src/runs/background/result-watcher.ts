@@ -78,7 +78,6 @@ type ResultFileChild = {
 	interrupted?: boolean;
 	timedOut?: boolean;
 	stopped?: boolean;
-	turnBudgetExceeded?: boolean;
 	processSignal?: string | null;
 	sessionFile?: string;
 	artifactPaths?: { outputPath?: string };
@@ -499,7 +498,6 @@ export function createResultWatcher(
 						interrupted: result.interrupted,
 						timedOut: result.timedOut,
 						stopped: result.stopped,
-						turnBudgetExceeded: result.turnBudgetExceeded,
 						processSignal: result.processSignal,
 					}),
 					outputState: result.outputState === "present" || result.outputState === "absent" || result.outputState === "unknown"

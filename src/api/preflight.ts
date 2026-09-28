@@ -3,7 +3,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { discoverAgentSnapshot, findBlockingAgentDiagnostic, formatUnknownAgentError, resolveAgentName, unknownAgentDiagnosticContext, type AgentConfig, type AgentDiscoveryAllResult, type AgentScope, type AgentSource } from "../agents/agents.ts";
 import { resolveExecutionAgentScope } from "../agents/agent-scope.ts";
-import { normalizeSkillInput, resolveSkillsWithFallback } from "../agents/skills.ts";
+import { resolveSkillsWithFallback } from "../agents/skills.ts";
 import { inheritsParentModel, resolveEffectiveSubagentModel, resolveModelOrigin, type AvailableModelInfo, type ParentModel } from "../runs/shared/model-resolution.ts";
 import { buildModelCandidates } from "../runs/shared/model-fallback.ts";
 import { resolveModelScopesForAgent } from "../runs/shared/model-scope.ts";
@@ -71,7 +71,6 @@ export interface SubagentLaunchContractInput {
 	parentModel?: ParentModel;
 	availableModels?: ReadonlyArray<AvailableModelInfo | { provider: string; id: string; fullId?: string; reasoning?: boolean }>;
 	preferredProvider?: string;
-	skill?: string | string[] | boolean;
 	output?: string | boolean;
 	outputMode?: OutputMode;
 	outputSchema?: JsonSchemaObject | false;
@@ -334,7 +333,6 @@ export async function resolveSubagentLaunchContract(input: SubagentLaunchContrac
 	const bridge = resolveIntercomBridge({
 		config: loadConfig().intercomBridge,
 		...(bridgeOverride ? { override: bridgeOverride.value } : {}),
-		context,
 		orchestratorTarget: input.orchestratorTarget ?? PREFLIGHT_ORCHESTRATOR_TARGET,
 	});
 	if (bridge.active && bridge.interpolatesOrchestratorTarget && input.orchestratorTarget === undefined) {
@@ -345,11 +343,9 @@ export async function resolveSubagentLaunchContract(input: SubagentLaunchContrac
 	const restrictionMessage = capabilityCeilingAgentRestrictionMessage(agent.name, effectiveCapabilityCeiling);
 	if (restrictionMessage) return { ok: false, code: "restricted_agent", message: restrictionMessage, diagnostics };
 	const runId = input.runId ?? "preflight";
-	const skillInput = normalizeSkillInput(input.skill);
 	const outputOverride = normalizeSingleOutputOverride(undefined, undefined);
 	const behavior = resolveStepBehavior(agent, {
 		...(outputOverride !== undefined ? { output: outputOverride } : {}),
-		...(skillInput !== undefined ? { skills: skillInput } : {}),
 		...(input.model !== undefined ? { model: input.model } : {}),
 		...(input.outputSchema !== undefined ? { outputSchema: input.outputSchema } : {}),
 	});

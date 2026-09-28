@@ -224,7 +224,7 @@ export default function (pi) {
 		await child.dispose();
 	}, {}, true));
 
-	for (const scenario of ["success", "retained", "cross-provider-skip", "no-sibling", "second429", "sibling-startup", "sibling-abort", "unverified-sibling", "wrong-model", "changed-file", "missing-file", "cancel-at-create", "deadline-at-create", "usage-budget", "tool-budget", "directory", "text429", "stop-at-settlement", "steer-at-settlement", "smaller-model"] as const) {
+	for (const scenario of ["success", "retained", "cross-provider-skip", "no-sibling", "second429", "sibling-startup", "sibling-abort", "unverified-sibling", "wrong-model", "changed-file", "missing-file", "cancel-at-create", "deadline-at-create", "tool-budget", "directory", "text429", "stop-at-settlement", "steer-at-settlement", "smaller-model"] as const) {
 		it(`actual foreground owned continuation loop: ${scenario}`, async (test) => fixture(async ({ pi, l, factory, requests, setResponses, captured, cwd, agentDir }) => {
 			const file = l.storage.sessionFile;
 			if (scenario === "retained") {
@@ -257,7 +257,6 @@ export default function (pi) {
 				cwd, runId: "owned-foreground", sessionDir: cwd, sessionFile: scenario === "directory" ? undefined : file,
 				signal: controller.signal,
 				...(scenario === "deadline-at-create" ? { timeoutMs: 10000 } : {}),
-				...(scenario === "usage-budget" ? { usageBudget: { tokens: { hard: 100000 } } } : {}),
 				...(scenario === "tool-budget" ? { toolBudget: { hard: 10, block: ["read"] } } : {}),
 				childSessionFactory: { ...factory, async create(input) {
 					const createStart = performance.now();
@@ -295,7 +294,7 @@ export default function (pi) {
 					return child;
 				} },
 			}).finally(() => { Date.now = realNow; });
-			const denied = ["no-sibling", "usage-budget", "tool-budget", "directory", "text429", "stop-at-settlement", "steer-at-settlement", "smaller-model"].includes(scenario);
+			const denied = ["no-sibling", "tool-budget", "directory", "text429", "stop-at-settlement", "steer-at-settlement", "smaller-model"].includes(scenario);
 			assert.equal(creates, denied ? 1 : 2, result.error);
 			assert.equal(result.modelAttempts?.length, denied ? 1 : 2);
 			assert.equal(requests.length, ["success", "retained", "cross-provider-skip", "second429"].includes(scenario) ? 3 : 2, "no dispatch after a handoff veto and no third model dispatch");
@@ -317,40 +316,6 @@ export default function (pi) {
 				test.diagnostic(JSON.stringify({ scenario, historyBytes: Buffer.byteLength(readFileSync(file, "utf8")), createMs, shutdownAndValidationMs: disposeMs, logicalMs: Date.now() - start }));
 			} else assert.notEqual(result.exitCode, 0, "negative cannot report success");
 		}, {}, scenario !== "retained"));
-	}
-
-	for (const budgetOwner of ["none", "single", "workflow"] as const) {
-		it(`actual executor propagates ${budgetOwner} configured usage budget`, async () => fixture(async ({ factory, cwd, agentDir, setResponses }) => {
-			const agent: AgentConfig = { name: "reader", description: "Read", systemPrompt: "Read marker.txt", systemPromptMode: "append", tools: ["read"], extensions: [], allowNestedSubagents: false, inheritProjectContext: false, inheritGlobalContext: false, inheritSkills: false, source: "project", filePath: join(cwd, "reader.md"), model: "baseten/model-a", fallbackModels: ["baseten/model-b"] };
-			const children: ChildSession[] = [];
-			const inputs: ChildSessionLaunch[] = [];
-			setChildSessionFactory({ ...factory, async create(input) { inputs.push(input); const child = await factory.create(input); children.push(child); return child; } });
-			const state = { baseCwd: cwd, currentSessionId: null, asyncJobs: new Map(), foregroundRuns: new Map(), foregroundControls: new Map(), lastForegroundControlId: null, pendingForegroundControlNotices: new Map(), cleanupTimers: new Map(), lastUiContext: null, poller: null, completionSeen: new Map(), watcher: null, watcherRestartTimer: null, resultFileCoalescer: { schedule: () => false, clear() {} } };
-			try {
-				const executor = createSubagentExecutor({
-					pi: { events: { emit() {}, on() { return () => {}; } }, getSessionName() { return "parent"; } } as any,
-					state: state as any, config: { maxSubagentDepth: 2, control: {}, intercomBridge: { mode: "off" } } as any,
-					asyncByDefault: false, tempArtifactsDir: join(cwd, "artifacts"), getSubagentSessionRoot: () => join(cwd, "sessions"), expandTilde: (value) => value,
-					discoverAgents: () => ({ agents: [agent] }),
-				});
-				setResponses([() => sse(true), () => http(429), () => sse()]);
-				const single = { agent: "reader", task: "Read marker.txt once", async: false, output: false };
-				const request = budgetOwner === "workflow" ? { workflowScript: `return await runs.run('reader', ${JSON.stringify(single)});`, async: false, mission: false, usageBudget: { tokens: { hard: 100000 } } } : { ...single, ...(budgetOwner === "single" ? { usageBudget: { tokens: { hard: 100000 } } } : {}) };
-				const parentProviderConfig = JSON.parse(readFileSync(join(agentDir, "models.json"), "utf8")).providers.baseten;
-				const modelRegistry = {
-					getAvailable() { return ["model-a", "model-b"].map((id) => ({ provider: "baseten", id })); },
-					getRegisteredProviderIds() { return ["baseten"]; },
-					getRegisteredProviderConfig(id: string) { return id === "baseten" ? parentProviderConfig : undefined; },
-					getRegisteredNativeProvider() { return undefined; },
-				};
-				const result = await executor.execute("budget-owner", request, undefined, undefined, { cwd, hasUI: false, sessionManager: { getSessionId() { return "parent"; }, getSessionFile() { return null; } }, modelRegistry, model: { provider: "baseten", id: "model-a" } } as any);
-				assert.ok(children[0] && getReadonlySessionEvidence(children[0]), JSON.stringify(inputs));
-				assert.equal(children.length, budgetOwner === "none" ? 2 : 1, JSON.stringify(result));
-			} finally {
-				setChildSessionFactory(undefined);
-				for (const timer of state.cleanupTimers.values()) clearTimeout(timer);
-			}
-		}, {}, true));
 	}
 
 	it("certifies explicitly test-opted-in actual foreground and sibling with no admission/dispatch/settlement native scans", async () => countAsyncIO(async (io) => fixture(async ({ l, factory, captured, requests, setResponses, cwd }) => {
@@ -448,7 +413,7 @@ export default function (pi) {
 		writeFileSync(file, JSON.stringify(config));
 	}
 
-	for (const kind of ["success", "fresh success", "second429", "sibling startup", "sibling abort", "model mismatch", "stop after settlement", "deadline after settlement", "stop during create", "changed file", "missing file", "steer", "late shutdown", "fake factory", "ambient", "tool budget", "unknown token budget", "equal window", "retained image", "retained context too large", "no sibling", "false429"] as const) {
+	for (const kind of ["success", "fresh success", "second429", "sibling startup", "sibling abort", "model mismatch", "stop after settlement", "deadline after settlement", "stop during create", "changed file", "missing file", "steer", "late shutdown", "fake factory", "ambient", "tool budget", "equal window", "retained image", "retained context too large", "no sibling", "false429"] as const) {
 		it(`owned native runner loop: ${kind}`, async () => fixture(async ({ pi, cwd, agentDir, l, factory, captured, requests, setResponses }) => {
 			const success = kind === "success" || kind === "fresh success";
 			if (kind !== "equal window") enlargeRunnerSibling(agentDir);
@@ -469,8 +434,6 @@ export default function (pi) {
 			const context = { cwd, id: "owned-loop", flatIndex: 0, flatStepCount: 1, previousOutput: "", placeholder: "{previous}",
 				outputFile: join(cwd, "output.log"), artifactsDir: join(cwd, "artifacts"), sessionEnabled: true, deadlineAt: deadline,
 				stopSignal: stop.signal,
-				usageBudget: kind === "unknown token budget" ? { tokens: { hard: 1000 } } : undefined,
-				usageBudgetExhausted: kind === "unknown token budget" ? undefined : () => ledgerTokens >= 1000,
 				onChildEvent: (event: import("../../src/runs/background/run-child-session.ts").ChildEvent) => {
 					if (event.type === "message_end" && event.message?.role === "assistant") ledgerTokens += (event.message.usage?.input ?? 0) + (event.message.usage?.output ?? 0);
 				},
@@ -578,65 +541,27 @@ export default function (pi) {
 		assert.match(readFileSync(file, "utf8"), /"stopReason":"error"/);
 	}));
 
-	for (const kind of ["unconfigured", "available tokens", "exhausted tokens", "concurrent exhausted tokens", "concurrent unknown tokens", "cost unknown"] as const) {
-		it(`owned run ledger and final publication: ${kind}`, async () => fixture(async ({ cwd, agentDir, l, factory, requests, setResponses }) => {
-			enlargeRunnerSibling(agentDir);
-			const step = ownedRunnerStep(cwd, l.storage.sessionFile);
-			const concurrent = kind.startsWith("concurrent");
-			const unknown = kind === "concurrent unknown tokens";
-			const asyncDir = join(cwd, "owned-async");
-			const resultPath = join(asyncDir, "result.json");
-			let release: (() => void) | undefined;
-			const bothStarted = new Promise<void>((resolve) => { release = resolve; });
-			let unknownObserved: (() => void) | undefined;
-			const missingUsage = new Promise<void>((resolve) => { unknownObserved = resolve; });
-			let created = 0;
-			const observedFactory = { ...factory, async create(input: ChildSessionLaunch) {
-				const child = await factory.create(input);
-				if (++created === 2 && unknown) {
-					const subscribe = child.subscribe;
-					child.subscribe = (listener) => subscribe((event) => {
-						const message = event.message as { role?: string; usage?: Record<string, unknown> } | undefined;
-						if (event.type === "message_end" && message?.role === "assistant") {
-							listener({ ...event, message: { ...message, usage: { ...message.usage, input: undefined, inputTokens: undefined, output: 0 } } });
-							unknownObserved!();
-						} else listener(event);
-					});
-				}
-				return child;
-			} };
-			let initialRequests = 0;
-			setResponses(Array.from({ length: 8 }, () => async () => {
-				const request = requests.at(-1)!.body;
-				if (request.model === "model-b") return sse(false, 11);
-				const hasRead = (request.messages as { role: string }[]).some((message) => message.role === "tool");
-				if (hasRead) { if (unknown) await missingUsage; return http(429); }
-				if (concurrent) { if (++initialRequests === 2) release!(); await bothStarted; }
-				return sse(true, 7);
-			}));
-			await runSubagent({ id: "owned-ledger", cwd, asyncDir, resultPath, placeholder: "{previous}", sessionId: "parent-session",
-				steps: concurrent ? [{ parallel: [step, { ...step, sessionFile: join(cwd, "parallel-session.jsonl") }], concurrency: 2 }] : [step],
-				controlConfig: { ...DEFAULT_CONTROL_CONFIG, enabled: false }, artifactsDir: join(cwd, "artifacts"),
-				usageBudget: kind === "unconfigured" ? undefined : kind === "cost unknown" ? { costUsd: { hard: 100 } }
-					: { tokens: { hard: kind === "available tokens" || unknown ? 1000 : concurrent ? 20 : 10 } },
-			}, observedFactory);
-			const status = JSON.parse(readFileSync(join(asyncDir, "status.json"), "utf8"));
-			const result = JSON.parse(readFileSync(resultPath, "utf8"));
-			const success = kind === "unconfigured" || kind === "available tokens";
-			assert.equal(status.state, success ? "complete" : "failed", JSON.stringify(result));
-			assert.equal(requests.length, success ? 3 : concurrent ? 4 : 2);
-			assert.equal(status.totalTokens.input, success ? 18 : concurrent && !unknown ? 14 : 7);
-			assert.equal(status.totalTokens.output, success ? 18 : concurrent && !unknown ? 14 : 7);
-			assert.equal(status.steps[0].modelAttempts.length, success ? 2 : 1);
-			assert.equal(status.steps[0].toolCount, 1, "restored history is not a new tool event");
-			assert.ok(status.steps[0].durationMs >= 0);
-			assert.ok(existsSync(join(asyncDir, "events.jsonl")));
-			if (kind.includes("tokens")) {
-				assert.equal(status.usageBudget.tokens.used, success ? 36 : concurrent && !unknown ? 28 : 14);
-				assert.equal(status.usageBudget.exhausted, !success && !unknown);
-			}
-		}));
-	}
+	it("owned run ledger and final publication", async () => fixture(async ({ cwd, agentDir, l, factory, requests, setResponses }) => {
+		enlargeRunnerSibling(agentDir);
+		const step = ownedRunnerStep(cwd, l.storage.sessionFile);
+		const asyncDir = join(cwd, "owned-async");
+		const resultPath = join(asyncDir, "result.json");
+		setResponses([() => sse(true, 7), () => http(429), () => sse(false, 11)]);
+		await runSubagent({ id: "owned-ledger", cwd, asyncDir, resultPath, placeholder: "{previous}", sessionId: "parent-session",
+			steps: [step],
+			controlConfig: { ...DEFAULT_CONTROL_CONFIG, enabled: false }, artifactsDir: join(cwd, "artifacts"),
+		}, factory);
+		const status = JSON.parse(readFileSync(join(asyncDir, "status.json"), "utf8"));
+		const result = JSON.parse(readFileSync(resultPath, "utf8"));
+		assert.equal(status.state, "complete", JSON.stringify(result));
+		assert.equal(requests.length, 3);
+		assert.equal(status.totalTokens.input, 18);
+		assert.equal(status.totalTokens.output, 18);
+		assert.equal(status.steps[0].modelAttempts.length, 2);
+		assert.equal(status.steps[0].toolCount, 1, "restored history is not a new tool event");
+		assert.ok(status.steps[0].durationMs >= 0);
+		assert.ok(existsSync(join(asyncDir, "events.jsonl")));
+	}));
 
 	for (const optedIn of [false, true]) it(`actual native runner construction and mandatory captures, evidence opt-in=${optedIn}`, async () => countAsyncIO(async (io) => fixture(async ({ l, factory, captured, acknowledge, requests, setResponses, cwd }) => {
 		const file = l.storage.sessionFile;

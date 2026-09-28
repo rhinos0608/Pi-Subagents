@@ -22,7 +22,6 @@ const supportedFields = new Set([
 	"thinking",
 	"timeoutMs",
 	"toolBudget",
-	"skill",
 	"artifacts",
 	"intercomBridge",
 	"result",
@@ -33,8 +32,6 @@ const MAX_SCHEMA_BYTES = 64 * 1024;
 const MAX_TASK_BYTES = 1024 * 1024;
 const MAX_CWD_BYTES = 32 * 1024;
 const MAX_SHORT_TEXT_BYTES = 1024;
-const MAX_SKILL_ENTRIES = 256;
-const MAX_SKILL_AGGREGATE_BYTES = 64 * 1024;
 
 function nonEmptyString(value: unknown): value is string {
 	return typeof value === "string" && value.trim().length > 0;
@@ -89,14 +86,6 @@ export function parseSubagentDelegationRequest(data: unknown): SubagentDelegatio
 	}
 	const toolBudget = validateToolBudgetConfig(value.toolBudget, "toolBudget", { minimumHard: 0 });
 	if (toolBudget.error) return { ok: false, ...identity, error: toolBudget.error };
-	if (value.skill !== undefined) {
-		const validSkill = typeof value.skill === "boolean"
-			|| nonEmptyString(value.skill)
-			|| (Array.isArray(value.skill) && value.skill.length > 0 && value.skill.every(nonEmptyString));
-		if (!validSkill) {
-			return { ok: false, ...identity, error: "skill must be a boolean, non-empty string, or non-empty string array." };
-		}
-	}
 	if (value.artifacts !== undefined && typeof value.artifacts !== "boolean") {
 		return { ok: false, ...identity, error: "artifacts must be a boolean." };
 	}
@@ -120,16 +109,6 @@ export function parseSubagentDelegationRequest(data: unknown): SubagentDelegatio
 	}
 	if (typeof value.model === "string" && Buffer.byteLength(value.model, "utf8") > MAX_SHORT_TEXT_BYTES) {
 		return { ok: false, ...identity, error: "Delegation model exceeds 1 KiB when UTF-8 encoded." };
-	}
-	const skillEntries = typeof value.skill === "string" ? [value.skill] : Array.isArray(value.skill) ? value.skill as string[] : [];
-	if (skillEntries.length > MAX_SKILL_ENTRIES) {
-		return { ok: false, ...identity, error: "Delegation skill supports at most 256 entries." };
-	}
-	if (skillEntries.some((entry) => Buffer.byteLength(entry, "utf8") > MAX_SHORT_TEXT_BYTES)) {
-		return { ok: false, ...identity, error: "Delegation skill entry exceeds 1 KiB when UTF-8 encoded." };
-	}
-	if (skillEntries.reduce((total, entry) => total + Buffer.byteLength(entry, "utf8"), 0) > MAX_SKILL_AGGREGATE_BYTES) {
-		return { ok: false, ...identity, error: "Delegation skill entries exceed 64 KiB in aggregate when UTF-8 encoded." };
 	}
 	if (value.thinking !== undefined && (typeof value.thinking !== "string" || !thinkingLevels.has(value.thinking))) {
 		return { ok: false, ...identity, error: "thinking must be one of off, minimal, low, medium, high, xhigh, or max." };
