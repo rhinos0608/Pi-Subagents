@@ -26,7 +26,7 @@ describe("async single-agent deadline checkpoint lifecycle", { skip: !available 
 	installAsyncExecutionHooks();
 
 	for (const outcome of ["handoff", "timeout"] as const) {
-		it(`propagates ${outcome === "handoff" ? "call override" : "config default"} through the executor and runner: ${outcome}`, {
+		it(`propagates operator deadline checkpoint policy through the executor and runner: ${outcome}`, {
 			skip: !isAsyncAvailable() || !createSubagentExecutor ? "jiti or executor not available" : undefined,
 			timeout: 30_000,
 		}, async () => {
@@ -37,14 +37,12 @@ describe("async single-agent deadline checkpoint lifecycle", { skip: !available 
 					: { steps: [{ waitForPath: release, jsonl: [events.assistantMessage("current work complete")] }] }),
 				queuedMessageOutput: "Checkpoint handoff: changed files, tests, remaining work, commit state.",
 			});
-			// The overridden default would disarm the checkpoint entirely if call precedence broke.
 			const executor = makeAsyncExecutor([makeAgent("worker")], {
-				checkpointBeforeDeadlineMs: outcome === "handoff" ? 20_000 : 5_000,
+				timeoutMs: 10_000,
+				checkpointBeforeDeadlineMs: 5_000,
 			});
 			const result = await executor.execute(`checkpoint-${outcome}`, {
 				agent: "worker", task: "Explore the repository", async: true, clarify: false,
-				timeoutMs: 10_000,
-				...(outcome === "handoff" ? { checkpointBeforeDeadlineMs: 5_000 } : {}),
 			}, new AbortController().signal, undefined, makeMinimalCtx(tempDir));
 			const id = result.details?.asyncId;
 			assert.ok(id, "expected an async launch");
@@ -87,10 +85,9 @@ describe("async single-agent deadline checkpoint lifecycle", { skip: !available 
 		timeout: 25_000,
 	}, async () => {
 		mockPi.onCall({ output: "finished early" });
-		const executor = makeAsyncExecutor([makeAgent("worker")]);
+		const executor = makeAsyncExecutor([makeAgent("worker")], { timeoutMs: 8_000, checkpointBeforeDeadlineMs: 3_000 });
 		const result = await executor.execute("checkpoint-early", {
 			agent: "worker", task: "Explore the repository", async: true, clarify: false,
-			timeoutMs: 8_000, checkpointBeforeDeadlineMs: 3_000,
 		}, new AbortController().signal, undefined, makeMinimalCtx(tempDir));
 		const id = result.details?.asyncId;
 		assert.ok(id);
@@ -113,10 +110,9 @@ describe("async single-agent deadline checkpoint lifecycle", { skip: !available 
 		timeout: 10_000,
 	}, async () => {
 		mockPi.onCall({ steps: [{ waitForPath: path.join(tempDir, "never-released") }] });
-		const executor = makeAsyncExecutor([makeAgent("worker")]);
+		const executor = makeAsyncExecutor([makeAgent("worker")], { timeoutMs: 800, checkpointBeforeDeadlineMs: 100 });
 		const result = await executor.execute("checkpoint-short-lead", {
 			agent: "worker", task: "Wait", async: true, clarify: false,
-			timeoutMs: 800, checkpointBeforeDeadlineMs: 100,
 		}, new AbortController().signal, undefined, makeMinimalCtx(tempDir));
 		const id = result.details?.asyncId;
 		assert.ok(id);

@@ -525,6 +525,9 @@ interface ExecutionContextData {
 	suppressUnchangedDelegationUpdates?: boolean;
 	intercomBridge: IntercomBridgeState;
 	nestedRoute?: NestedRouteInfo;
+	/** Resolved operator-owned run deadline duration. Internal only; never model-authored. */
+	timeoutMs?: number;
+	/** Absolute deadline captured once so setup time consumes the same run budget. */
 	deadlineAt?: number;
 	/** Raw global config.toolTimeoutMs, for per-step resolution in async runners. */
 	configToolTimeoutMs?: number;
@@ -3315,6 +3318,8 @@ async function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 			structuredOutputSchema: params.outputSchema || undefined,
 			extensionBindings: params.extensionBindings,
 			acceptance: params.acceptance,
+			timeoutMs: data.timeoutMs,
+			absoluteDeadlineAt: data.deadlineAt,
 			toolBudget: data.toolBudget,
 			configToolBudget: data.configToolBudget,
 			toolTimeoutMs: data.params?.toolTimeoutMs,
@@ -3990,6 +3995,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 				}
 				recordRun(params.agent!, cleanTask, result.exitCode, result.progressSummary?.durationMs ?? 0, result);
 			},
+			timeoutMs: data.timeoutMs,
 			deadlineAt,
 			toolTimeoutMs: params.toolTimeoutMs,
 			configToolTimeoutMs: data.configToolTimeoutMs,
@@ -7084,6 +7090,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			intercomBridge,
 			nestedRoute,
 			timeoutMs: foregroundTimeout.timeoutMs,
+			deadlineAt: foregroundTimeout.timeoutMs === undefined ? undefined : Date.now() + foregroundTimeout.timeoutMs,
 			toolBudget: runToolBudget.toolBudget,
 			allowZeroToolBudget,
 			configToolBudget: configToolBudget.toolBudget,
