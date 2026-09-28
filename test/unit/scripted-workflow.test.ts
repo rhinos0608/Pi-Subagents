@@ -45,6 +45,20 @@ async function stopChild(child: ChildProcess): Promise<void> {
 	});
 }
 
+async function assertWorkflowChildRejectedBeforeLaunch(script: string, message: RegExp): Promise<void> {
+	const launches: string[] = [];
+	await assert.rejects(
+		runWorkflowScript({
+			script,
+			timeoutMs: 2_000,
+			async launch(key) { launches.push(key); return { key, ok: true, output: key, artifactPaths: [], results: [] }; },
+			async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
+		}),
+		(error: unknown) => error instanceof WorkflowScriptError && message.test(error.message),
+	);
+	assert.deepEqual(launches, []);
+}
+
 describe("scripted workflow runtime", () => {
 	it("exposes supplied and executor-normalized empty arguments as deeply frozen values", async () => {
 		const launch = async (key: string) => ({ key, ok: true, output: "unused", artifactPaths: [] });
@@ -1808,29 +1822,14 @@ describe("scripted workflow runtime", () => {
 	});
 
 	it("rejects per-child baseRef on workflow children", async () => {
-		const launches: string[] = [];
-		await assert.rejects(
-			runWorkflowScript({
-				script: `
-					const one = await runs.run("one", { agent: "worker", task: "one", baseRef: "refs/heads/release" });
-					return one.key;
-				`,
-				timeoutMs: 2_000,
-				async launch(key) { launches.push(key); return { key, ok: true, output: key, artifactPaths: [], results: [] }; },
-				async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
-			}),
-			(error: unknown) => error instanceof WorkflowScriptError && /unsupported fields: baseRef/.test(error.message),
+		await assertWorkflowChildRejectedBeforeLaunch(
+			`const one = await runs.run("one", { agent: "worker", task: "one", baseRef: "refs/heads/release" }); return one.key;`,
+			/unsupported fields: baseRef/,
 		);
-		await assert.rejects(
-			runWorkflowScript({
-				script: `return runs.all([{ key: "head", agent: "worker", task: "head", baseRef: "HEAD" }]);`,
-				timeoutMs: 2_000,
-				async launch(key) { launches.push(key); return { key, ok: true, output: key, artifactPaths: [], results: [] }; },
-				async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
-			}),
-			(error: unknown) => error instanceof WorkflowScriptError && /unsupported fields: baseRef/.test(error.message),
+		await assertWorkflowChildRejectedBeforeLaunch(
+			`return runs.all([{ key: "head", agent: "worker", task: "head", baseRef: "HEAD" }]);`,
+			/unsupported fields: baseRef/,
 		);
-		assert.deepEqual(launches, []);
 	});
 
 	it("rejects per-child baseRef values at dispatch validation", async () => {
@@ -1893,29 +1892,14 @@ describe("scripted workflow runtime", () => {
 	});
 
 	it("rejects per-child workflow controls on workflow children", async () => {
-		const launches: string[] = [];
-		await assert.rejects(
-			runWorkflowScript({
-				script: `
-					const one = await runs.run("one", { agent: "worker", task: "one", worktree: true, control: { needsAttentionAfterMs: 111 } });
-					return one.key;
-				`,
-				timeoutMs: 2_000,
-				async launch(key) { launches.push(key); return { key, ok: true, output: key, artifactPaths: [], results: [] }; },
-				async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
-			}),
-			(error: unknown) => error instanceof WorkflowScriptError && /unsupported fields: worktree, control/.test(error.message),
+		await assertWorkflowChildRejectedBeforeLaunch(
+			`const one = await runs.run("one", { agent: "worker", task: "one", worktree: true, control: { needsAttentionAfterMs: 111 } }); return one.key;`,
+			/unsupported fields: worktree, control/,
 		);
-		await assert.rejects(
-			runWorkflowScript({
-				script: `return runs.all([{ key: "two", agent: "worker", task: "two", worktree: false, control: { enabled: false } }]);`,
-				timeoutMs: 2_000,
-				async launch(key) { launches.push(key); return { key, ok: true, output: key, artifactPaths: [], results: [] }; },
-				async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
-			}),
-			(error: unknown) => error instanceof WorkflowScriptError && /unsupported fields: worktree, control/.test(error.message),
+		await assertWorkflowChildRejectedBeforeLaunch(
+			`return runs.all([{ key: "two", agent: "worker", task: "two", worktree: false, control: { enabled: false } }]);`,
+			/unsupported fields: worktree, control/,
 		);
-		assert.deepEqual(launches, []);
 	});
 
 	it("validates bounded lane metadata and passes it to child launch", async () => {
@@ -1943,23 +1927,13 @@ describe("scripted workflow runtime", () => {
 	});
 
 	it("rejects namespaced bindings on parallel children", async () => {
-		const launches: string[] = [];
-		await assert.rejects(
-			runWorkflowScript({
-				script: `
-					const [first, second] = await runs.all([
-						{ key: "first", agent: "worker", task: "first", extensionBindings: { "example.com/alpha/1": { token: "alpha" } } },
-						{ key: "second", agent: "reviewer", task: "second", extensionBindings: { "example.com/alpha/1": { token: "beta" } } },
-					]);
-					return [first.key, second.key];
-				`,
-				timeoutMs: 2_000,
-				async launch(key) { launches.push(key); return { key, ok: true, output: key, artifactPaths: [], results: [] }; },
-				async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
-			}),
-			(error: unknown) => error instanceof WorkflowScriptError && /unsupported fields: extensionBindings/.test(error.message),
+		await assertWorkflowChildRejectedBeforeLaunch(
+			`const [first, second] = await runs.all([
+				{ key: "first", agent: "worker", task: "first", extensionBindings: { "example.com/alpha/1": { token: "alpha" } } },
+				{ key: "second", agent: "reviewer", task: "second", extensionBindings: { "example.com/alpha/1": { token: "beta" } } },
+			]); return [first.key, second.key];`,
+			/unsupported fields: extensionBindings/,
 		);
-		assert.deepEqual(launches, []);
 	});
 
 	it("composes dynamic sequential and parallel phases", async () => {
