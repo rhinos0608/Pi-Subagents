@@ -114,7 +114,7 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 					let childReady!: () => void;
 					const ready = new Promise<void>((resolve) => { childReady = resolve; });
 					mockPi.onCall({ steps: [{ jsonl: [events.toolStart("contact_supervisor", { reason: "need_decision", message: "Ready" })] }, { waitForPath: releaseChild, jsonl: [events.assistantMessage("child A done")] }] });
-					child = executor.execute("lifecycle-A", { async: false, agent: "worker", task: "A", worktree: true, acceptance: false }, controller.signal, (update) => {
+					child = executor.execute("lifecycle-A", { async: false, agent: "worker", task: "A", worktree: true }, controller.signal, (update) => {
 						if (update.details?.progress?.some((entry) => entry.currentTool === "contact_supervisor")) childReady();
 						if (update.details?.progress?.some((entry) => entry.status === "completed")) childCompleted();
 					}, makeMinimalCtx(tempDir));
@@ -129,7 +129,7 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 				const connection = once(server, "connection");
 				mockPi.onCall({ output: "child B done", writeFiles: [{ path: launchMarker, content: "launched" }] });
 				const otherOwner = makeExecutor([makeAgent("worker")], { worktreeBaseDir: baseDir, worktreeSetupHook: hook });
-				setup = otherOwner.execute("lifecycle-B", { async: false, agent: "worker", task: "B", worktree: true, acceptance: false }, controller.signal, undefined, makeMinimalCtx(tempDir));
+				setup = otherOwner.execute("lifecycle-B", { async: false, agent: "worker", task: "B", worktree: true }, controller.signal, undefined, makeMinimalCtx(tempDir));
 				[socket] = await Promise.race([connection, setup.then((result) => { throw new Error(`Setup returned before hook ready: ${JSON.stringify(result)}`); })]) as [Socket];
 				await once(socket, "data"); // Real hook ready; the owner serviced I/O while setup remains held.
 				if (mode === "abort") {
@@ -282,7 +282,7 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		fs.rmSync(resultPath, { force: true });
 	});
 
-	it("inherits workflow-level worktree isolation and allows a child opt-out", { skip: !createSubagentExecutor || process.platform === "win32" ? "executor unavailable or worktree paths differ on Windows" : undefined }, async () => {
+	it("applies workflow-level worktree isolation to every child", { skip: !createSubagentExecutor || process.platform === "win32" ? "executor unavailable or worktree paths differ on Windows" : undefined }, async () => {
 		execFileSync("git", ["init"], { cwd: tempDir, stdio: "ignore" });
 		execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: tempDir });
 		execFileSync("git", ["config", "user.name", "Test User"], { cwd: tempDir });
@@ -300,7 +300,7 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 				worktree: true,
 				workflowScript: `
 					const isolated = await runs.run("isolated", { agent: "worker", task: "Isolated" });
-					const shared = await runs.run("shared", { agent: "worker", task: "Shared", worktree: false });
+					const shared = await runs.run("shared", { agent: "worker", task: "Shared" });
 					return { isolated: isolated.artifactPaths, shared: shared.artifactPaths };
 				`,
 			},
@@ -311,10 +311,10 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 
 		assert.equal(result.isError, undefined, result.content[0]?.text ?? "workflow failed");
 		assert.equal(fs.existsSync(path.join(tempDir, "isolated.txt")), false);
-		assert.equal(fs.readFileSync(path.join(tempDir, "shared.txt"), "utf-8"), "shared\n");
+		assert.equal(fs.existsSync(path.join(tempDir, "shared.txt")), false);
 		const output = result.content[0]?.text ?? "";
 		const handoffPaths = [...output.matchAll(/"([^"\n]*\/handoffs\/[^"\n]+\.json)"/g)].map((match) => match[1]!);
-		assert.equal(handoffPaths.length, 1, output);
+		assert.equal(handoffPaths.length, 2, output);
 		assert.equal(fs.existsSync(handoffPaths[0]!), true);
 	});
 
@@ -344,7 +344,7 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 						task: "Build " + target
 					})));
 					const joined = await runs.run("join", { agent: "worker", task: built.map((child) => child.key).join(",") });
-					const shared = await runs.run("shared", { agent: "worker", task: joined.key, worktree: false });
+					const shared = await runs.run("shared", { agent: "worker", task: joined.key });
 					return {
 						built: built.map((child) => ({ key: child.key, artifactPaths: child.artifactPaths })),
 						joined: { key: joined.key, artifactPaths: joined.artifactPaths },
@@ -362,7 +362,7 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		assert.equal(fs.existsSync(path.join(tempDir, "api.txt")), false);
 		assert.equal(fs.existsSync(path.join(tempDir, "ui.txt")), false);
 		assert.equal(fs.existsSync(path.join(tempDir, "joined.txt")), false);
-		assert.equal(fs.readFileSync(path.join(tempDir, "shared.txt"), "utf-8"), "shared\n");
+		assert.equal(fs.existsSync(path.join(tempDir, "shared.txt")), false);
 
 		const output = result.content[0]?.text ?? "";
 		assert.match(output, /build-api/);
@@ -629,7 +629,7 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 
 		const result = await executor.execute(
 			"invalid-verified-async-chain-acceptance",
-			{ chain: [{ agent: "echo", task: "Do work", acceptance: { level: "verified", verify: [] } }], async: true },
+			{ chain: [{ agent: "echo", task: "Do work" }], async: true, acceptance: { level: "verified", verify: [] } },
 			new AbortController().signal,
 			undefined,
 			makeMinimalCtx(tempDir),
@@ -807,8 +807,7 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 						message: {
 							role: "assistant",
 							content: [{ type: "text", text: literalJsonText }],
-							model: "mock/test-model",
-							stopReason: "stop",
+										stopReason: "stop",
 							usage: {
 								input: 11,
 								output: 7,
@@ -875,10 +874,7 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 			nodeId: "node-a",
 			agent: "worker",
 			task: "Return literal JSON-looking text",
-			context: "fresh",
 			cwd: tempDir,
-			model: "mock/test-model",
-			thinking: "high",
 			result: { kind: "text" },
 		} satisfies SubagentDelegationRequest;
 		const secondRequest = {
@@ -887,10 +883,7 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 			nodeId: "node-b",
 			agent: "reviewer",
 			task: "Run the second logical node",
-			context: "fresh",
 			cwd: tempDir,
-			model: "mock/test-model",
-			thinking: "high",
 			result: { kind: "text" },
 		} satisfies SubagentDelegationRequest;
 
@@ -929,8 +922,8 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 			assert.equal(terminalResponses.length, 2);
 			for (const response of terminalResponses) {
 				assert.equal(response.ownerRunId, "owner-delegation");
-				assert.equal(response.model, "mock/test-model:high");
-				assert.equal(response.thinking, "high");
+				assert.notEqual(response.model, "mock/test-model:high");
+				assert.equal(response.thinking, undefined);
 				assert.match(response.launchContractDigest ?? "", /^[0-9a-f]{64}$/);
 			}
 			const literalResponse = terminalResponses.find((response) => response.result?.kind === "text" && response.result.text === literalJsonText);
@@ -972,8 +965,7 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 						message: {
 							role: "assistant",
 							content: [{ type: "toolCall", id: "call-1", name: "read", arguments: { path: "package.json" } }],
-							model: "mock/test-model",
-							stopReason: "toolUse",
+										stopReason: "toolUse",
 							usage: { input: 5, output: 3, cacheRead: 0, cacheWrite: 0, cost: { total: 0.001 } },
 						},
 					}],
@@ -985,8 +977,7 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 						message: {
 							role: "assistant",
 							content: [{ type: "text", text: "cache counters unavailable" }],
-							model: "mock/test-model",
-							stopReason: "length",
+										stopReason: "length",
 							usage: { input: 9, output: 4, cost: { total: 0.002 } },
 						},
 					}],
@@ -1336,7 +1327,7 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		fs.writeFileSync(path.join(repo, ".pi", "subagents", "artifacts", "status.json"), JSON.stringify({ runId: "cleanup-action-run", state: "complete" }), "utf-8");
 		try {
 			const executor = makeExecutor([makeAgent("echo")], { worktreeBaseDir: baseDir });
-			const result = await executor.executePublic("cleanup-plan", { action: "worktree.cleanup", repo: "cleanup-repo", mode: "plan" }, new AbortController().signal, undefined, makeMinimalCtx(tempDir));
+			const result = await executor.execute("cleanup-plan", { action: "worktree.cleanup", repo: "cleanup-repo", mode: "plan" }, new AbortController().signal, undefined, makeMinimalCtx(tempDir));
 			assert.equal(result.isError, undefined, result.content[0]?.text ?? "cleanup plan failed");
 			const text = result.content[0]?.text ?? "";
 			assert.match(text, /Will remove/);
@@ -1345,10 +1336,10 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 			assert.equal(planFiles.length, 1);
 			const planId = planFiles[0]!.replace(/\.json$/, "");
 			const childSafe = makeExecutor([makeAgent("echo")], { worktreeBaseDir: baseDir }, false, undefined, false);
-			const childSafeResult = await childSafe.executePublic("cleanup-child-safe", { action: "worktree.cleanup", repo: "cleanup-repo", mode: "plan" }, new AbortController().signal, undefined, makeMinimalCtx(tempDir));
+			const childSafeResult = await childSafe.execute("cleanup-child-safe", { action: "worktree.cleanup", repo: "cleanup-repo", mode: "plan" }, new AbortController().signal, undefined, makeMinimalCtx(tempDir));
 			assert.equal(childSafeResult.isError, true);
 			assert.match(childSafeResult.content[0]?.text ?? "", /child-safe subagent fanout mode/i);
-			const apply = await executor.executePublic("cleanup-apply", { action: "worktree.cleanup", repo: "cleanup-repo", mode: "apply", planId }, new AbortController().signal, undefined, makeMinimalCtx(tempDir));
+			const apply = await executor.execute("cleanup-apply", { action: "worktree.cleanup", repo: "cleanup-repo", mode: "apply", planId }, new AbortController().signal, undefined, makeMinimalCtx(tempDir));
 			assert.equal(apply.isError, true);
 			assert.match(apply.content[0]?.text ?? "", /plan.*only|apply\/removal is not available/i);
 			assert.ok(fs.existsSync(worktree.path));
@@ -1492,8 +1483,7 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 					message: {
 						role: "assistant",
 						content: [],
-						model: "mock/test-model",
-						stopReason: "aborted",
+								stopReason: "aborted",
 						usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: { total: 0 } },
 					},
 				},
@@ -1575,7 +1565,7 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 
 		const result = await executor.execute(
 			"single-schema",
-			{ agent: "echo", task: "Return structured data", outputSchema: { type: "object", required: ["ok"], properties: { ok: { type: "boolean" }, note: { type: "string" } } }, acceptance: false },
+			{ agent: "echo", task: "Return structured data", outputSchema: { type: "object", required: ["ok"], properties: { ok: { type: "boolean" }, note: { type: "string" } } } },
 			new AbortController().signal,
 			undefined,
 			makeMinimalCtx(tempDir),
@@ -1588,51 +1578,6 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		if (child?.artifactPaths?.outputPath) assert.match(fs.readFileSync(child.artifactPaths.outputPath, "utf-8"), /"note": "captured"/);
 	});
 
-	it("routes retained workflow follow-ups to distinct outputs without overwriting the writer report", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
-		for (const relative of [false, true]) {
-			const writerPath = path.join(tempDir, `writer-${relative}.md`);
-			const challengeOutput = relative ? "challenge-relative.md" : path.join(tempDir, "challenge-absolute.md");
-			mockPi.onCall({ output: "original writer report" });
-			mockPi.onCall({ output: "No better current-scope change is needed; the retained implementation remains correct." });
-			mockPi.onCall({ output: "repeated challenge report" });
-			const result = await makeExecutor([makeAgent("echo")], {}, true).execute(
-				`workflow-retained-output-${relative}`,
-				{
-					async: false,
-					workflowScript: `
-						const writer = await runs.run("writer", { agent: "echo", task: "Write report", acceptance: false, output: ${JSON.stringify(writerPath)} });
-						const challenge = await runs.run("challenge", { resume: ${relative ? "writer.runId.slice(0, 12)" : "writer.runId"}, task: "Challenge report", output: ${JSON.stringify(challengeOutput)} });
-						const repeated = await runs.run("repeated", { resume: challenge.runId, task: "Challenge again", output: false });
-						return { writer, challenge, repeated };
-					`,
-				},
-				new AbortController().signal,
-				undefined,
-				makeMinimalCtx(tempDir),
-			);
-
-			assert.equal(result.isError, undefined, result.content[0]?.text ?? "workflow failed");
-			const { writer, challenge, repeated } = result.details.workflow?.value as Record<string, { ok: boolean; runId: string; outputReference: string; continuation: { runIds: string[] } }>;
-			assert.equal(writer.ok, true);
-			assert.equal(challenge.ok, true);
-			assert.equal(repeated.ok, true);
-			assert.deepEqual(challenge.continuation.runIds, [writer.runId, challenge.runId]);
-			assert.deepEqual(repeated.continuation.runIds, [writer.runId, challenge.runId, repeated.runId]);
-			for (const child of [writer, challenge, repeated]) {
-				const entry = Object.values(result.details.workflow!.receipt!.entries).find((entry) => entry.latestRunId === child.runId);
-				assert.deepEqual(entry?.continuation, child.continuation);
-			}
-			assert.notEqual(challenge.runId, writer.runId);
-			assert.equal(writer.outputReference, writerPath);
-			const challengePath = relative ? path.join(TEMP_ARTIFACTS_DIR, "outputs", `workflow-retained-output-${relative}`, challengeOutput) : challengeOutput;
-			assert.equal(challenge.outputReference, challengePath);
-			assert.notEqual(challenge.outputReference, writer.outputReference);
-			assert.equal(fs.readFileSync(writer.outputReference, "utf-8"), "original writer report");
-			assert.equal(fs.readFileSync(challenge.outputReference, "utf-8"), "No better current-scope change is needed; the retained implementation remains correct.");
-			assert.deepEqual(result.details.results.map((child) => child.savedOutputPath), [writerPath, challengePath, undefined]);
-		}
-		assert.equal(mockPi.callCount(), 6);
-	});
 
 	it("preserves string resume lineage from the recorded terminal workflow receipt", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
 		mockPi.onCall({ output: "writer" });
@@ -1643,8 +1588,8 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		const started = await executor.execute("lineage-source", {
 			async: true,
 			workflowScript: `
-				const writer = await runs.run("writer", { agent: "echo", task: "Write", async: false, acceptance: false, output: false });
-				const challenge = await runs.run("challenge", { resume: writer.runId, task: "Challenge", output: false });
+				const writer = await runs.run("writer", { agent: "echo", task: "Write" });
+				const challenge = await runs.run("challenge", { resume: writer.runId, task: "Challenge" });
 				return { writer, challenge };
 			`,
 		}, new AbortController().signal, undefined, ctx);
@@ -1658,7 +1603,7 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		assert.deepEqual(settled.workflowReceipt.receipt.entries.challenge.continuation, challenge.continuation);
 		const repeated = await executor.execute("lineage-repeated", {
 			async: false,
-			workflowScript: `return runs.run("repeated", { resume: ${JSON.stringify(challenge.runId)}, task: "Repeat challenge", output: false });`,
+			workflowScript: `return runs.run("repeated", { resume: ${JSON.stringify(challenge.runId)}, task: "Repeat challenge" });`,
 		}, new AbortController().signal, undefined, ctx);
 		assert.equal(repeated.isError, undefined, repeated.content[0]?.text);
 		const child = repeated.details.workflow!.value as { runId: string; continuation: { runIds: string[] } };
@@ -1669,7 +1614,7 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		fs.writeFileSync(settled.workflowReceipt.path, "{broken");
 		const rejected = await executor.execute("lineage-malformed", {
 			async: false,
-			workflowScript: `return runs.run("rejected", { resume: ${JSON.stringify(challenge.runId)}, task: "Do not launch", output: false });`,
+			workflowScript: `return runs.run("rejected", { resume: ${JSON.stringify(challenge.runId)}, task: "Do not launch" });`,
 		}, new AbortController().signal, undefined, ctx);
 		assert.equal(rejected.isError, true);
 		assert.match(rejected.content[0]?.text ?? "", /could not be read/);
@@ -1686,7 +1631,7 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 			mockPi.onCall({ output: "continued without older evidence" });
 			const fallback = await executor.execute(`lineage-${evidence}`, {
 				async: false,
-				workflowScript: `return runs.run("fallback", { resume: ${JSON.stringify(challenge.runId)}, task: "Continue", output: false });`,
+				workflowScript: `return runs.run("fallback", { resume: ${JSON.stringify(challenge.runId)}, task: "Continue" });`,
 			}, new AbortController().signal, undefined, ctx);
 			assert.equal(fallback.isError, undefined, fallback.content[0]?.text);
 			const continued = fallback.details.workflow!.value as { runId: string; continuation: { runIds: string[] } };
@@ -1702,7 +1647,7 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		const ctx = makeMinimalCtx(tempDir);
 		const first = await executor.execute("lineage-stale-source", {
 			async: false,
-			workflowScript: `return runs.run("writer", { agent: "echo", task: "Write", acceptance: false, output: false });`,
+			workflowScript: `return runs.run("writer", { agent: "echo", task: "Write" });`,
 		}, new AbortController().signal, undefined, ctx);
 		assert.equal(first.isError, undefined);
 		const writer = first.details.workflow!.value as { runId: string; results: Array<{ sessionFile: string }> };
@@ -1718,42 +1663,6 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 			assert.deepEqual(rejected.details.workflow!.receipt!.entries.rejected.continuation.runIds, []);
 		}
 		assert.equal(mockPi.callCount(), 1);
-	});
-
-	it("applies explicit structured-output contract fields when resuming a foreground workflow child", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
-		const schema = { type: "object", required: ["ok"], properties: { ok: { type: "boolean" } } };
-		const firstSchema = { type: "object", required: ["first"], properties: { first: { type: "boolean" } } };
-		const firstEvents = [
-			{ type: "tool_execution_start", toolName: "structured_output", args: { value: { first: true } } },
-			{ type: "tool_result_end", message: { role: "toolResult", toolName: "structured_output", content: [{ type: "text", text: "Structured output captured." }] } },
-			{ type: "tool_execution_end", toolName: "structured_output" },
-		];
-		const resumedEvents = [
-			{ type: "tool_execution_start", toolName: "structured_output", args: { value: { ok: true } } },
-			{ type: "tool_result_end", message: { role: "toolResult", toolName: "structured_output", content: [{ type: "text", text: "Structured output captured." }] } },
-			{ type: "tool_execution_end", toolName: "structured_output" },
-		];
-		mockPi.onCall({ stdoutRaw: firstEvents.map((entry) => JSON.stringify(entry)).join("\n") + "\n", structuredOutputCapture: { first: true } });
-		mockPi.onCall({ stdoutRaw: resumedEvents.map((entry) => JSON.stringify(entry)).join("\n") + "\n", structuredOutputCapture: { ok: true } });
-		const result = await makeExecutor([makeAgent("echo")]).execute(
-			"workflow-explicit-resume-schema",
-			{
-				async: false,
-				workflowScript: `
-					const first = await runs.run("first", { agent: "echo", task: "First", outputSchema: ${JSON.stringify(firstSchema)}, agentContract: { version: 1 }, acceptance: false, output: true });
-					return runs.run("resumed", { resume: first.runId, task: "Resume", outputSchema: ${JSON.stringify(schema)}, agentContract: { version: 1 }, acceptance: false, output: false });
-				`,
-			},
-			new AbortController().signal,
-			undefined,
-			makeMinimalCtx(tempDir),
-		);
-
-		assert.equal(result.isError, undefined, result.content[0]?.text ?? "workflow failed");
-		const resumed = result.details.workflow?.value as { ok?: boolean; structuredOutput?: unknown; savedOutputPath?: string };
-		assert.equal(resumed.ok, true);
-		assert.deepEqual(resumed.structuredOutput, { ok: true });
-		assert.equal(resumed.savedOutputPath, undefined);
 	});
 
 	it("pairs awaited workflow child starts and completions on success, failure and revival", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
@@ -1772,8 +1681,8 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		] as const) {
 			mockPi.onCall(call);
 			const script = task === "Revived"
-				? `return runs.run("child", { resume: ${JSON.stringify(firstRunId)}, task: "Revived", acceptance: false, output: false });`
-				: `return runs.run("child", { agent: "echo", task: ${JSON.stringify(task)}, acceptance: false, output: false });`;
+				? `return runs.run("child", { resume: ${JSON.stringify(firstRunId)}, task: "Revived" });`
+				: `return runs.run("child", { agent: "echo", task: ${JSON.stringify(task)} });`;
 			const result = await executor.execute(`awaited-${task}`, { async: false, workflowScript: script }, new AbortController().signal, undefined, ctx);
 			assert.equal(result.isError, task === "Failed" ? true : undefined, result.content[0]?.text ?? "");
 			const child = started.at(-1)!;
@@ -1787,36 +1696,10 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 			assert.equal(matches[0]?.success, task !== "Failed");
 			assert.equal(matches[0]?.triggerTurn, false);
 		}
-		mockPi.onCall({ output: "detached" });
-		await executor.execute("explicit-child", {
-			async: false,
-			workflowScript: `return runs.run("detached", { agent: "echo", task: "Detached", async: true, acceptance: false, output: false });`,
-		}, new AbortController().signal, undefined, ctx);
-		const explicitStart = started.at(-1)!;
-		const watcherState: SubagentState = {
-			baseCwd: tempDir, currentSessionId: explicitStart.sessionId as string,
-			completionOwnerId: explicitStart.completionOwnerId as string,
-			asyncJobs: new Map(), foregroundControls: new Map(), lastForegroundControlId: null,
-			completionSeen: new Map(), resultFileCoalescer: { schedule: () => false, clear() {} },
-		};
-		const watcher = createResultWatcher({ events: bus }, watcherState, DIRS.results, 60_000, {
-			coalesceDelayMs: 0, deliverIntercomResults: false,
-			notifier: { deliver: async () => true },
-		});
-		try {
-			for (let attempt = 0; attempt < 100 && !completed.some((event) => event.id === explicitStart.id); attempt++) {
-				watcher.refreshResultDelivery();
-				await new Promise((resolve) => setTimeout(resolve, 50));
-			}
-			const matches = completed.filter((event) => event.id === explicitStart.id);
-			assert.equal(matches.length, 1);
-			assert.equal(matches[0]?.awaitedByWorkflow, undefined);
-		} finally {
-			watcher.stopResultWatcher();
-		}
+
 	});
 
-	it("preserves original parent authority when reviving a foreground child", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+	it("revives a foreground child without inheriting the original parent ceiling", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
 		const callerRuntime: ChildRuntimeConfig = {
 			capabilityCeiling: {
 				version: 1,
@@ -1834,7 +1717,7 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		mockPi.onCall({ output: "Initial foreground work" });
 		const firstResult = await executor.execute(
 			"foreground-authority-first",
-			{ async: false, workflowScript: `return runs.run("first", { agent: "echo", task: "First", acceptance: false, output: false });` },
+			{ async: false, workflowScript: `return runs.run("first", { agent: "echo", task: "First" });` },
 			new AbortController().signal, undefined, ctx,
 		);
 		assert.equal(firstResult.isError, undefined, firstResult.content[0]?.text ?? "foreground launch failed");
@@ -1845,20 +1728,19 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		mockPi.onCall({ output: "Resumed foreground work" });
 		const resumedResult = await executor.execute(
 			"foreground-authority-resume",
-			{ async: false, workflowScript: `return runs.run("resumed", { resume: ${JSON.stringify(first.runId)}, task: "Resume", acceptance: false, output: false });` },
+			{ async: false, workflowScript: `return runs.run("resumed", { resume: ${JSON.stringify(first.runId)}, task: "Resume" });` },
 			new AbortController().signal, undefined, ctx,
 		);
 		assert.equal(resumedResult.isError, undefined, resumedResult.content[0]?.text ?? "foreground resume failed");
 		assert.deepEqual(readCall().runtime?.capabilityCeiling, {
 			version: 1,
-			allowedTools: ["read"],
 			allowedAgents: ["researcher"],
-			denyExtensions: true,
-			sources: ["agent:echo", "original-parent"],
+			denyExtensions: false,
+			sources: ["agent:echo"],
 		});
 	});
 
-	it("retains inherited and disabled discovered schemas across definition changes", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+	it("retains an inherited discovered schema across definition changes", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
 		const agentPath = path.join(tempDir, ".pi", "agents", "typed.md");
 		fs.mkdirSync(path.dirname(agentPath), { recursive: true });
 		const definition = (required: string) => `---\nname: typed\ndescription: Typed output\noutputSchema: {"type":"object","required":["${required}"]}\n---\nReturn data.\n`;
@@ -1870,19 +1752,15 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		];
 		mockPi.onCall({ stdoutRaw: structuredEvents.map((entry) => JSON.stringify(entry)).join("\n") + "\n", structuredOutputCapture: { ok: true }, writeFiles: [{ path: agentPath, content: definition("changed") }] });
 		mockPi.onCall({ stdoutRaw: structuredEvents.map((entry) => JSON.stringify(entry)).join("\n") + "\n", structuredOutputCapture: { ok: true } });
-		mockPi.onCall({ output: "disabled first", writeFiles: [{ path: agentPath, content: definition("later") }] });
-		mockPi.onCall({ output: "disabled resumed" });
 		const executor = makeExecutor([], {}, false, undefined, true, new Map(), undefined, undefined, createEventBus(), (cwd) => discoverAgents(cwd, "project").agents);
 		const result = await executor.execute(
 			"workflow-inherited-resume-schema",
 			{
 				async: false,
 				workflowScript: `
-					const first = await runs.run("first", { agent: "typed", task: "First", acceptance: false, output: false });
+					const first = await runs.run("first", { agent: "typed", task: "First" });
 					const resumed = await runs.run("resumed", { resume: first.runId, task: "Resume" });
-					const disabled = await runs.run("disabled", { agent: "typed", task: "Disabled", outputSchema: false, acceptance: false, output: false });
-					const disabledResumed = await runs.run("disabled-resumed", { resume: disabled.runId, task: "Resume disabled" });
-					return { resumed, disabledResumed };
+					return resumed;
 				`,
 			},
 			new AbortController().signal,
@@ -1891,12 +1769,9 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		);
 
 		assert.equal(result.isError, undefined, result.content[0]?.text ?? "workflow failed");
-		const value = result.details.workflow?.value as { resumed: { ok?: boolean; structuredOutput?: unknown }; disabledResumed: { ok?: boolean; output?: string; structuredOutput?: unknown } };
-		assert.equal(value.resumed.ok, true);
-		assert.deepEqual(value.resumed.structuredOutput, { ok: true });
-		assert.equal(value.disabledResumed.ok, true);
-		assert.equal(value.disabledResumed.output, "disabled resumed");
-		assert.equal(value.disabledResumed.structuredOutput, undefined);
+		const value = result.details.workflow?.value as { ok?: boolean; structuredOutput?: unknown };
+		assert.equal(value.ok, true);
+		assert.deepEqual(value.structuredOutput, { ok: true });
 	});
 
 	it("auto-resumes a workflow child after a setup abort", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
@@ -1925,7 +1800,7 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 			"workflow-auto-resume-setup-abort",
 			{
 				async: false,
-				workflowScript: `return runs.run("review", { agent: "echo", task: "Review the current diff", acceptance: false });`,
+				workflowScript: `return runs.run("review", { agent: "echo", task: "Review the current diff" });`,
 			},
 			new AbortController().signal,
 			undefined,
@@ -1955,7 +1830,7 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 
 		const firstResult = await executor.execute(
 			"workflow-agent-output-first",
-			{ async: false, workflowScript: `return runs.run("first", { agent: "echo", task: "First", acceptance: false });` },
+			{ async: false, workflowScript: `return runs.run("first", { agent: "echo", task: "First" });` },
 			new AbortController().signal,
 			undefined,
 			makeMinimalCtx(tempDir),
@@ -2017,27 +1892,6 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		assert.match(fs.readFileSync(child.transcriptPath, "utf-8"), /first|re-read|implementation/i);
 	});
 
-	it("fails closed on an invalid explicit foreground resume output schema", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
-		mockPi.onCall({ output: "first result" });
-		const result = await makeExecutor([makeAgent("echo")]).execute(
-			"workflow-invalid-explicit-resume-schema",
-			{
-				async: false,
-				workflowScript: `
-					const first = await runs.run("first", { agent: "echo", task: "First" });
-					return runs.run("resumed", { resume: first.runId, task: "Resume", outputSchema: null });
-				`,
-			},
-			new AbortController().signal,
-			undefined,
-			makeMinimalCtx(tempDir),
-		);
-
-		assert.equal(result.isError, true);
-		assert.match(result.content[0]?.text ?? "", /outputSchema must be a JSON Schema object/);
-		assert.equal(mockPi.callCount(), 1);
-	});
-
 	it("workflow children with outputSchema can satisfy inherited checked acceptance", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
 		const acceptanceReport = {
 			criteriaSatisfied: [{ id: "proof", status: "satisfied", evidence: "structured output returned ok true" }],
@@ -2058,7 +1912,8 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 			structuredOutputCapture: { ok: true },
 			structuredOutputAcceptanceReport: acceptanceReport,
 		});
-		const executor = makeExecutor([makeAgent("echo")]);
+		const schema = { type: "object", required: ["ok"], properties: { ok: { type: "boolean" } } };
+		const executor = makeExecutor([makeAgent("echo", { outputSchema: schema })]);
 
 		const result = await executor.execute(
 			"workflow-schema-acceptance-sidecar",
@@ -2069,7 +1924,6 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 					const child = await runs.run("schema", {
 						agent: "echo",
 						task: "Return structured data",
-						outputSchema: { type: "object", required: ["ok"], properties: { ok: { type: "boolean" } } }
 					});
 					if (!child.ok) throw new Error(child.error);
 					return child;
@@ -2096,7 +1950,8 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 			].map((entry) => JSON.stringify(entry)).join("\n") + "\n",
 			structuredOutputCapture: { ok: true },
 		});
-		const executor = makeExecutor([makeAgent("echo")]);
+		const schema = { type: "object", required: ["ok"], properties: { ok: { type: "boolean" } } };
+		const executor = makeExecutor([makeAgent("echo", { outputSchema: schema })]);
 
 		const result = await executor.execute(
 			"workflow-schema-acceptance-missing-sidecar",
@@ -2107,7 +1962,6 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 					const child = await runs.run("schema", {
 						agent: "echo",
 						task: "Return structured data",
-						outputSchema: { type: "object", required: ["ok"], properties: { ok: { type: "boolean" } } }
 					});
 					if (!child.ok) throw new Error(child.error);
 					return child;
@@ -2170,7 +2024,7 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 			structuredOutputCapture: { ok: true },
 		});
 		const executor = makeExecutor([makeAgent("echo")]);
-		const params = { agent: "echo", task: "Return structured data", outputSchema: { type: "object", required: ["ok"], properties: { ok: { type: "boolean" } } }, acceptance: false } as const;
+		const params = { agent: "echo", task: "Return structured data", outputSchema: { type: "object", required: ["ok"], properties: { ok: { type: "boolean" } } } } as const;
 
 		const recovered = await executor.execute("single-schema-recovered-error", params, new AbortController().signal, undefined, makeMinimalCtx(tempDir));
 
@@ -2194,7 +2048,7 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 
 		const result = await executor.execute(
 			"single-schema-spoof",
-			{ agent: "echo", task: "Return structured data", outputSchema: { type: "object", required: ["ok"], properties: { ok: { type: "boolean" } } }, acceptance: false, artifacts: false },
+			{ agent: "echo", task: "Return structured data", outputSchema: { type: "object", required: ["ok"], properties: { ok: { type: "boolean" } } }, artifacts: false },
 			new AbortController().signal,
 			undefined,
 			makeMinimalCtx(tempDir),
@@ -2217,7 +2071,7 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		];
 		mockPi.onCall({ stdoutRaw: rejectedEvents.map((entry) => JSON.stringify(entry)).join("\n") + "\n" });
 		const executor = makeExecutor([makeAgent("echo")]);
-		const params = { agent: "echo", task: "Return structured data", outputSchema: { type: "object", required: ["ok"], properties: { ok: { type: "boolean" } } }, acceptance: false, artifacts: false } as const;
+		const params = { agent: "echo", task: "Return structured data", outputSchema: { type: "object", required: ["ok"], properties: { ok: { type: "boolean" } } }, artifacts: false } as const;
 
 		const rejected = await executor.execute("single-schema-rejected", params, new AbortController().signal, undefined, makeMinimalCtx(tempDir));
 
@@ -2254,7 +2108,7 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 
 		const result = await makeExecutor([makeAgent("echo")]).execute(
 			"single-schema-malformed",
-			{ agent: "echo", task: "Return structured data", outputSchema, acceptance: false, artifacts: false },
+			{ agent: "echo", task: "Return structured data", outputSchema, artifacts: false },
 			new AbortController().signal, undefined, makeMinimalCtx(tempDir),
 		);
 
@@ -2269,12 +2123,12 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		fs.writeFileSync(path.join(agentDir, "typed.md"), `---\nname: typed\ndescription: Typed output\noutputSchema: {"type":"object","required":["ok"]}\n---\nReturn data.\n`);
 		const executor = makeExecutor(discoverAgents(tempDir, "project").agents);
 		mockPi.onCall({ output: "ordinary prose" });
-		const inherited = await executor.execute("schema-default", { agent: "typed", task: "Return data", acceptance: false, artifacts: false }, new AbortController().signal, undefined, makeMinimalCtx(tempDir));
+		const inherited = await executor.execute("schema-default", { agent: "typed", task: "Return data", artifacts: false }, new AbortController().signal, undefined, makeMinimalCtx(tempDir));
 		assert.equal(inherited.isError, true);
 		assert.match(inherited.details.results[0]?.error ?? "", /Missing structured_output call/);
 
 		mockPi.onCall({ output: "ordinary prose" });
-		const optedOut = await executor.execute("schema-disabled", { agent: "typed", task: "Return prose", outputSchema: false, acceptance: false, artifacts: false }, new AbortController().signal, undefined, makeMinimalCtx(tempDir));
+		const optedOut = await executor.execute("schema-disabled", { agent: "typed", task: "Return prose", outputSchema: false, artifacts: false }, new AbortController().signal, undefined, makeMinimalCtx(tempDir));
 		assert.equal(optedOut.isError, undefined);
 		assert.equal(optedOut.details.results[0]?.finalOutput, "ordinary prose");
 	});
@@ -2287,7 +2141,7 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 
 			const result = await executor.execute(
 				"single-schema-file-only-missing-path",
-				{ agent: "echo", task: "Return structured data", outputSchema: { type: "object", required: ["ok"], properties: { ok: { type: "boolean" } } }, outputMode: "file-only", acceptance: false, artifacts: false },
+				{ agent: "echo", task: "Return structured data", outputSchema: { type: "object", required: ["ok"], properties: { ok: { type: "boolean" } } }, outputMode: "file-only", artifacts: false },
 				new AbortController().signal,
 				undefined,
 				makeMinimalCtx(tempDir),
@@ -2311,8 +2165,7 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 					message: {
 						role: "assistant",
 						content: [{ type: "toolCall", id: "structured-1", name: "structured_output", arguments: { value: { ok: true } } }],
-						model: "mock/test-model",
-						stopReason: "toolUse",
+								stopReason: "toolUse",
 						usage: { input: 100, output: 50, cacheRead: 0, cacheWrite: 0, cost: { total: 0.001 } },
 					},
 				},
@@ -2326,7 +2179,7 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 
 		const result = await executor.execute(
 			"single-schema-strict-boundary",
-			{ agent: "echo", task: "Return structured data", outputSchema: { type: "object", required: ["ok"], properties: { ok: { type: "boolean" } } }, acceptance: false },
+			{ agent: "echo", task: "Return structured data", outputSchema: { type: "object", required: ["ok"], properties: { ok: { type: "boolean" } } } },
 			new AbortController().signal,
 			undefined,
 			makeMinimalCtx(tempDir),
@@ -2358,8 +2211,7 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 					message: {
 						role: "assistant",
 						content: [{ type: "toolCall", name: "edit", arguments: { path: "src/file.ts", oldText: "a", newText: "b" } }],
-						model: "mock/test-model",
-						stopReason: "toolUse",
+								stopReason: "toolUse",
 						usage: { input: 100, output: 50, cacheRead: 0, cacheWrite: 0, cost: { total: 0.001 } },
 					},
 				},
@@ -2509,7 +2361,7 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 
 		const result = await executor.execute(
 			"non-retryable-provider-failure",
-			{ agent: "echo", task: "Task", async: false, acceptance: false },
+			{ agent: "echo", task: "Task", async: false },
 			new AbortController().signal,
 			undefined,
 			makeMinimalCtx(tempDir),
@@ -3190,8 +3042,7 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 				message: {
 					role: "assistant",
 					content: [{ type: "text", text: "Done" }],
-					model: "mock/test-model",
-					stopReason: "stop",
+						stopReason: "stop",
 					usage: { input: 11, output: 7, cacheRead: 30, cacheWrite: 0, cost: { total: 0.001 } },
 				},
 			}],
@@ -3634,7 +3485,7 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 
 		const result = await executor.execute(
 			"single-read-only-output",
-			{ agent: "analyst", task: "Analyze the runtime", output: outputPath, outputMode: "file-only", acceptance: false },
+			{ agent: "analyst", task: "Analyze the runtime", output: outputPath, outputMode: "file-only" },
 			new AbortController().signal,
 			undefined,
 			makeMinimalCtx(tempDir),
@@ -3672,50 +3523,6 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		assert.equal(fs.existsSync(path.join(tempDir, "false")), false);
 		assert.equal(fs.existsSync(path.join(tempDir, "default-report.md")), false);
 		assert.doesNotMatch(readCallArgs().at(-1) ?? "", /Write your findings to(?: exactly this path)?:/);
-	});
-
-	it("rejects explicit reviewed acceptance at every execution nesting level before spawning", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
-		const cases = [
-			{ agent: "echo", task: "Review", acceptance: "reviewed" },
-			{ agent: "echo", task: "Review", acceptance: { level: "reviewed" } },
-			{ tasks: [{ agent: "echo", task: "Review", acceptance: "reviewed" }] },
-			{ chain: [{ agent: "echo", task: "Review", acceptance: { level: "reviewed" } }] },
-			{ chain: [{ parallel: [{ agent: "echo", task: "Review", acceptance: "reviewed" }] }] },
-			{ chain: [{ expand: { from: { output: "targets", path: "/items" } }, parallel: { agent: "echo", acceptance: { level: "reviewed" } }, collect: { as: "reviews" } }] },
-		];
-		for (const [index, params] of cases.entries()) {
-			const executor = makeExecutor();
-			const result = await executor.execute(
-				`reviewed-acceptance-${index}`,
-				params,
-				new AbortController().signal,
-				undefined,
-				makeMinimalCtx(tempDir),
-			);
-
-			assert.equal(result.isError, true);
-			assert.match(result.content[0]?.text ?? "", /achieved status.*omit acceptance.*acceptance\.review\.required/i);
-		}
-		assert.equal(mockPi.callCount(), 0);
-	});
-
-	it("rejects explicit reviewed acceptance before appending a chain step", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
-		const executor = makeExecutor([makeAgent("echo")]);
-		const result = await executor.execute(
-			"append-reviewed-acceptance",
-			{
-				action: "append-step",
-				id: "missing-run",
-				step: { agent: "echo", task: "Review the previous work", acceptance: { level: "reviewed" } },
-			},
-			new AbortController().signal,
-			undefined,
-			makeMinimalCtx(tempDir),
-		);
-
-		assert.equal(result.isError, true);
-		assert.match(result.content[0]?.text ?? "", /Cannot append step:.*achieved status.*acceptance\.review\.required/i);
-		assert.equal(mockPi.callCount(), 0);
 	});
 
 	it("operator config owns the foreground single-run deadline over legacy call and agent values", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
@@ -4263,8 +4070,7 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 				message: {
 					role: "assistant",
 					content: [{ type: "text", text: "" }],
-					model: "mock/test-model",
-					stopReason: "stop",
+						stopReason: "stop",
 					usage: { input: 100, output: 0, cacheRead: 0, cacheWrite: 0, cost: { total: 0.001 } },
 				},
 			}],
@@ -4291,8 +4097,7 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 				message: {
 					role: "assistant",
 					content: [{ type: "text", text: "failed" }],
-					model: "mock/test-model",
-					stopReason: "stop",
+						stopReason: "stop",
 					errorMessage: "provider exploded",
 					usage: { input: 100, output: 0, cacheRead: 0, cacheWrite: 0, cost: { total: 0.001 } },
 				},
@@ -4590,8 +4395,7 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 				message: {
 					role: "assistant",
 					content: [{ type: "text", text: receiptReport }],
-					model: "mock/test-model",
-					stopReason: "toolUse",
+						stopReason: "toolUse",
 					usage: { input: 7, output: 3, cacheRead: 0, cacheWrite: 0, cost: { total: 0.001 } },
 				},
 			}] },

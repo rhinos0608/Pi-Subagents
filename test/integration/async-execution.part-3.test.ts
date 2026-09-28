@@ -204,11 +204,9 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 	});
 
 	for (const terminal of [
-		// An empty stop with no tool results looks like a model cold-start, so
-		// bounded fallback retries it (up to 3 attempts) and the terminal
-		// diagnosis carries the exhausted-fallback text instead of the direct
-		// empty-output error. Length-limit stops keep the direct diagnosis.
-		{ name: "empty text stop", content: [{ type: "text", text: "" }], stopReason: "stop", error: /Subagent produced no output.*empty response/, output: /No subagent model could start/ },
+		// Exploratory tool-result evidence means task execution already started,
+		// so an empty stop is terminal and must not be replayed as a cold start.
+		{ name: "empty text stop", content: [{ type: "text", text: "" }], stopReason: "stop", error: /Subagent produced no output.*empty response/, output: "" },
 		{ name: "tool-call-only stop", content: [{ type: "toolCall", id: "read-1", name: "read", arguments: { path: "README.md" } }], stopReason: "toolUse", error: /grep failed.*Path not found/i, output: "" },
 		{ name: "empty text length limit", content: [{ type: "text", text: "" }], stopReason: "length", error: /grep failed.*Path not found/i, output: "" },
 	]) {
