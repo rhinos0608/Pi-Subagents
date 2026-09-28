@@ -495,7 +495,6 @@ function inheritedRunFanoutBudget(deps: Pick<ExecutorDeps, "childRuntime">): Run
 }
 
 type ForkSessionFileForTask = (agentName: string, idx?: number, modelOverride?: string, modelOverrideFromParent?: boolean, modelOrigin?: ModelOrigin) => string | undefined;
-type PrepareForkSessionForTask = (agentName: string, idx?: number, modelOverride?: string, modelOverrideFromParent?: boolean, modelOrigin?: ModelOrigin) => Promise<void>;
 type ThinkingOverrideForTask = () => AgentConfig["thinking"] | undefined;
 
 interface ExecutionContextData {
@@ -6926,8 +6925,6 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		);
 		if (spawnPreflight.error) return spawnBudgetErrorResult(spawnPreflight.error, foregroundMode);
 
-		let forkSessionFileForIndex: (idx?: number) => string | undefined = () => undefined;
-		let prepareForkSessionForIndex: (idx?: number) => Promise<void> = async () => {};
 		const selectedAgentNames = hasSingle
 			? [effectiveParams.agent!]
 			: hasTasks
@@ -7031,11 +7028,9 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		}
 		const sessionDirForIndex = (idx?: number) =>
 			path.join(sessionRoot, `run-${idx ?? 0}`);
-		const forkSessionFileForTask: ForkSessionFileForTask = () => undefined;
-		const prepareForkSessionForTask: PrepareForkSessionForTask = async () => {};
 		const thinkingOverrideForTask: ThinkingOverrideForTask = () => undefined;
-		const childSessionFileForTask: ForkSessionFileForTask = (agentName, idx, modelOverride, modelOverrideFromParent, modelOrigin) =>
-			forkSessionFileForTask(agentName, idx, modelOverride, modelOverrideFromParent, modelOrigin) ?? path.join(sessionDirForIndex(idx), "session.jsonl");
+		const childSessionFileForTask: ForkSessionFileForTask = (_agentName, idx) =>
+			path.join(sessionDirForIndex(idx), "session.jsonl");
 		const childSessionFileForIndex = (idx?: number) =>
 			path.join(sessionDirForIndex(idx), "session.jsonl");
 		const chainBindingsError = validateExecutionChainBindings(effectiveParams, deps.config.chain?.dynamicFanout?.maxItems);

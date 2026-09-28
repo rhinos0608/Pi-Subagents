@@ -2585,13 +2585,6 @@ export interface MainWindowRendererConfig {
 	compactResultMaxLines?: number;
 }
 
-export interface ForkContextConfig {
-	/** Keep the complete fork by default, or summarize large text-only tool results before launch. */
-	mode?: "full" | "pruned";
-	/** Required pruning model when mode is "pruned". */
-	model?: string;
-}
-
 export interface ActiveAsyncCapacityConfig {
 	/** Reclaim failed runner slots after this age when process proof is unknown; false keeps strict retention. */
 	abandonedSlotReleaseAfterMs?: number | false;

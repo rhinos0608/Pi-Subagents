@@ -2,6 +2,7 @@ export type ContextMode = "fresh" | "fork";
 export type ContextSummary = ContextMode | "mixed";
 
 export function isContextMode(value: unknown): value is ContextMode {
+	// Accept "fork" for old persisted data only; launches are always fresh and nothing renders fork.
 	return value === "fresh" || value === "fork";
 }
 

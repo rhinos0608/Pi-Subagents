@@ -11,7 +11,6 @@ interface PromptWorkflow {
 	body: string;
 	filePath: string;
 	agent: string;
-	context?: "fresh" | "fork";
 	model?: string;
 	cwd?: string;
 	chain?: string;
@@ -66,13 +65,6 @@ function stringField(frontmatter: Record<string, string>, key: string): string |
 	return value ? value : undefined;
 }
 
-function booleanField(frontmatter: Record<string, string>, key: string): boolean | undefined {
-	const value = frontmatter[key]?.trim().toLowerCase();
-	if (value === "true" || value === "yes" || value === "1") return true;
-	if (value === "false" || value === "no" || value === "0") return false;
-	return undefined;
-}
-
 function parseAgent(frontmatter: Record<string, string>): string {
 	const subagent = stringField(frontmatter, "subagent");
 	if (!subagent || subagent === "true") return "delegate";
@@ -93,8 +85,6 @@ function loadPromptWorkflow(filePath: string): PromptWorkflow | undefined {
 		body,
 		filePath,
 		agent: parseAgent(frontmatter),
-		...(booleanField(frontmatter, "inheritContext") === true || booleanField(frontmatter, "fork") === true ? { context: "fork" as const } : {}),
-		...(booleanField(frontmatter, "fresh") === true ? { context: "fresh" as const } : {}),
 		...(model ? { model } : {}),
 		...(cwd ? { cwd } : {}),
 		...(chain ? { chain } : {}),
