@@ -41,6 +41,8 @@ First npm release of the fork: `v0.71.0-fork.1` (published as `@rhinos0608/pi-su
 - `mcp:` direct-tool selections now resolve from pi-mcp-adapter 3.0's `mcp-adapter.json` files (the Pi-global one and a project's `.pi/mcp-adapter.json`), so a migrated setup no longer fails child launch with `Unresolved MCP direct-tool selectors`. Pi's own `mcp.json` files are no longer read, matching the adapter: they belong to Pi's built-in MCP support. Thanks to [@qsgy-edge](https://github.com/qsgy-edge) for [#2511](https://github.com/nicobailon/pi-subagents/pull/2511).
 - MCP `mcp:` direct-tool selectors no longer fail closed after upgrading pi-mcp-adapter to 3.1.0, whose config hash adds a stdio server's `inheritEnv` and `literalEnv` settings to the identity. Child resolution now computes the same hash, so cached tool metadata stays valid and configured direct tools resolve again. Thanks to [@qsgy-edge](https://github.com/qsgy-edge) for [#2539](https://github.com/nicobailon/pi-subagents/pull/2539).
 - `inheritSkills: false` now also removes skills that extensions add to an in-process child session (for example from `subagents.defaultExtensions`), so they no longer show up in the child's prompt next to the agent's own skills. Thanks to [@zeezooz](https://github.com/zeezooz) for [#2540](https://github.com/nicobailon/pi-subagents/issues/2540).
+- Answering a background subagent's supervisor request no longer wakes the parent again with a stale needs-attention notice and intercom copy. The attention notice now waits 60 seconds and is sent only if the request is still unanswered and the run is still active. Status displays and waits still react to the request immediately.
+
 
 ## [0.71.0] - 2026-09-23
 
