@@ -4880,11 +4880,11 @@ function createScheduledOwnerState(source: SubagentState, ownerSessionId: string
 }
 
 /**
- * Scheduled replays ride the internal owner dispatch (e5c053c4) so
- * scheduler-owned fields (args, scheduleOrigin) survive the public gate.
- * That dispatch must not inherit internal host authority: raw scheduled
- * scripts stay host-denied unless a workflow resource grants it.
- * Module-level so the mark survives the hop to the per-owner executor.
+ * Scheduler-owned launches ride the internal owner dispatch so scheduler fields
+ * such as args and scheduleOrigin survive the model-facing schema gate. That
+ * path does not inherit host authority: raw scheduled scripts remain host-denied
+ * unless a workflow resource grants it. Module-level state preserves the mark
+ * across the hop to the per-owner executor.
  */
 const scheduledExecutions = new WeakSet<object>();
 
