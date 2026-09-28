@@ -1782,12 +1782,10 @@ Answer only from the supplied synthetic text.
 		assert.equal(started.isError, undefined);
 		assert.ok(started.details.asyncId);
 		const workflowResultPath = path.join(DIRS.results, `${started.details.asyncId}.json`);
-		let workflowResult: { state?: string; results?: Array<{ output?: string; runId?: string }> } = {};
-		for (let attempt = 0; attempt < 100; attempt++) {
-			if (fs.existsSync(workflowResultPath)) workflowResult = JSON.parse(fs.readFileSync(workflowResultPath, "utf-8"));
-			if (workflowResult.state === "complete" || workflowResult.state === "failed") break;
-			await new Promise((resolve) => setTimeout(resolve, 20));
-		}
+		const workflowResult = JSON.parse(await waitForFileContent(workflowResultPath, '\n  "state": "complete"')) as {
+			state?: string;
+			results?: Array<{ agent?: string; success?: boolean; outputState?: string; output?: string; runId?: string }>;
+		};
 		assert.equal(workflowResult.state, "complete");
 		// Workflow result publications carry the settled child summary (no
 		// per-child `state`; liveness lives in status.json). The defaultModel
