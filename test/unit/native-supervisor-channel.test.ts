@@ -97,6 +97,33 @@ afterEach(() => {
 });
 
 describe("native supervisor channel", () => {
+	it("does not require POSIX directory mode enforcement on Windows", () => {
+		const runId = randomUUID();
+		const channelDir = resolveSupervisorChannelDir(runId, "worker", 0);
+		const channelRoot = path.dirname(channelDir);
+		createdChannels.push(channelDir);
+		fs.mkdirSync(channelRoot, { recursive: true, mode: 0o755 });
+		fs.chmodSync(channelRoot, 0o755);
+		const originalPlatform = process.platform;
+		const chmodSync = fsDefault.chmodSync;
+		fsDefault.chmodSync = ((target: fs.PathLike, mode: fs.Mode) => {
+			if (path.resolve(String(target)).startsWith(path.resolve(channelRoot))) return;
+			return chmodSync(target, mode);
+		}) as typeof fsDefault.chmodSync;
+		syncBuiltinESMExports();
+		Object.defineProperty(process, "platform", { value: "win32" });
+		try {
+			ensureSupervisorChannelDir(channelDir);
+			assert.equal(fs.existsSync(path.join(channelDir, "requests")), true);
+			assert.equal(fs.existsSync(path.join(channelDir, "replies")), true);
+		} finally {
+			Object.defineProperty(process, "platform", { value: originalPlatform });
+			fsDefault.chmodSync = chmodSync;
+			syncBuiltinESMExports();
+			fs.chmodSync(channelRoot, 0o700);
+		}
+	});
+
 	for (const platform of ["darwin", "win32", "linux"] as const) {
 		it(`bounds coordinator polling to owned channels and stops when idle (${platform})`, async () => {
 			const owner = randomUUID();

@@ -391,13 +391,11 @@ describe("runtime agent registration", () => {
 		}
 	});
 
-	it("reports provider-scoped model settings for runtime agents", () => {
+	it("reports model settings for runtime agents", () => {
 		writeJson(path.join(tempHome, ".pi", "agent", "settings.json"), {
 			subagents: {
-				agentOverridesByProvider: {
-					anthropic: {
-						"runtime-provider-helper": { model: "anthropic/claude-sonnet-4", thinking: "high" },
-					},
+				agentOverrides: {
+					"runtime-provider-helper": { model: "anthropic/claude-sonnet-4", thinking: "high" },
 				},
 			},
 		});
