@@ -1516,7 +1516,8 @@ export async function runSingleStepInner(
 			error,
 			messages: run.messages,
 			toolCount: run.toolCount,
-			taskExecutionStarted: run.observedMutationAttempt === true
+			taskExecutionStarted: run.compactionObserved === true
+				|| run.observedMutationAttempt === true
 				|| mutationEvidence.attemptedMutation === true
 				|| mutationEvidence.changedFiles.length > 0
 				|| Boolean(structuredError || missingRequiredOutputError || toolAvailabilityError || midToolExitError || hiddenError?.hasError),
