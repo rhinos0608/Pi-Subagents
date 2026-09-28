@@ -368,10 +368,7 @@ describe("subagent extension child mode", () => {
 				registerSubagentExtension(fakePi);
 				if (!registeredTool) throw new Error("tool not registered");
 				const theme = { fg(_name, text) { return text; }, bold(text) { return text; } };
-				const call = registeredTool.renderCall({ agent: "worker" }, theme).render(120).map((line) => line.trimEnd());
-				// Phase 6 trimmed renderCall to the 7-field public vocabulary: the
-				// [async] suffix is gone, but horizontalSpacing: 0 still joins title and agent.
-				if (call.length !== 1 || call[0] !== "subagentworker") throw new Error("unexpected call row: " + JSON.stringify(call));
+				if (registeredTool.renderCall({ agent: "worker" }, theme).render(120).map((line) => line.trimEnd()).join("\n") !== "subagentworker") throw new Error("configured zero horizontal spacing did not join the call row");
 			`;
 			const env = parentToolEnv();
 			env.PI_CODING_AGENT_DIR = agentDir;
