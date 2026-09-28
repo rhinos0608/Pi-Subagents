@@ -4855,6 +4855,12 @@ function createScheduledOwnerState(source: SubagentState, ownerSessionId: string
 	};
 }
 
+/**
+ * Scheduler-owned launches bypass the model schema but not the public authority boundary:
+ * raw scheduled scripts remain host-denied unless a workflow resource grants that authority.
+ */
+const scheduledExecutions = new WeakSet<object>();
+
 export function createSubagentExecutor(deps: ExecutorDeps): {
 	execute: (
 		id: string,
@@ -4915,6 +4921,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		const allowZeroToolBudget = delegatedZeroToolBudgets.has(params);
 		const delegatedExecution = delegatedExecutions.has(params);
 		const publicExecution = publicExecutions.has(params);
+		const scheduledExecution = scheduledExecutions.has(params);
 		const workflowResourcePermit = workflowResourcePermits.get(params);
 		const workflowPermitContext = workflowPermitContexts.get(params);
 		const delegatedWorkflowPermit = workflowPermitContext && "root" in workflowPermitContext ? workflowPermitContext.root : undefined;
@@ -5548,7 +5555,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 					});
 					const workflowHost = workflowResource
 						? workflowResource.authority.host ? runHostCommand : undefined
-						: publicExecution ? undefined : runHostCommand;
+						: (publicExecution || scheduledExecution) ? undefined : runHostCommand;
 					let projectedTraceLength = 0;
 					let projectedTraceTail: NonNullable<Details["workflow"]>["trace"][number] | undefined;
 					const updateTrace = (trace: NonNullable<Details["workflow"]>["trace"]) => {
@@ -5934,7 +5941,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 				? undefined
 				: workflowResource
 					? workflowResource.authority.host ? runHostCommand : undefined
-					: publicExecution ? undefined : runHostCommand;
+					: (publicExecution || scheduledExecution) ? undefined : runHostCommand;
 			const workflowHostSteps = new Map<string, HostStepNode>();
 			let liveWorkflow: NonNullable<Details["workflow"]> = { trace: [], emits: [], console: [], ...(workflowResource ? { resource: workflowResource.provenance } : {}) };
 			const childProgress = new Map<string, ReturnType<typeof workflowChildProgress>>();
@@ -7422,7 +7429,8 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			owner = { state, executor: createSubagentExecutor({ ...deps, state }) };
 			ownerExecutors.set(ownerSessionId, owner);
 		}
-		return owner.executor.executePublic(id, params, signal, undefined, ctx);
+		scheduledExecutions.add(params);
+		return owner.executor.execute(id, params, signal, undefined, ctx);
 	};
 
 	function* getCurrentSupervisorOwnerStates(): Iterable<SubagentState> {
