@@ -800,9 +800,9 @@ Answer only from the supplied synthetic text.
 		assert.equal(mockPi.callCount(), 3, "wrong-then-right must not spawn");
 	});
 
-	it("resolves workflow child profile context from its agent default", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+	it("resolves workflow child profile context as always fresh", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
 		mockPi.onCall({ output: "Workflow child completed" });
-		const result = await makeExecutor([makeAgent("echo", { defaultContext: "fresh" })], { defaultSubagentContext: "fork" }).execute(
+		const result = await makeExecutor([makeAgent("echo")]).execute(
 			"workflow-profile-context",
 			{ async: false, workflowScript: `return runs.run("main", { agent: "echo", task: "Use profile context" });` },
 			new AbortController().signal,
@@ -812,7 +812,7 @@ Answer only from the supplied synthetic text.
 
 		assert.equal(result.isError, undefined, result.content[0]?.text ?? "workflow failed");
 		// Per-result context was removed with the per-call vocabulary; workflow
-		// children resolve profile intent from the agent defaultContext, reported
+		// children always launch fresh, reported
 		// on the child result as resolvedContext.
 		const profileValue = result.details.workflow?.value as { resolvedContext?: string } | undefined;
 		assert.equal(profileValue?.resolvedContext, "fresh");
@@ -2796,7 +2796,7 @@ Answer only from the supplied synthetic text.
 
 	});
 
-	it("aligns a forked workflow child session with its managed worktree cwd", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+	it("runs a worktree workflow child fresh with its managed worktree cwd", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
 		execFileSync("git", ["init"], { cwd: tempDir, stdio: "ignore" });
 		execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: tempDir });
 		execFileSync("git", ["config", "user.name", "Test User"], { cwd: tempDir });
@@ -2818,8 +2818,8 @@ Answer only from the supplied synthetic text.
 				},
 			}),
 		});
-		mockPi.onCall({ output: "isolated fork child" });
-		const executor = makeExecutor([makeAgent("worker", { defaultContext: "fork" })]);
+		mockPi.onCall({ output: "isolated fresh child" });
+		const executor = makeExecutor([makeAgent("worker")]);
 
 		const result = await executor.execute(
 			"forked-worktree-workflow",
@@ -2842,9 +2842,8 @@ Answer only from the supplied synthetic text.
 		assert.ok(callCwd);
 		assert.notEqual(path.resolve(callCwd), path.resolve(tempDir));
 		assert.equal(path.basename(callCwd), path.basename(managedWorktreeCwd));
-		const sessionHeader = JSON.parse(fs.readFileSync(childSessionFile, "utf-8").split("\n", 1)[0]!) as { cwd?: string };
-		assert.ok(sessionHeader.cwd);
-		assert.equal(path.basename(sessionHeader.cwd), path.basename(callCwd));
+		// Launches are always fresh: no branched session is created for the child.
+		assert.equal(fs.existsSync(childSessionFile), false);
 	});
 
 	it("stringifies workflow child results without object placeholders", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {

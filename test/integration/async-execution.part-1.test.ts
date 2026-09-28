@@ -671,7 +671,7 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		});
 		const id = `async-launch-digest-${Date.now().toString(36)}`;
 		const privateExtension = path.join(tempDir, "extensions", "private-extension.ts");
-		const recoveryAgentConfig = makeAgent("worker", { extensions: [privateExtension], tools: ["read"], systemPrompt: "Base prompt", defaultContext: "fork" });
+		const recoveryAgentConfig = makeAgent("worker", { extensions: [privateExtension], tools: ["read"], systemPrompt: "Base prompt" });
 		const launch = executeAsyncSingle(id, {
 			agent: "worker",
 			task: "Exercise launch digest reporting",
@@ -688,7 +688,7 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		assert.match(launch.details.launchContractDigest ?? "", /^[a-f0-9]{64}$/);
 		const recovery = JSON.parse(fs.readFileSync(path.join(ASYNC_DIR, id, "recovery-descriptor.json"), "utf-8")) as { runFanoutBudget?: { rootRunId?: string; limit?: number }; context?: string; intercomBridge?: { mode?: string }; tools?: string[]; systemPrompt?: string };
 		assert.deepEqual(recovery.runFanoutBudget && { rootRunId: recovery.runFanoutBudget.rootRunId, limit: recovery.runFanoutBudget.limit }, { rootRunId: id, limit: 64 });
-		// Per-call context was removed; the agent-definition defaultContext above is
+		// Launches are always fresh; the agent definition above is
 		// what the launch contract digest binds (asserted below via digest equality).
 		// The recovery descriptor no longer persists a separate context field.
 		assert.deepEqual(recovery.intercomBridge, { mode: "off" });

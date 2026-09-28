@@ -239,11 +239,11 @@ describe("subagent launch context wiring (always-fresh)", { skip: !available ? "
 		assert.match(args[systemIndex + 1] ?? "", /## Acceptance Contract/);
 	});
 
-	it("falls back to fresh when an implicit default fork has no persisted parent session", async () => {
+	it("launches fresh when no persisted parent session exists", async () => {
 		const { manager } = makeSessionManagerRecorder({ sessionFile: undefined, leafId: "leaf-current" });
 		const executor = makeExecutorWithDiscoverAgents(() => ({
 			agents: [
-				{ name: "worker", description: "Worker", defaultContext: "fork" },
+				{ name: "worker", description: "Worker" },
 			],
 			projectAgentsDir: null,
 		}));
@@ -261,15 +261,15 @@ describe("subagent launch context wiring (always-fresh)", { skip: !available ? "
 		assert.doesNotMatch(readCallArgs().at(-1) ?? "", /delegated subagent running from a fork/);
 	});
 
-	it("uses global defaultSubagentContext fresh for a fork-default agent", async () => {
+	it("launches fresh without forking the parent session", async () => {
 		const parentSessionFile = path.join(tempDir, "parent.jsonl");
 		const { manager, openedPaths } = makeForkingSessionManagerRecorder({ sessionFile: parentSessionFile, leafId: "leaf-current" });
 		const executor = makeExecutorWithDiscoverAgents(() => ({
 			agents: [
-				{ name: "worker", description: "Worker", defaultContext: "fork" },
+				{ name: "worker", description: "Worker" },
 			],
 			projectAgentsDir: null,
-		}), { defaultSubagentContext: "fresh" });
+		}), {});
 
 		const result = await executor.execute(
 			"id",
@@ -284,10 +284,10 @@ describe("subagent launch context wiring (always-fresh)", { skip: !available ? "
 		assert.deepEqual(openedPaths, []);
 	});
 
-	it("reports unknown top-level parallel agents before default-fork preconditions", async () => {
+	it("reports unknown top-level parallel agents without forking", async () => {
 		const { manager } = makeSessionManagerRecorder({ sessionFile: undefined, leafId: "leaf-current" });
 		const executor = makeExecutorWithDiscoverAgents(() => ({
-			agents: [{ name: "worker", description: "Worker", defaultContext: "fork" }],
+			agents: [{ name: "worker", description: "Worker" }],
 			projectAgentsDir: null,
 		}));
 
@@ -304,12 +304,12 @@ describe("subagent launch context wiring (always-fresh)", { skip: !available ? "
 		assert.doesNotMatch(result.content[0]?.text ?? "", /persisted parent session/);
 	});
 
-	it("falls back to fresh when an implicit default fork has a session path that is not persisted yet", async () => {
+	it("launches fresh when the session path is not persisted yet", async () => {
 		const parentSessionFile = path.join(tempDir, "unpersisted-parent.jsonl");
 		const { manager } = makeSessionManagerRecorder({ sessionFile: parentSessionFile, leafId: "leaf-current" });
 		const executor = makeExecutorWithDiscoverAgents(() => ({
 			agents: [
-				{ name: "worker", description: "Worker", defaultContext: "fork" },
+				{ name: "worker", description: "Worker" },
 			],
 			projectAgentsDir: null,
 		}));
@@ -327,13 +327,13 @@ describe("subagent launch context wiring (always-fresh)", { skip: !available ? "
 		assert.doesNotMatch(readCallArgs().at(-1) ?? "", /delegated subagent running from a fork/);
 	});
 
-	it("falls back to fresh when an implicit default fork has no current leaf", async () => {
+	it("launches fresh when there is no current leaf", async () => {
 		const parentSessionFile = path.join(tempDir, "parent-no-leaf.jsonl");
 		fs.writeFileSync(parentSessionFile, '{"type":"session","version":1,"id":"parent","timestamp":"2026-04-16T00:00:00.000Z","cwd":"/tmp"}\n', "utf-8");
 		const { manager } = makeSessionManagerRecorder({ sessionFile: parentSessionFile, leafId: null });
 		const executor = makeExecutorWithDiscoverAgents(() => ({
 			agents: [
-				{ name: "worker", description: "Worker", defaultContext: "fork" },
+				{ name: "worker", description: "Worker" },
 			],
 			projectAgentsDir: null,
 		}));

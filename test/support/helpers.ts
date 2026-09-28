@@ -49,7 +49,6 @@ interface AgentConfig {
 	name: string;
 	aliases?: string[];
 	description?: string;
-	defaultContext?: "fresh" | "fork";
 	systemPrompt?: string;
 	model?: string;
 	tools?: string[];
