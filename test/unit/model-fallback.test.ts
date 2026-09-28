@@ -1076,6 +1076,25 @@ describe("isContextOverflow", () => {
 	});
 });
 
+describe("retryable model failure execution boundary", () => {
+	it("rejects retry when tool-result evidence exists even if the tool counter missed it", () => {
+		assert.equal(isRetryableModelFailureAttempt({
+			error: "Subagent produced no output (possible model cold-start or empty response).",
+			toolCount: 0,
+			messages: [{ role: "toolResult", toolName: "grep", isError: true, content: [{ type: "text", text: "Path not found" }] }],
+		}), false);
+	});
+
+	it("rejects retry when the caller observed task-execution evidence", () => {
+		assert.equal(isRetryableModelFailureAttempt({
+			error: "Subagent produced no output (possible model cold-start or empty response).",
+			toolCount: 0,
+			messages: [],
+			taskExecutionStarted: true,
+		}), false);
+	});
+});
+
 describe("stateless bounded model retry", () => {
 	it("retries the same candidate twice with bounded backoff, then advances", () => {
 		assert.equal(MODEL_MAX_ATTEMPTS_PER_CANDIDATE, 3);

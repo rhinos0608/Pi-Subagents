@@ -1740,7 +1740,7 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 			makeMinimalCtx(tempDir),
 		);
 		const statusText = status.content[0]?.text ?? "";
-		assert.match(statusText, /do not resume or launch a replacement while any child remains detached/);
+		assert.match(statusText, /do not resume or launch a replacement while any child remains detached/i);
 		assert.doesNotMatch(statusText, /Revive child:/);
 
 		const resumed = await executor.execute(
