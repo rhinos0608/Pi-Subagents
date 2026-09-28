@@ -484,7 +484,7 @@ extensions:
 systemPromptMode: replace
 inheritProjectContext: false
 inheritSkills: false
-defaultContext: fresh
+# defaultContext removed (always-fresh cutover): declaring it hard-errors on load.
 ---
 
 Answer only from the supplied synthetic text and return the requested structured result.
@@ -583,7 +583,7 @@ extensions:
 systemPromptMode: replace
 inheritProjectContext: false
 inheritSkills: false
-defaultContext: fresh
+# defaultContext removed (always-fresh cutover): declaring it hard-errors on load.
 ---
 
 Answer only from the supplied synthetic text.
