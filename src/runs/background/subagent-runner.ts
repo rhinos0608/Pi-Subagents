@@ -12,6 +12,7 @@ import { createCapacityResilientJsonWriter } from "../../shared/capacity-resilie
 import { isStorageCapacityError } from "../../shared/file-system-retry.ts";
 import { updateActiveRunIndex } from "./active-run-index.ts";
 import { createChildTranscriptWriter, type ChildTranscriptWriter } from "../../shared/child-transcript.ts";
+// FORK(FD-019): drain import keeps late control from stranding once the watcher is dead.
 import { closeSteerInbox, closeStopInbox, consumeInterruptRequest, consumeSteerRequests, consumeStopRequestPayloads, deliverInterruptRequest, deliverStopRequest, deliverTimeoutRequest, drainTerminalControlInbox, watchAsyncControlInbox, type SteerRequest, type StopRequest } from "./control-channel.ts";
 import { appendJsonl as appendRawJsonl, formatOutputArtifactContent, getArtifactPaths, writeArtifact, writeMetadata } from "../../shared/artifacts.ts";
 import { PI_CODING_AGENT_PACKAGE, resolveInstalledPiPackageRoot } from "../shared/pi-spawn.ts";
@@ -4932,6 +4933,7 @@ export async function runSubagent(
 		timedOut = true;
 	}
 	disposeControlInbox();
+	// FORK(FD-019): watcher dead, so pending control must route while status still reads nonterminal.
 	// Pre-terminal drain: the live watcher is dead, so route every pending control
 	// kind through the handlers while the status is still nonterminal.
 	const preTerminalDrain = drainTerminalControlInbox(asyncDir);
@@ -5118,6 +5120,7 @@ export async function runSubagent(
 	} finally {
 		finalResultPublication = undefined;
 	}
+	// FORK(FD-019): late requests must reopen the terminal outcome before the result file persists.
 	// Final synchronized drain: control requests landing between the pre-terminal
 	// drain and terminal persistence must not strand while status still reads
 	// running. Consume everything; a late whole-run stop or timeout reopens the
@@ -5266,6 +5269,7 @@ export async function runSubagent(
 		}
 	}
 	writeStatusPayload();
+	// FORK(FD-019): one bounded pass narrows the persist gap; stragglers reconcile against persisted status.
 	// Bounded re-drain (one extra pass only): closes the late window between the
 	// terminal drain above and status persistence — a stop/timeout landing in
 	// that gap would otherwise strand while status reads terminal. Residual
