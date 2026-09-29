@@ -86,6 +86,7 @@ function writeAsyncRun(root: string, input: {
 const theme = {
 	fg: (_name: string, text: string) => text,
 	bold: (text: string) => text,
+	getThinkingBorderColor: (_level: string) => (text: string) => text,
 };
 
 const markdownTheme: MarkdownTheme = {

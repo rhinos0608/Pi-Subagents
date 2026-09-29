@@ -17,6 +17,7 @@ First npm release of the fork: `v0.71.0-fork.1` (published as `@rhinos0608/pi-su
 - The `subagent` tool description is now a single always-on default (~2.2 KB) instead of compact/full modes. `toolDescriptionMode` accepts `"default"` or `"custom"` (operator override via `subagent-tool-description.md` with `{{defaultDescription}}`); legacy `"full"`/`"compact"` values and `{{full}}`/`{{compact}}` placeholders keep working by rendering the default with a deprecation warning.
 - Pi starts faster with pi-subagents enabled: the foreground executor and Fleet view now load on first use instead of at startup. Tools, commands, and prompts are registered exactly as before. Thanks to [@h4yfans](https://github.com/h4yfans) for the measurements in [#2480](https://github.com/nicobailon/pi-subagents/issues/2480).
 - Failed workflows now expose a structured `failureKind` in foreground details and async status, distinguishing validation, script, child, return-serialization, timeout, detached-child, and runtime failures without requiring callers to parse error text.
+- A running subagent's spinner now takes Pi's prompt-box thinking color. A glyph for one child uses that child's configured thinking level, or the main session's current level when none is set; a glyph for several children (widget headers, parallel and chain cards, workflow phases) uses the main session's level. `thinking` labels still show the configured level. Thanks to [@pwguler](https://github.com/pwguler) for [#2512](https://github.com/nicobailon/pi-subagents/pull/2512).
 
 ### Fork-preserved
 
