@@ -80,7 +80,7 @@ Code-sites lines below are candidates from seam reports; refresh when marking.
 - Rationale: VISION "Compatibility is explicit" (hard cutover, no shims); FORK.md triage SKIP class.
 - Upstream: `tool-activation.ts`, `bg_wait` tool, `async` toggle.
 - Reversal: owner approval; rejected by default.
-- Pinning: smoke tests removed (absence pinned by registration tests); **MISSING** dedicated always-on boundary test.
+- Pinning: `test/unit/fork-always-on.test.ts` (registers subagent with no activation step; no subagents_enable/bg_wait).
 - Code sites: candidate; refresh when marking (`src/extension/index.ts`).
 
 ## FD-008 — Default description

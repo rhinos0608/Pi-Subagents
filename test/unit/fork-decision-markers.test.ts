@@ -10,7 +10,6 @@ const REGISTRY = path.join(ROOT, "docs/fork-decisions.md");
 // Entries with no pinning test yet. Removing an ID from this list requires
 // adding the test first; adding one requires owner sign-off in the registry.
 const MISSING_TEST_ALLOWLIST: Record<string, string> = {
-	"FD-007": "no dedicated always-on/no-bg_wait boundary test yet",
 };
 
 function registryIds(): string[] {
