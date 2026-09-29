@@ -1,0 +1,4 @@
+# CHANGELOG entries always append under Unreleased on both fork and upstream,
+# so union merge auto-resolves the most common sync conflict instead of
+# forcing a manual conflict on every cherry-pick.
+CHANGELOG.md merge=union
