@@ -30,7 +30,7 @@ and exposes 6 to the model.
 |---|---|---|---|---|---|
 | Top-level tool fields | 82 (`SubagentParamProperties`, `upstream/main:src/extension/schemas.ts:280`) | 9: `agent task action id message topic workflowScript args cwd` (`src/extension/schemas.ts:238`) | `src/extension/schemas.ts`, `src/extension/public-execution.ts`, `src/runs/foreground/subagent-executor.ts` | `test/unit/public-boundary-contract.test.ts` | Small model surface; policy in config/agents |
 | Model-callable actions | 57 (`SUBAGENT_ACTIONS`, `upstream/main:src/shared/types.ts`) | 6 (`MODEL_VISIBLE_SUBAGENT_ACTIONS`: steer/resume/interrupt/status/guide/validate, `src/shared/types.ts:2805`) | `src/shared/types.ts`, `src/runs/foreground/subagent-executor.ts` (executePublic gate) | `test/unit/public-boundary-contract.test.ts` | Management lives in Fleet/slash/RPC |
-| Workflow child fields | loose (upstream rejects only orchestration keys) | strict 10-field allowlist (`WORKFLOW_CHILD_ALLOWED_FIELDS`, `src/workflows/scripted-workflow.ts:1919`: 9 prior + `worktree`) | `src/workflows/scripted-workflow.ts` | `test/unit/public-boundary-contract.test.ts:259` | No per-child execution knobs |
+| Workflow child fields | loose (upstream rejects only orchestration keys) | strict 11-field allowlist (`WORKFLOW_CHILD_ALLOWED_FIELDS`, `src/workflows/scripted-workflow.ts`: 10 prior + `outputSchema` per FD-010 reversal 2026-09-29) | `src/workflows/scripted-workflow.ts` | `test/unit/public-boundary-contract.test.ts:259` | No per-child execution knobs |
 | `subagents_enable` activation | `src/extension/tool-activation.ts`, `bg_wait` tool | removed; tool always registered (`src/extension/index.ts`) | `src/extension/index.ts` | smoke tests removed | Always-on tool |
 | Provider-override layer | per-call model/provider overrides | removed; flat `agentOverrides`, operator-owned models | `src/agents/agents.ts` | policy guidance tests | Operator owns model policy |
 | Fork context | `context: fresh\|fork\|profile` | removed; always fresh context | `src/extension/tool-description.ts` | `test/unit/tool-description.test.ts` | Stateless; parent passes context in `task` |
@@ -176,3 +176,9 @@ watcher determinism, 10-field allowlist expectation); retained-path timeout inte
 2-action registry cut (lane.recordMerge/recordSupersession; 6 pinned actions kept per boundary
 contract); executor boundary consolidation (resolvePublicSubagentRequest); runner/executor markers.
 Post-tax gate: unit 3796/3809 pass, 0 fail; integration 1066/1074, 0 fail.
+
+FD-010 reversal (2026-09-29, owner approval): per-child `outputSchema` restored as the 11th
+workflow-child field (`runs.run`/`runs.all`/lanes only; object-root schema or `false`; ≤4 KiB;
+validated at worker/static/runtime seams; threaded into the existing structured-output machinery).
+Top-level model tool stays 9 fields. Registry FD-010 flipped DEFERRED→KEEP; pinning in
+`test/unit/workflow-child-output-schema.test.ts` plus the boundary lock.

@@ -14,8 +14,9 @@ the model sees 9 fields and 6 actions; Fleet, slash commands, and RPC keep the r
 1. Small model-facing tool: 9 top-level fields (`agent`, `task`, `action`, `id`, `message`,
    `topic`, `workflowScript`, `args`, `cwd`; `src/extension/schemas.ts`), 6 model-callable actions
    (`steer`, `resume`, `interrupt`, `status`, `guide`, `validate`;
-   `MODEL_VISIBLE_SUBAGENT_ACTIONS` in `src/shared/types.ts`), strict 10-field workflow child
-   allowlist (`agent`, `task`, `cwd`, `resume`, `as`, `phase`, `label`, `lane`, `index`, `worktree`;
+   `MODEL_VISIBLE_SUBAGENT_ACTIONS` in `src/shared/types.ts`), strict 11-field workflow child
+   allowlist (`agent`, `task`, `cwd`, `resume`, `as`, `phase`, `label`, `lane`, `index`, `worktree`,
+   `outputSchema`;
    `WORKFLOW_CHILD_ALLOWED_FIELDS` in `src/workflows/scripted-workflow.ts:1919`).
    `args` is workflowScript-only (frozen plain-JSON global, persisted as evidence — never
    secrets); `worktree` is a boolean (per-child isolation, clean tree required).

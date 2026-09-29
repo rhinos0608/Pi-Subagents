@@ -104,15 +104,18 @@ Code-sites lines below are candidates from seam reports; refresh when marking.
 - Pinning: `test/unit/runtime-rpc.test.ts`, `test/unit/runtime-rpc-contract.test.ts`.
 - Code sites: candidate; refresh when marking (`src/extension/rpc.ts`, `src/api/runtime-rpc.ts`).
 
-## FD-010 — outputSchema DEFERRED
+## FD-010 — outputSchema KEEP (per-child override)
 
-- Status: DEFERRED (open surface decision). Date: 2026-09-29.
-- Decision: per-child `outputSchema`/structured output stays out; agent frontmatter default only.
-- Rationale: dynamic typed joins lost; restore on `runs.run` is candidate, not yet approved (fork-delta owner decision 3).
+- Status: KEEP (reversed DEFERRED 2026-09-29, owner approval). Date: 2026-09-29.
+- Decision: per-child `outputSchema` on `runs.run`/`runs.all`/lane children only (11th workflow-child
+  field); object-root JSON Schema (`{type:'object', ...}`, ≤4 KiB serialized) or `false` to disable
+  the agent-frontmatter default. Top-level model tool stays 9 fields (no top-level `outputSchema`).
+- Rationale: dynamic typed joins need per-child overrides; child overrides agent default,
+  `false` disables it; validation reuses the existing structured-output machinery.
 - Upstream: per-call schema+gate fields; agent inline `outputSchema` default.
-- Reversal: owner approval defines the restore shape.
-- Pinning: `test/unit/public-boundary-contract.test.ts` (rejection pinned).
-- Code sites: candidate; refresh when marking (workflow child validation).
+- Reversal: fulfilled (this entry); further widening needs owner approval + boundary test update.
+- Pinning: `test/unit/workflow-child-output-schema.test.ts`, `test/unit/public-boundary-contract.test.ts`.
+- Code sites: `src/workflows/scripted-workflow.ts` (worker/static/runtime seams, `// FORK(FD-010)`).
 
 ## FD-011 — Scoped package
 

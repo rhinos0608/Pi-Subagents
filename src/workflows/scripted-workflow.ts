@@ -604,19 +604,34 @@ function validateLaneMetadata(value, label, workflowKey) {
   }
 }
 
+const MAX_WORKFLOW_CHILD_OUTPUT_SCHEMA_BYTES = 4 * 1024;
+
+function validateWorkflowChildOutputSchema(value, label) {
+  // FORK(FD-010): per-child outputSchema override; 4 KiB cap mirrors the frozen-args budget style (bounded model surface and evidence).
+  if (value === undefined) return undefined;
+  if (value === false) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value) || value.type !== "object") return label + " outputSchema must be an object-root JSON Schema ({ type: 'object', ... }) or false to disable the agent default.";
+  var encoded;
+  try { encoded = JSON.stringify(value); } catch (error) { return label + " outputSchema must be plain JSON data."; }
+  if (encoded === undefined || new TextEncoder().encode(encoded).length > MAX_WORKFLOW_CHILD_OUTPUT_SCHEMA_BYTES) return label + " outputSchema exceeds " + MAX_WORKFLOW_CHILD_OUTPUT_SCHEMA_BYTES + " bytes.";
+  return undefined;
+}
+
 function validateRunCall(key, params, label, fingerprints) {
   if (typeof key !== "string" || !runKeyPattern.test(key)) throw new Error(label + " has an invalid key.");
   if (hostKeys.has(key)) throw new Error("Workflow key '" + key + "' is already used by runs.host.");
   if (!params || typeof params !== "object" || Array.isArray(params)) throw new Error(label + " requires a params object.");
   if (Object.prototype.hasOwnProperty.call(params, "action") || Object.prototype.hasOwnProperty.call(params, "workflowScript") || Object.prototype.hasOwnProperty.call(params, "globalConcurrencyLimit") || Object.prototype.hasOwnProperty.call(params, "maxSubagentSpawnsPerRun") || Object.prototype.hasOwnProperty.call(params, "tasks") || Object.prototype.hasOwnProperty.call(params, "chain") || Object.prototype.hasOwnProperty.call(params, "parallel") || Object.prototype.hasOwnProperty.call(params, "concurrency") || Object.prototype.hasOwnProperty.call(params, "chainDir")) {
     const hint = label === "runs.run" ? "; use runs.all(...) and JavaScript control flow for orchestration." : ".";
-    throw new Error(label + " accepts one child via { agent, task, cwd, resume } plus naming keys (as, phase, label, lane)" + hint);
+    throw new Error(label + " accepts one child via { agent, task, cwd, resume } plus naming keys (as, phase, label, lane) and outputSchema" + hint);
   }
   if (Object.prototype.hasOwnProperty.call(params, "clarify")) throw new Error(label + " does not support clarify UI.");
-  const allowedRunFields = new Set(["agent", "task", "cwd", "resume", "as", "phase", "label", "lane", "index", "worktree"]);
+  const allowedRunFields = new Set(["agent", "task", "cwd", "resume", "as", "phase", "label", "lane", "index", "worktree", "outputSchema"]);
   const unknownRunFields = Object.keys(params).filter((field) => !allowedRunFields.has(field));
-  if (unknownRunFields.length > 0) throw new Error(label + " has unsupported fields: " + unknownRunFields.join(", ") + ". Supported workflow child fields: agent, task, cwd, resume, as, phase, label, lane, index, worktree.");
+  if (unknownRunFields.length > 0) throw new Error(label + " has unsupported fields: " + unknownRunFields.join(", ") + ". Supported workflow child fields: agent, task, cwd, resume, as, phase, label, lane, index, worktree, outputSchema.");
   if (params.worktree !== undefined && typeof params.worktree !== "boolean") throw new Error(label + " worktree must be a boolean.");
+  const outputSchemaError = validateWorkflowChildOutputSchema(params.outputSchema, label);
+  if (outputSchemaError) throw new Error(outputSchemaError);
   validateLaneMetadata(params.lane, label + " lane", key);
   if (params.resume !== undefined && typeof params.resume !== "string") {
     const reference = params.resume;
@@ -1744,7 +1759,28 @@ function validateStaticRunParams(params: AstNode | undefined, owner: string, ski
 		reported.add(name);
 		errors.push({ message: `${owner} params contain unsupported field '${name}'.`, ...nodeLocation(params) });
 	}
+	// FORK(FD-010): per-child outputSchema override; literal shapes validate statically, dynamic values fall through to runtime.
+	const outputSchemaNode = directObjectPropertyValue(params, "outputSchema");
+	if (outputSchemaNode) {
+		const schemaError = validateStaticOutputSchema(outputSchemaNode, owner);
+		if (schemaError) errors.push({ message: schemaError, ...nodeLocation(outputSchemaNode) });
+	}
 	return errors;
+}
+
+function validateStaticOutputSchema(node: AstNode, owner: string): string | undefined {
+	if (!astNode(node)) return undefined;
+	if (node.type === "Literal") {
+		if (node.value === false) return undefined;
+		return `${owner} params outputSchema must be an object-root JSON Schema ({ type: 'object', ... }) or false to disable the agent default.`;
+	}
+	if (node.type === "ArrayExpression") return `${owner} params outputSchema must be an object-root JSON Schema ({ type: 'object', ... }) or false to disable the agent default.`;
+	if (node.type !== "ObjectExpression" || !Array.isArray(node.properties)) return undefined;
+	const typeNode = directObjectPropertyValue(node, "type");
+	const typeValue = typeNode ? literalString(typeNode) : undefined;
+	if (typeValue === undefined) return undefined;
+	if (typeValue !== "object") return `${owner} params outputSchema must be an object-root JSON Schema ({ type: 'object', ... }) or false to disable the agent default.`;
+	return undefined;
 }
 
 function containsWorkflowLaunch(node: unknown): boolean {
@@ -1989,7 +2025,24 @@ export function validateWorkflowScript(script: string, options: WorkflowScriptVa
 	const unique = errors.filter((error, index) => errors.findIndex((candidate) => candidate.message === error.message && candidate.line === error.line && candidate.column === error.column) === index);
 	return { ok: unique.length === 0, errors: unique, ...(warnings.length > 0 ? { warnings } : {}) };
 }
-const WORKFLOW_CHILD_ALLOWED_FIELDS = new Set(["agent", "task", "cwd", "resume", "as", "phase", "label", "lane", "index", "worktree"]);
+const WORKFLOW_CHILD_ALLOWED_FIELDS = new Set(["agent", "task", "cwd", "resume", "as", "phase", "label", "lane", "index", "worktree", "outputSchema"]);
+
+// FORK(FD-010): per-child outputSchema override; 4 KiB cap mirrors the frozen-args budget style in workflow-resources.ts (bounded model surface and evidence).
+const MAX_WORKFLOW_CHILD_OUTPUT_SCHEMA_BYTES = 4 * 1024;
+
+function validateWorkflowChildOutputSchema(value: unknown, label: string): string | undefined {
+	if (value === undefined) return undefined;
+	if (value === false) return undefined;
+	if (!value || typeof value !== "object" || Array.isArray(value) || (value as Record<string, unknown>).type !== "object") return `${label} outputSchema must be an object-root JSON Schema ({ type: 'object', ... }) or false to disable the agent default.`;
+	let encoded: string | undefined;
+	try {
+		encoded = JSON.stringify(value);
+	} catch {
+		return `${label} outputSchema must be plain JSON data.`;
+	}
+	if (encoded === undefined || Buffer.byteLength(encoded, "utf8") > MAX_WORKFLOW_CHILD_OUTPUT_SCHEMA_BYTES) return `${label} outputSchema exceeds ${MAX_WORKFLOW_CHILD_OUTPUT_SCHEMA_BYTES} bytes.`;
+	return undefined;
+}
 
 function workflowStringMetadata(params: Record<string, unknown>): Pick<WorkflowScriptTraceEntry, "phase" | "label" | "agent"> {
 	return {
@@ -2543,15 +2596,18 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 			if (params.action !== undefined) return respond(Promise.reject(new Error(`runs.run('${key}') accepts execution params only; management action is not allowed.`)));
 			if (params.workflowScript !== undefined) return respond(Promise.reject(new Error(`runs.run('${key}') cannot start a nested workflow script.`)));
 			if (params.tasks !== undefined || params.chain !== undefined || params.parallel !== undefined || params.concurrency !== undefined || params.chainDir !== undefined) {
-				return respond(Promise.reject(new Error(`runs.run('${key}') accepts one child via { agent, task, cwd, resume } plus naming keys (as, phase, label, lane); use runs.all(...) and JavaScript control flow for orchestration.`)));
+				return respond(Promise.reject(new Error(`runs.run('${key}') accepts one child via { agent, task, cwd, resume } plus naming keys (as, phase, label, lane) and outputSchema; use runs.all(...) and JavaScript control flow for orchestration.`)));
 			}
 			const unknownFields = Object.keys(params).filter((field) => !WORKFLOW_CHILD_ALLOWED_FIELDS.has(field));
 			if (unknownFields.length > 0) {
-				return respond(Promise.reject(new Error(`runs.run('${key}') has unsupported fields: ${unknownFields.join(", ")}. Supported workflow child fields: agent, task, cwd, resume, as, phase, label, lane, index, worktree.`)));
+				return respond(Promise.reject(new Error(`runs.run('${key}') has unsupported fields: ${unknownFields.join(", ")}. Supported workflow child fields: agent, task, cwd, resume, as, phase, label, lane, index, worktree, outputSchema.`)));
 			}
 			if (params.worktree !== undefined && typeof params.worktree !== "boolean") {
 				return respond(Promise.reject(new Error(`runs.run('${key}') worktree must be a boolean.`)));
 			}
+			// FORK(FD-010): per-child outputSchema override (object-root schema or false); threaded into launch params for the existing structured-output machinery.
+			const childOutputSchemaError = validateWorkflowChildOutputSchema(params.outputSchema, `runs.run('${key}')`);
+			if (childOutputSchemaError) return respond(Promise.reject(new Error(childOutputSchemaError)));
 			let resumeReference: WorkflowReceiptResumeReference | undefined;
 			try {
 				if (params.resume !== undefined && typeof params.resume !== "string") resumeReference = parseWorkflowResumeReference(params.resume);

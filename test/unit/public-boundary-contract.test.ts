@@ -280,8 +280,8 @@ describe("public boundary: runs.run child params reject unknown keys", () => {
 		}
 	});
 
-	// Phase 6 workflow-child boundary (landed): model-authored runs.run/runs.all
-	// children accept exactly { agent, task, cwd, resume, as, phase, label, lane, index, worktree }.
+	// Phase 6 workflow-child boundary (landed) + FD-010 (landed): model-authored runs.run/runs.all
+	// children accept exactly { agent, task, cwd, resume, as, phase, label, lane, index, worktree, outputSchema }.
 	// Execution tuning (async, output, outputMode, reads, progress) resolves from
 	// agent definitions, workflow defaults, or operator config — never the model.
 	// The static entry point rejects unknown keys offline; these pin the contract.
@@ -334,8 +334,8 @@ describe("public boundary: runs.run child params reject unknown keys", () => {
 	// is rejected by name.
 	it("locks the exact model-authored child allowlist", () => {
 		const source = readFileSync(new URL("../../src/workflows/scripted-workflow.ts", import.meta.url), "utf8");
-		const exactSet = `"agent", "task", "cwd", "resume", "as", "phase", "label", "lane", "index", "worktree"`;
-		const exactMessage = "Supported workflow child fields: agent, task, cwd, resume, as, phase, label, lane, index, worktree.";
+		const exactSet = `"agent", "task", "cwd", "resume", "as", "phase", "label", "lane", "index", "worktree", "outputSchema"`;
+		const exactMessage = "Supported workflow child fields: agent, task, cwd, resume, as, phase, label, lane, index, worktree, outputSchema.";
 		// All three seams carry the exact set: WORKER_SOURCE copy, module
 		// allowlist, and each runtime error message.
 		assert.equal(source.match(/allowedRunFields = new Set\(\[(.*?)\]\)/)?.[1], exactSet);
@@ -354,6 +354,8 @@ describe("public boundary: runs.run child params reject unknown keys", () => {
 			`{ agent: "worker", task: "check", lane: { version: 1, key: "one" } }`,
 			`{ agent: "worker", task: "check", index: 0 }`,
 			`{ agent: "worker", task: "check", worktree: true }`,
+			`{ agent: "worker", task: "check", outputSchema: { type: "object" } }`,
+			`{ agent: "worker", task: "check", outputSchema: false }`,
 		]) {
 			const script = `return await runs.run("one", ${params});`;
 			const result = validateWorkflowScript!(script);

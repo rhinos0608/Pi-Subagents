@@ -64,9 +64,11 @@ Chaining is code-driven through `workflowScript`. Use `await runs.run(...)` for 
 
 ### Workflow child fields
 
-Each `runs.run` / `runs.all` child accepts exactly: `agent`, `task`, `cwd`, `resume`, `as`, `phase`, `label`, `lane`, `index`, `worktree`.
+Each `runs.run` / `runs.all` child accepts exactly: `agent`, `task`, `cwd`, `resume`, `as`, `phase`, `label`, `lane`, `index`, `worktree`, `outputSchema`.
 
 `worktree: true` isolates that child in its own managed worktree (requires a clean git working tree); omit it to use the workflow/operator default. `worktree` must be a boolean. `baseRef` / `isolation` / provider overrides stay rejected on children.
+
+`outputSchema` overrides the agent frontmatter default for that child only: pass an object-root JSON Schema (`{ type: "object", ... }`, additional properties allowed, at most 4 KiB serialized) or `false` to disable the default. Anything else is a validation error naming the field. On schema mismatch the child result is an error carrying the schema message (that child fails; the workflow continues for other children).
 
 ```js
 { workflowScript: `
