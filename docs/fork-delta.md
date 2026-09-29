@@ -158,8 +158,8 @@ Apply order:
 
 ## Last synced
 
-Last integration: merge-base `2e9c51ba` (#2479, 2026-09-24) via `72c2d7de` ("Merge upstream
-through 2e9c51ba after grouped integration", 2026-09-26) plus grouped `integrate(upstream)`
-commits (latest `45f26a86`). Derived from `git log --grep='integrate(upstream)'`,
-`git log --grep='Merge upstream'`, and `git merge-base HEAD upstream/main`. No upstream tag
-newer than `2e9c51ba` has been integrated; `upstream/main` is now at `v0.73.1` (44 ahead).
+Last integration 2026-09-29 on `merge/upstream-v0.73.1-20260929`: all 46 upstream commits behind
+`2e9c51ba` triaged — 19 TAKE (cherry-pick `-x`), 9 ADAPT (+`62b92bae`/`7c795dce` companion
+hunks, worktree-reuse guard in `matchWorkflowReuse`, fanout-child executor memoization), 18 SKIP.
+Now at `upstream/main` `4416738f` (past `v0.73.1`). Kept divergence: `running-tone.test.ts`
+retains the `"no level at all → accent"` case that upstream `62b92bae` cut (pinned to `1228ed68`).
