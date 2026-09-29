@@ -19,8 +19,8 @@ the model sees 9 fields and 6 actions; Fleet, slash commands, and RPC keep the r
    `WORKFLOW_CHILD_ALLOWED_FIELDS` in `src/workflows/scripted-workflow.ts:1919`).
    `args` is workflowScript-only (frozen plain-JSON global, persisted as evidence — never
    secrets); `worktree` is a boolean (per-child isolation, clean tree required).
-2. Management lives in Fleet, slash commands, and RPC — not the model tool. The other 43 of the
-   49 `SUBAGENT_ACTIONS` stay routable internally but are not model-visible.
+2. Management lives in Fleet, slash commands, and RPC — not the model tool. The other 49 of the
+   55 `SUBAGENT_ACTIONS` stay routable internally but are not model-visible.
 3. Execution policy (model, thinking, budgets, timeouts, skills, placement) comes from agent
    definitions and operator config, not per-call fields.
 4. Always fresh context: every child starts empty; the parent puts files, constraints, and
