@@ -3555,6 +3555,41 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		assert.match(result.content[0]?.text ?? "", /Workflow script timed out after 250ms/);
 		assert.deepEqual(result.details.workflow?.receipt?.terminalOutcome, { state: "partial", reason: "timeout" });
 	});
+
+	it("rejects oversized agent timeoutMs before launch (upstream 5655f9bb, fork-retained agent path)", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		const executor = makeExecutor([makeAgent("echo", { defaultTimeoutMs: 2_147_483_648 })], {}, true);
+		const result = await executor.execute(
+			"agent-timeout-overflow",
+			{ agent: "echo", task: "Never launch" },
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+		assert.equal(result.isError, true);
+		assert.match(result.content[0]?.text ?? "", /timeoutMs must be a positive integer no larger than 2147483647/);
+		assert.equal(readAllCallArgs().length, 0, "oversized agent timeoutMs must be rejected before child launch");
+	});
+
+	it("rejects oversized operator config timeoutMs before launch (upstream 5655f9bb, fork-retained config path)", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		const executor = makeExecutor([makeAgent("echo")], { timeoutMs: 2_147_483_648 });
+		const cases = [
+			{ agent: "echo", task: "Never launch", async: false },
+			{ async: false, workflowScript: `return await runs.run("never", { agent: "echo", task: "Never launch" });` },
+		] as const;
+		for (const params of cases) {
+			const result = await executor.execute(
+				"config-timeout-overflow",
+				params,
+				new AbortController().signal,
+				undefined,
+				makeMinimalCtx(tempDir),
+			);
+			assert.equal(result.isError, true);
+			assert.match(result.content[0]?.text ?? "", /config\.timeoutMs must be a positive integer no larger than 2147483647/);
+		}
+		assert.equal(readAllCallArgs().length, 0, "oversized config timeoutMs must be rejected before child launch");
+	});
+
 	it("runs omitted async launches in the background when the global default is enabled", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
 		const executor = makeExecutor([makeAgent("echo")], {}, true);
 
