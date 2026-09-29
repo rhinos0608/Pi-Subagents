@@ -2772,6 +2772,104 @@ function resolveConfigTimeoutMs(raw: unknown): number | undefined {
 	return raw;
 }
 
+// FORK-DORMANT(FD-013): fork-context plumbing kept-but-unreachable. Always-fresh
+// is enforced at the public boundary (rejectRemovedPublicSubagentFields drops
+// `context` before dispatch), so no model input can select these branches. The
+// pure helpers below keep upstream shape for sync; nothing in the fork calls them.
+// DELETE-KEEP: resolveExplicitContextPolicy + resolveAgentDefaultContextPolicy stay
+// deleted — they need resolveSubagentLaunchContext from src/shared/fork-context.ts,
+// which the fork removed (upstream churn 28473acd 2026-08-20, a0b8c6de 2026-09-06).
+interface AgentDefaultContextPolicy {
+	params: SubagentParamsLike;
+	contextForAgent(agentName: string): ContextMode;
+	contextSummary?: ContextSummary;
+	usesFork: boolean;
+}
+
+// collectRequestedAgentNames is kept where it already lives above (used by the
+// fork); the dormant helpers below reuse it to preserve upstream shape.
+function shouldForkAgent(contextPolicy: AgentDefaultContextPolicy, agentName: string): boolean {
+	return contextPolicy.contextForAgent(agentName) === "fork";
+}
+
+function wrapChainTasksForFork(chain: ChainStep[], contextPolicy: AgentDefaultContextPolicy): ChainStep[] {
+	return chain.map((step, stepIndex) => {
+		if (isParallelStep(step)) {
+			return compactOptional<ParallelStep>({
+				...step,
+				parallel: step.parallel.map((task) => compactOptional<ParallelTaskItem>({
+					...task,
+					task: shouldForkAgent(contextPolicy, task.agent)
+						? wrapForkTask(task.task ?? "{previous}")
+						: task.task,
+				})),
+			});
+		}
+		if (isDynamicParallelStep(step)) {
+			return compactOptional<DynamicParallelStep>({
+				...step,
+				parallel: compactOptional<DynamicParallelStep["parallel"]>({
+					...step.parallel,
+					task: shouldForkAgent(contextPolicy, step.parallel.agent)
+						? wrapForkTask(step.parallel.task ?? "{previous}")
+						: step.parallel.task,
+				}),
+			});
+		}
+		const sequential = step as SequentialStep;
+		return compactOptional<SequentialStep>({
+			...sequential,
+			task: shouldForkAgent(contextPolicy, sequential.agent)
+				? wrapForkTask(sequential.task ?? (stepIndex === 0 ? "{task}" : "{previous}"))
+				: sequential.task,
+		});
+	});
+}
+
+// FORK-DORMANT(FD-015): upstream launch-timeout shape kept-but-unreachable.
+// The public boundary rejects `timeoutMs`/`maxRuntimeMs` before dispatch, so no
+// model input reaches this resolver; nothing in the fork calls it.
+// DELETE-KEEP: resolveSingleAgentLaunchTimeout stays deleted — it needs
+// DEFAULT_ASYNC_TIMEOUT_MS, removed from async-execution (upstream churn 5655f9bb
+// 2026-09-27 covers this region).
+export const DEFAULT_FOREGROUND_TIMEOUT_MS = 30 * 60 * 1000;
+
+// Narrow structural view: the fork removed timeoutMs/maxRuntimeMs from
+// SubagentParamsLike, so the verbatim upstream body reads them through this alias.
+type DormantTimeoutParams = SubagentParamsLike & { timeoutMs?: number; maxRuntimeMs?: number };
+
+export function resolveForegroundTimeout(params: DormantTimeoutParams, defaultTimeoutMs?: number): { timeoutMs?: number; error?: string } {
+	const rawTimeout = params.timeoutMs;
+	const rawMaxRuntime = params.maxRuntimeMs;
+	if (rawTimeout === undefined && rawMaxRuntime === undefined) {
+		return defaultTimeoutMs === undefined ? {} : { timeoutMs: defaultTimeoutMs };
+	}
+	for (const [name, value] of [["timeoutMs", rawTimeout], ["maxRuntimeMs", rawMaxRuntime]] as const) {
+		if (value === undefined) continue;
+		if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+			return { error: `${name} must be a positive integer.` };
+		}
+		const overflowError = timerDelayOverflowError(name, value);
+		if (overflowError) return { error: overflowError };
+	}
+	if (rawTimeout !== undefined && rawMaxRuntime !== undefined && rawTimeout !== rawMaxRuntime) {
+		return { error: "timeoutMs and maxRuntimeMs are aliases; provide only one value or use the same value for both." };
+	}
+	const timeoutMs = rawTimeout ?? rawMaxRuntime;
+	return timeoutMs === undefined ? {} : { timeoutMs };
+}
+
+// FORK(FD-014): DELETE-KEEP set — left deleted, no restore:
+// - admitEnabledWorkflowChildren + disabled-feature gates (needs
+//   src/shared/disabled-features.ts, removed; upstream churn 60905d10 2026-09-28).
+// - scopedModelIds threading in model-scope plumbing (needs
+//   scopedModelIdsFromContext, removed; upstream churn b84a82a7 2026-08-21).
+// - usage-budget validation/state (per-call budget surface, never restored per
+//   seam rule 4; upstream churn 7a89fec4 2026-07-31; also marked at the
+//   admission site below).
+// - PrepareForkSessionForTask / preflightForkSessionsForStaticTasks (need
+//   src/shared/fork-context.ts + pruned-fork.ts, removed).
+
 function resolveToolBudget(
 	raw: unknown,
 	label = "toolBudget",

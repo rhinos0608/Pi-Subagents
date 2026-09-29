@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
 import { resolveSubagentRunId } from "../../src/runs/background/run-id-resolver.ts";
+import { resolvePublicSubagentRequest } from "../../src/extension/public-execution.ts";
 import { createSubagentExecutor, rejectMissingControlRunId, unknownSubagentActionMessage } from "../../src/runs/foreground/subagent-executor.ts";
 import { MODEL_VISIBLE_SUBAGENT_ACTIONS, SUBAGENT_ACTIONS } from "../../src/shared/types.ts";
 
@@ -441,6 +442,25 @@ describe("public boundary: phase 7c model-visible action surface", () => {
 				(error) => error instanceof Error ? error.message : String(error),
 			);
 			assert.doesNotMatch(result, /moved to Fleet/);
+		});
+	}
+});
+
+describe("seam-4 dormant branches stay unreachable from model input", () => {
+	// Each restored FORK-DORMANT branch in subagent-executor.ts is keyed off a
+	// model-removed field; the public boundary must reject that field first.
+	for (const params of [
+		{ agent: "worker", task: "do it", context: "fork" },
+		{ agent: "worker", task: "do it", context: "fresh" },
+		{ agent: "worker", task: "do it", timeoutMs: 1000 },
+		{ agent: "worker", task: "do it", maxRuntimeMs: 1000 },
+		{ agent: "worker", task: "do it", usageBudget: { maxCostUsd: 1 } },
+		{ agent: "worker", task: "do it", skill: "review" },
+	]) {
+		it(`rejects model input ${JSON.stringify(params)} before dispatch`, () => {
+			const result = resolvePublicSubagentRequest(params);
+			assert.equal(result.ok, false);
+			if (!result.ok) assert.match(result.error, /Removed subagent field/);
 		});
 	}
 });
