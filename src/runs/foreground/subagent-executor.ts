@@ -2844,6 +2844,12 @@ const FALLBACK_TIMEOUT_MS = 3_600_000;
  */
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
+export function timerDelayOverflowError(name: string, value: unknown): string | undefined {
+	return typeof value === "number" && value > MAX_TIMER_DELAY_MS
+		? `${name} must be a positive integer no larger than ${MAX_TIMER_DELAY_MS}.`
+		: undefined;
+}
+
 function resolveConfigTimeoutMs(raw: unknown): number | undefined {
 	if (typeof raw !== "number" || !Number.isInteger(raw) || raw <= 0 || raw > MAX_TIMER_DELAY_MS) return undefined;
 	return raw;
@@ -3275,6 +3281,10 @@ async function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 		// (per-call timeoutMs left the model contract); without this forward the
 		// async runner never sees it.
 		const effectiveTimeoutMs = a.defaultTimeoutMs;
+		const agentOverflowError = timerDelayOverflowError("timeoutMs", effectiveTimeoutMs);
+		if (agentOverflowError) {
+			return toExecutionErrorResult(params, new Error(agentOverflowError), "fresh");
+		}
 		const asyncResult = await executeAsyncSingle(id, compactOptional<Parameters<typeof executeAsyncSingle>[1]>({
 			agent: params.agent!,
 			task: params.task ?? "",
@@ -5035,6 +5045,8 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 				}
 			}
 			const parentCwd = ctx.cwd;
+			const workflowConfigOverflowError = timerDelayOverflowError("config.timeoutMs", deps.config.timeoutMs);
+			if (workflowConfigOverflowError) return buildRequestedModeError(requestParams, workflowConfigOverflowError);
 			const timeout = requestParams.async === false ? resolveConfigTimeoutMs(deps.config.timeoutMs) ?? FALLBACK_TIMEOUT_MS : undefined;
 			const workflowCwd = resolveRequestedCwd(parentCwd, requestParams.cwd);
 			const discoverWorkflowAgents = (cwd: string, scope: AgentScope) => deps.discoverAgents(cwd, scope, workflowParentModel?.provider);
@@ -6955,7 +6967,12 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			}
 		}
 		const runId = randomUUID();
-		const resolvedTimeoutMs = resolveConfigTimeoutMs(deps.config.timeoutMs) ?? FALLBACK_TIMEOUT_MS;
+		const rawConfigTimeoutMs = deps.config.timeoutMs;
+		const configOverflowError = timerDelayOverflowError("config.timeoutMs", rawConfigTimeoutMs);
+		if (configOverflowError) {
+			return buildRequestedModeError(requestParams, configOverflowError);
+		}
+		const resolvedTimeoutMs = resolveConfigTimeoutMs(rawConfigTimeoutMs) ?? FALLBACK_TIMEOUT_MS;
 		const foregroundTimeout = { timeoutMs: resolvedTimeoutMs };
 		const controlConfig = resolveControlConfig(deps.config.control, effectiveParams.control);
 		const requestedWorkflowChildAsyncId = typeof effectiveParams.workflowChildAsyncId === "string" ? effectiveParams.workflowChildAsyncId.trim() : "";

@@ -136,6 +136,12 @@ function validatePositiveInteger(value: unknown, field: string): number | undefi
 	return value;
 }
 
+function validateTimeoutMs(value: unknown, field: string): number | undefined {
+	if (value === undefined) return undefined;
+	if (typeof value !== "number" || !Number.isInteger(value) || value <= 0 || value > 2_147_483_647) throw new Error(`${field} must be a positive integer no larger than 2147483647 when provided.`);
+	return value;
+}
+
 function validateBoolean(value: unknown, field: string): boolean | undefined {
 	if (value === undefined) return undefined;
 	if (typeof value !== "boolean") throw new Error(`${field} must be a boolean when provided.`);
@@ -221,8 +227,8 @@ function validateDefinition(value: unknown): RuntimeAgentDefinition {
 	const inheritGlobalContext = validateBoolean(definition.inheritGlobalContext, "Runtime agent definition inheritGlobalContext");
 	const inheritSkills = validateBoolean(definition.inheritSkills, "Runtime agent definition inheritSkills");
 	const defaultAsync = validateBoolean(definition.defaultAsync, "Runtime agent definition defaultAsync");
-	const defaultTimeoutMs = validatePositiveInteger(definition.defaultTimeoutMs, "Runtime agent definition defaultTimeoutMs");
-	const defaultToolTimeoutMs = validatePositiveInteger(definition.defaultToolTimeoutMs, "Runtime agent definition defaultToolTimeoutMs");
+	const defaultTimeoutMs = validateTimeoutMs(definition.defaultTimeoutMs, "Runtime agent definition defaultTimeoutMs");
+	const defaultToolTimeoutMs = validateTimeoutMs(definition.defaultToolTimeoutMs, "Runtime agent definition defaultToolTimeoutMs");
 	const defaultAcceptance = validateAcceptance(definition.defaultAcceptance);
 	const runner = validateRunner(definition.runner);
 	const skills = validateStringList(definition.skills, "Runtime agent definition skills");
