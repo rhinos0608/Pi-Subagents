@@ -79,10 +79,13 @@ describe("result watcher", () => {
 			notifier: { async deliver(value) { delivered.push(value); return true; } },
 		});
 		try {
-			watcher.startResultWatcher();
+			// Write before starting: the native watcher may miss a write that
+			// lands between start and delivery, so prime explicitly after start.
 			writeIndexedResult(path.join(resultsDir, "dispatch.json"), { id: "dispatch", runId: "dispatch", mode: "workflow", state: "complete", success: true, sessionId: "session-1",
 				results: [{ workflowKey: "child", runId: "child-run", state: "running", output: "", outputState: "absent" }],
 			});
+			watcher.startResultWatcher();
+			watcher.primeExistingResults();
 			assert.equal(await waitForPredicate(() => completed.length === 1), true);
 			for (const value of [...delivered, ...completed]) {
 				assert.equal(value.results[0].status, "running");
