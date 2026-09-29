@@ -23,7 +23,7 @@ Counts: upstream top-level fields = direct keys of `SubagentParamProperties`
 (`upstream/main:src/extension/schemas.ts:280-400`, one-tab-indented `name:` lines) = 82,
 including schedule/mission/workflow/watchdog knobs; fork = 9 (`Object.keys(SubagentParams.properties)`:
 `agent task action id message topic workflowScript args cwd`).
-Actions: `SUBAGENT_ACTIONS` has 57 entries in both trees; the fork keeps them routable internally
+Actions: `SUBAGENT_ACTIONS` has 57 entries upstream, 49 in the fork (8 dead hidden actions deleted 2026-09-29: `children.list`, `dismiss`, `debug.run`, `grant-spawn-budget`, `worktree.discard`, `lane.status`, `lane.recordMerge`, `lane.recordSupersession`); the fork keeps them routable internally
 and exposes 6 to the model.
 
 | Area | Upstream | Fork | Key files | Pinning tests | Rationale |

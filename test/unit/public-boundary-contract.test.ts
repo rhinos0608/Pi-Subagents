@@ -378,7 +378,7 @@ describe("public boundary: phase 7c model-visible action surface", () => {
 	});
 
 	it("keeps the internal action registry intact for internal/slash/RPC/Fleet callers", () => {
-		for (const action of ["list", "get", "models", "children.list", "create", "stop", "dismiss", "refine", "mission.list", "schedule.list", "doctor", "debug.run", "grant-spawn-budget", "watchdog.status", "inspector.open", "project.open", "worktree.discard", "lane.status"]) {
+		for (const action of ["list", "get", "models", "create", "stop", "refine", "mission.list", "schedule.list", "doctor", "watchdog.status", "inspector.open", "project.open"]) {
 			assert.ok((SUBAGENT_ACTIONS as readonly string[]).includes(action), `${action} must stay implemented internally`);
 			assert.ok(!(MODEL_VISIBLE_SUBAGENT_ACTIONS as readonly string[]).includes(action), `${action} must not be model-visible`);
 		}
