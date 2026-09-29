@@ -193,11 +193,9 @@ export default function registerFanoutChildSubagentExtension(pi: ExtensionAPI, c
 	childConfig.hasPendingSupervisorRequest = hasPendingSupervisorRequest;
 	// Created on first tool use so importing this module (via child-hooks) does not
 	// pull the foreground executor graph into extension startup.
-	let executor: ReturnType<typeof createSubagentExecutor> | undefined;
-	const getExecutor = async (): Promise<NonNullable<typeof executor>> => {
-		if (!executor) {
-		const { createSubagentExecutor: createExecutor } = await import("../runs/foreground/subagent-executor.ts");
-		executor = createExecutor({
+	let executorPromise: Promise<ReturnType<typeof createSubagentExecutor>> | undefined;
+	const getExecutor = (): Promise<ReturnType<typeof createSubagentExecutor>> => {
+		executorPromise ??= import("../runs/foreground/subagent-executor.ts").then(({ createSubagentExecutor: createExecutor }) => createExecutor({
 			pi,
 			state,
 			config,
@@ -210,9 +208,8 @@ export default function registerFanoutChildSubagentExtension(pi: ExtensionAPI, c
 			childRuntime: childConfig,
 			activateSupervisorTransport: supervisorChannel.activateTransport,
 			findPendingAsks: supervisorChannel.findPendingAsks,
-		});
-		}
-		return executor;
+		}));
+		return executorPromise;
 	};
 
 	const params = SubagentParams;
