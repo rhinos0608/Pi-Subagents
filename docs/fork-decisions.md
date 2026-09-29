@@ -80,7 +80,7 @@ Code-sites lines below are candidates from seam reports; refresh when marking.
 - Rationale: VISION "Compatibility is explicit" (hard cutover, no shims); FORK.md triage SKIP class.
 - Upstream: `tool-activation.ts`, `bg_wait` tool, `async` toggle.
 - Reversal: owner approval; rejected by default.
-- Pinning: smoke tests removed (absence pinned by registration tests).
+- Pinning: smoke tests removed (absence pinned by registration tests); **MISSING** dedicated always-on boundary test.
 - Code sites: candidate; refresh when marking (`src/extension/index.ts`).
 
 ## FD-008 — Default description
@@ -133,6 +133,7 @@ Code-sites lines below are candidates from seam reports; refresh when marking.
 - Rationale: FORK.md small-surface policy + hybrid rule (keep divergence at surface/boundary seams).
 - Upstream behavior: no translation needed (model sees full surface).
 - Reversal: owner approval.
+- Pinning: `test/unit/public-boundary-contract.test.ts`, `test/unit/public-execution.test.ts`.
 - Code sites: candidate; refresh when marking (`src/runs/foreground/subagent-executor.ts`).
 
 ## FD-013 — Executor context plumbing dormant
@@ -143,6 +144,7 @@ Code-sites lines below are candidates from seam reports; refresh when marking.
 - Rationale: FORK.md hybrid rule (dormant over deletion where shared internals churn).
 - Upstream behavior: `context: fork` carries parent history.
 - Reversal: owner approval.
+- Pinning: `test/unit/public-boundary-contract.test.ts`, `test/integration/fork-context-execution.test.ts`.
 - Code sites: candidate; refresh when marking (executor context paths).
 
 ## FD-014 — No usage-budget surface
@@ -153,6 +155,7 @@ Code-sites lines below are candidates from seam reports; refresh when marking.
 - Rationale: FORK.md principle 3 (operator-owned budgets) + small-surface policy.
 - Upstream behavior: per-call `usageBudget`/tool-budget knobs.
 - Reversal: owner approval.
+- Pinning: `test/unit/public-boundary-contract.test.ts`.
 - Code sites: candidate; refresh when marking (schema admission, executor budget paths).
 
 ## FD-015 — Workflow dispatch dormant shape
@@ -163,6 +166,7 @@ Code-sites lines below are candidates from seam reports; refresh when marking.
 - Rationale: FORK.md hybrid rule (sync-cheap dormant shapes over risky deletions).
 - Upstream behavior: wider child/step shapes dispatch.
 - Reversal: owner approval.
+- Pinning: `test/unit/public-boundary-contract.test.ts`, `test/unit/scripted-workflow.test.ts`.
 - Code sites: candidate; refresh when marking (`src/workflows/` dispatch).
 
 ## FD-016 — Scheduled-owner execution
@@ -173,6 +177,7 @@ Code-sites lines below are candidates from seam reports; refresh when marking.
 - Rationale: FORK.md principle 3 (operator policy, not per-call fields).
 - Upstream behavior: per-schedule execution knobs.
 - Reversal: owner approval.
+- Pinning: `test/unit/scheduled-runs.test.ts`.
 - Code sites: candidate; refresh when marking (schedule launch paths).
 
 ## FD-017 — Exact run IDs
@@ -182,6 +187,7 @@ Code-sites lines below are candidates from seam reports; refresh when marking.
 - Rationale: VISION "Evidence closes work" (no pretending a label is an identity).
 - Upstream behavior: same lookup; fork guidance tightened.
 - Reversal: owner approval.
+- Pinning: `test/unit/subagent-action-recovery.test.ts`.
 - Code sites: candidate; refresh when marking (retained/resume paths).
 
 ## FD-018 — Fleet resume
@@ -192,6 +198,7 @@ Code-sites lines below are candidates from seam reports; refresh when marking.
 - Rationale: FORK.md principle 2 (management lives in Fleet/slash/RPC).
 - Upstream behavior: wider model-callable management surface.
 - Reversal: owner approval + new registry entry per exposed action.
+- Pinning: `test/unit/fleet-status.test.ts`, `test/unit/fleet.test.ts`.
 - Code sites: candidate; refresh when marking (Fleet/slash resume paths).
 
 ## FD-019 — Runner terminal lifecycle dormant
@@ -202,6 +209,7 @@ Code-sites lines below are candidates from seam reports; refresh when marking.
 - Rationale: FORK.md hybrid rule (keep runtime internals syncable; diverge at surface).
 - Upstream behavior: fuller lifecycle driven from model surface.
 - Reversal: owner approval.
+- Pinning: `test/unit/control-channel.test.ts`.
 - Code sites: candidate; refresh when marking (runner lifecycle).
 
 ## FD-020 — Async-execution step-option restrictions
@@ -212,6 +220,7 @@ Code-sites lines below are candidates from seam reports; refresh when marking.
 - Rationale: FORK.md principles 1–3 (allowlist + operator policy).
 - Upstream behavior: per-step execution options.
 - Reversal: owner approval.
+- Pinning: `test/unit/scripted-workflow.test.ts`, `test/unit/async-execution.test.ts`.
 - Code sites: candidate; refresh when marking (async step validation).
 
 ## FD-021 — Foreground recovery/continuation
@@ -222,4 +231,5 @@ Code-sites lines below are candidates from seam reports; refresh when marking.
 - Rationale: VISION authority clarity; no silent execution-mode switches.
 - Upstream behavior: same recovery scope retained.
 - Reversal: owner approval.
+- Pinning: `test/unit/run-child-session.test.ts`, `test/unit/abort-recovery.test.ts`.
 - Code sites: candidate; refresh when marking (recovery/continuation paths).
