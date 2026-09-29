@@ -1,6 +1,6 @@
 /**
-* TypeBox schemas for subagent tool parameters
-*/
+ * TypeBox schemas for subagent tool parameters
+ */
 
 import { Type } from "typebox";
 
