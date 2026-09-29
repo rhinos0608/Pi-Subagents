@@ -59,7 +59,7 @@ import { createOrcaProgressTab, type OrcaProgressTab } from "../shared/orca-prog
 import { resolvePermissionRules } from "../shared/permissions.ts";
 import { applyThinkingSuffix } from "../shared/child-tool-plan.ts";
 import { deriveChildSessionName } from "../../shared/child-session-name.ts";
-import { assertAgentAllowedByCapabilityCeiling, intersectSubagentCapabilityCeilings, resolveCurrentSubagentCapabilityCeiling } from "../shared/capability-ceiling.ts";
+import { assertAgentAllowedByCapabilityCeiling, resolveCurrentSubagentCapabilityCeiling } from "../shared/capability-ceiling.ts";
 import { resolveEffectiveThinking } from "../../shared/model-info.ts";
 import { assertThinkingWithinCeiling, intersectThinkingCeilings } from "../../shared/thinking-ceiling.ts";
 import { formatStructuredOutputRejectionError, MISSING_STRUCTURED_ACCEPTANCE_REPORT_ERROR, MISSING_STRUCTURED_OUTPUT_CALL_ERROR } from "../shared/structured-output.ts";
@@ -1904,12 +1904,14 @@ async function runSyncCompletionInner(
 		}
 	}
 	const modelsToTry = candidates.length > 0 ? candidates : [undefined];
+	// FORK(FD-021): fork retries retryable startup failures per candidate with bounded backoff instead of failing the run on first provider error.
 	let recoveryState: LogicalRecoveryState = "unused";
 	let readonlyExpected: SettledReadonlyEvidence | undefined;
 	let readonlyModel: string | undefined;
 	let readonlySource: ChildSession | undefined;
 	// Ordinary startup retries retain their per-attempt timeout. Only retained
 	// continuation uses the original logical deadline, never a renewed allowance.
+	// FORK(FD-021): retained continuation reuses the original logical deadline so recovery never gains a renewed timeout allowance.
 	const continuationDeadline = options.deadlineAt ?? (options.timeoutMs === undefined ? undefined : Date.now() + options.timeoutMs);
 	const readonlyHandoffAllowed = () => !options.signal?.aborted && !options.interruptSignal?.aborted
 		&& !intercomDetached && !detachedReason && !options.workflowChildPermitLaunch
@@ -1984,7 +1986,8 @@ async function runSyncCompletionInner(
 					block?.type === "text" || message.role === "assistant" && block?.type === "toolCall"));
 			const retainedBytes = evidence && models ? Buffer.byteLength(evidence.contextJson) + models.requestBytes : Infinity;
 			const resolvedCandidates = modelsToTry.map((reference, index) => index === modelIndex ? models?.current : reference ? models?.resolve(reference) : undefined);
-			const continuation = planReadonlyModelContinuation({
+			// FORK(FD-021): read-only continuation consumes the settled child's retained session once instead of relaunching after 429s with read-only progress.
+		const continuation = planReadonlyModelContinuation({
 				source, recoveryState, currentIndex: modelIndex,
 				candidates: resolvedCandidates.map((resolved, index) => {
 					// A conservative byte ceiling includes serialized history, actual system
@@ -2014,7 +2017,8 @@ async function runSyncCompletionInner(
 			}
 			if (!attemptSucceeded) {
 				const afterCompactionSettlement = (result as AbortRecoverySingleResult)[AFTER_COMPACTION_SETTLEMENT];
-				const abortRecovery = planAbortRecovery({
+				// FORK(FD-021): abort recovery resumes the retained session once after useful progress instead of reporting the transport abort as final.
+			const abortRecovery = planAbortRecovery({
 					messages: result.messages ?? [],
 					error: result.error,
 					processSignal: result.processSignal,
