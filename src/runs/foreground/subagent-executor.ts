@@ -24,7 +24,8 @@ import { handleManagementAction } from "../../agents/agent-management.ts";
 import { handleRefinementAction } from "../../agents/agent-refinements.ts";
 import { buildDoctorReport } from "../../extension/doctor.ts";
 import { readSubagentGuide } from "../../extension/subagent-guide.ts";
-import { normalizePublicSubagentExecution, validateWorkflowCapacityOverrides } from "../../extension/public-execution.ts";
+import { editDistance, hasSingleAdjacentTransposition, resolvePublicSubagentRequest, unknownSubagentActionMessage, validateWorkflowCapacityOverrides } from "../../extension/public-execution.ts";
+export { rejectMissingControlRunId, unknownSubagentActionMessage } from "../../extension/public-execution.ts";
 import { runSync } from "./execution.ts";
 import { handleWatchdogToolAction, WATCHDOG_TOOL_ACTIONS } from "../../watchdog/tool-actions.ts";
 import type { MainWatchdogRuntime } from "../../watchdog/runtime.ts";
@@ -139,7 +140,6 @@ import {
 	type WorkflowResourceAuthority,
 	type WorkflowResourcePermit,
 } from "../../shared/workflow-child-permit.ts";
-import { deepFreezeWorkflowArgs, normalizeWorkflowArgs } from "../../workflows/workflow-resources.ts";
 import { stableJsonDigest } from "../../shared/launch-contract.ts";
 import {
 	cleanupWorktrees,
@@ -196,7 +196,6 @@ import {
 	DEFAULT_ARTIFACT_CONFIG,
 	DEFAULT_MAX_OUTPUT,
 	DEFAULT_FORK_PREAMBLE,
-	MODEL_VISIBLE_SUBAGENT_ACTIONS,
 	SUBAGENT_ACTIONS,
 	SUBAGENT_ASYNC_STARTED_EVENT,
 	SUBAGENT_CHILD_STATUS_EVENT,
@@ -216,50 +215,9 @@ import {
 import { deriveChildSessionName } from "../../shared/child-session-name.ts";
 
 const MUTATING_MANAGEMENT_ACTIONS = new Set(["create", "update", "delete", "eject", "disable", "enable", "reset", "grant-spawn-budget", "watchdog.configure", "mission.create", "mission.update", "mission.resolve-decision", "mission.attach-run", "mission.close", "inspector.open", "inspector.close", "project.open", "project.close", "worktree.discard", "worktree.cleanup", "lane.recordMerge", "lane.recordSupersession", "refine", "refine.rollback", "dismiss", "schedule.create", "schedule.pause", "schedule.resume", "schedule.run", "schedule.run-due", "schedule.delete"]);
-const DESTRUCTIVE_MANAGEMENT_ACTIONS = new Set(["delete", "eject", "disable", "reset", "mission.close", "worktree.discard", "refine.rollback", "inspector.close", "project.close", "stop", "interrupt", "schedule.delete"]);
 
 function resolveSteerDeliveryMode(mode: SubagentParamsLike["mode"]): SteerDeliveryMode | undefined {
 	return mode === "steer" || mode === "follow_up" || mode === "auto" ? mode : undefined;
-}
-
-function editDistance(left: string, right: string): number {
-	const previous = Array.from({ length: right.length + 1 }, (_, index) => index);
-	for (let leftIndex = 1; leftIndex <= left.length; leftIndex += 1) {
-		let diagonal = previous[0]!;
-		previous[0] = leftIndex;
-		for (let rightIndex = 1; rightIndex <= right.length; rightIndex += 1) {
-			const above = previous[rightIndex]!;
-			previous[rightIndex] = left[leftIndex - 1] === right[rightIndex - 1]
-				? diagonal
-				: Math.min(diagonal, above, previous[rightIndex - 1]!) + 1;
-			diagonal = above;
-		}
-	}
-	return previous[right.length]!;
-}
-
-function hasSingleAdjacentTransposition(left: string, right: string): boolean {
-	if (left.length !== right.length) return false;
-	const mismatch = [...left].findIndex((character, index) => character !== right[index]);
-	return mismatch >= 0
-		&& left[mismatch] === right[mismatch + 1]
-		&& left[mismatch + 1] === right[mismatch]
-		&& left.slice(mismatch + 2) === right.slice(mismatch + 2);
-}
-
-export function unknownSubagentActionMessage(action: string): string {
-	const requested = action.toLowerCase();
-	const suggestion = MODEL_VISIBLE_SUBAGENT_ACTIONS.find((candidate) => {
-		const distance = editDistance(requested, candidate);
-		const closeMatch = distance <= Math.max(1, Math.floor(candidate.length / 4)) || hasSingleAdjacentTransposition(requested, candidate);
-		if (DESTRUCTIVE_MANAGEMENT_ACTIONS.has(candidate)) return distance === 1 && requested.length >= candidate.length - 1;
-		return closeMatch;
-	});
-	const nextStep = 'Use subagent({ action: "status" }) to inspect runs or subagent({ action: "guide" }) to read topic docs.';
-	const validActions = `Valid: ${MODEL_VISIBLE_SUBAGENT_ACTIONS.join(", ")}.`;
-	return suggestion
-		? `Unknown action: ${action}. Did you mean ${suggestion}? ${nextStep} ${validActions}`
-		: `Unknown action: ${action}. ${nextStep} ${validActions}`;
 }
 
 type UndefinedOmitted<T extends object> = {
@@ -553,39 +511,6 @@ interface ExecutionContextData {
 
 function resolveRequestedCwd(runtimeCwd: string, requestedCwd: string | undefined): string {
 	return requestedCwd ? path.resolve(runtimeCwd, requestedCwd) : runtimeCwd;
-}
-
-/** Phase 6a: per-run tuning/model fields killed at the backend or cut from the model vocabulary. Model input carrying any of these is rejected, never ignored. */
-const REMOVED_PUBLIC_SUBAGENT_FIELDS = [
-	"context",
-	"timeoutMs",
-	"maxRuntimeMs",
-	"checkpointBeforeDeadlineMs",
-	"usageBudget",
-	"skill",
-	"async",
-	"model",
-	"fast",
-	"thinking",
-] as const;
-
-function rejectRemovedPublicSubagentFields(params: PublicSubagentParamsLike): string | undefined {
-	const record = params as Record<string, unknown>;
-	const rejected = (REMOVED_PUBLIC_SUBAGENT_FIELDS as readonly string[]).filter((field) => record[field] !== undefined);
-	if (!rejected.length) return undefined;
-	return `Removed subagent field(s) rejected: ${rejected.join(", ")}. The public subagent vocabulary is agent, task, cwd, workflowScript, args, action, id, message, topic (guide-only).`;
-}
-
-/** Control actions target a live run, so they require a non-empty run id. Launch mode omits action and id legitimately. */
-const CONTROL_RUN_ID_ACTIONS = new Set(["steer", "resume", "interrupt"]);
-
-export function rejectMissingControlRunId(params: PublicSubagentParamsLike): string | undefined {
-	const action = typeof params.action === "string" ? params.action.trim().toLowerCase() : undefined;
-	if (!action || !CONTROL_RUN_ID_ACTIONS.has(action)) return undefined;
-	if (typeof params.id !== "string" || !params.id.trim()) {
-		return `Action '${params.action}' requires id to be a non-empty run id string.`;
-	}
-	return undefined;
 }
 
 export function removeForegroundControlIfIdle(state: SubagentState, runId: string, trackRetainedNestedRoute?: (rootRunId: string) => void): boolean {
@@ -1856,6 +1781,7 @@ function resolveRequestedResumeTarget(params: SubagentParamsLike, deps: Executor
 	const requestedId = params.id ?? params.runId;
 	let resolved: ResolvedSubagentRunId | undefined;
 	try {
+		// FORK(FD-017): control targeting resolves exact run IDs only, never prefixes.
 		resolved = requestedId ? resolveSubagentRunId(requestedId, omitUndefinedProperties({ state: deps.state, nested: nestedResolutionScopeForExecutor(deps), exactOnly: true })) : undefined;
 	} catch (error) {
 		const message = error instanceof Error ? error.message : "";
@@ -5850,7 +5776,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 										}
 									}
 								}
-								// Fork: usageBudget per-call fields stay removed; no budget gate here.
+								// FORK(FD-014): no per-call usage-budget gate; usage budgets stay removed from the model surface.
 								const childPhase = typeof childParams.phase === "string" && childParams.phase.trim() ? childParams.phase.trim() : undefined;
 								const childLabel = typeof childParams.label === "string" && childParams.label.trim() ? childParams.label.trim() : undefined;
 								recordMissionWorkflowChild(missionBinding, workflowRunId, key, {
@@ -7494,34 +7420,14 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		onUpdate: ((r: AgentToolResult<Details>) => void) | undefined,
 		ctx: ExtensionContext,
 	): Promise<AgentToolResult<Details>> => {
-		const removedFieldError = rejectRemovedPublicSubagentFields(params);
-		if (removedFieldError) {
-			return Promise.resolve({ content: [{ type: "text", text: removedFieldError }], isError: true, details: { mode: "management", results: [] } });
+		// FORK(FD-012): executor surface translation lives at the public boundary; this adapter only resolves and dispatches.
+		const resolved = resolvePublicSubagentRequest(params as unknown as Parameters<typeof resolvePublicSubagentRequest>[0]);
+		if (!resolved.ok) {
+			return Promise.resolve({ content: [{ type: "text", text: resolved.error }], isError: true, details: { mode: resolved.mode, results: [] } });
 		}
-		const missingControlRunIdError = rejectMissingControlRunId(params);
-		if (missingControlRunIdError) {
-			return Promise.resolve({ content: [{ type: "text", text: missingControlRunIdError }], isError: true, details: { mode: "management", results: [] } });
-		}
-		// Phase 7c: model dispatch keeps steer/resume/interrupt/status/guide/validate only.
-		// Every other management action stays implemented for internal/slash/RPC/Fleet callers.
-		const publicAction = typeof params.action === "string" ? params.action.trim() : undefined;
-		if (publicAction && !(MODEL_VISIBLE_SUBAGENT_ACTIONS as readonly string[]).includes(publicAction.toLowerCase())) {
-			return Promise.resolve({ content: [{ type: "text", text: `${unknownSubagentActionMessage(publicAction)} Management actions (agents, missions, schedules, watchdogs, inspectors, projects, worktrees, lanes, refinements, stop, dismiss) moved to Fleet; the model cannot invoke them.` }], isError: true, details: { mode: "management", results: [] } });
-		}
-		const normalized = normalizePublicSubagentExecution(params as SubagentParamsLike);
-		if (!normalized.ok) {
-			return Promise.resolve({ content: [{ type: "text", text: normalized.error }], isError: true, details: { mode: normalized.mode, results: [] } });
-		}
-		let publicParams = normalized.params as SubagentParamsLike;
-		if (publicParams.workflowScript !== undefined) {
-			const normalizedArgs = normalizeWorkflowArgs(publicParams.args);
-			if ("error" in normalizedArgs) return Promise.resolve({ content: [{ type: "text", text: normalizedArgs.error }], isError: true, details: { mode: publicParams.action ? "management" : "workflow", results: [] } });
-			publicParams = { ...publicParams, args: deepFreezeWorkflowArgs(normalizedArgs.args) };
-		} else if ((publicParams as unknown as Record<string, unknown>).args !== undefined) {
-			return Promise.resolve({ content: [{ type: "text", text: "args requires workflowScript; omit args on agent/task launches and other actions." }], isError: true, details: { mode: publicParams.action ? "management" : "workflow", results: [] } });
-		}
-		publicExecutions.add(publicParams);
-		return executeWithSingleDispatchGuard(id, publicParams, signal, onUpdate, ctx);
+		const publicParams = resolved.params as SubagentParamsLike;
+	publicExecutions.add(publicParams);
+	return executeWithSingleDispatchGuard(id, publicParams, signal, onUpdate, ctx);
 	};
 
 	const executeDelegated = async (
@@ -7552,6 +7458,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		signal: AbortSignal,
 		ctx: ExtensionContext,
 	) => {
+		// FORK(FD-016): scheduled launches keep their owning context without replacing the live active session.
 		const ownerSessionId = resolveCurrentSessionId(ctx.sessionManager);
 		const runtimeOwnerId = ctx.sessionManager.getSessionId() || null;
 		let ownerExecutors = scheduledOwnerExecutors.get(runtimeOwnerId);
@@ -7580,6 +7487,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 }
 
 /** Fleet resume delegate: runs the SAME eligibility check the model resume path runs. */
+// FORK(FD-018): Fleet resume reuses the public boundary so resumed runs pass the same gate as model resumes.
 export type FleetResumeExecutor = Pick<ReturnType<typeof createSubagentExecutor>, "executePublic">;
 
 export async function resumeFleetRun(
