@@ -161,5 +161,18 @@ Apply order:
 Last integration 2026-09-29 on `merge/upstream-v0.73.1-20260929`: all 46 upstream commits behind
 `2e9c51ba` triaged — 19 TAKE (cherry-pick `-x`), 9 ADAPT (+`62b92bae`/`7c795dce` companion
 hunks, worktree-reuse guard in `matchWorkflowReuse`, fanout-child executor memoization), 18 SKIP.
-Now at `upstream/main` `4416738f` (past `v0.73.1`). Kept divergence: `running-tone.test.ts`
-retains the `"no level at all → accent"` case that upstream `62b92bae` cut (pinned to `1228ed68`).
+Now at upstream/main 4416738f (past v0.73.1). Kept divergence: running-tone.test.ts
+retains the no-level-at-all accent case that upstream 62b92bae cut (pinned to 1228ed68).
+
+## Sync-tax wave (2026-09-29, same branch)
+
+Follow-up on the integration branch to cut future sync cost (hybrid rule: delete stable/dead
+upstream code, keep dormant shape where upstream churns; every site gets a FORK(FD-###) marker
+into docs/fork-decisions.md FD-001 to FD-021, guarded by
+test/unit/fork-decision-markers.test.ts): CHANGELOG merge=union plus scripts/upstream-triage.mjs
+plus scripts/sync-verify.sh; drift fixes plus test/unit/fork-surface-drift.test.ts; red-test fixes
+(all 12 pre-sync baseline failures now pass: Herdr sockets via short /tmp dirs, fleet viewport,
+watcher determinism, 10-field allowlist expectation); retained-path timeout integration tests;
+2-action registry cut (lane.recordMerge/recordSupersession; 6 pinned actions kept per boundary
+contract); executor boundary consolidation (resolvePublicSubagentRequest); runner/executor markers.
+Post-tax gate: unit 3796/3809 pass, 0 fail; integration 1066/1074, 0 fail.
