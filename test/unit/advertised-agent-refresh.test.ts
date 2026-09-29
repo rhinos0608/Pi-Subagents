@@ -89,7 +89,7 @@ it("emits bounded file-only snapshots, refreshes through management, and perform
 			let prompt = await noIo(() => emit());
 			assert.match(prompt, /<name>specialist<\/name>/);
 			assert.doesNotMatch(prompt, /hidden-/);
-			assert.match(prompt, /Before execution.*action: "list", capabilities: true/);
+			assert.match(prompt, /Before execution.*action: "guide", topic: "agents"/);
 			assert.equal(await noIo(() => emit(prompt, ["read"])), "base");
 			const ceiling = registerSubagentCapabilityCeiling({ sessionId: "advertised-test", source: "test", ceiling: { allowedAgents: [] } });
 			assert.equal(await noIo(() => emit(prompt)), "base");

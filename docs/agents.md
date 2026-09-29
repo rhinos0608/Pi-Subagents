@@ -246,7 +246,8 @@ A custom agent file that shadows a bundled agent replaces the bundled definition
 
 Native Pi and the six code-owned Claude Code, Codex, and Cursor profiles can run on a Herdr machine (`herdr machine add <target> --label <name>`). Herdr owns each visible agent process in a fresh no-focus pane; SSH is used only as bounded transport for Herdr RPC and ownership checks. Herdr's catalog is the host allowlist; raw ssh targets are rejected.
 
-`machine` is a top-level frontmatter key and a settings override (`subagents.agentOverrides.<agent>.machine`, project beats user, `false` clears a pin). It is not a model-callable `subagent` field or a workflow `runs.run` child field; chain and parallel steps configure placement through their internal step config. Placement survives `subagent({ action: "disable" })`, `reset`, and model profile switches.
+`machine` is a top-level frontmatter key and a settings override (`subagents.agentOverrides.<agent>.machine`, project beats user, `false` clears a pin). It is not a model-callable `subagent` field or a workflow `runs.run` child field; chain and parallel steps configure placement through their internal step config. Placement survives agent disable, `reset`, and model profile switches.
+`machine` is managed through operator config and Fleet agent controls, not the model tool.
 
 `cwd` means the directory on that machine when a machine is set. An absolute path or `~/...` is used as given; a relative path joins the repo's configured machine root; with no cwd the root is used; with no root the launch fails closed naming the setting:
 
@@ -269,7 +270,7 @@ pi-subagents never clones, pulls, or checks out on the machine. Generic `externa
 
 Set `advertise: true` in a specialist's agent file frontmatter for parent-prompt discovery, or in `subagents.agentOverrides.<name>.advertise` when the definition must stay untouched. When the `subagent` tool is active, pi-subagents adds an agent-owned catalog of names and descriptions to the parent system prompt. Disabled agents and agents excluded by the current capability ceiling are omitted. Advertisement is not supported through runtime registration.
 
-Advertisement is opt-in discovery, not automatic routing. The catalog is sorted by name and limited to 16 agents and 12,288 total rendered UTF-8 bytes, including XML escaping, instructions, and omission counts. Descriptions are capped at 512 UTF-8 bytes before escaping. Entries that cannot fit are omitted; canonical agent names are never truncated. The parent still checks Fleet agent output before execution to confirm that the selected agent is executable (including `runner.available === true` for external CLI agents).
+Advertisement is opt-in discovery, not automatic routing. The catalog is sorted by name and limited to 16 agents and 4,096 total rendered UTF-8 bytes, including XML escaping, instructions, and omission counts. Descriptions are capped at 160 UTF-8 bytes before escaping. Entries that cannot fit are omitted; canonical agent names are never truncated. The parent still checks Fleet agent output before execution to confirm that the selected agent is executable (including `runner.available === true` for external CLI agents).
 
 The file catalog snapshot refreshes at session start/reload and after extension-owned agent-management mutations. External file or settings edits require `/reload`; ordinary turns do not poll the filesystem. Tool availability and capability-ceiling filtering are checked in memory on every prompt. A failed management-triggered refresh withdraws the catalog until a successful refresh, without changing the persisted mutation's result.
 

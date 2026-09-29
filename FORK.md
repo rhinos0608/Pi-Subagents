@@ -3,8 +3,10 @@
 This repo is a fork of [nicobailon/pi-subagents](https://github.com/nicobailon/pi-subagents)
 (maintained at `rhinos0608/Pi-Subagents`, remote `origin`; upstream remote is `upstream`).
 
-The fork diverges at the model-facing **surface and guidance** layer and deliberately keeps
-runtime internals close to upstream so syncing stays cheap. Small tool in, full engine inside:
+The fork diverges at the model-facing **surface and guidance** layer and carries measured
+runtime-internal edits alongside it (115 src files changed vs merge-base; executor/runner
+internals carry fork runtime edits), while keeping the model-visible contract small so
+syncing stays reviewable. Small tool in, full engine inside:
 the model sees 9 fields and 6 actions; Fleet, slash commands, and RPC keep the rest.
 
 ## Divergence principles
