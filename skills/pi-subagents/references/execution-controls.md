@@ -20,7 +20,7 @@ Project settings resolve from the nearest parent directory containing `.pi` or `
 
 ## Running Subagents
 
-The model tool has exactly 7 fields: `agent`, `task`, `cwd`, `workflowScript`, `action`, `id`, `message`. Launch omits `action`. Control actions are `steer`, `resume`, `interrupt`, `status`, plus `guide` and `validate`. Everything else (agent management, run stop, diagnostics, missions, schedules) lives in Fleet and slash commands.
+The model tool has exactly 9 fields: `agent`, `task`, `cwd`, `workflowScript`, `args`, `action`, `id`, `message`, `topic` (`topic` is guide-only; `args` is a plain JSON object for `workflowScript` only, readable in the script as the frozen global `args` — never secrets). Launch omits `action`. Control actions are `steer`, `resume`, `interrupt`, `status`, plus `guide` and `validate`. Everything else (agent management, run stop, diagnostics, missions, schedules) lives in Fleet and slash commands.
 
 ### External CLI profiles
 
@@ -65,7 +65,7 @@ Foreground results, async status, fleet, and widget surfaces label fresh childre
 
 `workflowScript` is the public composition surface when the parent needs JavaScript control flow or data-dependent branching. Use `runs.run(key, { agent, task, ... })` for keyed children, `runs.all([...])` for parallel children, and ordinary JavaScript for sequence, filtering, retries, and aggregation. Scripts are ordinary JavaScript statement bodies, so use an explicit return such as `return runs.run("main", { agent: "worker", task: "..." })` for a useful one-child result. Use top-level `await`, plain helper functions, or explicit Promise chains; nested `async function` helpers, async arrows, and async methods are rejected.
 
-Each `runs.run` / `runs.all` child accepts exactly: `agent`, `task`, `cwd`, `resume`, `as`, `phase`, `label`, `lane`, `index`, `output`, `outputMode`, `reads`, `progress`, `async`. There are no per-child model, thinking, tool-budget, timeout, context, skill, worktree, or ref fields.
+Each `runs.run` / `runs.all` child accepts exactly: `agent`, `task`, `cwd`, `resume`, `as`, `phase`, `label`, `lane`, `index`, `worktree`. Pass `worktree: true` on a child for its own managed worktree (requires a clean git tree); omitted, the child uses the workflow/operator launch defaults (`prepareWorkflowLaunchParams` spreads `{...workflowDefaults, ...childParams}`, and `resolveWorkflowChildLocalCwd` falls back to the workflow cwd). Only `worktree: true` creates a per-child managed worktree via worktree admission. There are no per-child output, outputMode, reads, progress, model, thinking, tool-budget, timeout, context, skill, baseRef, isolation, ref, or async fields. Output routing comes from the agent definition (`output`, `outputMode`, `defaultReads`, `defaultProgress`) plus tooling-managed run artifacts: the runtime saves each child's managed output artifact and exposes it as the awaited `result.output` (with `outputReference` / `artifactPaths` for durable consumers). Name scratch report paths in task text and consume the aggregate workflow result; do not pass per-child output routing fields.
 
 ```js
 subagent({
@@ -82,7 +82,7 @@ subagent({
 
 Scripts run in a timed worker with only `runs.run`, `runs.all`, `runs.status`, `emit`, captured `console`, and standard JavaScript. Pass explicit task text to `runs.run`. Stable keys are required. Give each child a distinct decision and output path when reports must outlive the workflow, then consume the aggregate workflow result before opening individual reports. Do not ask children to write `reports/...` or other repo-root scratch paths in task text.
 
-For one host-run verification command, an agent definition may carry `gate: "npm test"` shorthand. For a typed post-run check, the object form `gate: { command, output: "json", schema?, timeoutMs? }` makes the parsed stdout the child's `structuredOutput`, so a script can branch on `result.structuredOutput` without the parent reading the child's output. Pair it with `output` + `outputMode: "file-only"` so the command reads the saved file. Typed gates are never memoized.
+For one host-run verification command, an agent definition may carry `gate: "npm test"` shorthand. For a typed post-run check, the object form `gate: { command, output: "json", schema?, timeoutMs? }` makes the parsed stdout the child's `structuredOutput`, so a script can branch on `result.structuredOutput` without the parent reading the child's output. For large summaries, set file-only output routing on the agent definition or override so the command reads the saved file. Typed gates are never memoized.
 
 Completed workflow children from this parent session stay addressable as retained children with explicit `resumable` / `not resumable` state. Resume only `resumable` rows with `subagent({ action: "resume", id: "<run-id>", message: "..." })`. Resume performs the authoritative eligibility check and may reject the attempt. For a retained-child challenge, use `resume` instead of `steer` when the child is complete. Launch a same-role fallback challenge, labeled as fallback, only when no known candidate exists or resume rejects eligibility. A later workflow continues a resumable child with `runs.run(key, { resume: "<run-id>", task: "follow-up" })`. Pass explicit follow-up task text. `resume` and `agent` are mutually exclusive, and the revived child keeps its stored agent and tool contract.
 
@@ -96,9 +96,9 @@ Use raw `runs.run(...)` / `runs.all(...)` instead when branching or rolling fano
 
 ### Async/background
 
-Prefer async mode for every subagent launch. This applies to scouts, researchers, workers, reviewers, validators, oracle checks, one-off delegates, final review gates, publication gates, and scripted workflows.
+Placement follows agent defaults and operator config such as `asyncByDefault` and `forceTopLevelAsync`; there is no `async` call field on the model tool or on workflow children. Prefer background placement for every subagent launch. This applies to scouts, researchers, workers, reviewers, validators, oracle checks, one-off delegates, final review gates, publication gates, and scripted workflows.
 
-Use `async:false` only when the parent must block until completion. Async mode still shows progress. Do not use `async:false` because a task is short, because it is the last gate, because no other work is ready, because the user asked to finish the overall job, or because blocking is convenient.
+Keep a launch in the foreground only when the parent must block until completion. Background placement still shows progress. Do not force foreground placement because a task is short, because it is the last gate, because no other work is ready, because the user asked to finish the overall job, or because blocking is convenient.
 
 Async does not mean parallel writes. Do not edit the same active worktree while an async worker is changing it.
 
@@ -108,14 +108,13 @@ In an ordinary interactive chat, normally return control after launching or tria
 
 ```typescript
 subagent({
-  workflowScript: `return runs.run("main", { agent: "worker", task: "Run the full test suite" })`,
-  async: true
+  workflowScript: `return runs.run("main", { agent: "worker", task: "Run the full test suite" })`
 })
 ```
 
-File-only output mode works for workflowScript child launches. Use relative child output paths for scratch reports so the runtime stores them under the run artifact directory and age-based cleanup can remove them. Use absolute paths only for user-approved durable destinations.
+Child outputs land in tooling-managed run artifacts. Name relative scratch report paths in task text so the runtime stores them under the run artifact directory and age-based cleanup can remove them. Use absolute paths only for user-approved durable destinations.
 
-The `output` field is the API binding; a filename mentioned in task text is only instruction and does not override runtime routing. When a later workflow step or parent needs a durable file, set `output` on `runs.run`/`runs.all` and return the child's `outputReference` or `artifactPaths`.
+A filename mentioned in task text is only instruction; durable consumers should read the child's managed `outputReference` or `artifactPaths` from the awaited workflow result. When a later workflow step needs an earlier child's content, hold the awaited result in an ordinary JavaScript variable and interpolate it (or its managed artifact reference) into the later task text.
 
 While children run, the persistent FleetView and the collapsed foreground tool-result card show live per-child detail. `/subagents-fleet` opens the live fleet inspector, which also has per-child controls (`s` steer, `D` stop with confirmation, `Enter`/`H` inspect).
 
@@ -189,7 +188,7 @@ Steering supports three delivery modes via the `mode` parameter (`steer` is the 
 
 Single-agent and workflow launches support `outputSchema` (JSON Schema object) for structured output; the runtime validates structured output and exposes it as `structuredOutput`. Acceptance is configured on agent definitions and operator config; there is no per-call acceptance parameter. Agent frontmatter may provide `acceptance`, `acceptanceRole`, and JSON `outputSchema` defaults.
 
-Foreground `async:false` children run in-process and do not load the parent's ambient extensions. MCP tools and provider-extension models therefore require background children, which load extensions in the detached runner.
+Foreground children run in-process and do not load the parent's ambient extensions. MCP tools and provider-extension models therefore require background children, which load extensions in the detached runner.
 
 ## Watchdog
 
@@ -217,7 +216,7 @@ Routing rule:
 
 ## Worktree Isolation
 
-When multiple agents might write concurrently, use managed worktree isolation instead of letting them share one filesystem view. Worktree defaults live in operator config; Fleet run details show the worktree/branch per child. Git worktrees start from tracked files, so ignored or untracked build state such as `node_modules` may be absent — treat dependency setup as an explicit bootstrap step before running tests.
+When multiple agents might write concurrently, use managed worktree isolation instead of letting them share one filesystem view. In a workflow, pass `worktree: true` on each writer child; for single `{agent, task}` launches (no `worktree` field) the parent creates one git worktree per writer (outside auto-discovered extension dirs) and passes that path as the child's `cwd`. Fleet run details show the worktree/branch per child via the worktree summary. Git worktrees start from tracked files, so ignored or untracked build state such as `node_modules` may be absent — treat dependency setup as an explicit bootstrap step before running tests.
 
 ## The Oracle Workflow
 

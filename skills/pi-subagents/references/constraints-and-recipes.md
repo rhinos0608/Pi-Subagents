@@ -12,8 +12,7 @@ This file is a detailed reference loaded from `skills/pi-subagents/SKILL.md`.
 - **Attention signals are not lifecycle state.** `needs_attention` means no activity has been observed past the configured threshold. `paused` means the child turn was intentionally interrupted or is awaiting direction; it is not the same as `failed`.
 - **Intercom asks are blocking.** A session can only maintain one pending outbound
   ask wait state at a time.
-- **Keep conversational authority clear.** Advisory subagents should not silently
-  become second decision-makers.
+- **Keep conversational authority clear.** Subagents provide advisory findings; the parent orchestrator evaluates suggestions and retains decision authority.
 - **Respect the fixed authority policy.** `authorityPolicy` is a small `auto` / `confirm` / `forbid` map for supported operational actions. Destructive cleanup and spawn-budget grants default to confirmation; steer and interrupt remain automatic. Confirm-required actions refuse safely without an interactive UI and retained paths include manual Git recovery commands.
 
 Runtime config can change orchestration behavior. `intercomBridge.resultDelivery: false` disables only external acknowledged grouped-result delivery when native parent notifications own completion; supervisor asks/progress stay active, and enabled transport failures are still reported. `asyncByDefault` and `forceTopLevelAsync` affect whether launches detach; headless auto-drain of settled runs remains active; `globalConcurrencyLimit` bounds concurrent fanout, while a positive `maxSubagentSpawnsPerSession` optionally caps cumulative launches (`0` or unset is unlimited). Status and Fleet report the budget; static work preflights declared capacity; only the settled root interactive parent can approve a spawn-budget grant after native confirmation, with total grants bounded by the original cap. Compaction does not reset usage or grants; `singleRunOutputBaseDir` and `worktreeBaseDir` route outputs and worktrees; `completionBatch` groups async notifications. `artifactDir` is `session` (default), `project`, or `temp` and chooses where subagent artifacts are stored. Set `asyncWidget: false` to hide the above-editor background-run widget when a companion footer or dashboard owns that space (fleet inspector remains available). Per-run `artifacts: false` disables artifact capture for that launch. Async status and result artifacts include `lifecycleArtifactVersion` and fields such as `workflowGraph`, `steps`, `results`, `totalTokens`, `totalCost`, `turnCount`, `toolCount`, and nested `children`. Prefer these artifacts and `status` views over scraping terminal output.
@@ -26,12 +25,12 @@ For durable evidence, copy only the final summary to session memory, a PR body/c
 
 ## Best Practices
 
-- Run subagents asynchronously by default; direct one-child execution is enough for one bounded task, while `workflowScript` is the composition surface for JavaScript control flow and data-dependent branching. Use `async: false` only when the parent must block. See `references/execution-controls.md` → Async/background for wait semantics.
+- Run subagents in the background by default; direct one-child execution is enough for one bounded task, while `workflowScript` is the composition surface for JavaScript control flow and data-dependent branching. Runs detach per config; coordinate sequential steps with JavaScript `await`. See `references/execution-controls.md` → Async/background for wait semantics.
 - For a predeclared broad plan split into visible narrow stages, use `runs.lanes([...])` inside `workflowScript`; use raw `runs.run(...)`/`runs.all(...)` for conditional or rolling flows. See [`execution-controls.md`](execution-controls.md#parallel-sequential-lanes).
-- Keep one writer per cwd/worktree. Parallelize reading, review, and validation; concurrent writers need isolated worktrees. Give every child a cold-start packet with its goal, target/ref, authority, context, success criteria, validation, output, and stop rules.
+- Parallelize reading, review, and validation freely. Give concurrent writers worktree isolation when the tree is clean (`worktree: true` on each workflow writer child; for single `{agent, task}` launches the parent creates the worktree and passes it as the child's `cwd`), disjoint file ownership in the shared checkout otherwise (see `multi-lane-orchestration.md`). Give every child a cold-start packet with its goal, target/ref, authority, context, success criteria, validation, output, and stop rules.
 - Keep tasks narrow and standalone; do not rely on issue numbers, broad globs, or supervisor round-trips to supply missing context.
 - Keep authority with the parent. Escalate unapproved product, scope, architecture, merge, credential, or release decisions; checks, receipts, and review bots are evidence, not authority.
-- Use `fresh` context for adversarial review. `fork` is a persisted, history-inheriting branch; see `references/execution-controls.md` for its preconditions.
+- Use fresh-context reviewers for adversarial review. All launches are fresh; no per-call context option changes that.
 - Use a same-session oracle follow-up only when its first answer leaves a material tradeoff. Treat `needs_attention` as a control signal, not failure, and do not interrupt a child merely because it is quiet during tools, tests, or reasoning.
 - Use `/name` when intercom targeting needs a stable session name.
 
@@ -47,12 +46,11 @@ This reference keeps cross-cutting policy and failure handling. Load the matchin
 | Independent lanes, repositories, worktrees, and handoffs | [`references/multi-lane-orchestration.md`](multi-lane-orchestration.md) |
 | Agent management, file authoring, prompt integration, or RPC | [`references/management-authoring-rpc.md`](management-authoring-rpc.md) |
 
-After delegation is operator-authorized, choose the smallest recipe that earns
-its overhead. Recipes select a shape; they do not authorize delegation:
+Choose the recipe whose benefit covers its overhead:
 
 - **Recon → plan → implement:** run one focused `scout`, then one `worker` that consumes its findings.
-- **Implementation:** clarify scope and acceptance, record user-owned decisions and seam/validation contracts, and use a bounded scout, writer, or fresh reviewer only where the requested delegation benefits from that stage. Keep one writer, inspect direct evidence, and require every added stage to earn its overhead. Split large work into serial milestones instead of a writer swarm; do not stop at review without disposition.
-- **Parallel analysis:** fan out only independent read/review/validation work, or isolate each writer in its own worktree. Never run concurrent writers in one checkout.
+- **Implementation:** clarify scope and acceptance, record user-owned decisions and seam/validation contracts, and use a bounded scout, writer, or fresh reviewer where that stage helps. Inspect direct evidence and add stages when they pay for themselves. Do not hand one subagent a monolithic task: run serial milestones or parallel writers partitioned by file or contract ownership; do not stop at review without disposition.
+- **Parallel analysis:** fan out independent read/review/validation work freely; parallel writers need `worktree: true` (workflow children) or parent-created worktrees passed as `cwd` (single launches) when the tree is clean, non-overlapping files otherwise.
 
 ## Error Handling
 

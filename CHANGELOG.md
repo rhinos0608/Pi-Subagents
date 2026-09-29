@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+First npm release of the fork: `v0.71.0-fork.1` (published as `@rhinos0608/pi-subagents`). Forks upstream `v0.71.0`; see `FORK.md` and `docs/fork-delta.md` for the full divergence ledger.
+
+### Added
+
+- Workflow children accept per-child `worktree: true/false` (10-field child allowlist). `true` isolates the child in its own managed worktree at a mirrored subpath and requires a clean git working tree; omit it to use the workflow/operator default. Non-boolean values are rejected before launch. `baseRef` / `isolation` / provider overrides stay rejected on children.
+- Top-level `args` for `workflowScript`: a plain JSON object readable in the script as the frozen global `args` (total ≤ 16 KB with per-value/depth/width limits; persisted as run evidence, so never put secrets in it). Rejected without `workflowScript`.
+
+### Changed
+
+- **Breaking:** the npm package is now `@rhinos0608/pi-subagents` (scoped, public; version `0.71.0` kept). Migration: install `pi install npm:@rhinos0608/pi-subagents` (remove upstream `npm:pi-subagents` first so tools do not register twice); host import specifiers `pi-subagents/...` become `@rhinos0608/pi-subagents/...`.
+
+- The `subagent` tool description is now a single always-on default (~2.2 KB) instead of compact/full modes. `toolDescriptionMode` accepts `"default"` or `"custom"` (operator override via `subagent-tool-description.md` with `{{defaultDescription}}`); legacy `"full"`/`"compact"` values and `{{full}}`/`{{compact}}` placeholders keep working by rendering the default with a deprecation warning.
+
 ### Fork-preserved
 
 - Preserve the fork's internal leaf-model runtime RPC, terminal-result RPC projection, ordered model fallback/exclusion behavior, and disabled-extension-tool warning semantics while integrating upstream 0.71.x changes.

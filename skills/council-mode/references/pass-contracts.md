@@ -4,7 +4,7 @@ Load this before launching council advisors.
 
 ## Pass 1 report
 
-Native Pi advisors should receive this `outputSchema`. External runners should receive the same shape as plain JSON text and no `outputSchema`.
+Native Pi advisors declare this `outputSchema` in agent definition frontmatter. External runners should receive the same shape as plain JSON text and no `outputSchema`.
 
 ```js
 const pass1OutputSchema = {
@@ -93,7 +93,7 @@ Do not replace `runtime-default-unknown` with a guessed context.
 
 A challenge packet contains only disputed claims, strong conflicting evidence, missing proof, owner decisions, and high-impact risks. Attribute peer content as "another advisor". Do not include full peer reports.
 
-Native Pi advisors receive `pass2OutputSchema`. External runners and fresh external fallbacks receive the same shape as JSON-only task text and no `outputSchema`.
+Native Pi advisors declare `pass2OutputSchema` in agent definition frontmatter. External runners and fresh external fallbacks receive the same shape as JSON-only task text and no `outputSchema`.
 
 ```js
 const pass2OutputSchema = {

@@ -10,7 +10,7 @@ Use orchestration as parent-agent guidance, not as a runtime workflow mode. For 
 clarify → scout → worker → fresh reviewers → worker
 ```
 
-Packaged `worker`, `oracle`, and `advisor` all launch with fresh context, so each child starts from its assigned brief instead of the parent's unfinished conversation.
+Packaged `worker`, `oracle`, and `advisor` all launch with fresh context, so each child starts from its assigned brief instead of the parent's unfinished conversation. Do not hand one subagent a monolithic task; either stage it sequentially (for example scout → worker → reviewer) or fan out across independent seams or files.
 
 ## Prompt shortcuts
 
@@ -30,13 +30,23 @@ Add `autofix` to `/parallel-review` or `/parallel-cleanup` to apply only the syn
 
 Use direct `{ agent, task }` for one bounded child. Use `workflowScript` when the parent needs a stable keyed child, sequence, fanout, steering, retry, or aggregation. For ordinary parallel fanout, use `await runs.all([{ key, agent, task }, ...])`. It resolves to an ordered array, not a key map, so use indexes, destructuring, or `.map(...)`, not `results.<key>`. Do not read `.output` from unawaited `runs.run` launches. Scripts are ordinary JavaScript statement bodies. Use an explicit `return` for a useful result:
 
-For multi-step or parallel work, make exactly one top-level `subagent` workflow call and launch children only inside it. Available sandbox helpers include `runs.run`, `runs.all`, `runs.steer`, `runs.status`, `emit`, `console`, and standard JavaScript. No filesystem, shell, arbitrary Pi tools, or host globals are available.
+For multi-step or parallel work, group it inside one top-level `subagent` workflow call and launch children inside it; this reduces turns compared to multiple sequential tool calls. Available sandbox helpers include `runs.run`, `runs.all`, `runs.steer`, `runs.status`, `emit`, `console`, and standard JavaScript. No filesystem, shell, arbitrary Pi tools, or host globals are available.
 
 Child results cross into the script as plain JSON data. Use returned fields such as `runId`, `ok`, `output`, and `structuredOutput` for workflow control.
 
 Children always run awaited: the script continues once the child settles with its final result. `ok` confirms successful child completion, not successful dispatch.
 
 A workflow can finish dispatch while these children remain running. Its summary and child rows identify that distinction. Consume the later child result before treating its work or report as complete.
+
+### Workflow args (`args`)
+
+A top-level `subagent({ workflowScript, args })` call can pass data into the script as the frozen global `args` — no string interpolation needed. `args` must be a plain JSON object (total ≤ 16 KB; string values non-empty, ≤ 16 KB each; depth ≤ 8; arrays ≤ 64 items; objects ≤ 16 keys with non-empty names; numbers finite), is deep-frozen before the script reads it, and is persisted as run evidence, so never put secrets in it. `args` without `workflowScript` is rejected.
+
+```js
+subagent({ workflowScript: `
+  return "Reviewing " + args.repo + " at severity " + args.severity;
+`, args: { repo: "auth", severity: "high" } });
+```
 
 Validate a script without launching children:
 
@@ -47,7 +57,9 @@ subagent({ action: "validate", workflowScript: `
 ` });
 ```
 
-Each `runs.run` / `runs.all` child accepts exactly: `agent`, `task`, `cwd`, `resume`, `as`, `phase`, `label`, `lane`, `index`. There are no per-child model, thinking, tool-budget, timeout, context, skill, worktree, ref, output, outputMode, reads, progress, or async fields; those resolve from agent definitions and operator config.
+Each `runs.run` / `runs.all` child accepts exactly: `agent`, `task`, `cwd`, `resume`, `as`, `phase`, `label`, `lane`, `index`, `worktree`. There are no per-child model, thinking, tool-budget, timeout, context, skill, ref, output, outputMode, reads, progress, or async fields; those resolve from agent definitions and operator config.
+
+`worktree: true` gives that child its own managed worktree at a mirrored subpath (requires a clean git working tree — commit or stash first); omit it to use the workflow/operator default. `worktree` must be a boolean; `baseRef` / `isolation` / provider overrides stay rejected on children.
 
 ```js
 subagent({ workflowScript: `

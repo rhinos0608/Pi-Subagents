@@ -247,6 +247,7 @@ const SubagentParamProperties = {
 	message: Type.Optional(Type.String({ description: "resume/steer guidance or project.open prompt." })),
 	topic: Type.Optional(Type.String({ description: "Guide topic for action:'guide' only; ignored on other actions." })),
 	workflowScript: Type.Optional(Type.String({ minLength: 1, description: "Inline JavaScript statement body; raw/unknown provenance, no runs.host. Use explicit return and top-level await; see tool guidance/guide workflows." })),
+	args: Type.Optional(Type.Unsafe({ type: "object", additionalProperties: true, description: "Plain JSON object readable in the script as the frozen global 'args'; persisted as run evidence, so never put secrets in it." })),
 	cwd: Type.Optional(Type.String({ description: "Execution/project-pane directory." })),
 };
 

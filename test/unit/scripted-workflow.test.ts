@@ -1894,11 +1894,11 @@ describe("scripted workflow runtime", () => {
 	it("rejects per-child workflow controls on workflow children", async () => {
 		await assertWorkflowChildRejectedBeforeLaunch(
 			`const one = await runs.run("one", { agent: "worker", task: "one", worktree: true, control: { needsAttentionAfterMs: 111 } }); return one.key;`,
-			/unsupported fields: worktree, control/,
+			/unsupported fields: control/,
 		);
 		await assertWorkflowChildRejectedBeforeLaunch(
 			`return runs.all([{ key: "two", agent: "worker", task: "two", worktree: false, control: { enabled: false } }]);`,
-			/unsupported fields: worktree, control/,
+			/unsupported fields: control/,
 		);
 	});
 

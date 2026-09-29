@@ -2539,7 +2539,7 @@ export interface ProactiveSkillSubagentsConfig {
 	preferredAgent?: string;
 }
 
-export type ToolDescriptionMode = "full" | "compact" | "custom";
+export type ToolDescriptionMode = "default" | "custom";
 export type InlineToolDisplay = "rich" | "summary";
 
 export interface ScheduledRunsConfig {
@@ -2604,7 +2604,7 @@ export interface ExtensionConfig {
 	asyncWidget?: boolean;
 	/** Exact provider/model candidates mapped to operator-declared equivalent response IDs. Empty arrays add no accepted IDs. */
 	modelResponseAliases?: Record<string, string[]>;
-	/** Tool description variant registered for the parent-facing subagent tool. Defaults to split metadata. */
+	/** Tool description variant registered for the parent-facing subagent tool. Omit or use "default" for the always-on default description plus split prompt metadata; "custom" reads subagent-tool-description.md. Legacy "full"/"compact" values map to the default with a deprecation warning. */
 	toolDescriptionMode?: ToolDescriptionMode;
 	/** Inline chat rendering for the subagent tool. Defaults to rich. */
 	inlineToolDisplay?: InlineToolDisplay;

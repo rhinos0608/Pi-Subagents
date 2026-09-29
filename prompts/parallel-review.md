@@ -4,7 +4,7 @@ description: Parallel subagents review
 
 Launch parallel reviewers for an adversarial review of the current work.
 
-Use fresh context, not forked context, unless I explicitly ask for forked context. Reviewers should inspect the repository, relevant instructions, and current diff directly from files and commands. Do not rely on the main conversation history.
+Launches are always fresh: each reviewer starts from its assigned brief, not the parent conversation. Pass every reviewer the full context it needs inside its task (target files, diff or plan, review angle, acceptance bar). Reviewers should inspect the repository, relevant instructions, and current diff directly from files and commands. Do not rely on the main conversation history.
 
 Give each reviewer a distinct angle. Generate the angles dynamically from the user's intent, the plan, the implemented code, and the current diff. If I specify angles, use mine. Otherwise, choose the highest-value review angles for this specific work.
 

@@ -101,11 +101,14 @@ describe("public subagent execution normalization", () => {
 		}
 	});
 
-	it("rejects bare arguments and arguments on direct child launches", () => {
+	it("accepts args with workflowScript, including action validate", () => {
+		const script = 'return await runs.run("one", { agent: "worker", task: "check" });';
+		assert.equal(normalizePublicSubagentExecution({ workflowScript: script, args: { target: "src" } }).ok, true);
+		assert.equal(normalizePublicSubagentExecution({ action: "validate", workflowScript: script, args: { target: "src" } }).ok, true);
 		for (const params of [{ args: {} }, { agent: "worker", task: "work", args: {} }] as const) {
 			const result = normalizePublicSubagentExecution(params);
 			assert.equal(result.ok, false);
-			if (!result.ok) assert.match(result.error, /args were removed/);
+			if (!result.ok) assert.match(result.error, /args requires workflowScript/);
 		}
 	});
 

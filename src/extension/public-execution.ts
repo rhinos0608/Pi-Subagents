@@ -1,4 +1,5 @@
 import { normalizeWorktreeBaseRef } from "../runs/shared/worktree.ts";
+import { normalizeWorkflowArgs } from "../workflows/workflow-resources.ts";
 
 export interface PublicSubagentExecutionParams {
 	action?: unknown;
@@ -21,6 +22,7 @@ export interface PublicSubagentExecutionParams {
 	chainName?: unknown;
 	config?: unknown;
 	workflowScript?: unknown;
+	args?: unknown;
 	sessionOnly?: unknown;
 	globalConcurrencyLimit?: unknown;
 	maxSubagentSpawnsPerRun?: unknown;
@@ -84,7 +86,11 @@ export function normalizePublicSubagentExecution<T extends PublicSubagentExecuti
 		return { ok: false, error: "Named workflow resources were removed; use workflowScript.", mode: "workflow" };
 	}
 	if (raw.args !== undefined) {
-		return { ok: false, error: "args were removed; inline values directly in workflowScript.", mode: "workflow" };
+		if (params.workflowScript === undefined) {
+			return { ok: false, error: "args requires workflowScript; omit args on agent/task launches and other actions.", mode: params.action === undefined ? "workflow" : "management" };
+		}
+		const normalizedArgs = normalizeWorkflowArgs(raw.args);
+		if ("error" in normalizedArgs) return { ok: false, error: normalizedArgs.error, mode: params.action === undefined ? "workflow" : "management" };
 	}
 	const hasWorkflowInput = params.workflowScript !== undefined;
 	const hasCapacityOverride = params.globalConcurrencyLimit !== undefined || params.maxSubagentSpawnsPerRun !== undefined;

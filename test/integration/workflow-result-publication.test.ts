@@ -32,7 +32,7 @@ describe("host workflow result publication", { skip: !available }, () => {
 		const executor = createSubagentExecutor!({ pi, state, config: {}, asyncByDefault: false, tempArtifactsDir: tempDir,
 			getSubagentSessionRoot: () => tempDir, expandTilde: (p: string) => p, discoverAgents: () => ({ agents: [makeAgent("worker")] }),
 		});
-		// Per-call async was removed from model-authored workflow children (8-field tool
+		// Per-call async was removed from model-authored workflow children (9-field tool
 		// contract): child-level async must fail loud with the exact allowlist message.
 		const result = await executor.execute("dispatch-reporting", { async: background, mission: false,
 			workflowScript: 'return await runs.run("child", { agent: "worker", task: "Wait for fixture release", async: true });',

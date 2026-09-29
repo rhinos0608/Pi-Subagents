@@ -54,10 +54,10 @@ for (const relativePath of expectedDirectories) {
 }
 
 const sourcePackage = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
-if (sourcePackage.private !== true) throw new Error("The source package must remain private; publish only ./dist-pkg");
+if (sourcePackage.private !== true && sourcePackage.name === "pi-subagents") throw new Error("The upstream source package must remain private; publish only ./dist-pkg");
 const copyFields = [
 	"name", "version", "description", "author", "license", "repository", "homepage", "bugs",
-	"bin", "dependencies", "peerDependencies", "peerDependenciesMeta", "engines", "keywords",
+	"bin", "dependencies", "peerDependencies", "peerDependenciesMeta", "engines", "keywords", "publishConfig",
 ];
 const publishedPackage = { type: sourcePackage.type };
 for (const field of copyFields) {

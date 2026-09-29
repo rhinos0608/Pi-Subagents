@@ -44,7 +44,7 @@ async subagent worker · background
     Press configured-expand-key for live detail
 ```
 
-To inspect one background child in text, use `subagent({ action: "status", id: "...", view: "transcript" })`; add `index` for a specific child in a parallel or chain run.
+To inspect one background child in text, use `subagent({ action: "status", id: "..." })`. Rich transcript windows (`view: "transcript"`, per-child `index`) are Fleet/RPC/inspect parameters, not model-callable `subagent` fields: the model tool accepts only `agent, task, cwd, workflowScript, action, id, message, topic`.
 
 In Pi fullscreen mode with mouse dispatch, left-click
 anywhere on the async widget's header row to fold it into a live one-line status

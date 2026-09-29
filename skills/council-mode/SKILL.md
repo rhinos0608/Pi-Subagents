@@ -16,17 +16,17 @@ Before launch, read:
 
 ## Roster
 
-Check the Fleet Agents view, then choose 2-3 executable advisor names that start with `council-`. The prefix is convention only. Never use more than four advisors.
+Check the Fleet Agents view, then choose 2-3 executable advisor names that start with `council-`. The prefix is convention only. Convening 2 to 3 advisors balances diversity of perspective against context and latency overhead; never use more than four advisors.
 
 If fewer than two council profiles are available, fill with `oracle`, then `reviewer`. Both launch fresh like every child. Note fallbacks in the memo. If fewer than two advisors remain, use the normal one-oracle consultation loop and label it degraded mode.
 
 `council-*` profiles live in user or project agent directories, not this package. A profile defines model, tools, output defaults, and persistent stance. Keep advisors read-only, disable inherited skills unless needed, and put stance in the profile body instead of inventing per-run role labels.
 
-External-job/package advisors may join only when their provider is registered. Treat them as ordinary advisor names in `runs.all`, but honor their runner limits: they may lack repo tools, structured output, or resumability. Include evidence they cannot read, request JSON text instead of `outputSchema`, and use a fresh-context fallback when they cannot resume for cross-exam.
+External-job/package advisors may join only when their provider is registered. Treat them as ordinary advisor names in `runs.all`, but honor their runner limits: they may lack repo tools, structured output, or resumability. Include evidence they cannot read, request JSON text instead of per-call `outputSchema`, and use a fresh-context fallback when they cannot resume for cross-exam.
 
 ## Passes
 
-Pass 1 is independent reports. Pass 2 is one cross-exam. Run Pass 3 only when `--max-passes 3` was requested and a material dispute can still be settled by evidence. Never run an unbounded loop.
+Pass 1 is independent reports. Pass 2 is one cross-exam. Run Pass 3 only when `--max-passes 3` was requested and a material dispute can still be settled by evidence. A two-pass sequence (independent review followed by one cross-examination round) avoids diminishing returns and unbounded token spend; never run an unbounded loop.
 
 ## Protocol
 
@@ -40,7 +40,7 @@ Pass 1 is independent reports. Pass 2 is one cross-exam. Run Pass 3 only when `-
 
 If an advisor is not resumable, run the same profile fresh with its Pass 1 report and challenge packet. Label it a fresh-context fallback, not true cross-exam.
 
-Do not set `clarify`, `worktree`, `gate`, tool budgets, or tight usage budgets on advisors. Bound work through the roster, pass cap, and report length.
+`clarify`, `worktree`, `gate`, and tool budgets are not part of the model tool surface, so do not set them on advisors. Bound work through the roster, pass cap, and report length.
 
 ## Memo
 
@@ -56,4 +56,4 @@ The memo states:
 - confidence and what would change the decision
 - roster, passes, and fallbacks
 
-Identify advisors by profile name. Escalate to a writer only after the memo and only when the user requests it.
+Identify advisors by profile name. Council passes are advisory; implementing the decision is a separate writer step, best launched after the memo settles the recommendation and implementation is in scope.

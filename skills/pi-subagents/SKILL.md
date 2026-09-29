@@ -1,23 +1,21 @@
 ---
 name: pi-subagents
 description: |
-  Technical guidance for operator-requested delegation to builtin or custom
+  Technical guidance for delegating to builtin or custom
   subagents: bounded handoffs, parallel review, scripted workflows, async work,
   fresh launch context, isolation, and coordinated execution.
 ---
 
 # Pi Subagents
 
-The parent works directly by default. Invoke subagents only when the operator
-requested delegation in the current request or through applicable user/project
-instructions. Task size, complexity, risk, tool-call count, recipe fit, or an
-available specialist does not independently authorize delegation.
-
-Once authorized, choose the smallest bounded shape that earns its token and
-elapsed-time overhead through concrete evidence, independent review,
-specialization, useful parallelism, or needed isolation. A single child is
-valid; writer, challenge, and review stages must each earn their overhead rather
-than becoming default ceremony. The parent keeps user intent, constraints,
+Delegate when a child adds something the parent cannot get as cheaply on its
+own: concrete evidence, independent review, specialization, useful parallelism,
+context offload, or isolation. Each stage costs tokens and elapsed time, so pick
+the shape whose benefit covers that overhead. A single child is valid; add
+writer, challenge, and review stages when they pay for themselves. Do not
+hand one subagent a monolithic task: either stage it sequentially (for
+example, scout \u2192 worker \u2192 reviewer, or serial milestones) or fan out
+across independent seams or files. The parent keeps user intent, constraints,
 routing, arbitration, decisions, final acceptance, and publication authority,
 and may perform the work directly where it is the most efficient owner.
 
@@ -59,9 +57,10 @@ generator, or schema change. Native direct `{ agent, task }` calls have no
 top-level `label` parameter; do not invent one or wrap a tiny single task in
 a workflow just to label it.
 
-Use async/background by default. Set `async:false` only when the parent must
-block. Final reviews, validation gates, oracle checks, and publication checks
-stay async.
+Runs detach in the background by default per config, so prefer background
+execution and coordinate sequential steps with JavaScript `await` inside the
+`workflowScript`. Final reviews, validation gates, oracle checks, and
+publication checks stay detached.
 
 In an ordinary interactive session, yield after launching or triaging useful
 async lanes and let Pi wake the parent on completion; ordinary async subagents
@@ -76,29 +75,30 @@ that runner explicitly supports the option.
 
 ## Read the reference for the branch
 
-For exact API fields and worked examples, call `subagent({action:"guide",message:"tool-reference"})` or `message:"workflows"`. The model tool has exactly 7 fields (`agent`, `task`, `cwd`, `workflowScript`, `action`, `id`, `message`); management lives in Fleet and slash commands.
+For exact API fields and worked examples, call `subagent({action:"guide",topic:"tool-reference"})` or `topic:"workflows"`. The model tool has exactly 9 fields (`agent`, `task`, `cwd`, `workflowScript`, `args`, `action`, `id`, `message`, `topic`, where `topic` is guide-only and `args` is a plain JSON object for `workflowScript` only); management lives in Fleet and slash commands.
 
 | Branch | Read |
 | --- | --- |
 | Delegate or choose roles, prompts, models, or slash commands | `references/prompting-and-roles.md` |
-| Execute single, scripted, async, forked, watchdog, oracle, or intercom workflows | `references/execution-controls.md` |
+| Execute single, scripted, async, watchdog, oracle, or intercom workflows | `references/execution-controls.md` |
 | Review, validate, triage gate failures, or prepare delivery | `references/review-and-validation.md` |
 | Coordinate lanes, worktrees, repositories, or writer waves | `references/multi-lane-orchestration.md` |
 | Create, edit, disable, eject, or expose agents/RPC via Fleet and slash | `references/management-authoring-rpc.md` |
 | Check safety constraints, recipes, or error handling | `references/constraints-and-recipes.md` |
+| Build planning context or implementation handoff briefs | `references/recipes-walkthrough.md` |
 
-For an authorized complex delegated workflow, read `prompting-and-roles.md` and
+For a complex delegated workflow, read `prompting-and-roles.md` and
 `execution-controls.md`, then load `review-and-validation.md` and
 `constraints-and-recipes.md` before launch or review.
 
 ## Operating rules
 
 - Avoid duplicate scouts, overlapping writers, and vague prompts without a concrete deliverable.
-- Keep the parent on the ordinary strong default model. Route workers/scouts to a fast capable tier, serious reviews to a strong tier, and top reasoning to bounded read-only critique.
+- Keep the parent on the ordinary strong default model. Distinct models can be assigned per agent definition to balance cost and capability (for example, lightweight models for scout/worker tasks, high-capacity models for review).
 - Exact model names are deployment policy. Put them in user/project settings or profiles, not package guidance.
 - Give every child a compact meta-prompt checklist: objective; repo/cwd/ref; authority/edit boundary; relevant files/contracts and constraints; success/acceptance criteria; validation; expected output/report; and stop/ask conditions. See `references/prompting-and-roles.md`.
 - Before launching a writer for substantial mutation work, classify it as single-seam or multi-seam and partition multi-seam work across exclusive component owners, gates, and durable handoffs before an integration-only owner. See `references/multi-lane-orchestration.md`.
-- For mutation work, use an isolated lane/worktree when isolation, overlap, or concurrent juggling matters; keep one writer per cwd/worktree. See `references/multi-lane-orchestration.md` for lane mechanics.
+- When writers may touch overlapping files: if git status is clean, pass `worktree: true` on each workflow writer child so it runs in its own managed worktree; for single `{agent, task}` launches (no `worktree` field) the parent creates a git worktree per writer with `git worktree add <path> -b <branch>` outside auto-discovered extension dirs and passes that path as the child's `cwd`; otherwise give each writer disjoint file ownership in the shared checkout \u2014 unless the user has restricted work to a single writer per cwd. See `references/multi-lane-orchestration.md` for lane mechanics.
 - Keep long/high-output validation out of chat: prefer `interactive_shell` dispatch/background monitors, bounded logs, or subagent-owned reports; return a concise summary plus report path unless same-turn output is required. Do not use `interactive_shell` as an implicit fallback for a failed `subagent` lane; see `references/execution-controls.md`.
 - Treat subagent workflow, child launch, prompt runtime, extension load, and child tooling setup failures as lane infrastructure blockers. Stop, report the exact failure and run/worktree state, verify a clean worktree or capture a partial diff, and use only a clear same-protocol retry or an owner-approved execution-mode fallback.
 - For cross-codebase work, record the repo, explicit `cwd`, authority boundary, and expected output before launch.

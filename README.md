@@ -8,13 +8,24 @@
 
 <https://github.com/user-attachments/assets/702554ec-faaf-4635-80aa-fb5d6e292fd1>
 
+> This is a fork — see [FORK.md](FORK.md) for fork policy and [docs/fork-delta.md](docs/fork-delta.md) for the upstream delta ledger.
+
 ## Install
 
 ```bash
-pi install npm:pi-subagents
+pi install npm:@rhinos0608/pi-subagents
 ```
 
-That is the only required step. Background children use the host's SDK: npm Pi keeps its detached Node runner; the official Pi 0.86.1 Linux x64 standalone release loads the same runner through Pi's embedded SDK, without a separate SDK install. See [Standalone background execution](docs/standalone-background.md) for the supported boundary and validation gate.
+If the upstream `npm:pi-subagents` package is already installed, remove it first
+with your Pi extension manager: Pi identifies npm packages by name, so both
+copies could load and register the same tools twice.
+That is the only required step. For local development from a checkout, install
+the working tree directly instead:
+```bash
+pi install /path/to/Pi-Subagents
+```
+
+Background children use the host's SDK: npm Pi keeps its detached Node runner; the official Pi 0.86.1 Linux x64 standalone release loads the same runner through Pi's embedded SDK, without a separate SDK install. See [Standalone background execution](docs/standalone-background.md) for the supported boundary and validation gate.
 
 ## Try this first
 
@@ -44,9 +55,7 @@ Pi is the parent session. A subagent is a focused child Pi session with its own 
 
 When you ask for a subagent, Pi starts the child, gives it the task, and brings the result back. Foreground children run as sessions inside the parent Pi process and stream in the conversation. Background children run as sessions inside a detached runner process that keeps working and can be checked later.
 
-Installing the extension does not start an automatic reviewer in the background. The `subagent` tool is available whenever the extension loads; when your request or applicable instructions authorize delegation, Pi can call it directly. Complexity alone does not authorize delegation.
-
-If you want every implementation reviewed, say so in your prompt or project instructions:
+Installing the extension does not start an automatic reviewer in the background. The `subagent` tool is available whenever the extension loads, and Pi can call it whenever delegation helps. Delegation policy is yours to set: if you want every implementation reviewed, or never want delegation without asking, say so in your prompt or project instructions:
 
 ```text
 When you finish implementing, run a reviewer subagent before summarizing.
@@ -110,7 +119,7 @@ For bounded orchestration, `maxSubagentSpawnsPerRun` limits cumulative logical c
 
 or ask: "Check whether subagents and intercom are set up correctly."
 
-For installed-version help, use `/subagents-guide [topic]` or `subagent({ action: "guide", message: "workflows" })`.
+For installed-version help, use `/subagents-guide [topic]` or `subagent({ action: "guide", topic: "workflows" })`.
 
 ## Documentation
 
@@ -122,7 +131,7 @@ The full reference lives in `docs/`:
 | [Models](https://github.com/nicobailon/pi-subagents/blob/main/docs/models.md) | Model resolution from agent definitions plus operator config, defaults, per-role overrides, recommended tiering, thinking levels, model scope enforcement, profiles. No per-call model parameters. |
 | [Workflows](https://github.com/nicobailon/pi-subagents/blob/main/docs/workflows.md) | Orchestration patterns, prompt shortcuts, scripted workflows, worktree isolation, child-to-parent coordination, the recursion guard. |
 | [Watchdog](https://github.com/nicobailon/pi-subagents/blob/main/docs/watchdog.md) | The opt-in adversarial change reviewer, scope monitoring, LSP checks, and child tool permissions. |
-| [Tool reference](https://github.com/nicobailon/pi-subagents/blob/main/docs/tool-reference.md) | The 7 model fields, launch/steer/resume/interrupt/status/guide/validate, workflow child fields, acceptance gates, external CLI runners. Management lives in Fleet and slash commands. |
+| [Tool reference](https://github.com/nicobailon/pi-subagents/blob/main/docs/tool-reference.md) | The 9 model fields, launch/steer/resume/interrupt/status/guide/validate, workflow child fields, acceptance gates, external CLI runners. Management lives in Fleet and slash commands. |
 | [Observability](https://github.com/nicobailon/pi-subagents/blob/main/docs/observability.md) | FleetView, the fleet inspector, lifecycle artifacts, events, logs, session sharing. |
 | [Missions and schedules](https://github.com/nicobailon/pi-subagents/blob/main/docs/missions.md) | Durable mission records and delivery receipts (managed via Fleet and slash commands, not the model tool). |
 | [Configuration](https://github.com/nicobailon/pi-subagents/blob/main/docs/configuration.md) | Every `config.json` key and environment variable. |

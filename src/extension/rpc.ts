@@ -487,7 +487,7 @@ async function executeChecked(
 	// Internal/system params (runId/dir/index/view/lines/mode/steeringRecovery/
 	// async/worktree/output/quiet) are validated per-method above and enforced by
 	// the executor boundary; they must NOT be checked against the model-facing
-	// 8-field public schema here.
+	// 9-field public schema here.
 	const controller = new AbortController();
 	const result = await options.execute(`rpc-${method}-${requestId}`, params, controller.signal, undefined, ctx);
 	failIfToolError(result);

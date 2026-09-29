@@ -309,7 +309,7 @@ interface TaskParam {
 
 /**
  * Model-authored public vocabulary (Phase 6a cutover): agent, task, cwd,
- * workflowScript, action, id, message, topic (guide-only) ONLY. executePublic rejects any other
+ * workflowScript, args, action, id, message, topic (guide-only) ONLY. executePublic rejects any other
  * model-supplied key; the tool schema sets additionalProperties:false so
  * providers reject them before dispatch.
  */
@@ -318,6 +318,7 @@ export interface PublicSubagentParamsLike {
 	task?: string;
 	cwd?: string;
 	workflowScript?: string;
+	args?: Record<string, unknown>;
 	action?: string;
 	id?: string;
 	message?: string;
@@ -568,7 +569,7 @@ function rejectRemovedPublicSubagentFields(params: PublicSubagentParamsLike): st
 	const record = params as Record<string, unknown>;
 	const rejected = (REMOVED_PUBLIC_SUBAGENT_FIELDS as readonly string[]).filter((field) => record[field] !== undefined);
 	if (!rejected.length) return undefined;
-	return `Removed subagent field(s) rejected: ${rejected.join(", ")}. The public subagent vocabulary is agent, task, cwd, workflowScript, action, id, message, topic (guide-only).`;
+	return `Removed subagent field(s) rejected: ${rejected.join(", ")}. The public subagent vocabulary is agent, task, cwd, workflowScript, args, action, id, message, topic (guide-only).`;
 }
 
 /** Control actions target a live run, so they require a non-empty run id. Launch mode omits action and id legitimately. */
@@ -7404,6 +7405,8 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			const normalizedArgs = normalizeWorkflowArgs(publicParams.args);
 			if ("error" in normalizedArgs) return Promise.resolve({ content: [{ type: "text", text: normalizedArgs.error }], isError: true, details: { mode: publicParams.action ? "management" : "workflow", results: [] } });
 			publicParams = { ...publicParams, args: deepFreezeWorkflowArgs(normalizedArgs.args) };
+		} else if ((publicParams as unknown as Record<string, unknown>).args !== undefined) {
+			return Promise.resolve({ content: [{ type: "text", text: "args requires workflowScript; omit args on agent/task launches and other actions." }], isError: true, details: { mode: publicParams.action ? "management" : "workflow", results: [] } });
 		}
 		publicExecutions.add(publicParams);
 		return executeWithSingleDispatchGuard(id, publicParams, signal, onUpdate, ctx);

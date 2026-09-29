@@ -124,6 +124,14 @@ With `"summary"`, a tool result looks like this:
 ✓ reviewer · completed
 ```
 
+## `toolDescriptionMode`
+
+```json
+{ "toolDescriptionMode": "custom" }
+```
+
+Controls the `subagent` tool description shown to the model. The default (omit the key or use `"default"`) registers one always-on description (~2.2 KB) covering the execution shape, owned-run controls, guide topics, and the safety kernel, plus split prompt metadata. `"custom"` reads an operator override file, `subagent-tool-description.md`, from the project config directory (`.pi/` under the launch cwd) first, then the agent directory; the safety kernel is always appended. Templates may use `{{defaultDescription}}` (or `{{default}}`), `{{safetyGuidance}}` (or `{{safety}}`), `{{agentDir}}`, and `{{projectConfigDir}}`. Legacy `"full"`/`"compact"` values and `{{fullDescription}}`, `{{full}}`, `{{compactDescription}}`, `{{compact}}` placeholders still render the default description with a deprecation warning; invalid values warn and use the default.
+
 ## `foregroundDetachShortcut`
 
 ```json
@@ -162,7 +170,7 @@ Set `enabled` to `false` (or remove the block) as a kill switch. In that state, 
 { "asyncByDefault": false }
 ```
 
-WorkflowScript calls use background execution when the request omits `async`. Set `asyncByDefault` to `false` to restore foreground-by-default behavior for tool launches that still use the internal single-run primitive. Callers can still force foreground with `async: false` unless `forceTopLevelAsync` is enabled.
+Controls default execution placement for subagent launches: background execution unless set to `false` for foreground-by-default. The model-facing `subagent` tool accepts no `async` flag, so model calls follow this default together with agent defaults and `forceTopLevelAsync`; `async` remains an internal launch field only.
 
 ## `defaultSubagentContext` (removed)
 
@@ -293,7 +301,7 @@ Inline or file-backed top-level workflow calls may set a positive safe-integer `
 
 Optionally caps the total number of child subagent launches during one parent session, including completed and failed children, parallel task counts, static chain steps, and bounded dynamic fanout children. Sessions are unlimited by default. Set this value to `0` to disable a configured cap. `PI_SUBAGENT_MAX_SPAWNS_PER_SESSION` overrides the config for a process and follows the same positive-cap/zero-unlimited semantics.
 
-`subagent({ action: "status" })` and fleet status expose used, effective limit, remaining capacity, grants, and the remaining grant allowance for this budget. A user may explicitly call `subagent({ action: "grant-spawn-budget", additional: 10 })` from the root interactive parent after all children settle and confirm the native prompt. Grants are additive: they never erase cumulative usage, are rejected for unlimited sessions and child/headless callers, and total granted capacity cannot exceed the original configured cap. Compaction remains part of the same logical parent session and does not reset usage or grants; starting a new parent session does.
+`subagent({ action: "status" })` and fleet status expose used, effective limit, remaining capacity, grants, and the remaining grant allowance for this budget. A user may top up spend from the root interactive parent session with the `grant-spawn-budget` management action (Fleet/slash-command/RPC dispatch only — the model-facing `subagent` tool rejects it) after all children settle and confirm the native prompt. Grants are additive: they never erase cumulative usage, are rejected for unlimited sessions and child/headless callers, and total granted capacity cannot exceed the original configured cap. Compaction remains part of the same logical parent session and does not reset usage or grants; starting a new parent session does.
 
 ## `maxSubagentSpawnsPerRun`
 

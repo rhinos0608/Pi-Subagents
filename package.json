@@ -1,7 +1,6 @@
 {
-  "name": "pi-subagents",
-  "version": "0.71.0",
-  "private": true,
+  "name": "@rhinos0608/pi-subagents",
+  "version": "0.71.0-fork.1",
   "description": "Pi extension for single-agent delegation and scripted multi-agent workflows",
   "author": "Nico Bailon",
   "license": "MIT",
@@ -26,11 +25,14 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/nicobailon/pi-subagents.git"
+    "url": "git+https://github.com/rhinos0608/Pi-Subagents.git"
   },
-  "homepage": "https://github.com/nicobailon/pi-subagents#readme",
+  "homepage": "https://github.com/rhinos0608/Pi-Subagents#readme",
   "bugs": {
-    "url": "https://github.com/nicobailon/pi-subagents/issues"
+    "url": "https://github.com/rhinos0608/Pi-Subagents/issues"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "keywords": [
     "pi-package",

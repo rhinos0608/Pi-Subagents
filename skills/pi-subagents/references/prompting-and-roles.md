@@ -8,17 +8,12 @@ Parent extensions may register a session-scoped, out-of-band ceiling through `pi
 
 ## When to Use
 
-All launch guidance below assumes delegation was requested by the operator in
-the current request or applicable user/project instructions. Complexity,
-workflow fit, and potential quality gains help choose a shape after that gate;
-they do not authorize a launch.
-
-- **Complex work orchestration**: after delegation is authorized, keep the parent on its ordinary strong default model and launch only when a bounded child materially improves evidence, independent review, specialization, useful parallelism, or isolated execution. For hard orchestration or root-cause questions, use a top-reasoning model only as a bounded read-only critic/oracle escalation, never as an autonomous root. Lightweight one-off delegation can stay lightweight.
-- **Advisory review**: use fresh-context `reviewer` agents for adversarial code review; fork to `oracle` only for rare escalation where inherited decisions, drift, model routing, root cause, or hard tradeoffs matter
+- **Complex work orchestration**: keep the parent on its ordinary strong default model and launch only when a bounded child materially improves evidence, independent review, specialization, useful parallelism, or isolated execution. For hard orchestration or root-cause questions, use a top-reasoning model only as a bounded read-only critic/oracle escalation, never as an autonomous root. Lightweight one-off delegation can stay lightweight.
+- **Advisory review**: use fresh-context `reviewer` agents for adversarial code review; escalate to `oracle` only for rare cases where drift, model routing, root cause, or hard tradeoffs matter
 - **Implementation handoff**: have `oracle` advise, then `worker` implement only after an approved direction
 - **Recon and planning**: use `scout`, then write a plan when needed
 - **Parallel exploration**: run multiple non-conflicting tasks concurrently
-- **Regular skill specialists**: when authorized delegation names or benefits from a relevant specialization, discovery suggestions may help select a small fresh-context fanout
+- **Regular skill specialists**: when delegated work names or benefits from a relevant specialization, discovery suggestions may help select a small fresh-context fanout
 - **Long-running work**: launch async/background runs and inspect them later. For mutation-capable work, bound the delivery slice and elapsed runtime, then request checkpoints after active tool work returns. Reserve hard tool-call caps for explicitly read-only children.
 - **Subagent control**: watch needs-attention signals and soft-interrupt only when a delegated run is genuinely blocked
 - **Agent authoring**: create, update, or override project agents. Treat saved chain records as legacy inspection or migration inputs, not as a current authoring target.
@@ -58,13 +53,13 @@ The prompt templates in `prompts/` encode workflows the parent agent can run on 
 
 ### Commission-risk and cold-start packets
 
-After the operator-authority gate above, delegate only when the child materially improves evidence, independent review, specialization, useful parallelism, or isolated execution; do not manufacture parallelism. Every child packet must be cold-start complete: state the goal, exact target/cwd/ref, authority and edit boundary, relevant context/evidence, success criteria, validation, output, and stop/escalation rules. For an orchestration audit by the critic tier, make the child read-only and request at most three omissions, each cited to a file, line, or decision; high thinking is an explicit escalation, not a default.
+After scoping the request, delegate only when the child materially improves evidence, independent review, specialization, useful parallelism, or isolated execution; do not manufacture parallelism. Every child packet must be cold-start complete: state the goal, exact target/cwd/ref, authority and edit boundary, relevant context/evidence, success criteria, validation, output, and stop/escalation rules. For an orchestration audit by the critic tier, make the child read-only and request at most three omissions, each cited to a file, line, or decision; high thinking is an explicit escalation, not a default.
 
 ### Council Mode technique
 
 Use Council Mode when the user asks to convene advisors, debate a material decision, cross-examine recommendations, or critique and improve a plan with several model perspectives. This includes requests such as “run a council on this architecture,” “have the configured advisors critique this plan,” or “get multiple oracles to debate the tradeoffs.” Read `../council-mode/SKILL.md` and follow its bounded parent-supervised protocol instead of launching ad hoc parallel oracle calls.
 
-Council advisors are read-only. User or project `council-*` profiles choose allowed models and define any persistent stance in the profile body. A top-reasoning advisor remains bounded and read-only; it does not become the root. Package advisors such as Surf's `gpt-pro` can join the roster only when the `surf-cli` Pi extension is installed and its `surf-oracle` provider is registered; treat them as external runners, omit child `async` for attached results, and do not pass `outputSchema` to them. The council question and scope provide the decision frame; do not invent per-advisor role labels. The parent collects independent reports, optionally sends curated cross-exam packets, and writes the final memo. Do not treat the council as agent-to-agent chat, implementation authority, or a writer swarm.
+Council advisors are read-only. User or project `council-*` profiles choose allowed models and define any persistent stance in the profile body. A top-reasoning advisor remains bounded and read-only; it does not become the root. Package advisors such as Surf's `gpt-pro` can join the roster only when the `surf-cli` Pi extension is installed and its `surf-oracle` provider is registered; treat them as external runners and request JSON text instead of per-call `outputSchema` for attached results. The council question and scope provide the decision frame; do not invent per-advisor role labels. The parent collects independent reports, optionally sends curated cross-exam packets, and writes the final memo. Do not treat the council as agent-to-agent chat, implementation authority, or a writer swarm.
 
 ### Parallel review technique
 
@@ -72,12 +67,12 @@ Use this when the user wants adversarial review of a diff, plan, issue, file, or
 
 ### Proactive skill-specialist technique
 
-Use this only within operator-authorized delegation when the Fleet Agents view reports skill subagent suggestions relevant to the requested handoff. Availability is a selection hint, not authority or a command to fan out.
+Use this when the Fleet Agents view reports skill subagent suggestions relevant to the requested handoff. Availability is a selection hint, not authority or a command to fan out.
 
 Default guardrails:
 - Keep the fanout small: usually one or two skill-specialist children, never more than the listed recommendations or configured cap.
 - Prefer child agents with a tight brief and include only the files, diff, plan, URL, or request details each child needs.
-- Use read-only agents for analysis/review unless implementation was explicitly requested; do not create several writers in the same worktree.
+- Use read-only agents for analysis/review unless implementation was explicitly requested; give concurrent writers worktree isolation when the tree is clean (`worktree: true` on workflow children; parent-created worktrees passed as `cwd` for single launches), disjoint file ownership otherwise.
 - Skip proactive skill subagents for tiny questions, direct commands, highly private requests, or when the user asks not to delegate.
 - Make cost and concurrency visible by using an ordinary `subagent(...)` call rather than hidden/background automation.
 
@@ -97,7 +92,7 @@ subagent({
 
 ### Review-loop technique
 
-Use this when the user wants implementation or current diff review to continue until reviewers stop finding fixes worth doing now. Keep the loop in the parent session: one async `worker` implements or fixes, fresh-context `reviewer` agents inspect the actual repo and diff, the parent synthesizes accepted fixes, and one async `worker` applies them. The parent can express the sequence up front as an async/background `workflowScript` when the workflow is known, or continue with explicit follow-up workflowScript runs after each async completion. For an initial workflow, pass `async: true` so the main chat is unblocked. Treat an async implementation worker handoff as an intermediate state, not final completion, unless the user explicitly asked for worker-only work, review-only output, or to stop after implementation. Stop when reviewers find no P0 blockers or P1 fixes worth doing now, remaining P2 feedback is optional or deferred, an unapproved product/scope/architecture decision appears, or the max review-round cap is reached. Default to 3 review rounds unless the user sets a different cap. Do not loop for optional polish, and do not let children launch subagents or decide the loop outcome.
+Use this when the user wants implementation or current diff review to continue until reviewers stop finding fixes worth doing now. Keep the loop in the parent session: one async `worker` implements or fixes, fresh-context `reviewer` agents inspect the actual repo and diff, the parent synthesizes accepted fixes, and one async `worker` applies them. The parent can express the sequence up front as a background `workflowScript` when the workflow is known, or continue with explicit follow-up workflowScript runs after each completion. Runs detach in the background by default, so the main chat stays unblocked. Treat an async implementation worker handoff as an intermediate state, not final completion, unless the user explicitly asked for worker-only work, review-only output, or to stop after implementation. Stop when reviewers find no P0 blockers or P1 fixes worth doing now, remaining P2 feedback is optional or deferred, an unapproved product/scope/architecture decision appears, or the max review-round cap is reached. Default to 3 review rounds unless the user sets a different cap. Do not loop for optional polish, and do not let children launch subagents or decide the loop outcome.
 
 As a conservative orchestration policy, do not set tight tool budgets on an implementation worker, fix worker, reviewer with edit authority, or other mutation-capable child. Tool-call counts do not measure delivery safety. Use a narrow task plus an outer elapsed deadline with enough margin, then request a checkpoint after the current tool returns. The checkpoint should report changed files, build/test state, remaining work, and commit or PR state. An elapsed timeout is not a mutation-safe boundary and must not be used as the checkpoint trigger.
 
@@ -113,7 +108,7 @@ Use this when the operator requests delegated context gathering. Launch `scout` 
 
 ### Parallel cleanup technique
 
-Use this after implementation when the user or applicable instructions request delegated cleanup review. Launch two fresh-context `reviewer` tasks with `output: false` and `progress: false`: one deslop pass and one verbosity pass. If the `deslop` or `verbosity-cleaner` skills are available, pass the relevant skill to that reviewer; otherwise inline the criteria. Both reviewers are review-only and should flag concrete issues with severity, file/line references, and smallest safe fixes. Phrase the constraint as “Do not modify project/source files; returning findings through the configured output artifact is allowed” when you use `output` or `outputMode: "file-only"`. The parent decides what to apply and asks before making changes unless cleanup was already authorized.
+Use this after implementation when the user or applicable instructions request delegated cleanup review. Launch two fresh-context review-only `reviewer` tasks: one deslop pass and one verbosity pass. If the `deslop` or `verbosity-cleaner` skills are available, name them in the reviewer task text so the child loads them; otherwise inline the criteria. Both reviewers should flag concrete issues with severity, file/line references, and smallest safe fixes. Phrase the constraint as "Do not modify project/source files; return findings in your result." The parent decides what to apply and asks before making changes unless cleanup was already authorized.
 
 ### Staged fix orchestration technique
 
@@ -130,7 +125,7 @@ stage; keep sequencing and synthesis with the parent.
 3. Use one writer for the complete fix only when the accepted fixes are one tightly coupled existing diff/seam and the lane board records evidence that splitting would create overlapping ownership or artificial handoffs. Give that writer the planning summaries, accepted scope, stop rules, and verification contract.
 4. Run fresh-context, read-only validation against the integrated or single-seam result. Validators use distinct angles and report pass/fail, remaining blockers, and missing verification.
 
-Prefer `async: true`, fresh-context reviewer/validator agents, `outputMode: "file-only"` for large summaries, and per-stage output names that will not collide. Use stable `runs` keys plus `phase` and `label` on each launch item to make async status readable, and hold each awaited result in an ordinary JavaScript variable when a later step needs that specific result — interpolate it (or the durable output path you declared for that child) into the later task text instead of passing a whole aggregate blob. Use this pattern instead of launching several writer workers into a dirty worktree. Include non-blocking suggestions in the writer prompt only when they are small, safe, and do not expand product scope; otherwise record them as deferred.
+Prefer background execution, fresh-context reviewer/validator agents, and per-stage scratch report names in task text that will not collide. Use stable `runs` keys plus `phase` and `label` on each launch item to make async status readable, and hold each awaited result in an ordinary JavaScript variable when a later step needs that specific result — interpolate it (or its managed artifact reference) into the later task text instead of passing a whole aggregate blob. Use this pattern instead of launching several writer workers with overlapping files into one checkout. Include non-blocking suggestions in the writer prompt only when they are small, safe, and do not expand product scope; otherwise record them as deferred.
 
 When one child returns a structured target list, use ordinary JavaScript to validate/filter it and map bounded entries into `runs.all`; do not use the removed chain fanout DSL.
 
@@ -138,31 +133,28 @@ Single-seam example shape (the lane board records that these are review angles o
 
 ```typescript
 subagent({
-  async: true,
   workflowScript: `
     // Stage 1: parallel read-only review angles on one recorded single seam
     const plans = await runs.all([
-      { key: "correctness-plan", agent: "reviewer", phase: "Planning", label: "Review lifecycle correctness", task: "Plan correctness fixes for the same deployment-lifecycle diff. Do not modify project/source files; returning findings via the configured output artifact is allowed.", output: "plans/correctness.md", outputMode: "file-only" },
-      { key: "regression-plan", agent: "reviewer", phase: "Planning", label: "Review lifecycle regressions", task: "Plan regression coverage for the same deployment-lifecycle diff. Do not modify project/source files; returning findings via the configured output artifact is allowed.", output: "plans/regressions.md", outputMode: "file-only" },
-      { key: "minimality-plan", agent: "reviewer", phase: "Planning", label: "Review lifecycle minimality", task: "Plan minimality fixes for the same deployment-lifecycle diff. Do not modify project/source files; returning findings via the configured output artifact is allowed.", output: "plans/minimality.md", outputMode: "file-only" }
+      { key: "correctness-plan", agent: "reviewer", phase: "Planning", label: "Review lifecycle correctness", task: "Plan correctness fixes for the same deployment-lifecycle diff. Save a scratch report to plans/correctness.md. Do not modify project/source files; return findings in your result." },
+      { key: "regression-plan", agent: "reviewer", phase: "Planning", label: "Review lifecycle regressions", task: "Plan regression coverage for the same deployment-lifecycle diff. Save a scratch report to plans/regressions.md. Do not modify project/source files; return findings in your result." },
+      { key: "minimality-plan", agent: "reviewer", phase: "Planning", label: "Review lifecycle minimality", task: "Plan minimality fixes for the same deployment-lifecycle diff. Save a scratch report to plans/minimality.md. Do not modify project/source files; return findings in your result." }
     ]);
 
     // Stage 2: one writer for this lane-board-recorded single seam.
-    // Under outputMode "file-only" the awaited .output is the saved-output
-    // reference, so pass those managed artifact references to the writer.
+    // The awaited .output values are the managed child outputs,
+    // so interpolate those results into the writer task.
     const worker = await runs.run("apply-fixes", {
       agent: "worker",
       phase: "Implementation",
       label: "Apply accepted fixes",
-      task: "Apply only the accepted fixes to the one deployment-lifecycle seam. The lane board records that splitting this existing diff would create overlapping ownership. You are the sole writer for this seam. Run focused validation and report changed files, commands, failures, and remaining issues.\\n\\nCorrectness plan: " + plans[0].output + "\\n\\nRegression plan: " + plans[1].output + "\\n\\nMinimality plan: " + plans[2].output,
-      output: "worker/fixes.md",
-      outputMode: "file-only"
+      task: "Apply only the accepted fixes to the one deployment-lifecycle seam. The lane board records that splitting this existing diff would create overlapping ownership. You own this seam exclusively; no other writer touches these files. Save a scratch report to worker/fixes.md. Run focused validation and report changed files, commands, failures, and remaining issues.\\n\\nCorrectness plan: " + plans[0].output + "\\n\\nRegression plan: " + plans[1].output + "\\n\\nMinimality plan: " + plans[2].output
     });
 
     // Stage 3: parallel read-only validation fanout
     const validations = await runs.all([
-      { key: "validate-behavior", agent: "reviewer", phase: "Validation", label: "Validate lifecycle behavior", task: "Validate behavior in the post-worker deployment-lifecycle diff. Start from the worker result: " + worker.output + ". Do not modify project/source files; returning findings via the configured output artifact is allowed.", output: "validation/behavior.md", outputMode: "file-only" },
-      { key: "validate-minimality", agent: "reviewer", phase: "Validation", label: "Validate lifecycle minimality", task: "Validate minimality in the same post-worker deployment-lifecycle diff. Start from the worker result: " + worker.output + ". Do not modify project/source files; returning findings via the configured output artifact is allowed.", output: "validation/minimality.md", outputMode: "file-only" }
+      { key: "validate-behavior", agent: "reviewer", phase: "Validation", label: "Validate lifecycle behavior", task: "Validate behavior in the post-worker deployment-lifecycle diff. Save a scratch report to validation/behavior.md. Start from the worker result: " + worker.output + ". Do not modify project/source files; return findings in your result." },
+      { key: "validate-minimality", agent: "reviewer", phase: "Validation", label: "Validate lifecycle minimality", task: "Validate minimality in the same post-worker deployment-lifecycle diff. Save a scratch report to validation/minimality.md. Start from the worker result: " + worker.output + ". Do not modify project/source files; return findings in your result." }
     ]);
 
     return { worker: worker.output, validations: validations.map(v => v.output) };
@@ -205,7 +197,7 @@ For one run, use inline config:
 /run reviewer[model=provider/review-model] "Review this diff"
 ```
 
-For persistent tweaks, edit `subagents.agentOverrides` in user or project settings. User overrides apply everywhere. Project overrides apply only in that repo and win over user overrides. Use `/subagents-models` or `subagent({ action: "models" })` to inspect the live mapping after settings and overrides load.
+For persistent tweaks, edit `subagents.agentOverrides` in user or project settings. User overrides apply everywhere. Project overrides apply only in that repo and win over user overrides. Use `/subagents-models [agent]` to inspect the live mapping after settings and overrides load. The model tool has no `models` action.
 
 Model ids do not have to be exact. Separator variations (`fast.worker-v1` vs `fast-worker-v1`), case (`Strong-Review-Model`), and optional trailing date stamps all resolve to the same registry model. Exact `provider/id` wins; a qualified `provider/model` never switches providers. To constrain subagents to a budget or compliance profile, set `subagents.modelScope: { enforce: true, allow: ["approved-provider/*", "second-provider/approved-*"] }` in user or project settings. Out-of-scope models you pass explicitly error and abort; models inherited from frontmatter, `subagents.defaultModel`, agent frontmatter, or the parent session only warn.
 
@@ -221,7 +213,7 @@ A strong subagent prompt usually includes:
 - **Authority boundary**: whether the child may read, edit, commit, push, comment, close, merge, publish, or release. Omit or forbid actions that are not approved.
 - **Context/evidence**: relevant plan paths, files, diffs, decisions, or user constraints already approved.
 - **Success criteria**: what must be true before the child can finish.
-- **Hard constraints**: true invariants only, such as no edits for review-only tasks, one writer thread, child must not run subagents unless it is explicitly authorized through `tools: subagent` or `allowNestedSubagents: true`, or escalation for unapproved decisions.
+- **Hard constraints**: true invariants only, such as no edits for review-only tasks, exclusive file ownership for concurrent writers, child must not run subagents unless it is explicitly authorized through `tools: subagent` or `allowNestedSubagents: true`, or escalation for unapproved decisions.
 - **Validation**: targeted checks to run, or the next-best check when validation is impossible.
 - **Output**: the expected summary shape, artifact path, or finding format. Use managed artifact paths for scratch reports; reserve repo-qualified absolute paths for durable handoffs that the user approved.
 - **Stop rules**: when to ask via `intercom` or `contact_supervisor`, when to stop after enough evidence, and when not to keep searching.
@@ -262,11 +254,11 @@ agent with the same name only when you want a substantially different agent.
 
 ### Recommended model tiering (optional)
 
-Keep the parent/orchestrator on the ordinary strong default model because omission failures are cheaper than unnecessary commissions. Route workers and scouts to a fast, capable worker tier, and keep serious reviews on the strong reviewer tier at high thinking. Do not use `oracle` or a top-reasoning model as the routine fresh-review default. Use that tier only for bounded, read-only critic/oracle/root-cause audits after ordinary review, CI, bot, or source evidence is insufficient; critic-tier high thinking is escalation-only and never an autonomous root. Explicit parent/user model policy wins over these recommendations.
+Agent definitions allow setting distinct models to balance cost and capability across implementation and verification roles: keep the parent/orchestrator on the ordinary strong default model, route workers and scouts to a fast capable tier, and keep serious reviews on the strong reviewer tier at high thinking. Do not use `oracle` or a top-reasoning model as the routine fresh-review default. Use that tier only for bounded, read-only critic/oracle/root-cause audits after ordinary review, CI, bot, or source evidence is insufficient; critic-tier high thinking is escalation-only and never an autonomous root. Explicit parent/user model policy wins over these recommendations.
 
 Examples are illustrative, not requirements. Map these tiers to concrete models in user/project settings or a profile. A non-OpenAI setup should choose comparable available models by capability.
 
-Each child launch uses one resolved model exactly once. If quota or availability fails, surface that failure and let the parent or operator explicitly launch a later attempt with another model. Forked children keep their requested thinking level even when provider-specific reasoning blocks are stripped from the inherited transcript.
+Each child launch uses one resolved model exactly once. If quota or availability fails, surface that failure and let the parent or operator explicitly launch a later attempt with another model. Children keep their requested thinking level even when provider-specific reasoning blocks are stripped from the transcript.
 
 If a provider rejects model IDs with thinking suffixes, use
 `subagents.disableThinking: true` in user or project settings to clear bundled
@@ -275,4 +267,4 @@ override can opt one builtin back in or replace custom-agent frontmatter thinkin
 
 Set `subagents.defaultExtensions` to give agents without an `extensions` field a shared child extension allowlist. Omit it to preserve ambient extension discovery, set it to `[]` to disable ambient extensions by default, or use `agentOverrides.<name>.extensions` for one agent. Set `subagents.defaultSubagentOnlyExtensions` to add shared child-only paths without disabling ambient discovery. For either field, explicit frontmatter suppresses the default and a matching override replaces or false-clears it; lists are not combined.
 
-The model tool registers one fixed description and schema (7 fields). Extended recipes live in `subagent({ action: "guide", message: "<topic>" })` and this skill, not in selectable description modes.
+The model tool registers one fixed description and schema (8 fields). Extended recipes live in `subagent({ action: "guide", topic: "<topic>" })` and this skill.

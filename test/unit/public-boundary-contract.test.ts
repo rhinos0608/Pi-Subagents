@@ -10,8 +10,8 @@ import { MODEL_VISIBLE_SUBAGENT_ACTIONS, SUBAGENT_ACTIONS } from "../../src/shar
 // Phase 1b public-boundary contract tests: prove the INTENDED end state from
 // docs/subagent-tooling-overhaul.md ("Target public tool boundary" + "Schema cleanup").
 //
-// Intended top-level vocabulary (8 fields only):
-//   agent, task, cwd, workflowScript, action, id, message, topic (guide-only)
+// Intended top-level vocabulary (9 fields only):
+//   agent, task, cwd, workflowScript, args, action, id, message, topic (guide-only)
 // Plus the intended runs.run child allowlist: { agent, task, cwd, resume }.
 //
 // Sibling-work note: three sibling worktrees are concurrently shrinking the
@@ -61,7 +61,7 @@ try {
 
 const describeIfSchemas = schemasAvailable && CompileSchema ? describe : describe.skip;
 
-describeIfSchemas("public boundary: intended 8-field shapes validate", () => {
+describeIfSchemas("public boundary: intended 9-field shapes validate", () => {
 	function check(value: unknown): boolean {
 		return CompileSchema!(SubagentParams).Check(value);
 	}
@@ -121,14 +121,16 @@ describeIfSchemas("public boundary: legacy workflow spellings are rejected", () 
 		return { ok, detail };
 	}
 
-	// Phase 6 siblings in flight: siblings are collapsing
-	// workflowScriptPath/workflow/args into workflowScript-only.
+	// Phase 6 siblings in flight: siblings collapsed
+	// workflowScriptPath/workflow into workflowScript-only; top-level args is the
+	// workflowScript parameter object (rejected without workflowScript).
 	it("workflowScriptPath is rejected", () => {
 		const result = check({ workflowScriptPath: "workflows/review.js" });
 		assert.equal(result.ok, false, `workflowScriptPath should not validate (${result.detail})`);
 	});
 
-	// Phase 6 siblings in flight: named-workflow `workflow` + `args` spelling collapses away.
+	// Phase 6 siblings in flight: named-workflow `workflow` spelling collapsed away.
+	// Top-level `args` without `workflowScript` stays rejected (args requires workflowScript).
 	it("named workflow + args spelling is rejected", () => {
 		const result = check({ workflow: "review", args: { target: "src" } });
 		assert.equal(result.ok, false, `workflow/args should not validate (${result.detail})`);
@@ -270,6 +272,8 @@ describe("public boundary: runs.run child params reject unknown keys", () => {
 			`{ agent: "worker", task: "check" }`,
 			`{ agent: "worker", task: "check", cwd: "/repo/pkg" }`,
 			`{ resume: "retained-run", task: "continue" }`,
+			`{ agent: "worker", task: "check", worktree: true }`,
+			`{ agent: "worker", task: "check", worktree: false }`,
 		]) {
 			const result = staticResult(params);
 			assert.equal(result.ok, true, `${params} should validate statically (${result.messages})`);
@@ -277,11 +281,11 @@ describe("public boundary: runs.run child params reject unknown keys", () => {
 	});
 
 	// Phase 6 workflow-child boundary (landed): model-authored runs.run/runs.all
-	// children accept exactly { agent, task, cwd, resume, as, phase, label, lane, index }.
+	// children accept exactly { agent, task, cwd, resume, as, phase, label, lane, index, worktree }.
 	// Execution tuning (async, output, outputMode, reads, progress) resolves from
 	// agent definitions, workflow defaults, or operator config — never the model.
 	// The static entry point rejects unknown keys offline; these pin the contract.
-	for (const key of ["model", "toolBudget", "timeoutMs", "worktree", "fast", "action", "workflowScript", "async", "output", "outputMode", "reads", "progress"]) {
+	for (const key of ["model", "toolBudget", "timeoutMs", "fast", "action", "workflowScript", "async", "output", "outputMode", "reads", "progress", "baseRef", "isolation", "provider"]) {
 		it(`rejects unknown child key: ${key}`, () => {
 			const params =
 				key === "action"
@@ -290,10 +294,8 @@ describe("public boundary: runs.run child params reject unknown keys", () => {
 						? `{ agent: "worker", task: "check", workflowScript: "return 1;" }`
 						: key === "toolBudget"
 							? `{ agent: "worker", task: "check", toolBudget: { hard: 12 } }`
-							: key === "worktree"
-								? `{ agent: "worker", task: "check", worktree: true }`
-								: key === "fast"
-									? `{ agent: "worker", task: "check", fast: true }`
+							: key === "fast"
+								? `{ agent: "worker", task: "check", fast: true }`
 									: key === "timeoutMs"
 										? `{ agent: "worker", task: "check", timeoutMs: 1000 }`
 										: key === "async"
@@ -306,7 +308,13 @@ describe("public boundary: runs.run child params reject unknown keys", () => {
 										? `{ agent: "worker", task: "check", reads: ["docs/scope.md"] }`
 										: key === "progress"
 											? `{ agent: "worker", task: "check", progress: true }`
-											: `{ agent: "worker", task: "check", model: "anthropic/claude-opus-4-8" }`;
+											: key === "baseRef"
+										? `{ agent: "worker", task: "check", baseRef: "HEAD" }`
+										: key === "isolation"
+											? `{ agent: "worker", task: "check", isolation: "worktree" }`
+											: key === "provider"
+												? `{ agent: "worker", task: "check", provider: "auto" }`
+												: `{ agent: "worker", task: "check", model: "anthropic/claude-opus-4-8" }`;
 			const result = staticResult(params);
 			assert.equal(result.ok, false, `runs.run ${key} should fail static validation (${result.messages})`);
 		});
@@ -326,8 +334,8 @@ describe("public boundary: runs.run child params reject unknown keys", () => {
 	// is rejected by name.
 	it("locks the exact model-authored child allowlist", () => {
 		const source = readFileSync(new URL("../../src/workflows/scripted-workflow.ts", import.meta.url), "utf8");
-		const exactSet = `"agent", "task", "cwd", "resume", "as", "phase", "label", "lane", "index"`;
-		const exactMessage = "Supported workflow child fields: agent, task, cwd, resume, as, phase, label, lane, index.";
+		const exactSet = `"agent", "task", "cwd", "resume", "as", "phase", "label", "lane", "index", "worktree"`;
+		const exactMessage = "Supported workflow child fields: agent, task, cwd, resume, as, phase, label, lane, index, worktree.";
 		// All three seams carry the exact set: WORKER_SOURCE copy, module
 		// allowlist, and each runtime error message.
 		assert.equal(source.match(/allowedRunFields = new Set\(\[(.*?)\]\)/)?.[1], exactSet);
@@ -345,13 +353,14 @@ describe("public boundary: runs.run child params reject unknown keys", () => {
 			`{ agent: "worker", task: "check", label: "step one" }`,
 			`{ agent: "worker", task: "check", lane: { version: 1, key: "one" } }`,
 			`{ agent: "worker", task: "check", index: 0 }`,
+			`{ agent: "worker", task: "check", worktree: true }`,
 		]) {
 			const script = `return await runs.run("one", ${params});`;
 			const result = validateWorkflowScript!(script);
 			assert.equal(result.ok, true, `${params} should validate statically (${JSON.stringify(result.errors)})`);
 		}
 		// Every removed execution-tuning field fails, naming the field.
-		for (const key of ["async", "output", "outputMode", "reads", "progress"]) {
+		for (const key of ["async", "output", "outputMode", "reads", "progress", "baseRef", "isolation", "provider"]) {
 			const script = `return await runs.run("one", { agent: "worker", task: "check", ${key}: true });`;
 			const result = validateWorkflowScript!(script);
 			assert.equal(result.ok, false, `${key} should fail static validation`);

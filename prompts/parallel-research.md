@@ -4,7 +4,7 @@ description: Parallel subagents research
 
 Launch parallel research subagents to build a grounded answer to the current question or decision.
 
-Use fresh context, not forked context, unless I explicitly ask for forked context. Researchers and scouts should inspect sources directly instead of relying on the main conversation history.
+Launches are always fresh: each child starts from its assigned brief, not the parent conversation. Pass every subagent the full context it needs inside its task (question, known constraints, entry points). Researchers and scouts should inspect sources directly instead of relying on the main conversation history.
 
 Use a combination of `researcher` and `scout` subagents:
 - Use `researcher` for web, docs, standards, ecosystem, recent changes, benchmarks, and primary-source evidence.

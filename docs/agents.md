@@ -60,7 +60,7 @@ The Pi async run remains the source of truth for status, artifacts, wake/wait, m
 
 ### Command-runner agents as typed steps
 
-`runner.type: external-cli` with a plain `command` (no `adapter`) runs any local executable as a subagent: the assembled prompt is written to stdin, stdout becomes the child's output, and the run gets the usual run id, status, mission entry, and workflow key. This is how a classifier, a scoring script, or a small evaluation model becomes a `runs.run` step. Such agents are async-only (workflows launch children async by default; a direct `async: false` call is refused), receive no forked transcript, and cannot produce `structuredOutput` themselves; parse their `output` in the workflow, or pair them with a [typed gate](tool-reference.md#typed-gates). Generic commands are local-only; saved-machine placement accepts only the code-owned adapters below.
+`runner.type: external-cli` with a plain `command` (no `adapter`) runs any local executable as a subagent: the assembled prompt is written to stdin, stdout becomes the child's output, and the run gets the usual run id, status, mission entry, and workflow key. This is how a classifier, a scoring script, or a small evaluation model becomes a `runs.run` step. Such agents are async-only (a per-call `async` override is rejected on model calls), receive no forked transcript, and cannot produce `structuredOutput` themselves; parse their `output` in the workflow, or pair them with a [typed gate](tool-reference.md#typed-gates). Generic commands are local-only; saved-machine placement accepts only the code-owned adapters below.
 
 ### Advisory runner data boundary
 
@@ -246,7 +246,7 @@ A custom agent file that shadows a bundled agent replaces the bundled definition
 
 Native Pi and the six code-owned Claude Code, Codex, and Cursor profiles can run on a Herdr machine (`herdr machine add <target> --label <name>`). Herdr owns each visible agent process in a fresh no-focus pane; SSH is used only as bounded transport for Herdr RPC and ownership checks. Herdr's catalog is the host allowlist; raw ssh targets are rejected.
 
-`machine` is a top-level frontmatter key, a settings override (`subagents.agentOverrides.<agent>.machine`, project beats user, `false` clears a pin), and a launch option on the `subagent` tool, workflow `runs.run`, chain, parallel, and dynamic-fanout steps. The launch option wins. Placement survives `subagent({ action: "disable" })`, `reset`, and model profile switches.
+`machine` is a top-level frontmatter key and a settings override (`subagents.agentOverrides.<agent>.machine`, project beats user, `false` clears a pin). It is not a model-callable `subagent` field or a workflow `runs.run` child field; chain and parallel steps configure placement through their internal step config. Placement survives `subagent({ action: "disable" })`, `reset`, and model profile switches.
 
 `cwd` means the directory on that machine when a machine is set. An absolute path or `~/...` is used as given; a relative path joins the repo's configured machine root; with no cwd the root is used; with no root the launch fails closed naming the setting:
 
@@ -485,15 +485,13 @@ Discovery uses project-first precedence:
 6. User packages and user settings packages via `package.json -> pi.skills`
 7. `~/.pi/agent/settings.json -> skills`
 
-Use agent defaults, override them at runtime, or disable them:
+Use agent defaults, override them in the agent definition or `agentOverrides`, or disable them. `skill` is not a `runs.run` child field or model-call field:
 
 ```ts
 { workflowScript: `return runs.run("main", { agent: "scout", task: "..." })` }
-{ workflowScript: `return runs.run("main", { agent: "scout", task: "...", skill: "tmux, safe-bash" })` }
-{ workflowScript: `return runs.run("main", { agent: "scout", task: "...", skill: false })` }
 ```
 
-For chains, `skill` at the top level is additive. A step-level `skill` overrides that step; `false` disables skills for that step.
+Set `skills` on the agent definition (`skills: "tmux, safe-bash"`, or `skills: false` to disable) or via `agentOverrides`; a chain step-level `skill` overrides the chain default.
 
 Available skills use this shape in the child prompt:
 
@@ -519,11 +517,11 @@ Agent-local `skillPath` candidates never enter Pi's parent/global skills catalog
 
 ## The bundled pi-subagents skill
 
-The package bundles a `pi-subagents` skill that is automatically available to the parent agent when the extension is installed. Availability is not automatic routing or permission to delegate: the parent works directly unless the operator requests delegation in the current request or through applicable user/project instructions. Once authorized, use the smallest bounded child or workflow whose evidence, independent review, specialization, parallelism, or isolation benefit earns its overhead. It is for the orchestrating parent only: child subagents never receive it, and their context is explicitly filtered to strip parent-only orchestration instructions.
+The package bundles a `pi-subagents` skill that is automatically available to the parent agent when the extension is installed. Availability is not automatic routing: the skill describes launch shapes and their tradeoffs, while when to delegate is left to operator instructions and the parent's judgment. It is for the orchestrating parent only: child subagents never receive it, and their context is explicitly filtered to strip parent-only orchestration instructions.
 
 What it covers:
 
-- **Delegation patterns**: how to select a bounded agent and single, parallel, scripted, or async shape after delegation is authorized.
+- **Delegation patterns**: how to select a bounded agent and single, parallel, scripted, or async shape.
 - **Prompt workflow recipes**: how to apply the packaged techniques directly with `subagent(...)` when the user describes the workflow in natural language instead of invoking a slash command. This includes parallel review, review-loop, parallel research, parallel context-build, parallel handoff-plan, gather-context-and-clarify, and parallel cleanup.
 - **Role-agent prompting guidance**: compact contract prompts instead of long scripts, what to include in role-specific meta prompts, and retrieval budgets for researchers.
 - **Safety boundaries**: child agents must not run subagents unless their resolved builtin tools explicitly include `subagent`, must not invent intercom targets, and must escalate unapproved decisions.

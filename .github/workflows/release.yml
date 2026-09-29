@@ -13,6 +13,7 @@ concurrency:
 
 jobs:
   publish:
+    if: github.repository == 'rhinos0608/Pi-Subagents'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5

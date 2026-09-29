@@ -2,13 +2,13 @@
 
 Parameters and actions for the `subagent` tool. These are what the model passes when it calls the tool; most users ask naturally or use slash commands instead.
 
-The `subagent` tool is registered and available whenever the extension loads. Direct execution remains the default; task complexity does not grant delegation authority.
+The `subagent` tool is registered and available whenever the extension loads. Direct execution and delegation are both available; delegate when the benefit outweighs the token and latency overhead. Operators set their own delegation policy via prompts and instructions.
 
 A parent needs to learn only this: launch with `agent` + `task` (plus `cwd` when the work lives elsewhere, or `workflowScript` for composed work), then `steer` / `resume` / `interrupt` a live run, and never poll — completion and attention wake the parent.
 
 ## The model surface
 
-Exactly 7 fields. Nothing else is accepted on a model call.
+Exactly 9 fields. Nothing else is accepted on a model call.
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -16,9 +16,11 @@ Exactly 7 fields. Nothing else is accepted on a model call.
 | `task` | string | The child's task. Requires `agent`. Excludes `action` and workflow inputs on a direct launch. |
 | `cwd` | string | Override working directory. Defaults to runtime cwd. |
 | `workflowScript` | string | Inline JavaScript statement body for composed work. See [workflows](workflows.md). |
+| `args` | object | Plain JSON object for `workflowScript` only; readable in the script as the frozen global `args`. Persisted as run evidence — never put secrets in it. Rejected without `workflowScript`. |
 | `action` | string | One of `steer`, `resume`, `interrupt`, `status`, `guide`, `validate`. Omit for launch. |
 | `id` | string | Run id for `steer` / `resume` / `interrupt` / `status`. |
 | `message` | string | Guidance text for `steer` / `resume`; focus detail for `status` transcript views. |
+| `topic` | string | Guide topic for `action: "guide"` only; ignored on other actions. |
 
 Actions:
 
@@ -27,7 +29,7 @@ Actions:
 - `subagent({ action: "steer", id: "<run-id>", message: "..." })` — acknowledged guidance to a live child.
 - `subagent({ action: "resume", id: "<run-id>", message: "..." })` — continue a paused or completed child.
 - `subagent({ action: "interrupt", id: "<run-id>" })` — pause a live child without stopping it.
-- `subagent({ action: "guide", message: "workflows" })` — packaged guidance; reads do not change schema or grant authority.
+- `subagent({ action: "guide", topic: "workflows" })` — packaged guidance; reads do not change schema or grant authority.
 - `subagent({ action: "validate", workflowScript: "..." })` — check script syntax and structure without launching. Returns `{ ok, errors }`; fails the tool call when `ok` is false.
 
 Model, thinking, and context resolve from agent definitions plus operator config (see [models](models.md) and [agents](agents.md)). There are no per-call model / thinking / context parameters. Launches are always fresh.
@@ -62,7 +64,9 @@ Chaining is code-driven through `workflowScript`. Use `await runs.run(...)` for 
 
 ### Workflow child fields
 
-Each `runs.run` / `runs.all` child accepts exactly: `agent`, `task`, `cwd`, `resume`, `as`, `phase`, `label`, `lane`, `index`.
+Each `runs.run` / `runs.all` child accepts exactly: `agent`, `task`, `cwd`, `resume`, `as`, `phase`, `label`, `lane`, `index`, `worktree`.
+
+`worktree: true` isolates that child in its own managed worktree (requires a clean git working tree); omit it to use the workflow/operator default. `worktree` must be a boolean. `baseRef` / `isolation` / provider overrides stay rejected on children.
 
 ```js
 { workflowScript: `

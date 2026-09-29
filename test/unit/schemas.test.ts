@@ -177,7 +177,7 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 		assert.ok(CompileSchema);
 		const validator = CompileSchema!(SubagentParams);
 		const base = { agent: "worker", task: "work" };
-		// 8-field public vocabulary (topic added for action:"guide").
+		// 9-field public vocabulary (topic added for action:"guide"; args added for workflowScript).
 		assert.equal(validator.Check(base), true);
 		assert.equal(validator.Check({ ...base, outputSchema: { type: "object" } }), false);
 		assert.equal(validator.Check({ ...base, outputSchema: false }), false);
@@ -196,10 +196,10 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 		assert.equal(contextSchema, undefined, "context should not be public");
 	});
 
-	it("exposes the 8-field single-schema vocabulary and omits removed workflow/resource modes", () => {
-		assert.deepEqual(Object.keys(SubagentParams?.properties ?? {}), ["agent", "task", "action", "id", "message", "topic", "workflowScript", "cwd"]);
+	it("exposes the 9-field single-schema vocabulary and omits removed workflow/resource modes", () => {
+		assert.deepEqual(Object.keys(SubagentParams?.properties ?? {}), ["agent", "task", "action", "id", "message", "topic", "workflowScript", "args", "cwd"]);
 		const properties = SubagentParams?.properties as Record<string, unknown> | undefined;
-		for (const name of ["workflow", "args", "workflowScriptPath", "globalConcurrencyLimit", "maxSubagentSpawnsPerRun", "preflight", "chatProgress", "worktree", "isolation", "gate", "acceptance", "mission", "config", "thinking", "model", "fast", "skill", "toolBudget", "toolTimeoutMs", "capabilities", "control", "agentContract", "outputSchema"]) {
+		for (const name of ["workflow", "workflowScriptPath", "globalConcurrencyLimit", "maxSubagentSpawnsPerRun", "preflight", "chatProgress", "worktree", "isolation", "gate", "acceptance", "mission", "config", "thinking", "model", "fast", "skill", "toolBudget", "toolTimeoutMs", "capabilities", "control", "agentContract", "outputSchema"]) {
 			assert.equal(properties?.[name], undefined, `${name} should not be public`);
 		}
 		const workflowScript = SubagentParams?.properties?.workflowScript;
@@ -440,7 +440,7 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 		assert.deepEqual(acceptanceLevelBranch?.enum, ["auto", "attested", "checked"], "verified requires object form with runtime commands");
 	});
 
-	it("validates the 8-field vocabulary with TypeBox compiler", { skip: !CompileSchema ? "typebox compiler not available" : undefined }, () => {
+	it("validates the 9-field vocabulary with TypeBox compiler", { skip: !CompileSchema ? "typebox compiler not available" : undefined }, () => {
 		assert.ok(SubagentParams, "SubagentParams schema should exist");
 		assert.ok(CompileSchema, "TypeBox compiler should exist");
 		const validator = CompileSchema(SubagentParams);
@@ -448,6 +448,7 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 			{},
 			{ agent: "worker", task: "Fix" },
 			{ workflowScript: "return await runs.run(\"one\", {agent: \"reviewer\", task: \"check\"})" },
+			{ workflowScript: "return args.target;", args: { target: "src" } },
 			{ cwd: "/tmp/work" },
 			{ action: "list" },
 			{ action: "steer", id: "run-1", message: "focus on tests" },
@@ -494,7 +495,7 @@ describe("single public schema (Phase 6a: full/compact dual-mode removed)", { sk
 		assert.ok(SubagentParams, "SubagentParams schema should exist");
 		const serialized = JSON.stringify(SubagentParams);
 		assert.ok(serialized.length <= 8_600, `expected single schema at or under 8600 chars, got ${serialized.length}`);
-		assert.deepEqual(Object.keys((SubagentParams as unknown as JsonSchemaNode).properties as Record<string, unknown>), ["agent", "task", "action", "id", "message", "topic", "workflowScript", "cwd"]);
+		assert.deepEqual(Object.keys((SubagentParams as unknown as JsonSchemaNode).properties as Record<string, unknown>), ["agent", "task", "action", "id", "message", "topic", "workflowScript", "args", "cwd"]);
 	});
 
 	it("keeps load-bearing top-level annotations on the single schema", () => {

@@ -2,11 +2,11 @@
 
 Use this reference when several independent tasks need coordinated workers, worktrees, or repositories. It defines lane ownership; use the other pi-subagents references for run controls, prompts, and mission details. The parent remains the final decision-maker.
 
-Create lanes only after delegation is operator-authorized and each lane materially improves evidence, independent review, specialization, useful parallelism, or isolated execution. Do not manufacture parallelism: keep dependent work serial, and only split work when each lane has a distinct decision and useful output.
+Create lanes when each lane materially improves evidence, independent review, specialization, useful parallelism, or isolated execution. Do not manufacture parallelism: keep dependent work serial, and only split work when each lane has a distinct decision and useful output.
 
 ## Mandatory implementation-topology preflight
 
-Before launching a writer for substantial mutation work, classify the implementation as **single-seam** or **multi-seam**. Two or more independently testable contracts or source boundaries make it multi-seam. One PR does not imply one writer, and the one-writer-per-worktree rule prevents concurrent ownership conflicts; it does not authorize an issue-wide commission.
+Before launching a writer for substantial mutation work, classify the implementation as **single-seam** or **multi-seam**. Independent codebase seams can be assigned to separate lanes, while interdependent changes benefit from a single writer to avoid merge conflicts. Two or more independently testable contracts or source boundaries make it multi-seam. One PR does not imply one writer; exclusive file or contract ownership is what prevents concurrent-edit conflicts.
 
 Record the classification and evidence on a lane board before writer launch. For multi-seam work, give each isolated component writer exclusive file or contract ownership and focused validation gates. Require every component to produce a committed or otherwise durable handoff, then start a separate integration-only owner after the component handoffs are ready. Mechanically reject and repartition a writer prompt if it owns all major outcomes across multiple independent boundaries.
 
@@ -24,7 +24,7 @@ For every lane, record the delivery target, allowed actions, required validation
 
 ## Partitioned runs
 
-Use one writer per repo/cwd or worktree. Mutation lanes need distinct isolation paths and explicit `cwd` values. Set `worktree: true` when a run needs managed worktree isolation within one repository. Read-only runs can share a checkout only when they cannot change state or create generated files.
+Give each mutation lane an explicit `cwd` and claimed files. When writers may touch overlapping files: if git status is clean, pass `worktree: true` on each workflow writer child so it runs in its own managed worktree; for single `{agent, task}` launches (no `worktree` field) the parent creates a git worktree per writer with `git worktree add <path> -b <branch>` outside auto-discovered extension dirs and passes that path as the child's `cwd`; otherwise give each writer disjoint file ownership — unless the user has restricted work to a single writer per cwd. Read-only runs can share a checkout only when they cannot change state or create generated files.
 
 For Pi extension repositories, keep lane worktrees outside auto-discovered extension directories such as `~/.pi/agent/extensions`. A stale extension worktree there can auto-load duplicate tools and shortcuts. Remove or move it only after its handoff is durable, the worktree is clean, and no run owns it.
 
@@ -34,7 +34,7 @@ Partition fanout by repository, source seam, decision, or review angle. Each run
 
 Every child packet must stand alone: include the goal, exact repository/cwd/ref, authority and edit boundary, relevant context/evidence, success criteria, validation, expected output, and stop/escalation rules. Do not rely on parent history, an issue number, or a broad glob alone. An orchestration audit by a top-reasoning critic model is read-only and returns at most three cited omissions; use high thinking only as an explicit parent/user escalation, never as an autonomous root or a parallel placeholder.
 
-Use one async `workflowScript` for a coordinated wave. Use `runs.all` for independent lanes and `runs.run` for dependent lane stages. Give cross-repository runs explicit `cwd` values and lane-qualified outputs. Use `outputMode: "file-only"` when a report must survive the run or feed a later stage. Keep scratch outputs relative so they live under subagent artifacts; use absolute paths only for durable memory, approved docs paths, or final handoff files.
+Use one `workflowScript` for a coordinated wave. Use `runs.all` for independent lanes and `runs.run` for dependent lane stages. Give cross-repository runs explicit `cwd` values and lane-qualified outputs. When a report must survive the run or feed a later stage, read the child's managed `outputReference`/`artifactPaths` from the awaited result (per-child output routing comes from the agent definition, not the child call; see `execution-controls.md`). Keep scratch outputs relative so they live under subagent artifacts; use absolute paths only for durable memory, approved docs paths, or final handoff files.
 
 ## Keep independent work moving
 
@@ -47,7 +47,7 @@ async lanes are running, record the revisit trigger and yield.
 
 An ordinary coordinated workflow has one mission. Use its durable state, artifacts, run records, and receipts for recovery. Treat a receipt as evidence, not as authority or acceptance.
 
-After a writer produces a candidate, run the required fresh-context, read-only reviewer. The reviewer inspects the exact worktree and returns evidence-backed findings. The parent decides which findings are in scope and whether the lane is ready. Use `review-and-validation.md` for finding disposition, validation, and gate-failure triage. Send accepted fixes to that lane's sole writer, then rerun only the affected gate.
+After a writer produces a candidate, run the required fresh-context, read-only reviewer. The reviewer inspects the exact worktree and returns evidence-backed findings. The parent decides which findings are in scope and whether the lane is ready. Use `review-and-validation.md` for finding disposition, validation, and gate-failure triage. Send accepted fixes to that lane's writer, then rerun only the affected gate.
 
 ## Handoff, cleanup, and recovery
 
@@ -57,4 +57,4 @@ For backlog lanes and other subagent-governed workflows, a setup/runtime/tooling
 
 Keep a worktree until its handoff is durable, no run owns it, and no later gate needs it. Clean up only inside the recorded authority boundary. If a run stops or needs attention, preserve its worktree and artifacts, record the last known state and recovery owner, then resume that run or create one replacement lane from the handoff. Do not start another writer while worktree ownership is uncertain.
 
-Before completion, inspect the board. Every lane must be terminal or blocked with a named next action. Confirm one writer per repo/cwd or worktree, required validation, required fresh read-only review, and a durable handoff. The parent reports outcomes, evidence, residual risks, and the next decision.
+Before completion, inspect the board. Every lane must be terminal or blocked with a named next action. Confirm no unresolved overlapping edits between writers, required validation, required fresh read-only review, and a durable handoff. The parent reports outcomes, evidence, residual risks, and the next decision.

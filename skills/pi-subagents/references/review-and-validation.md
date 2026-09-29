@@ -1,13 +1,13 @@
 # Pi Subagents: Review And Validation
 
-Generic review and delivery guidance for operator-authorized delegated work. This file does not encode private backlog, merge, or release policy.
+Generic review and delivery guidance for delegated work. This file does not encode private backlog, merge, or release policy.
 
 ## Delivery loop
 
 Use the smallest loop that proves the change:
 
 1. Inspect the source, diff, issue, or plan directly.
-2. Keep one writer for each cwd or worktree.
+2. When writers may touch overlapping files: if git status is clean, pass `worktree: true` on each workflow writer child (for single `{agent, task}` launches the parent creates the worktree and passes it as the child's `cwd`); otherwise give concurrent writers disjoint file ownership in the shared checkout.
 3. Run focused validation that can fail for the changed behavior.
 4. When the operator/project delegation contract calls for independent review, use a fresh-context read-only reviewer; otherwise parent inspection is valid.
 5. Apply only accepted findings inside the same writer boundary.

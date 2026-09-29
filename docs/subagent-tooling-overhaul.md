@@ -102,7 +102,9 @@ A likely core workflow surface is:
 
 Every additional workflow primitive must justify its presence from zero.
 
-Workflow children must not regain model selection, budget tuning, timeout tuning, worktree flags, fast mode, arbitrary skill/tool overrides, or other execution-policy knobs.
+Workflow children must not regain model selection, budget tuning, timeout tuning, fast mode, arbitrary skill/tool overrides, or other execution-policy knobs.
+
+> Note (2026-09-29, owner decision): per-child `worktree: true/false` was restored on workflow children — isolation is orchestration intent (which writers share a tree), not execution tuning. `baseRef` / `isolation` / provider overrides stay removed. Top-level `args` for `workflowScript` was likewise restored (frozen plain-JSON global, never secrets). Per-child `outputSchema` stays deferred; per-child model/thinking stay removed.
 
 ### Live control
 
@@ -128,6 +130,7 @@ The public vocabulary should therefore be close to:
     action
     id
     message
+    topic // guide-only: subagent({ action: "guide", topic: "workflows" })
 
 If workflow argument/data separation proves necessary, args can be considered separately. It should not survive automatically.
 
@@ -464,6 +467,8 @@ The current compact schema is still a large schema with descriptions stripped. R
 After the overhaul there should be no need for full-versus-compact model-facing schema machinery.
 
 Prefer a discriminated union internally and a concise tool description externally.
+
+Done: the compact/full description modes are removed in src/extension/tool-description.ts in favor of one always-on default description plus an optional custom mode; custom templates interpolate it via the {{defaultDescription}} placeholder.
 
 Validation should reject removed fields rather than silently ignoring them, so old call patterns do not survive invisibly.
 

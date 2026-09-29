@@ -75,7 +75,7 @@ For small agent changes such as a model swap, prefer the settings override layer
 
 The package includes prompt shortcuts for common workflows: `/parallel-review`, `/review-loop`, `/parallel-research`, `/gather-context-and-clarify`, and `/parallel-cleanup`. Use them when the user wants repeatable review, review/fix loops, research, context handoff, implementation handoff, clarification, or cleanup-review patterns. `/parallel-review autofix` and `/parallel-cleanup autofix` synthesize reviewer feedback and then apply only the fixes worth doing now. Parent agents can also apply the same recipes directly with `subagent(...)` when the user describes the workflow in natural language instead of invoking a slash command.
 
-Additional user prompt templates can delegate into `pi-subagents` through the native `/prompt-workflow` command. This is useful when a slash command should always run through a particular agent or with forked context. Prompt frontmatter can set `subagent`, `model`, `skill`, `cwd`, `fresh`, `fork`, or `inheritContext` for the native adapter.
+Additional user prompt templates can delegate into `pi-subagents` through the native `/prompt-workflow` command. This is useful when a slash command should always run through a particular agent. Prompt frontmatter supports `subagent`, `model`, `cwd`, `chain`, and `description` (see `loadPromptWorkflow` in `src/slash/prompt-workflows.ts`); there is no `skill`, `fresh`, `fork`, or `inheritContext` frontmatter field, and launches are always fresh.
 
 ## Extension RPC
 
