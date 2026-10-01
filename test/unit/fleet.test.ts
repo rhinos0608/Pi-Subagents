@@ -86,6 +86,7 @@ function writeAsyncRun(root: string, input: {
 const theme = {
 	fg: (_name: string, text: string) => text,
 	bold: (text: string) => text,
+	getThinkingBorderColor: (_level: string) => (text: string) => text,
 };
 
 const markdownTheme: MarkdownTheme = {
@@ -121,7 +122,7 @@ describe("native subagent fleet", () => {
 			sessionManager: { getSessionId: () => "fleet-rewrite-session" },
 			modelRegistry: {
 				async getApiKeyAndHeaders() { return { ok: true as const, apiKey: "test" }; },
-				getRegisteredProviderConfig() { return { api: "faux", streamSimple: streamFn }; },
+				streamSimple: streamFn,
 			},
 		} as never;
 		const rewritten = await rewritePromptWithGuidance({
@@ -1039,13 +1040,19 @@ describe("native subagent fleet", () => {
 	});
 
 	it("renders selectable transcript detail and completed artifact paths within terminal width", () => {
-		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-fleet-render-"));
+		// macOS sun_path-style long /var/folders temp roots wrap artifact paths
+		// mid-filename in the narrow detail pane, splitting asserted substrings
+		// (same family as the Herdr socket fix). Use a short /tmp dir on darwin.
+		const root = fs.mkdtempSync(path.join(process.platform === "darwin" ? "/tmp" : os.tmpdir(), "pi-fl-"));
 		try {
 			const asyncDir = writeAsyncRun(root, { id: "async-finished", state: "complete", contexts: ["fresh"], output: "FINAL ASYNC OUTPUT" });
 			const state = stateForTest();
 			let closed = false;
 			let renderRequests = 0;
-			const tui = { terminal: { rows: 32, columns: 100 }, requestRender: () => { renderRequests++; } };
+			// Expanded run-detail header overflows the detail viewport and the
+			// pane tail-follows, so header lines scroll out of view. Page up to
+			// the top before asserting on header metadata.
+			const tui = { terminal: { rows: 60, columns: 100 }, requestRender: () => { renderRequests++; } };
 			const component = new SubagentFleetComponent(
 				tui as never,
 				theme as never,
@@ -1054,6 +1061,8 @@ describe("native subagent fleet", () => {
 				{ asyncDirRoot: root, resultsDir: path.join(root, "results"), refreshMs: 60_000 },
 			);
 			try {
+				component.render(100);
+				for (let page = 0; page < 10; page++) component.handleInput("\x1b[5~");
 				const lines = component.render(100);
 				assert.ok(lines.some((line) => line.includes("FINAL ASYNC OUTPUT")));
 				assert.ok(lines.some((line) => line.includes("output-0.log")));

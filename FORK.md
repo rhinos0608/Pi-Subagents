@@ -3,8 +3,10 @@
 This repo is a fork of [nicobailon/pi-subagents](https://github.com/nicobailon/pi-subagents)
 (maintained at `rhinos0608/Pi-Subagents`, remote `origin`; upstream remote is `upstream`).
 
-The fork diverges at the model-facing **surface and guidance** layer and deliberately keeps
-runtime internals close to upstream so syncing stays cheap. Small tool in, full engine inside:
+The fork diverges at the model-facing **surface and guidance** layer and carries measured
+runtime-internal edits alongside it (115 src files changed vs merge-base; executor/runner
+internals carry fork runtime edits), while keeping the model-visible contract small so
+syncing stays reviewable. Small tool in, full engine inside:
 the model sees 9 fields and 6 actions; Fleet, slash commands, and RPC keep the rest.
 
 ## Divergence principles
@@ -12,13 +14,14 @@ the model sees 9 fields and 6 actions; Fleet, slash commands, and RPC keep the r
 1. Small model-facing tool: 9 top-level fields (`agent`, `task`, `action`, `id`, `message`,
    `topic`, `workflowScript`, `args`, `cwd`; `src/extension/schemas.ts`), 6 model-callable actions
    (`steer`, `resume`, `interrupt`, `status`, `guide`, `validate`;
-   `MODEL_VISIBLE_SUBAGENT_ACTIONS` in `src/shared/types.ts`), strict 10-field workflow child
-   allowlist (`agent`, `task`, `cwd`, `resume`, `as`, `phase`, `label`, `lane`, `index`, `worktree`;
+   `MODEL_VISIBLE_SUBAGENT_ACTIONS` in `src/shared/types.ts`), strict 11-field workflow child
+   allowlist (`agent`, `task`, `cwd`, `resume`, `as`, `phase`, `label`, `lane`, `index`, `worktree`,
+   `outputSchema`;
    `WORKFLOW_CHILD_ALLOWED_FIELDS` in `src/workflows/scripted-workflow.ts:1919`).
    `args` is workflowScript-only (frozen plain-JSON global, persisted as evidence — never
    secrets); `worktree` is a boolean (per-child isolation, clean tree required).
-2. Management lives in Fleet, slash commands, and RPC — not the model tool. The other 51 of the
-   57 `SUBAGENT_ACTIONS` stay routable internally but are not model-visible.
+2. Management lives in Fleet, slash commands, and RPC — not the model tool. The other 49 of the
+   55 `SUBAGENT_ACTIONS` stay routable internally but are not model-visible.
 3. Execution policy (model, thinking, budgets, timeouts, skills, placement) comes from agent
    definitions and operator config, not per-call fields.
 4. Always fresh context: every child starts empty; the parent puts files, constraints, and

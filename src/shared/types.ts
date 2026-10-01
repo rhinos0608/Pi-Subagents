@@ -133,6 +133,8 @@ export interface WorkflowPreflight {
 
 export type WorkflowReceiptState = "complete" | "failed" | "paused" | "stopped";
 
+export type WorkflowScriptFailureKind = "validation" | "script" | "child" | "return-serialization" | "timeout" | "detached-child" | "runtime";
+
 export type WorkflowTerminalResolution = "settled-awaiting-resume" | "failed-child" | "interrupted-child";
 
 export interface WorkflowTerminalOutcome {
@@ -1485,8 +1487,15 @@ export interface Details {
 	mission?: MissionRecord;
 	workflow?: {
 		value?: unknown;
+		failureKind?: WorkflowScriptFailureKind;
 		args?: Record<string, unknown>;
 		argsDigest?: string;
+		/** SHA-256 of the workflow script source (async workflows). */
+		scriptDigest?: string;
+		/** Structured stop cause; set only when the owning extension runtime was replaced. */
+		stopCause?: "runtime-replaced";
+		/** Runtime-replaced workflow run whose finished children this run reused. */
+		reusedFrom?: string;
 		resource?: WorkflowResourceProvenance;
 		preflightWarnings?: string[];
 		trace: Array<{
@@ -1502,6 +1511,8 @@ export interface Details {
 			generatedLaneKey?: string;
 			warning?: string;
 			error?: string;
+			/** Came from a previous runtime-replaced run of the same script and args; this run launched nothing. */
+			reused?: boolean;
 		}>;
 		emits: unknown[];
 		console: Array<{ level: "log" | "info" | "warn" | "error"; text: string }>;
@@ -1868,6 +1879,8 @@ export interface AsyncStatus {
 	toolBudget?: ToolBudgetState;
 	toolBudgetBlocked?: boolean;
 	pid?: number;
+	/** Linux PID namespace identity used to scope liveness probes. */
+	pidNamespaceScope?: string;
 	cwd?: string;
 	/** Parent-resolved child session root retained for trusted restored transcript lookup. */
 	sessionRoot?: string;
@@ -1929,6 +1942,8 @@ export interface AsyncStatus {
 		outputName?: string;
 		structured?: boolean;
 		status: "pending" | "running" | "complete" | "completed" | "failed" | "partial" | "paused" | "stopped" | "rejected";
+		/** Workflow child result reused from a previous runtime-replaced run; the child was not re-run. */
+		reused?: boolean;
 		stopRequested?: boolean;
 		stopRequestedAt?: number;
 		children?: NestedRunSummary[];
@@ -2805,7 +2820,8 @@ export const DEFAULT_SUBAGENT_MAX_DEPTH = 2;
 export const MODEL_VISIBLE_SUBAGENT_ACTIONS = ["steer", "resume", "interrupt", "status", "guide", "validate"] as const;
 
 /** Internal registry: every action the internal/slash/RPC/Fleet dispatch can route. Only MODEL_VISIBLE_SUBAGENT_ACTIONS is model-visible (see executePublic gate). */
-export const SUBAGENT_ACTIONS = ["list", "get", "models", "children.list", "guide", "validate", "create", "update", "delete", "eject", "disable", "enable", "reset", "mission.create", "mission.list", "mission.show", "mission.update", "mission.resolve-decision", "mission.attach-run", "mission.close", "worktree.discard", "worktree.cleanup", "lane.status", "lane.recordMerge", "lane.recordSupersession", "refine", "refine.show", "refine.rollback", "inspector.open", "inspector.command", "inspector.status", "inspector.close", "project.open", "project.status", "project.close", "status", "debug.run", "grant-spawn-budget", "interrupt", "resume", "steer", "stop", "dismiss", "doctor", "watchdog.status", "watchdog.check", "watchdog.configure", "watchdog.recommend-model", "schedule.create", "schedule.list", "schedule.show", "schedule.history", "schedule.pause", "schedule.resume", "schedule.run", "schedule.run-due", "schedule.delete"] as const;
+// FORK(FD-002): unpinned hidden actions (lane.recordMerge, lane.recordSupersession) deleted; rest stay routable internally, never model-visible.
+export const SUBAGENT_ACTIONS = ["list", "get", "models", "children.list", "guide", "validate", "create", "update", "delete", "eject", "disable", "enable", "reset", "mission.create", "mission.list", "mission.show", "mission.update", "mission.resolve-decision", "mission.attach-run", "mission.close", "worktree.discard", "worktree.cleanup", "lane.status", "refine", "refine.show", "refine.rollback", "inspector.open", "inspector.command", "inspector.status", "inspector.close", "project.open", "project.status", "project.close", "status", "debug.run", "grant-spawn-budget", "interrupt", "resume", "steer", "stop", "dismiss", "doctor", "watchdog.status", "watchdog.check", "watchdog.configure", "watchdog.recommend-model", "schedule.create", "schedule.list", "schedule.show", "schedule.history", "schedule.pause", "schedule.resume", "schedule.run", "schedule.run-due", "schedule.delete"] as const;
 
 export const DEFAULT_FORK_PREAMBLE =
 	"You are a delegated subagent running from a fork of the parent session. " +

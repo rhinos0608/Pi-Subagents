@@ -29,7 +29,6 @@ import { registerPromptWorkflowCommands } from "./prompt-workflows.ts";
 import { collectSubagentCost, formatSubagentCostReport } from "./subagent-cost.ts";
 import { openSubagentsAdmin } from "./subagents-admin.ts";
 import { SUBAGENT_GUIDE_TOPICS } from "../extension/subagent-guide.ts";
-import { openSubagentFleet } from "../tui/fleet.ts";
 import { openSubagentAgents } from "../tui/fleet-agents.ts";
 import { createBuiltinInspectorPlugins } from "../inspectors/plugins.ts";
 import {
@@ -614,6 +613,7 @@ export function registerSlashCommands(
 		}
 		fleetOpen = true;
 		try {
+			const { openSubagentFleet } = await import("../tui/fleet.ts");
 			await openSubagentFleet(ctx, state, { asyncDirRoot: DIRS.async, inspectorPlugins: createBuiltinInspectorPlugins(), resultsDir: DIRS.results, fleetKeybindings: options.fleetKeybindings, ...(options.fleetResume ? { resumeRun: options.fleetResume } : {}) });
 		} finally {
 			fleetOpen = false;

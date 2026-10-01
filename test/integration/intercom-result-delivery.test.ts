@@ -1340,7 +1340,7 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 			const failed = await executor.execute(
 				"workflow-prep-capacity-release",
 				{
-					workflowScript: `return await runs.run("gated", { agent: "missing-worker", task: "run" });`,
+					workflowScript: `const agent = "missing-worker"; return await runs.run("gated", { agent, task: "run" });`,
 					async: true,
 					acceptance: "checked",
 				},

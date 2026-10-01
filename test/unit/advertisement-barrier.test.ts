@@ -88,11 +88,16 @@ setTimeout(() => { if (phase === "old") fs.writeFileSync(${JSON.stringify(oldDon
 			};
 			const start = hooks.get("session_start").at(-1);
 			const before = hooks.get("before_agent_start").at(-1);
+			const advertise = async () => {
+				const event = { systemPrompt: "base", systemPromptOptions: { selectedTools: ["subagent"], sections: {} } };
+				await before(event, ctx);
+				return event.systemPromptOptions.sections.advertised_subagents;
+			};
 			start({ reason: "startup" }, ctx);
 			let tick = false;
 			setTimeout(() => { tick = true; }, 10);
-			const firstPrompt = before({ systemPrompt: "base", systemPromptOptions: { selectedTools: ["subagent"] } }, ctx);
-			const enabled = before({ systemPrompt: "base", systemPromptOptions: { selectedTools: ["subagent"] } }, ctx);
+			const firstPrompt = advertise();
+			const enabled = advertise();
 			const firstExecution = tools.get("subagent").execute("immediate", { agent: "global-specialist", task: "Probe" }, new AbortController().signal, undefined, ctx)
 				.then((result) => JSON.stringify(result), (error) => error.message);
 			const firstList = manageAgents("list");
@@ -105,7 +110,7 @@ setTimeout(() => { if (phase === "old") fs.writeFileSync(${JSON.stringify(oldDon
 			assert.match(firstRun, /global-specialist/);
 			assert.doesNotMatch(firstRun, /Unknown agent|not found/i);
 			assert.match(JSON.stringify(listed), /global-specialist/);
-			for (const text of [prompt.systemPrompt, loader.systemPrompt]) {
+			for (const text of [prompt, loader]) {
 				assert.match(text, /<name>global-specialist<\/name>/);
 				assert.match(text, /<name>local-specialist<\/name>/);
 			}
@@ -114,8 +119,8 @@ setTimeout(() => { if (phase === "old") fs.writeFileSync(${JSON.stringify(oldDon
 			process.env.TEST_NPM_PHASE = "old";
 			start({ reason: "reload" }, ctx);
 			await new Promise((resolve) => setTimeout(resolve, 50));
-			const waitingOnOld = before({ systemPrompt: "base", systemPromptOptions: { selectedTools: ["subagent"] } }, ctx);
-			const waitingLoader = before({ systemPrompt: "base", systemPromptOptions: { selectedTools: ["subagent"] } }, ctx);
+			const waitingOnOld = advertise();
+			const waitingLoader = advertise();
 			const registration = registerRuntimeAgent({ pi, name: "runtime-test", definition: { description: "Test", systemPrompt: "Test" } });
 			process.env.TEST_NPM_PHASE = "latest";
 			start({ reason: "reload" }, ctx);
@@ -123,9 +128,9 @@ setTimeout(() => { if (phase === "old") fs.writeFileSync(${JSON.stringify(oldDon
 				.then((result) => JSON.stringify(result), (error) => error.message);
 			const [latest, reloadedLoader] = await Promise.all([waitingOnOld, waitingLoader]);
 			assert.equal(fs.existsSync(process.env.TEST_OLD_DONE), false, "old lookup held the new session's prompt");
-			assert.match(latest.systemPrompt, /<name>new-specialist<\/name>/);
-			assert.match(reloadedLoader.systemPrompt, /<name>new-specialist<\/name>/);
-			assert.doesNotMatch(latest.systemPrompt, /<name>global-specialist<\/name>/);
+			assert.match(latest, /<name>new-specialist<\/name>/);
+			assert.match(reloadedLoader, /<name>new-specialist<\/name>/);
+			assert.doesNotMatch(latest, /<name>global-specialist<\/name>/);
 			const currentList = await manageAgents("list");
 			assert.match(JSON.stringify(currentList), /new-specialist/);
 			assert.doesNotMatch(JSON.stringify(currentList), /global-specialist/);
@@ -141,16 +146,16 @@ setTimeout(() => { if (phase === "old") fs.writeFileSync(${JSON.stringify(oldDon
 			assert.doesNotMatch(runtime, /Unknown agent|not found/i);
 			await new Promise((resolve) => setTimeout(resolve, 2600));
 			assert.equal(fs.existsSync(process.env.TEST_OLD_DONE), true, "old lookup completed");
-			const afterStale = await before({ systemPrompt: "base", systemPromptOptions: { selectedTools: ["subagent"] } }, ctx);
-			assert.match(afterStale.systemPrompt, /<name>new-specialist<\/name>/);
-			assert.doesNotMatch(afterStale.systemPrompt, /<name>global-specialist<\/name>/);
+			const afterStale = await advertise();
+			assert.match(afterStale, /<name>new-specialist<\/name>/);
+			assert.doesNotMatch(afterStale, /<name>global-specialist<\/name>/);
 			for (const reason of ["failure", "timeout", "offline"]) {
 				process.env.TEST_NPM_PHASE = reason;
 				if (reason === "offline") process.env.PI_OFFLINE = "1";
 				start({ reason: "reload" }, ctx);
-				const local = await before({ systemPrompt: "base", systemPromptOptions: { selectedTools: ["subagent"] } }, ctx);
-				assert.match(local.systemPrompt, /<name>local-specialist<\/name>/, reason);
-				assert.doesNotMatch(local.systemPrompt, /<name>(global|new)-specialist<\/name>/, reason);
+				const local = await advertise();
+				assert.match(local, /<name>local-specialist<\/name>/, reason);
+				assert.doesNotMatch(local, /<name>(global|new)-specialist<\/name>/, reason);
 			}
 			fs.writeFileSync(path.join(process.env.PI_CODING_AGENT_DIR, "settings.json"), "{");
 			start({ reason: "reload" }, ctx);

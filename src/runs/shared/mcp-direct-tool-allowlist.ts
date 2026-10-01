@@ -262,15 +262,17 @@ function loadMcpConfig(cwd: string): McpConfig {
 }
 
 function getConfigPaths(projectRoot: string): string[] {
-	const piGlobalPath = path.join(getAgentDir(), "mcp.json");
-	const projectPath = path.resolve(projectRoot, ".mcp.json");
-	const projectPiPath = path.resolve(getProjectConfigDir(projectRoot), "mcp.json");
-	const sources: string[] = [];
-	if (GENERIC_GLOBAL_CONFIG_PATH !== piGlobalPath) sources.push(GENERIC_GLOBAL_CONFIG_PATH);
-	sources.push(piGlobalPath);
-	if (projectPath !== piGlobalPath) sources.push(projectPath);
-	if (projectPiPath !== piGlobalPath && projectPiPath !== projectPath) sources.push(projectPiPath);
-	return sources;
+	const agentDir = getAgentDir();
+	const projectDir = getProjectConfigDir(projectRoot);
+	// pi-mcp-adapter 3.x reads mcp-adapter.json. Pi's own mcp.json files belong to
+	// Pi's built-in MCP support, so servers there are never adapter-registered.
+	const candidates = [
+		GENERIC_GLOBAL_CONFIG_PATH,
+		path.join(agentDir, "mcp-adapter.json"),
+		path.resolve(projectRoot, ".mcp.json"),
+		path.join(projectDir, "mcp-adapter.json"),
+	];
+	return [...new Set(candidates)];
 }
 
 function readConfig(configPath: string): McpConfig | null {
@@ -381,11 +383,19 @@ function isServerCacheValid(entry: ServerCacheEntry | undefined, definition: Ser
 }
 
 export function computeMcpServerHash(definition: ServerEntry): string {
+	// Matches pi-mcp-adapter's computeServerHash (metadata-cache.ts). Since
+	// adapter 3.1.0, a stdio server's identity includes inheritEnv and
+	// literalEnv, and a literal-env server keeps its env verbatim. A hash
+	// mismatch invalidates the cached metadata and turns every direct-tool
+	// selector for that server unresolved, so the identity must stay aligned.
+	const isStdio = definition.command !== undefined;
+	const literalEnv = isStdio && definition.literalEnv === true;
 	const identity: Record<string, unknown> = {
-		command: definition.command,
+		command: resolveConfigPath(definition.command),
 		args: definition.args,
 		socket: resolveConfigPath(definition.socket),
-		env: interpolateEnvRecord(definition.env),
+		env: literalEnv ? definition.env : interpolateEnvRecord(definition.env),
+		...(isStdio ? { inheritEnv: definition.inheritEnv !== false, literalEnv } : {}),
 		cwd: resolveConfigPath(definition.cwd),
 		url: resolveServerUrl(definition),
 		headers: interpolateEnvRecord(definition.headers),

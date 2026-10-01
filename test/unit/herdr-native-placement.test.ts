@@ -12,6 +12,14 @@ import { HerdrPiFrameDecoder, encodeHerdrPiFrame, HERDR_PI_MAX_FRAME_BYTES, HERD
 import { parseHerdrEndpoint } from "../../src/runs/shared/herdr-connection.ts";
 import { formatHerdrMachineRunnerUnsupported, resolveHerdrMachinePlacement } from "../../src/runs/shared/herdr-machine.ts";
 import { buildRunnerChildLaunch } from "../../src/runs/background/runner-child-launch.ts";
+
+// macOS sun_path caps unix socket paths at 104 bytes. os.tmpdir() under the test
+// harness is a long /var/folders/.../pi-subagents-test-root-XXXXXX path, so socket
+// dirs use a short /tmp prefix on darwin (PI_SUBAGENTS_TEMP_ROOT=/tmp has the same
+// effect via TMPDIR). Non-socket temp dirs keep os.tmpdir().
+function socketTestDir(prefix: string): string {
+	return fs.mkdtempSync(path.join(process.platform === "darwin" ? "/tmp" : os.tmpdir(), prefix));
+}
 import { runChildSession } from "../../src/runs/background/run-child-session.ts";
 import { getAgentDir } from "../../src/shared/utils.ts";
 import registerHerdrPiBridge, { resolveRemoteHerdrResources } from "../../src/extension/herdr-pi-bridge.ts";
@@ -130,7 +138,7 @@ describe("pane-native Herdr placement public contracts", { skip: process.platfor
 	});
 
 	it("preserves canonical contact_supervisor progress and structured-interview semantics", { skip: process.platform === "win32" }, async () => {
-		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-herdr-supervisor-")); const old = { mode: process.env[HERDR_PI_MODE_ENV], run: process.env[HERDR_PI_RUN_ENV], dir: process.env[HERDR_PI_RUNTIME_DIR_ENV] }; process.env[HERDR_PI_MODE_ENV] = "1"; process.env[HERDR_PI_RUN_ENV] = "run_supervisor1"; process.env[HERDR_PI_RUNTIME_DIR_ENV] = dir; const handlers = new Map<string, Function>(); let tool: any; let command: any; let socket: net.Socket | undefined;
+		const dir = socketTestDir("hh-sv-"); const old = { mode: process.env[HERDR_PI_MODE_ENV], run: process.env[HERDR_PI_RUN_ENV], dir: process.env[HERDR_PI_RUNTIME_DIR_ENV] }; process.env[HERDR_PI_MODE_ENV] = "1"; process.env[HERDR_PI_RUN_ENV] = "run_supervisor1"; process.env[HERDR_PI_RUNTIME_DIR_ENV] = dir; const handlers = new Map<string, Function>(); let tool: any; let command: any; let socket: net.Socket | undefined;
 		let activeTools = ["read"]; const pi = { registerTool(value: unknown) { tool = value; }, registerCommand(_name: string, value: unknown) { command = value; }, on(name: string, handler: Function) { handlers.set(name, handler); }, setActiveTools(value: string[]) { activeTools = value; } };
 		try { registerHerdrPiBridge(pi as never); const ctx = { sessionManager: { getSessionId: () => "native", getSessionFile: () => "/remote/session" }, getActiveTools: () => activeTools, model: { provider: "p", id: "m" }, isIdle: () => true, hasPendingMessages: () => false }; handlers.get("session_start")?.({}, ctx); socket = net.createConnection(path.join(dir, "bridge.sock")); const decoder = new HerdrPiFrameDecoder(); const frames: any[] = []; socket.on("data", (chunk) => frames.push(...decoder.push(chunk))); await new Promise<void>((resolve) => socket!.once("connect", resolve)); socket.write(encodeHerdrPiFrame({ protocol: 1, runId: "run_supervisor1", type: "configure", requestId: "cfg", resources: { agent: "worker", toolCeiling: ["read"] } })); await new Promise((resolve) => setTimeout(resolve, 30)); assert.ok(frames.some((frame) => frame.type === "configured"));
 			const progressPromise = tool.execute("tc1", { reason: "progress_update", message: "halfway" }); await new Promise((resolve) => setTimeout(resolve, 10)); const progressRequest = frames.find((frame) => frame.type === "supervisor-request" && frame.reason === "progress_update"); assert.equal(progressRequest?.expectsReply, false); socket.write(encodeHerdrPiFrame({ protocol: 1, runId: "run_supervisor1", type: "supervisor-delivered", requestId: progressRequest.requestId })); const progress = await progressPromise; assert.equal(progress.details.delivered, true);
@@ -160,7 +168,7 @@ describe("pane-native Herdr placement public contracts", { skip: process.platfor
 	});
 
 	it("keeps an accepted public prompt pending across transport replacement and replay without redispatch", { skip: process.platform === "win32" }, async () => {
-		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-herdr-replay-")); const one = path.join(dir, "one.sock"); const two = path.join(dir, "two.sock"); let firstSocket: net.Socket | undefined; let requestId = ""; let dispatches = 0;
+		const dir = socketTestDir("hh-rp-"); const one = path.join(dir, "one.sock"); const two = path.join(dir, "two.sock"); let firstSocket: net.Socket | undefined; let requestId = ""; let dispatches = 0;
 		const server1 = net.createServer((socket) => { firstSocket = socket; let text = ""; socket.on("data", (chunk) => { text += chunk; const line = text.split("\n").find(Boolean); if (!line) return; const frame = JSON.parse(line); requestId = frame.requestId; socket.write(encodeHerdrPiFrame({ protocol: 1, runId: "run_12345678", type: "prepared", requestId, nativeSessionId: "native1", cursor: 1 })); }); }); await new Promise<void>((resolve) => server1.listen(one, resolve));
 		const server2 = net.createServer((socket) => { const send = () => { socket.write(encodeHerdrPiFrame({ protocol: 1, runId: "run_12345678", type: "accepted", requestId, nativeSessionId: "native1", cursor: 2 })); socket.write(encodeHerdrPiFrame({ protocol: 1, runId: "run_12345678", type: "settled", requestId, nativeSessionId: "native1", cursor: 3, idle: true, pending: false })); }; requestId ? send() : setTimeout(send, 20); }); await new Promise<void>((resolve) => server2.listen(two, resolve));
 		const fakeConnection = () => ({ endpoint: { socket: "/tmp/h", session: null, version: "0.9.0", protocol: 1, compatible: true as const, running: true as const }, socketPath: "/tmp/h", client: { async call() { dispatches++; firstSocket?.write(encodeHerdrPiFrame({ protocol: 1, runId: "run_12345678", type: "accepted", requestId, nativeSessionId: "native1", cursor: 2 })); setTimeout(() => firstSocket?.destroy(), 5); return {}; }, async subscribe() { return () => {}; } }, async forwardRemoteSocket() { throw new Error("unused"); }, async close() {} });

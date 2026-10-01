@@ -5,7 +5,7 @@ import { Worker } from "node:worker_threads";
 import { DEFAULT_GLOBAL_CONCURRENCY_LIMIT, Semaphore } from "../runs/shared/parallel-utils.ts";
 import { HOST_STEP_MAX_COUNT } from "../runs/shared/host-step-status.ts";
 import { describeGateAcceptanceConflict, parseGateInput } from "../runs/shared/acceptance.ts";
-import type { AcceptanceRecoveryMetadata, HostStepNode, SingleResult } from "../shared/types.ts";
+import type { AcceptanceRecoveryMetadata, HostStepNode, SingleResult, WorkflowScriptFailureKind } from "../shared/types.ts";
 import { normalizeWorkflowHostCommandParams, type WorkflowHostCommandParams, type WorkflowHostCommandResult } from "./host-command.ts";
 
 const KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
@@ -23,7 +23,7 @@ export interface WorkflowScriptValidationError {
 	message: string;
 	line?: number;
 	column?: number;
-	kind?: "spawn-budget";
+	kind?: "spawn-budget" | "agent";
 }
 
 export interface WorkflowScriptValidationWarning {
@@ -39,6 +39,8 @@ export interface WorkflowScriptValidationResult {
 
 export interface WorkflowScriptValidationOptions {
 	maxSubagentSpawnsPerRun?: number;
+	/** Returns why launch-time resolution would reject this literal child agent name. */
+	agentNameError?: (name: string) => string | undefined;
 }
 
 const WORKER_SOURCE = String.raw`
@@ -67,6 +69,7 @@ let topLevelWorkflowPromise;
 let suppressNativePromiseConsumption = 0;
 const activeNativePromises = [];
 const pending = new Map();
+const workflowErrorKinds = new WeakMap();
 const runKeyPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const trackedPromiseTrackers = new WeakMap();
 const trackedPromiseTargets = new WeakMap();
@@ -601,19 +604,34 @@ function validateLaneMetadata(value, label, workflowKey) {
   }
 }
 
+const MAX_WORKFLOW_CHILD_OUTPUT_SCHEMA_BYTES = 4 * 1024;
+
+function validateWorkflowChildOutputSchema(value, label) {
+  // FORK(FD-010): per-child outputSchema override; 4 KiB cap mirrors the frozen-args budget style (bounded model surface and evidence).
+  if (value === undefined) return undefined;
+  if (value === false) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value) || value.type !== "object") return label + " outputSchema must be an object-root JSON Schema ({ type: 'object', ... }) or false to disable the agent default.";
+  var encoded;
+  try { encoded = JSON.stringify(value); } catch (error) { return label + " outputSchema must be plain JSON data."; }
+  if (encoded === undefined || new TextEncoder().encode(encoded).length > MAX_WORKFLOW_CHILD_OUTPUT_SCHEMA_BYTES) return label + " outputSchema exceeds " + MAX_WORKFLOW_CHILD_OUTPUT_SCHEMA_BYTES + " bytes.";
+  return undefined;
+}
+
 function validateRunCall(key, params, label, fingerprints) {
   if (typeof key !== "string" || !runKeyPattern.test(key)) throw new Error(label + " has an invalid key.");
   if (hostKeys.has(key)) throw new Error("Workflow key '" + key + "' is already used by runs.host.");
   if (!params || typeof params !== "object" || Array.isArray(params)) throw new Error(label + " requires a params object.");
   if (Object.prototype.hasOwnProperty.call(params, "action") || Object.prototype.hasOwnProperty.call(params, "workflowScript") || Object.prototype.hasOwnProperty.call(params, "globalConcurrencyLimit") || Object.prototype.hasOwnProperty.call(params, "maxSubagentSpawnsPerRun") || Object.prototype.hasOwnProperty.call(params, "tasks") || Object.prototype.hasOwnProperty.call(params, "chain") || Object.prototype.hasOwnProperty.call(params, "parallel") || Object.prototype.hasOwnProperty.call(params, "concurrency") || Object.prototype.hasOwnProperty.call(params, "chainDir")) {
     const hint = label === "runs.run" ? "; use runs.all(...) and JavaScript control flow for orchestration." : ".";
-    throw new Error(label + " accepts one child via { agent, task, cwd, resume } plus naming keys (as, phase, label, lane)" + hint);
+    throw new Error(label + " accepts one child via { agent, task, cwd, resume } plus naming keys (as, phase, label, lane) and outputSchema" + hint);
   }
   if (Object.prototype.hasOwnProperty.call(params, "clarify")) throw new Error(label + " does not support clarify UI.");
-  const allowedRunFields = new Set(["agent", "task", "cwd", "resume", "as", "phase", "label", "lane", "index", "worktree"]);
+  const allowedRunFields = new Set(["agent", "task", "cwd", "resume", "as", "phase", "label", "lane", "index", "worktree", "outputSchema"]);
   const unknownRunFields = Object.keys(params).filter((field) => !allowedRunFields.has(field));
-  if (unknownRunFields.length > 0) throw new Error(label + " has unsupported fields: " + unknownRunFields.join(", ") + ". Supported workflow child fields: agent, task, cwd, resume, as, phase, label, lane, index, worktree.");
+  if (unknownRunFields.length > 0) throw new Error(label + " has unsupported fields: " + unknownRunFields.join(", ") + ". Supported workflow child fields: agent, task, cwd, resume, as, phase, label, lane, index, worktree, outputSchema.");
   if (params.worktree !== undefined && typeof params.worktree !== "boolean") throw new Error(label + " worktree must be a boolean.");
+  const outputSchemaError = validateWorkflowChildOutputSchema(params.outputSchema, label);
+  if (outputSchemaError) throw new Error(outputSchemaError);
   validateLaneMetadata(params.lane, label + " lane", key);
   if (params.resume !== undefined && typeof params.resume !== "string") {
     const reference = params.resume;
@@ -802,6 +820,15 @@ function isSyntaxError(error) {
   return error instanceof SyntaxError || error?.name === "SyntaxError";
 }
 
+function postWorkflowError(error) {
+  // Pre-run syntax and portability errors are tagged "validation" where the script is compiled;
+  // anything reaching here was thrown while the script ran, including a runtime SyntaxError.
+  const taggedKind = error && (typeof error === "object" || typeof error === "function") ? workflowErrorKinds.get(error) : undefined;
+  parentPort.postMessage({ type: "error", error: isSyntaxError(error) ? formatWorkflowScriptSyntaxError(error) : formatWorkflowScriptError(error), errorKind: taggedKind ?? "script" });
+}
+
+process.on("unhandledRejection", postWorkflowError);
+
 const NESTED_ASYNC_WORKFLOW_ERROR = "workflowScript validation failed before child launch; no children launched. workflowScript does not support nested async functions. Use top-level await, plain helper functions that return runs.run(...), or explicit Promise chains so workflows stay portable across Node and Bun. Parallel plus sequential rewrite: const a = runs.run(\"a\", { agent: \"worker\", task: \"A\" }); const writer = await runs.run(\"writer\", { agent: \"worker\", task: \"Write\" }); const review = await runs.run(\"review\", { agent: \"reviewer\", task: writer.output }); const [aResult] = await Promise.all([a]); return { a: aResult.output, issue: { writerRunId: writer.runId, reviewRunId: review.runId } };";
 const AST_SCALAR_KEYS = new Set(["type", "start", "end"]);
 
@@ -918,7 +945,7 @@ parentPort.on("message", async (message) => {
     if (message.ok) entry.resolve(message.value);
     else {
       const error = new Error(message.error);
-      if (message.errorKind === "detached-child") error.workflowErrorKind = "detached-child";
+      if (message.errorKind === "child" || message.errorKind === "detached-child") workflowErrorKinds.set(error, message.errorKind);
       entry.reject(error);
     }
     return;
@@ -937,7 +964,7 @@ parentPort.on("message", async (message) => {
       assertPortableWorkflowScript(message.script);
       compiled = new vm.Script("(async () => {\n" + message.script + "\n})()", { filename: "workflow-script.js" });
     } catch (error) {
-      parentPort.postMessage({ type: "error", error: isSyntaxError(error) ? formatWorkflowScriptSyntaxError(error) : formatWorkflowScriptError(error) });
+      parentPort.postMessage({ type: "error", errorKind: "validation", error: isSyntaxError(error) ? formatWorkflowScriptSyntaxError(error) : formatWorkflowScriptError(error) });
       return;
     }
     const nativePromisePrototype = vm.runInContext("(async () => {})().constructor.prototype", context);
@@ -1001,12 +1028,12 @@ parentPort.on("message", async (message) => {
     try {
       assertJsonValue(persistedValue, "return");
     } catch (error) {
-      parentPort.postMessage({ type: "error", errorPhase: "return-serialization", error: formatWorkflowScriptError(error) });
+      parentPort.postMessage({ type: "error", errorKind: "return-serialization", errorPhase: "return-serialization", error: formatWorkflowScriptError(error) });
       return;
     }
     parentPort.postMessage({ type: "complete", value: persistedValue });
   } catch (error) {
-    parentPort.postMessage({ type: "error", error: isSyntaxError(error) ? formatWorkflowScriptSyntaxError(error) : formatWorkflowScriptError(error), ...(error && error.workflowErrorKind === "detached-child" ? { errorKind: "detached-child" } : {}) });
+    postWorkflowError(error);
   }
 });
 `;
@@ -1041,6 +1068,8 @@ export interface WorkflowScriptChildResult {
 	continuation?: { runIds: string[] };
 	artifactPaths: string[];
 	results?: SingleResult[];
+	/** Came from a runtime-replaced run of the same script and args (its saved result, or its still-running child re-attached); this run launched nothing. */
+	reused?: boolean;
 }
 
 export interface WorkflowScriptTraceEntry {
@@ -1058,6 +1087,8 @@ export interface WorkflowScriptTraceEntry {
 	generatedLaneKey?: string;
 	lane?: import("../shared/types.ts").WorkflowLaneMetadata;
 	warning?: string;
+	/** The settled result came from a previous run of the same script and args; no child was launched. */
+	reused?: boolean;
 }
 
 /** Bounded plan metadata emitted when a workflow materializes a runs.lanes graph. */
@@ -1110,12 +1141,20 @@ export interface WorkflowScriptResult {
 	children: WorkflowScriptChildResult[];
 }
 
+function isWorkflowScriptFailureKind(value: unknown): value is WorkflowScriptFailureKind {
+	return value === "validation" || value === "script" || value === "child" || value === "return-serialization" || value === "timeout" || value === "detached-child" || value === "runtime";
+}
+
+function taggedWorkflowError(message: string, kind: WorkflowScriptFailureKind): Error & { workflowErrorKind: WorkflowScriptFailureKind } {
+	return Object.assign(new Error(message), { workflowErrorKind: kind });
+}
+
 export class WorkflowScriptError extends Error {
 	readonly partial: Omit<WorkflowScriptResult, "value">;
-	readonly errorKind?: "detached-child" | "timeout";
+	readonly errorKind?: WorkflowScriptFailureKind;
 
-	constructor(message: string, partial: Omit<WorkflowScriptResult, "value">, errorKind?: "detached-child" | "timeout") {
-		super(message);
+	constructor(message: string, partial: Omit<WorkflowScriptResult, "value">, errorKind?: WorkflowScriptFailureKind, options?: ErrorOptions) {
+		super(message, options);
 		this.name = "WorkflowScriptError";
 		this.partial = partial;
 		this.errorKind = errorKind;
@@ -1132,6 +1171,8 @@ export interface WorkflowChildSettledNotification {
 	outputReference?: string;
 	error?: string;
 	workflowRunning: boolean;
+	/** The script-visible result, exactly as returned to the script. */
+	result: WorkflowScriptChildResult;
 }
 
 export interface RunWorkflowScriptOptions {
@@ -1386,7 +1427,9 @@ export function formatWorkflowJsonPreview(value: unknown, maxLength: number): st
 	try {
 		assertWorkflowJsonValue(value);
 		const serialized = JSON.stringify(value);
-		return typeof serialized === "string" ? serialized.slice(0, maxLength) : undefined;
+		if (typeof serialized !== "string") return undefined;
+		// Serialized JSON never ends in "…", so the suffix always means the preview was cut.
+		return serialized.length > maxLength ? `${serialized.slice(0, maxLength)}…` : serialized;
 	} catch {
 		return undefined;
 	}
@@ -1433,6 +1476,11 @@ function stableJson(value: unknown): string {
 
 function canonicalRunParams(params: Record<string, unknown>): Record<string, unknown> {
 	return params;
+}
+
+/** Canonical launch-params identity; matches the worker's stableRunJson(canonicalRunParams(params)). */
+export function workflowRunParamsFingerprint(params: Record<string, unknown>): string {
+	return stableJson(canonicalRunParams(params));
 }
 
 function validateKey(value: unknown, owner = "runs.run"): string {
@@ -1646,6 +1694,43 @@ function validateStaticBaseRef(params: AstNode, owner: string): WorkflowScriptVa
 	return [];
 }
 
+// Children with their own cwd, agentScope, or resume resolve agents elsewhere, and a
+// spread or computed key can replace `agent`; leave those to launch-time resolution.
+function staticChildAgentNode(params: unknown): AstNode | undefined {
+	if (!astNode(params) || params.type !== "ObjectExpression" || !Array.isArray(params.properties)) return undefined;
+	let agent: AstNode | undefined;
+	for (const property of params.properties) {
+		if (!astNode(property) || property.type !== "Property") return undefined;
+		const key = staticPropertyKey(property);
+		if (key === undefined || key === "cwd" || key === "agentScope" || key === "resume") return undefined;
+		if (key === "agent") agent = property.kind === "init" && astNode(property.value) ? property.value : undefined;
+	}
+	return literalString(agent) === undefined ? undefined : agent;
+}
+
+function validateStaticChildAgents(call: AstNode, agentNameError: (name: string) => string | undefined): WorkflowScriptValidationError[] {
+	const args = Array.isArray(call.arguments) ? call.arguments : [];
+	const elements = (node: unknown): unknown[] => astNode(node) && node.type === "ArrayExpression" && Array.isArray(node.elements) ? node.elements : [];
+	// A spread or unknown computed key on the lane can replace `stages`.
+	const staticLane = (lane: unknown): lane is AstNode => astNode(lane) && lane.type === "ObjectExpression" && Array.isArray(lane.properties)
+		&& lane.properties.every((property) => astNode(property) && property.type === "Property" && staticPropertyKey(property) !== undefined);
+	const children: Array<{ owner: string; params: unknown }> = directRunsCall(call, "run")
+		? [{ owner: "runs.run", params: args[1] }]
+		: directRunsCall(call, "all")
+			? elements(args[0]).map((params) => ({ owner: "runs.all item", params }))
+			: directRunsCall(call, "lanes")
+				? elements(args[0]).flatMap((lane) => staticLane(lane) ? elements(directObjectPropertyValue(lane, "stages")).map((params) => ({ owner: "runs.lanes stage", params })) : [])
+				: [];
+	const errors: WorkflowScriptValidationError[] = [];
+	for (const child of children) {
+		const agentNode = staticChildAgentNode(child.params);
+		const agentName = literalString(agentNode);
+		const error = agentName === undefined ? undefined : agentNameError(agentName);
+		if (agentNode && error) errors.push({ kind: "agent", message: `${child.owner}: ${error}`, ...nodeLocation(agentNode) });
+	}
+	return errors;
+}
+
 function directRunsAllKeys(call: AstNode): Array<{ key: string; node: AstNode }> {
 	const args = Array.isArray(call.arguments) ? call.arguments : [];
 	const items = astNode(args[0]) && args[0].type === "ArrayExpression" && Array.isArray(args[0].elements) ? args[0].elements : [];
@@ -1674,7 +1759,28 @@ function validateStaticRunParams(params: AstNode | undefined, owner: string, ski
 		reported.add(name);
 		errors.push({ message: `${owner} params contain unsupported field '${name}'.`, ...nodeLocation(params) });
 	}
+	// FORK(FD-010): per-child outputSchema override; literal shapes validate statically, dynamic values fall through to runtime.
+	const outputSchemaNode = directObjectPropertyValue(params, "outputSchema");
+	if (outputSchemaNode) {
+		const schemaError = validateStaticOutputSchema(outputSchemaNode, owner);
+		if (schemaError) errors.push({ message: schemaError, ...nodeLocation(outputSchemaNode) });
+	}
 	return errors;
+}
+
+function validateStaticOutputSchema(node: AstNode, owner: string): string | undefined {
+	if (!astNode(node)) return undefined;
+	if (node.type === "Literal") {
+		if (node.value === false) return undefined;
+		return `${owner} params outputSchema must be an object-root JSON Schema ({ type: 'object', ... }) or false to disable the agent default.`;
+	}
+	if (node.type === "ArrayExpression") return `${owner} params outputSchema must be an object-root JSON Schema ({ type: 'object', ... }) or false to disable the agent default.`;
+	if (node.type !== "ObjectExpression" || !Array.isArray(node.properties)) return undefined;
+	const typeNode = directObjectPropertyValue(node, "type");
+	const typeValue = typeNode ? literalString(typeNode) : undefined;
+	if (typeValue === undefined) return undefined;
+	if (typeValue !== "object") return `${owner} params outputSchema must be an object-root JSON Schema ({ type: 'object', ... }) or false to disable the agent default.`;
+	return undefined;
 }
 
 function containsWorkflowLaunch(node: unknown): boolean {
@@ -1810,6 +1916,8 @@ export function validateWorkflowScript(script: string, options: WorkflowScriptVa
 		? root.body[0].expression.callee
 		: undefined;
 	const workflowBody = wrapper && astNode(wrapper.body) ? wrapper.body : root;
+	// A rebound `runs` may not be the workflow API, so its calls prove nothing about child launches.
+	const agentNameError = options.agentNameError && !invalidatesRunsBinding(workflowBody) ? options.agentNameError : undefined;
 	walkAst(workflowBody, (node) => {
 		if (node !== wrapper && node.async === true && (node.type === "FunctionDeclaration" || node.type === "FunctionExpression" || node.type === "ArrowFunctionExpression")) {
 			errors.push({ message: "workflowScript does not support nested async functions. Use top-level await, plain helper functions that return runs.run(...), or explicit Promise chains.", ...nodeLocation(node) });
@@ -1856,6 +1964,7 @@ export function validateWorkflowScript(script: string, options: WorkflowScriptVa
 			}
 		}
 		if (directRunsCall(node, "host")) errors.push(...validateStaticHostCall(node));
+		if (agentNameError) errors.push(...validateStaticChildAgents(node, agentNameError));
 		const boundaryValue = node.type === "CallExpression" && astNode(node.callee) && node.callee.type === "Identifier" && node.callee.name === "emit" && Array.isArray(node.arguments) && astNode(node.arguments[0])
 			? node.arguments[0]
 			: node.type === "CallExpression" && astNode(node.callee) && node.callee.type === "MemberExpression" && astNode(node.callee.object) && node.callee.object.type === "Identifier" && node.callee.object.name === "state" && astNode(node.callee.property) && node.callee.property.type === "Identifier" && node.callee.property.name === "set" && Array.isArray(node.arguments) && astNode(node.arguments[1])
@@ -1916,7 +2025,24 @@ export function validateWorkflowScript(script: string, options: WorkflowScriptVa
 	const unique = errors.filter((error, index) => errors.findIndex((candidate) => candidate.message === error.message && candidate.line === error.line && candidate.column === error.column) === index);
 	return { ok: unique.length === 0, errors: unique, ...(warnings.length > 0 ? { warnings } : {}) };
 }
-const WORKFLOW_CHILD_ALLOWED_FIELDS = new Set(["agent", "task", "cwd", "resume", "as", "phase", "label", "lane", "index", "worktree"]);
+const WORKFLOW_CHILD_ALLOWED_FIELDS = new Set(["agent", "task", "cwd", "resume", "as", "phase", "label", "lane", "index", "worktree", "outputSchema"]);
+
+// FORK(FD-010): per-child outputSchema override; 4 KiB cap mirrors the frozen-args budget style in workflow-resources.ts (bounded model surface and evidence).
+const MAX_WORKFLOW_CHILD_OUTPUT_SCHEMA_BYTES = 4 * 1024;
+
+function validateWorkflowChildOutputSchema(value: unknown, label: string): string | undefined {
+	if (value === undefined) return undefined;
+	if (value === false) return undefined;
+	if (!value || typeof value !== "object" || Array.isArray(value) || (value as Record<string, unknown>).type !== "object") return `${label} outputSchema must be an object-root JSON Schema ({ type: 'object', ... }) or false to disable the agent default.`;
+	let encoded: string | undefined;
+	try {
+		encoded = JSON.stringify(value);
+	} catch {
+		return `${label} outputSchema must be plain JSON data.`;
+	}
+	if (encoded === undefined || Buffer.byteLength(encoded, "utf8") > MAX_WORKFLOW_CHILD_OUTPUT_SCHEMA_BYTES) return `${label} outputSchema exceeds ${MAX_WORKFLOW_CHILD_OUTPUT_SCHEMA_BYTES} bytes.`;
+	return undefined;
+}
 
 function workflowStringMetadata(params: Record<string, unknown>): Pick<WorkflowScriptTraceEntry, "phase" | "label" | "agent"> {
 	return {
@@ -1983,10 +2109,11 @@ function setupAbortResumeParams(params: Record<string, unknown>, result: Workflo
 }
 
 export async function runWorkflowScript(options: RunWorkflowScriptOptions): Promise<WorkflowScriptResult> {
-	if (!options.script.trim()) throw new Error("workflowScript must not be empty.");
-	if (options.timeoutMs !== undefined && (!Number.isInteger(options.timeoutMs) || options.timeoutMs < 1)) throw new Error("workflow script timeout must be a positive integer.");
+	const emptyPartial = (): Omit<WorkflowScriptResult, "value"> => ({ emits: [], console: [], trace: [], children: [] });
+	if (!options.script.trim()) throw new WorkflowScriptError("workflowScript must not be empty.", emptyPartial(), "validation");
+	if (options.timeoutMs !== undefined && (!Number.isInteger(options.timeoutMs) || options.timeoutMs < 1)) throw new WorkflowScriptError("workflow script timeout must be a positive integer.", emptyPartial(), "runtime");
 	if (options.globalConcurrencyLimit !== undefined && (!Number.isSafeInteger(options.globalConcurrencyLimit) || options.globalConcurrencyLimit < 1)) {
-		throw new Error("workflow script global concurrency limit must be a positive integer.");
+		throw new WorkflowScriptError("workflow script global concurrency limit must be a positive integer.", emptyPartial(), "runtime");
 	}
 	const launchSemaphore = new Semaphore(options.globalConcurrencyLimit ?? DEFAULT_GLOBAL_CONCURRENCY_LIMIT);
 
@@ -1996,7 +2123,7 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 			realpathSync(process.cwd());
 		} catch (error) {
 			const code = typeof error === "object" && error !== null && "code" in error ? (error as NodeJS.ErrnoException).code : undefined;
-			if (code !== "ENOENT") throw new Error("Workflow current cwd could not be validated.", { cause: error });
+			if (code !== "ENOENT") throw new WorkflowScriptError("Workflow current cwd could not be validated.", emptyPartial(), "runtime", { cause: error });
 			staleCwd = true;
 		}
 		try {
@@ -2012,7 +2139,7 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 			}
 		} catch (error) {
 			const detail = error instanceof Error ? error.message : String(error);
-			throw new Error(`Workflow process cwd is unavailable: ${options.processCwd}: ${detail}`, { cause: error });
+			throw new WorkflowScriptError(`Workflow process cwd is unavailable: ${options.processCwd}: ${detail}`, emptyPartial(), "runtime", { cause: error });
 		}
 	}
 
@@ -2020,9 +2147,14 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 	try {
 		acornPath = resolveWorkflowParserEntry();
 	} catch (error) {
-		throw new Error("Workflow parser dependency 'acorn' is unavailable from pi-subagents. Reinstall pi-subagents dependencies before launching workflowScript.", { cause: error });
+		throw new WorkflowScriptError("Workflow parser dependency 'acorn' is unavailable from pi-subagents. Reinstall pi-subagents dependencies before launching workflowScript.", emptyPartial(), "runtime", { cause: error });
 	}
-	const worker = new Worker(WORKER_SOURCE, { eval: true, workerData: { acornPath } });
+	let worker: Worker;
+	try {
+		worker = new Worker(WORKER_SOURCE, { eval: true, workerData: { acornPath } });
+	} catch (error) {
+		throw new WorkflowScriptError(`Workflow worker could not start: ${error instanceof Error ? error.message : String(error)}`, emptyPartial(), "runtime", { cause: error });
+	}
 	const emits: unknown[] = [];
 	const consoleEntries: WorkflowScriptResult["console"] = [];
 	const trace: WorkflowScriptTraceEntry[] = [];
@@ -2125,6 +2257,7 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 				...(outputReference ? { outputReference } : {}),
 				...(!result.ok && result.error ? { error: result.error } : {}),
 				workflowRunning: !settled && !finishing,
+				result,
 			});
 		} catch (error) {
 			console.error("Workflow onChildSettled callback failed:", error);
@@ -2159,8 +2292,9 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 							return unobservedHosts.length > 0 ? new Error(`workflowScript completed with unawaited runs.host call(s): ${unobservedHosts.map((key) => `'${key}'`).join(", ")}. Await or return each call.`) : undefined;
 						})()
 						: undefined;
-				if ("error" in outcome) reject(new WorkflowScriptError(outcome.error.message, partial(), outcome.error.workflowErrorKind === "detached-child" || outcome.error.workflowErrorKind === "timeout" ? outcome.error.workflowErrorKind : undefined));
-				else if (completionError) reject(new WorkflowScriptError(completionError.message, partial()));
+				// Stops and reloads end through the abort paths untagged: they are not failures.
+				if ("error" in outcome) reject(new WorkflowScriptError(outcome.error.message, partial(), isWorkflowScriptFailureKind(outcome.error.workflowErrorKind) ? outcome.error.workflowErrorKind : undefined));
+				else if (completionError) reject(new WorkflowScriptError(completionError.message, partial(), "validation"));
 				else resolve({ value: outcome.value, ...partial() });
 			});
 		};
@@ -2180,7 +2314,7 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 				mayFlushAssembly = options.continueAfterAbortWhenChildrenSettled?.(error) === true;
 			} catch (callbackError) {
 				const callbackMessage = callbackError instanceof Error ? callbackError.message : String(callbackError);
-				return finish({ error: new Error(`Workflow assembly flush eligibility failed: ${callbackMessage}`) });
+				return finish({ error: taggedWorkflowError(`Workflow assembly flush eligibility failed: ${callbackMessage}`, "runtime") });
 			}
 			if (mayFlushAssembly && allChildrenSettled) {
 				// A reloaded async workflow may already be past its last child launch.
@@ -2212,16 +2346,14 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 		const timer = options.timeoutMs === undefined
 			? undefined
 			: setTimeout(() => {
-				const error = new Error(`Workflow script timed out after ${options.timeoutMs}ms.`) as Error & { workflowErrorKind: "timeout" };
-				error.workflowErrorKind = "timeout";
-				finish({ error });
+				finish({ error: taggedWorkflowError(`Workflow script timed out after ${options.timeoutMs}ms.`, "timeout") });
 			}, options.timeoutMs);
 		options.signal?.addEventListener("abort", onAbort, { once: true });
 		if (options.signal?.aborted) return onAbort();
 
-		worker.on("error", (error) => finish({ error: new Error(`Workflow worker failed: ${error instanceof Error ? error.message : String(error)}`) }));
+		worker.on("error", (error) => finish({ error: taggedWorkflowError(`Workflow worker failed: ${error instanceof Error ? error.message : String(error)}`, "runtime") }));
 		worker.on("exit", (code) => {
-			if (!settled && code !== 0) finish({ error: new Error(`Workflow worker exited with code ${code}.`) });
+			if (!settled && code !== 0) finish({ error: taggedWorkflowError(`Workflow worker exited with code ${code}.`, "runtime") });
 		});
 		worker.on("message", (message: Record<string, unknown>) => {
 			if (settled) return;
@@ -2233,7 +2365,7 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 				try {
 					assertWorkflowJsonValue(message.value, "emit");
 				} catch (error) {
-					finish({ error: new Error(`Workflow emit could not be persisted: ${error instanceof Error ? error.message : String(error)}`) });
+					finish({ error: taggedWorkflowError(`Workflow emit could not be persisted: ${error instanceof Error ? error.message : String(error)}`, "runtime") });
 					return;
 				}
 				emits.push(message.value);
@@ -2241,7 +2373,7 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 					options.onEmit?.([...emits]);
 				} catch (error) {
 					emits.pop();
-					finish({ error: new Error(`Workflow emit could not be persisted: ${error instanceof Error ? error.message : String(error)}`) });
+					finish({ error: taggedWorkflowError(`Workflow emit could not be persisted: ${error instanceof Error ? error.message : String(error)}`, "runtime") });
 				}
 				return;
 			}
@@ -2254,16 +2386,14 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 				try {
 					assertWorkflowJsonValue(message.value, "return");
 				} catch (error) {
-					return finish({ error: new Error(`Workflow return could not be persisted: ${error instanceof Error ? error.message : String(error)}`) });
+					return finish({ error: taggedWorkflowError(`Workflow return could not be persisted: ${error instanceof Error ? error.message : String(error)}`, "return-serialization") });
 				}
 				return finish({ value: message.value });
 			}
 			if (message.type === "error") {
 				const rawError = typeof message.error === "string" ? message.error : "Workflow script failed.";
 				const text = message.errorPhase === "return-serialization" ? `${rawError}${workflowReturnRecoveryHint(partial().children)}` : rawError;
-				const workflowError = new Error(text) as Error & { workflowErrorKind?: "detached-child" };
-				if (message.errorKind === "detached-child") workflowError.workflowErrorKind = "detached-child";
-				return finish({ error: workflowError });
+				return finish({ error: isWorkflowScriptFailureKind(message.errorKind) ? taggedWorkflowError(text, message.errorKind) : new Error(text) });
 			}
 			if (message.type === "callObserved" && typeof message.callId === "number") {
 				const key = typeof message.key === "string" ? message.key : undefined;
@@ -2303,7 +2433,10 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 						}
 					},
 					(error: unknown) => {
-						if (!settled) worker.postMessage({ type: "response", callId: message.callId, ok: false, error: error instanceof Error ? error.message : String(error), ...(error instanceof Error && (error as { workflowErrorKind?: unknown }).workflowErrorKind === "detached-child" ? { errorKind: "detached-child" } : {}) });
+						if (!settled) {
+							const errorKind = error instanceof Error ? (error as { workflowErrorKind?: unknown }).workflowErrorKind : undefined;
+							worker.postMessage({ type: "response", callId: message.callId, ok: false, error: error instanceof Error ? error.message : String(error), ...(isWorkflowScriptFailureKind(errorKind) ? { errorKind } : {}) });
+						}
 					},
 				);
 			};
@@ -2443,13 +2576,11 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 					const recoverableAcceptanceMetadata = result.recovery?.status === "available-for-review"
 						&& result.recovery.reason === "acceptance-metadata-rejected";
 					if (!result.ok && result.state !== "running" && !result.stopped && !recoverableAcceptanceMetadata) {
-						const childError = new Error(result.detached ? `Run '${key}' detached: ${result.error ?? result.output}` : `Run '${key}' failed: ${result.error ?? result.output}`) as Error & { workflowErrorKind?: "detached-child" };
-						if (result.detached) childError.workflowErrorKind = "detached-child";
-						throw childError;
+						throw taggedWorkflowError(`Run '${key}' ${result.detached ? "detached" : "failed"}: ${result.error ?? result.output}`, result.detached ? "detached-child" : "child");
 					}
 					return result;
 				});
-			const fingerprint = stableJson(canonicalRunParams(params));
+			const fingerprint = workflowRunParamsFingerprint(params);
 			const existing = launches.get(key);
 			if (existing) {
 				if (existing.fingerprint !== fingerprint) return respond(Promise.reject(new Error(`Duplicate workflow key '${key}' used with incompatible launch params.`)));
@@ -2465,15 +2596,18 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 			if (params.action !== undefined) return respond(Promise.reject(new Error(`runs.run('${key}') accepts execution params only; management action is not allowed.`)));
 			if (params.workflowScript !== undefined) return respond(Promise.reject(new Error(`runs.run('${key}') cannot start a nested workflow script.`)));
 			if (params.tasks !== undefined || params.chain !== undefined || params.parallel !== undefined || params.concurrency !== undefined || params.chainDir !== undefined) {
-				return respond(Promise.reject(new Error(`runs.run('${key}') accepts one child via { agent, task, cwd, resume } plus naming keys (as, phase, label, lane); use runs.all(...) and JavaScript control flow for orchestration.`)));
+				return respond(Promise.reject(new Error(`runs.run('${key}') accepts one child via { agent, task, cwd, resume } plus naming keys (as, phase, label, lane) and outputSchema; use runs.all(...) and JavaScript control flow for orchestration.`)));
 			}
 			const unknownFields = Object.keys(params).filter((field) => !WORKFLOW_CHILD_ALLOWED_FIELDS.has(field));
 			if (unknownFields.length > 0) {
-				return respond(Promise.reject(new Error(`runs.run('${key}') has unsupported fields: ${unknownFields.join(", ")}. Supported workflow child fields: agent, task, cwd, resume, as, phase, label, lane, index, worktree.`)));
+				return respond(Promise.reject(new Error(`runs.run('${key}') has unsupported fields: ${unknownFields.join(", ")}. Supported workflow child fields: agent, task, cwd, resume, as, phase, label, lane, index, worktree, outputSchema.`)));
 			}
 			if (params.worktree !== undefined && typeof params.worktree !== "boolean") {
 				return respond(Promise.reject(new Error(`runs.run('${key}') worktree must be a boolean.`)));
 			}
+			// FORK(FD-010): per-child outputSchema override (object-root schema or false); threaded into launch params for the existing structured-output machinery.
+			const childOutputSchemaError = validateWorkflowChildOutputSchema(params.outputSchema, `runs.run('${key}')`);
+			if (childOutputSchemaError) return respond(Promise.reject(new Error(childOutputSchemaError)));
 			let resumeReference: WorkflowReceiptResumeReference | undefined;
 			try {
 				if (params.resume !== undefined && typeof params.resume !== "string") resumeReference = parseWorkflowResumeReference(params.resume);
@@ -2573,7 +2707,9 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 				children.set(key, normalized);
 				recordAcceptanceRecoveryBarrier(key, normalized);
 				const state = normalized.state === "running" ? "started" : normalized.ok ? "completed" : normalized.stopped ? "stopped" : normalized.detached ? "detached" : "failed";
-				trace.push({ operation: "run", key, state, durationMs: Date.now() - startedAt, ...workflowStringMetadata(params), ...(generatedLaneKey ? { generatedLaneKey } : {}), ...(normalized.agent ? { agent: normalized.agent } : {}), ...(normalized.runId ? { runId: normalized.runId } : {}), ...(!normalized.ok && normalized.state !== "running" ? { error: normalized.error ?? normalized.output } : {}) });
+				const settledEntry: WorkflowScriptTraceEntry = { operation: "run", key, state, durationMs: Date.now() - startedAt, ...workflowStringMetadata(params), ...(generatedLaneKey ? { generatedLaneKey } : {}), ...(normalized.agent ? { agent: normalized.agent } : {}), ...(normalized.runId ? { runId: normalized.runId } : {}), ...(!normalized.ok && normalized.state !== "running" ? { error: normalized.error ?? normalized.output } : {}) };
+				if (normalized.reused) settledEntry.reused = true;
+				trace.push(settledEntry);
 				traceChanged();
 				notifyChildSettled(key, normalized);
 				return normalized;

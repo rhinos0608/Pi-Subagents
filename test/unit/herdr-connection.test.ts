@@ -7,7 +7,11 @@ import { describe, it } from "node:test";
 import { HerdrRpcError, SocketRpcClient } from "../../src/runs/shared/herdr-connection.ts";
 
 async function withSocketServer<T>(handler: (socket: net.Socket, request: Record<string, unknown>) => void, action: (client: SocketRpcClient) => Promise<T>, ackTimeoutMs = 100): Promise<T> {
-	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "herdr-rpc-")), socketPath = path.join(dir, "server.sock");
+	// macOS sun_path caps unix socket paths at 104 bytes. os.tmpdir() under the test
+	// harness is a long /var/folders/.../pi-subagents-test-root-XXXXXX path, so socket
+	// dirs use a short /tmp prefix on darwin (PI_SUBAGENTS_TEMP_ROOT=/tmp has the same
+	// effect via TMPDIR).
+	const dir = fs.mkdtempSync(path.join(process.platform === "darwin" ? "/tmp" : os.tmpdir(), "hs-")), socketPath = path.join(dir, "server.sock");
 	const server = net.createServer((socket) => { let buffer = ""; socket.on("data", (chunk) => { buffer += chunk; const newline = buffer.indexOf("\n"); if (newline < 0) return; const request = JSON.parse(buffer.slice(0, newline)) as Record<string, unknown>; buffer = buffer.slice(newline + 1); handler(socket, request); }); });
 	await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(socketPath, resolve); });
 	try { return await action(new SocketRpcClient(socketPath, ackTimeoutMs)); }

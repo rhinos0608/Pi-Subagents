@@ -64,9 +64,11 @@ Chaining is code-driven through `workflowScript`. Use `await runs.run(...)` for 
 
 ### Workflow child fields
 
-Each `runs.run` / `runs.all` child accepts exactly: `agent`, `task`, `cwd`, `resume`, `as`, `phase`, `label`, `lane`, `index`, `worktree`.
+Each `runs.run` / `runs.all` child accepts exactly: `agent`, `task`, `cwd`, `resume`, `as`, `phase`, `label`, `lane`, `index`, `worktree`, `outputSchema`.
 
 `worktree: true` isolates that child in its own managed worktree (requires a clean git working tree); omit it to use the workflow/operator default. `worktree` must be a boolean. `baseRef` / `isolation` / provider overrides stay rejected on children.
+
+`outputSchema` overrides the agent frontmatter default for that child only: pass an object-root JSON Schema (`{ type: "object", ... }`, additional properties allowed, at most 4 KiB serialized) or `false` to disable the default. Anything else is a validation error naming the field. On schema mismatch the child result is an error carrying the schema message (that child fails; the workflow continues for other children).
 
 ```js
 { workflowScript: `
@@ -88,6 +90,8 @@ Children always run awaited: the script continues once the child settles with it
 Output routing is tooling-managed, not a per-child script field: `runs.run` / `runs.all` params do not accept `output` or `outputMode`.
 
 Child outputs are saved to managed artifacts automatically. A filename mentioned in task text (for example, `Write your findings to exactly this path: report.md`) is only instruction and does not override runtime routing. When a later workflow step or parent needs a durable file, return the child's `outputReference` or `artifactPaths`.
+
+The workflow result text keeps the Return, Emitted, and Console sections, and a failed workflow's error, under 200 KB and 5000 lines. Each call-trace error is shortened to 500 characters. When anything is cut, a `[TRUNCATED: ... - full output at <path>]` line points to the uncut text, which is written to `<run>_workflow-result.md` under the run's artifacts directory. That file sits outside the `outputs/` tree where children save their reports and has the same retention as the other run artifacts in that directory: age-based cleanup removes it from temp and session artifact directories, while `artifactDir: "project"` files are kept. Async completion notices and `action: "status"` show short previews; a cut preview ends in `…` and names the run's `status.json`, which holds the full value.
 
 Child results cross into the script as plain JSON data, including saved-output references.
 

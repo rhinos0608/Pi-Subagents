@@ -85,6 +85,7 @@ export interface BuiltinAgentOverrideBase {
 
 interface BuiltinAgentOverrideConfig {
 	description?: string;
+	advertise?: boolean;
 	machine?: string | false;
 	output?: string | false;
 	outputMode?: OutputMode;
@@ -1009,6 +1010,14 @@ function parseBuiltinOverrideEntry(
 		}
 	}
 
+	if ("advertise" in input) {
+		if (typeof input.advertise === "boolean") {
+			override.advertise = input.advertise;
+		} else {
+			throw new Error(`Builtin override '${name}' in '${filePath}' has invalid 'advertise'; expected a boolean.`);
+		}
+	}
+
 	if ("output" in input) {
 		if ((typeof input.output === "string" && input.output.trim()) || input.output === false) override.output = input.output;
 		else throw new Error(`Builtin override '${name}' in '${filePath}' has invalid 'output'; expected a non-empty string or false.`);
@@ -1470,6 +1479,7 @@ function applyBuiltinOverride(
 	};
 
 	if (override.description !== undefined) next.description = override.description;
+	if (override.advertise !== undefined) next.advertise = override.advertise;
 	if (override.machine !== undefined) { if (override.machine === false) delete next.machine; else next.machine = override.machine; }
 	if (override.output !== undefined) { if (override.output === false) delete next.output; else next.output = override.output; }
 	if (override.outputMode !== undefined) next.outputMode = override.outputMode;
@@ -2155,8 +2165,8 @@ function loadAgentsFromDefinitionFiles(files: AgentDefinitionFile[], source: Age
 		let defaultTimeoutMs: number | undefined;
 		if (frontmatter.timeoutMs !== undefined) {
 			const parsed = Number(frontmatter.timeoutMs);
-			if (!Number.isInteger(parsed) || parsed <= 0) {
-				throw new Error(`Agent '${localName}' has invalid timeoutMs frontmatter; expected a positive integer.`);
+			if (!Number.isInteger(parsed) || parsed <= 0 || parsed > 2_147_483_647) {
+				throw new Error(`Agent '${localName}' has invalid timeoutMs frontmatter; expected a positive integer no larger than 2147483647.`);
 			}
 			defaultTimeoutMs = parsed;
 		}
