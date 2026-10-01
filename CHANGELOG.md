@@ -3,6 +3,20 @@
 ## [Unreleased]
 
 First npm release of the fork: `v0.71.0-fork.1` (published as `@rhinos0608/pi-subagents`). Forks upstream `v0.71.0`; see `FORK.md` and `docs/fork-delta.md` for the full divergence ledger.
+### Fixed
+
+- Headless sessions now deliver goal-mission notices even when draining background work fails, while preserving the drain rejection for callers. Thanks to [@quifox](https://github.com/quifox) for [#2605](https://github.com/nicobailon/pi-subagents/pull/2605).
+- A damaged linked-run status or mission state no longer prevents healthy goal missions from receiving continuation notices. The failing mission is reported separately. Thanks to [@quifox](https://github.com/quifox) for [#2604](https://github.com/nicobailon/pi-subagents/pull/2604).
+
+## [0.74.0] - 2026-09-30
+
+### Highlights
+
+- Workflow scripts are now written as a normal ```` ```js workflow ```` code block in the reply and run with `workflow: true`, with no JSON escaping. This replaces `workflowScript` and `workflowScriptPath`.
+- On models that cannot add a tool mid-conversation, `subagent` is now available from the start, so turning it on no longer reprocesses the whole conversation at full price.
+- The new `disabledFeatures` setting hides parts of the `subagent` tool you do not use, and with `workflow-scripts` turned off you can run children with simple `chain` and `tasks` lists.
+- `/reload` and session resumes no longer kill running background workflows, and relaunching one reuses the children that already finished.
+- Subagent children now respect an untrusted project the same way the main session does.
 
 ### Added
 
