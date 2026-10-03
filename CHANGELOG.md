@@ -5,6 +5,32 @@
 First npm release of the fork: `v0.71.0-fork.1` (published as `@rhinos0608/pi-subagents`). Forks upstream `v0.71.0`; see `FORK.md` and `docs/fork-delta.md` for the full divergence ledger.
 ### Fixed
 
+- When several async jobs crowd the widget and some of them leave the list, the widget now shrinks to the remaining jobs instead of keeping blank rows at its earlier height. Status updates while the same jobs are listed still keep the height fixed. Thanks to [@tara-marchand](https://github.com/tara-marchand) for [#2651](https://github.com/nicobailon/pi-subagents/issues/2651).
+
+## [0.75.0] - 2026-10-02
+
+### Highlights
+
+- Background subagents work on Pi 1.0.0 again. In 0.74.0 they failed to start with "does not provide @earendil-works/pi-agent-core/node".
+- The built-in `claude-code` and `claude-code-writer` agents can pick a Claude model and effort level per launch, for example `model: "claude-opus-5.5:high"`.
+- On Windows, `claude-code`, `codex-exec`, and `cursor-agent` can now launch CLIs installed with npm.
+- Children on a virtual model from an extension, such as a model router set as `subagents.defaultModel`, now launch and pass model verification.
+- An invalid config value no longer silently turns off `authorityPolicy`, `permissions`, or `toolBudget`. Loading the config fails instead.
+
+### Added
+
+- The built-in `claude-code` and `claude-code-writer` agents accept a model and thinking level per launch or in agent frontmatter, and pass them to Claude Code as `--model` and `--effort`. Before, the model could only be set in your global Claude Code settings. `model: "claude-opus-5.5:high"` sets both; `model: ":high"` sets only the effort. An unknown model or level fails the launch and names it. `subagents.maxThinking` and an enforced `subagents.modelScope` apply to these launches; with an enforced scope, a launch that sets no model fails, because Claude Code's default model cannot be checked. Other external runners still reject both fields. See [agents](docs/agents.md). Thanks to [@lexxbyte](https://github.com/lexxbyte) for [#2602](https://github.com/nicobailon/pi-subagents/issues/2602).
+- The parent can now manage a long `bash` command inside a native Pi child that is granted both `bash` and `subagent_command`: `command.status` shows it, `command.yield` lets the child continue while the command keeps running, and `command.cancel` stops only that command. The child can do the same itself with `bash`'s `yieldTimeMs` and the `subagent_command` tool. Commands use Pi's own shell and are stopped when the child exits, and a child that finishes with a command still running fails. Thanks to [@jiuai233](https://github.com/jiuai233) for [#2598](https://github.com/nicobailon/pi-subagents/pull/2598).
+- Hosts that require child extensions with `registerRequiredChildExtensions` can pass `requireForAllRunners: true`. Only local Pi children can load those extensions, so with this flag a launch on an external CLI, an external job, or another machine is refused before it starts instead of running without them. The requirement stays with the run, including nested, resumed, and workflow children, even after the host removes its registration. Without the flag, external runners are skipped as before. See [agents](docs/agents.md). Thanks to [@doc-krieger](https://github.com/doc-krieger) for [#2639](https://github.com/nicobailon/pi-subagents/issues/2639).
+- `schedule.create` accepts an existing `missionId`, so a scheduled workflow keeps the same mission state across runs and session restarts. Schedules with a mission are saved in a new format that older pi-subagents versions reject instead of silently dropping the mission; other schedules keep the old format. Thanks to [@quifox](https://github.com/quifox) for [#2616](https://github.com/nicobailon/pi-subagents/pull/2616).
+- `asyncWidgetCollapsed: true` starts the async widget under the editor folded to one line. Clicking its header still unfolds it, and the default is unchanged. Thanks to [@unrelentingfox](https://github.com/unrelentingfox) for [#2621](https://github.com/nicobailon/pi-subagents/pull/2621).
+
+### Changed
+
+- CI now runs the clean-install test against both Pi `0.86.1` and `1.0.0`, as separate jobs with separate logs. Thanks to [@EightDoor](https://github.com/EightDoor) for [#2648](https://github.com/nicobailon/pi-subagents/pull/2648).
+
+### Fixed
+
 - A child could not launch on a virtual model registered by an extension with `pi.registerVirtualModel()`, such as a router set as `subagents.defaultModel`. The child resolved its model before the extension's queued virtual models were registered, so the name fell through to a raw model-id match on another provider and the launch failed on that provider's missing API key. Queued virtual models are now registered before the child resolves its model, and a required extension whose registration fails stops the launch. Thanks to [@mauroziux](https://github.com/mauroziux) for [#2636](https://github.com/nicobailon/pi-subagents/pull/2636) (#2635).
 - Background subagents failed to start on Pi 1.0.0 with "does not provide @earendil-works/pi-agent-core/node", because that Pi release no longer ships the module. Background launches now skip it when the installed Pi does not offer it, and still fail when Pi offers it but the file is missing. Thanks to [@albertgwo](https://github.com/albertgwo) for [#2634](https://github.com/nicobailon/pi-subagents/pull/2634).
 - A background chain with a legacy `expand` dynamic-fanout step whose parallel template uses an external-runner agent, such as `claude-code`, failed with "Dynamic chain step N parallel does not support field 'runner'". Each item now runs through the agent's external runner, its status step shows that runner, and its output is collected like a static parallel child. A `runner` field written directly in a template is still rejected. Thanks to [@lexxbyte](https://github.com/lexxbyte) for reporting [#2629](https://github.com/nicobailon/pi-subagents/issues/2629).

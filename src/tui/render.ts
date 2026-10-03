@@ -2518,6 +2518,7 @@ interface WidgetLayoutSession {
 	columns: number;
 	tier: WidgetRenderTier;
 	lockedRows?: number;
+	rootJobCount?: number;
 	visibleJobKeys: string[];
 }
 
@@ -2777,12 +2778,16 @@ function fitAdaptiveWidgetLines(jobs: AsyncJobState[], buildLines: () => string[
 		const session = widgetLayoutSession;
 		const lockedRows = widgetLayoutSession.lockedRows;
 		let rendered = buildProgressiveWidgetLines(jobs, theme, width, lockedRows, session.visibleJobKeys, frame, projectionFor);
-		// A job that starts after a content-sized lock can be hidden while the cap has room: grow the lock, never shrink it.
+		// The height stays fixed across content-only updates (#186). It grows when a new job would be hidden while the cap
+		// has room, and shrinks to content only when root jobs leave, so finished jobs leave no blank rows.
 		const capRows = Math.min(availableRows, collapsedWidgetLineBudget(rows));
 		if (rendered.visibleJobKeys.length < jobs.length && lockedRows < capRows) {
 			rendered = buildProgressiveWidgetLines(jobs, theme, width, capRows, session.visibleJobKeys, frame, projectionFor);
 			session.lockedRows = Math.max(lockedRows, rendered.contentRows);
+		} else if (jobs.length < (session.rootJobCount ?? 0)) {
+			session.lockedRows = rendered.contentRows;
 		}
+		session.rootJobCount = jobs.length;
 		session.visibleJobKeys = rendered.visibleJobKeys;
 		return rendered.lines.slice(0, session.lockedRows);
 	}
@@ -2805,7 +2810,7 @@ function fitAdaptiveWidgetLines(jobs: AsyncJobState[], buildLines: () => string[
 	// Lock to the rows the content fills so the fixed-height card has no blank padding.
 	const rendered = buildProgressiveWidgetLines(jobs, theme, width, Math.min(availableRows, collapsedWidgetLineBudget(rows)), [], frame, projectionFor);
 	const lockedRows = rendered.contentRows;
-	widgetLayoutSession = { expanded, rows, columns, tier: "progressive", lockedRows, visibleJobKeys: rendered.visibleJobKeys };
+	widgetLayoutSession = { expanded, rows, columns, tier: "progressive", lockedRows, rootJobCount: jobs.length, visibleJobKeys: rendered.visibleJobKeys };
 	return rendered.lines.slice(0, lockedRows);
 }
 
