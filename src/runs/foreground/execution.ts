@@ -183,17 +183,13 @@ function persistSingleResultMetadata(input: {
 	});
 }
 
-function formatTimeoutMessage(timeoutMs: number): string {
-	return `Subagent timed out after ${timeoutMs}ms.`;
-}
-
 function resolveAttemptTimeout(options: RunSyncOptions): { timeoutMs: number; remainingMs: number; message: string } | undefined {
 	if (options.timeoutMs === undefined) return undefined;
 	const deadlineAt = options.deadlineAt ?? Date.now() + options.timeoutMs;
 	return {
 		timeoutMs: options.timeoutMs,
 		remainingMs: Math.max(0, deadlineAt - Date.now()),
-		message: formatTimeoutMessage(options.timeoutMs),
+		message: `Subagent timed out after ${options.timeoutMs}ms.`,
 	};
 }
 
@@ -541,6 +537,7 @@ async function runSingleAttempt(
 		else delete progress.cacheWrite;
 	};
 	const attemptTimeout = resolveAttemptTimeout(options);
+	let timeoutCause: string | undefined;
 	if (attemptTimeout?.remainingMs === 0) {
 		result.exitCode = 1;
 		result.timedOut = true;
@@ -1220,8 +1217,9 @@ async function runSingleAttempt(
 
 		if (attemptTimeout) {
 			timeoutTimer = setTimeout(() => {
-				if (sessionSettled || lifecycleFinished || interruptedByControl) return;
+				if (sessionSettled || lifecycleFinished || interruptedByControl || result.timedOut) return;
 				result.timedOut = true;
+				timeoutCause = attemptTimeout.message;
 				clearAllToolTimeouts();
 				result.error = attemptTimeout.message;
 				result.finalOutput = attemptTimeout.message;
@@ -1270,8 +1268,10 @@ async function runSingleAttempt(
 			}
 		};
 		const terminateForToolTimeout = (message: string): void => {
-			if (sessionSettled || lifecycleFinished || interruptedByControl) return;
+			if (sessionSettled || lifecycleFinished || interruptedByControl || result.timedOut) return;
+			clearTimeout(timeoutTimer);
 			result.timedOut = true;
+			timeoutCause = message;
 			result.error = message;
 			result.finalOutput = message;
 			progress.status = "failed";
@@ -1553,8 +1553,7 @@ async function runSingleAttempt(
 	let fullOutput = stripAcceptanceReport(acceptanceOutput);
 	if (!fullOutput.trim() && result.structuredOutput !== undefined) fullOutput = JSON.stringify(result.structuredOutput, null, 2);
 	result.outputState = fullOutput.trim() || result.structuredOutput !== undefined ? "present" : "absent";
-	if (result.timedOut) {
-		const timeoutMessage = formatTimeoutMessage(options.timeoutMs ?? 0);
+	if (timeoutCause) {
 		let requiredOutputMissing: boolean | undefined;
 		if (options.outputMode === "file-only" && options.outputPath) {
 			const outputChanged = hasSingleOutputChangedSinceSnapshot(options.outputPath, shared.outputSnapshot);
@@ -1574,8 +1573,8 @@ async function runSingleAttempt(
 			artifactPaths: shared.artifactPaths,
 		});
 		fullOutput = fullOutput.trim()
-			? `${timeoutMessage}\n\n${result.timeoutRecovery.message}\n\nPartial output before timeout:\n${fullOutput}`
-			: `${timeoutMessage}\n\n${result.timeoutRecovery.message}`;
+			? `${timeoutCause}\n\n${result.timeoutRecovery.message}\n\nPartial output before timeout:\n${fullOutput}`
+			: `${timeoutCause}\n\n${result.timeoutRecovery.message}`;
 	}
 		if (options.outputPath && result.exitCode === 0) {
 			const resolvedOutput = resolveSingleOutput(options.outputPath, fullOutput, shared.outputSnapshot, options.outputClaimPath);
