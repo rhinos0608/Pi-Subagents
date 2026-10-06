@@ -5,6 +5,24 @@
 First npm release of the fork: `v0.71.0-fork.1` (published as `@rhinos0608/pi-subagents`). Forks upstream `v0.71.0`; see `FORK.md` and `docs/fork-delta.md` for the full divergence ledger.
 ### Fixed
 
+- A long-running foreground child re-formatted every past tool call on each progress update, although progress shows only the latest 64, so each update got slower as the child's history grew. Progress updates now format only those 64 calls. ([#2704](https://github.com/nicobailon/pi-subagents/issues/2704))
+
+## [0.76.1] - 2026-10-05
+
+### Highlights
+
+- When a subagent result wakes an idle parent, that run keeps the subagent list, MCP servers, and other extensions' prompt sections, and no longer churns the provider's prompt cache.
+- Updating pi-subagents while Pi is running now stops `/reload` with a clear "restart Pi" error instead of running a mix of old and new code.
+- In Herdr, a child asking its parent agent for help no longer turns the pane red.
+- `stop` works on a paused run whose result was already delivered, and `subagent doctor` now shows the same async capacity that launches use.
+- Reloading extensions while a child's result is waiting no longer lets a host such as pi-web lose that result.
+
+### Changed
+
+- The npm package now has the `extension` keyword, so Pi's extension catalog lists pi-subagents under Extensions instead of Unlabelled.
+
+### Fixed
+
 - On Windows, the agent-memory and worktree-cleanup path checks could treat two different directories as the same path when their file ids differed only in bits lost by JavaScript numbers. They now compare exact bigint file ids. ([#2685](https://github.com/nicobailon/pi-subagents/issues/2685))
 - On Windows, a schedule claim whose lock file could not be written could delete another owner's replacement lock. The cleanup compared file ids as JavaScript numbers, and Windows file ids above 2^53 lose precision, so two nearby files could look identical. It now compares exact bigint file ids. ([#2679](https://github.com/nicobailon/pi-subagents/pull/2679))
 - The pi-web liveness provider reported a session idle while a child's result had not reached the parent: after the child ended but before its result was published, while a rejected send waited to retry, and while Pi held the accepted wake message in its queue. A host could replace the session then and lose the result. The provider now stays live until Pi starts that message. Thanks to [@brettinternet](https://github.com/brettinternet) for [#2674](https://github.com/nicobailon/pi-subagents/pull/2674).
