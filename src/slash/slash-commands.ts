@@ -603,7 +603,7 @@ export function registerSlashCommands(
 	};
 	const showFleet = async (ctx: ExtensionContext) => {
 		state.lastUiContext = ctx;
-		if (!ctx.hasUI) {
+		if (ctx.mode !== "tui") {
 			await runCommand(ctx, { action: "status", view: "fleet" });
 			return;
 		}
@@ -790,7 +790,7 @@ export function registerSlashCommands(
 				ctx.ui.notify(message, "error");
 				return;
 			}
-			if (!ctx.hasUI) {
+			if (ctx.mode !== "tui") {
 				sendSlashText(pi, stopFallbackText(targets));
 				return;
 			}
