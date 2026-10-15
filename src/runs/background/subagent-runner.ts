@@ -85,7 +85,7 @@ import { getSettledReadonlyChild, runChildSession, type ChildEvent, type RunChil
 import { planReadonlyModelContinuation, READONLY_CONTINUATION_PROMPT, type LogicalRecoveryState } from "../shared/readonly-model-continuation.ts";
 import { getReadonlySessionEvidence } from "../shared/readonly-session-evidence.ts";
 import { loadRunnerChildSessionFactory } from "./runner-child-sessions.ts";
-import { SUBAGENT_CHILD_ENV } from "../shared/child-runtime-config.ts";
+import { SUBAGENT_CHILD_ENV, SUBAGENT_RUNNER_PID_ENV } from "../shared/child-runtime-config.ts";
 import { deriveChildSessionName } from "../../shared/child-session-name.ts";
 import { outputEntryFromAsyncResult, resolveOutputReferences } from "../shared/chain-outputs.ts";
 import { clearStructuredOutputCaptures, createStructuredOutputFileCapture, createStructuredOutputRuntime, formatStructuredOutputRejectionError, MISSING_STRUCTURED_OUTPUT_CALL_ERROR, readStructuredOutput, readStructuredOutputAcceptanceReport } from "../shared/structured-output.ts";
@@ -166,8 +166,10 @@ const INTERCOM_DETACH_RECEIPT = "Detached for intercom coordination before task 
 
 // This process hosts child sessions. An ambient copy of pi-subagents loaded
 // into one of them must register nothing; the variable marks the process as a
-// child host.
+// child host. Processes spawned from a child inherit both variables, so only
+// the runner pid, matched against process.pid, identifies the runner itself.
 process.env[SUBAGENT_CHILD_ENV] = "1";
+process.env[SUBAGENT_RUNNER_PID_ENV] = String(process.pid);
 
 export interface SubagentRunConfig {
 	id: string;
