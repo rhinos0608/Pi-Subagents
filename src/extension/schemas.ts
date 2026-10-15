@@ -56,12 +56,11 @@ const AcceptanceOverride = Type.Unsafe({
 		{
 			type: "string",
 			enum: ["reviewed"],
-			deprecated: true,
 			description: "Invalid as an explicit policy. Recognized only so preflight can explain that reviewed is an achieved status.",
 		},
 		{
 			type: "string",
-			pattern: "^\\s*\\{",
+			pattern: "^\\s*\\{[\\s\\S]*$",
 		},
 		{ type: "boolean" },
 		{ type: "object", additionalProperties: true },
