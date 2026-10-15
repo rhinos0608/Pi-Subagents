@@ -29,6 +29,10 @@ function walkMarkdown(dir: string, out: string[] = []): string[] {
 	return out;
 }
 
+function normalizeDocRelativePath(relative: string): string {
+	return relative.replaceAll("\\", "/");
+}
+
 function corpusFiles(): string[] {
 	const files: string[] = [];
 	for (const dir of ["docs", "skills", "prompts"]) {
@@ -52,10 +56,14 @@ function unreleasedOnly(rel: string, lines: string[]): string[] {
 }
 
 describe("fork surface drift guard", () => {
+	it("normalizes Windows-style relative paths before exemption checks", () => {
+		assert.equal(normalizeDocRelativePath("docs\\fork-decisions.md"), "docs/fork-decisions.md");
+		assert.ok(DENYLIST_EXEMPT_FILES.has(normalizeDocRelativePath("docs\\fork-delta.md")));
+	});
 	it("names no removed knob as a live token in model-facing docs", () => {
 		const violations: string[] = [];
 		for (const full of corpusFiles()) {
-			const rel = path.relative(ROOT, full);
+			const rel = normalizeDocRelativePath(path.relative(ROOT, full));
 			if (DENYLIST_EXEMPT_FILES.has(rel)) continue;
 			let inRemovedSection = false;
 			const lines = unreleasedOnly(rel, fs.readFileSync(full, "utf-8").split("\n"));
@@ -76,7 +84,7 @@ describe("fork surface drift guard", () => {
 		const bad: string[] = [];
 		const files = [...corpusFiles(), path.join(ROOT, "src/agents/advertised-agent-prompt.ts")];
 		for (const full of files) {
-			const rel = path.relative(ROOT, full);
+			const rel = normalizeDocRelativePath(path.relative(ROOT, full));
 			if (DENYLIST_EXEMPT_FILES.has(rel)) continue;
 			const text = fs.readFileSync(full, "utf-8");
 			const lines = rel === "CHANGELOG.md" ? unreleasedOnly(rel, text.split("\n")) : text.split("\n");

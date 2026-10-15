@@ -89,7 +89,7 @@ describe("async stale-run reconciliation", () => {
 					const stale = reconcileAsyncRun(asyncDir, { ...options, staleAlivePidMs: 1000, now: () => now + 2000 });
 					assert.equal(stale.repaired, true, scenario.name);
 					assert.equal(stale.status?.state, "failed", scenario.name);
-					assert.match(stale.message ?? "", /status has not updated for 2100ms.*PID ownership is unverified/);
+					assert.match(stale.message ?? "", /status has not updated for 2100ms.*PID ownership cannot be verified/);
 				}
 				const receipt = fs.readFileSync(resultPath, "utf-8");
 				assert.equal(JSON.parse(receipt).state, "failed");

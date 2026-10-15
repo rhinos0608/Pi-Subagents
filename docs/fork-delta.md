@@ -199,3 +199,8 @@ Final second-pass checks: TypeScript passed. Unit suite 3,929 passed / 0 failed 
 ## Promotion to main (2026-10-16)
 
 Commit `c959d939` captured the local agent configuration changes before the prepared integration branch was merged into main. The intentional evidence-auditor deletion was retained. The one stale acceptance assertion was corrected without restoring the agent. Final gates: 3,936 unit tests passed (15 skipped), 1,078 integration tests passed (8 skipped), TypeScript and scoped package build passed. Live Pi settings were not rewritten; the configured package path already targets the main checkout. The 105 ADAPT decisions remain explicitly open.
+
+
+## CI portability follow-up (2026-10-16)
+
+The first GitHub Actions run after promoting the selective integration to main exposed two test-only cross-platform failures: the model-facing documentation guard used OS-native separators for repository-relative denylist exemptions on Windows, and a Linux stale PID reconciliation test expected an obsolete failure-message phrase. The guard now normalizes path separators before lookups and includes an explicit Windows-path regression case. The stale-PID assertion matches the actual fail-closed runtime wording. Production code and execution policy were not changed by these corrections.
