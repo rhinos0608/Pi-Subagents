@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
 import { resolveSubagentRunId } from "../../src/runs/background/run-id-resolver.ts";
+import { resolvePublicSubagentRequest } from "../../src/extension/public-execution.ts";
 import { createSubagentExecutor, rejectMissingControlRunId, unknownSubagentActionMessage } from "../../src/runs/foreground/subagent-executor.ts";
 import { MODEL_VISIBLE_SUBAGENT_ACTIONS, SUBAGENT_ACTIONS } from "../../src/shared/types.ts";
 
@@ -280,8 +281,8 @@ describe("public boundary: runs.run child params reject unknown keys", () => {
 		}
 	});
 
-	// Phase 6 workflow-child boundary (landed): model-authored runs.run/runs.all
-	// children accept exactly { agent, task, cwd, resume, as, phase, label, lane, index, worktree }.
+	// Phase 6 workflow-child boundary (landed) + FD-010 (landed): model-authored runs.run/runs.all
+	// children accept exactly { agent, task, cwd, resume, as, phase, label, lane, index, worktree, outputSchema }.
 	// Execution tuning (async, output, outputMode, reads, progress) resolves from
 	// agent definitions, workflow defaults, or operator config — never the model.
 	// The static entry point rejects unknown keys offline; these pin the contract.
@@ -334,8 +335,8 @@ describe("public boundary: runs.run child params reject unknown keys", () => {
 	// is rejected by name.
 	it("locks the exact model-authored child allowlist", () => {
 		const source = readFileSync(new URL("../../src/workflows/scripted-workflow.ts", import.meta.url), "utf8");
-		const exactSet = `"agent", "task", "cwd", "resume", "as", "phase", "label", "lane", "index", "worktree"`;
-		const exactMessage = "Supported workflow child fields: agent, task, cwd, resume, as, phase, label, lane, index, worktree.";
+		const exactSet = `"agent", "task", "cwd", "resume", "as", "phase", "label", "lane", "index", "worktree", "outputSchema"`;
+		const exactMessage = "Supported workflow child fields: agent, task, cwd, resume, as, phase, label, lane, index, worktree, outputSchema.";
 		// All three seams carry the exact set: WORKER_SOURCE copy, module
 		// allowlist, and each runtime error message.
 		assert.equal(source.match(/allowedRunFields = new Set\(\[(.*?)\]\)/)?.[1], exactSet);
@@ -354,6 +355,8 @@ describe("public boundary: runs.run child params reject unknown keys", () => {
 			`{ agent: "worker", task: "check", lane: { version: 1, key: "one" } }`,
 			`{ agent: "worker", task: "check", index: 0 }`,
 			`{ agent: "worker", task: "check", worktree: true }`,
+			`{ agent: "worker", task: "check", outputSchema: { type: "object" } }`,
+			`{ agent: "worker", task: "check", outputSchema: false }`,
 		]) {
 			const script = `return await runs.run("one", ${params});`;
 			const result = validateWorkflowScript!(script);
@@ -439,6 +442,25 @@ describe("public boundary: phase 7c model-visible action surface", () => {
 				(error) => error instanceof Error ? error.message : String(error),
 			);
 			assert.doesNotMatch(result, /moved to Fleet/);
+		});
+	}
+});
+
+describe("seam-4 dormant branches stay unreachable from model input", () => {
+	// Each restored FORK-DORMANT branch in subagent-executor.ts is keyed off a
+	// model-removed field; the public boundary must reject that field first.
+	for (const params of [
+		{ agent: "worker", task: "do it", context: "fork" },
+		{ agent: "worker", task: "do it", context: "fresh" },
+		{ agent: "worker", task: "do it", timeoutMs: 1000 },
+		{ agent: "worker", task: "do it", maxRuntimeMs: 1000 },
+		{ agent: "worker", task: "do it", usageBudget: { maxCostUsd: 1 } },
+		{ agent: "worker", task: "do it", skill: "review" },
+	]) {
+		it(`rejects model input ${JSON.stringify(params)} before dispatch`, () => {
+			const result = resolvePublicSubagentRequest(params);
+			assert.equal(result.ok, false);
+			if (!result.ok) assert.match(result.error, /Removed subagent field/);
 		});
 	}
 });

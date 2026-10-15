@@ -3,7 +3,7 @@ import * as path from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { resolveAsyncRunLocation } from "../runs/background/async-resume.ts";
-import { deliverStopRequest } from "../runs/background/control-channel.ts";
+import { deliverAsyncRunStop } from "../runs/foreground/async-stop-action.ts";
 import { reconcileAsyncRun } from "../runs/background/stale-run-reconciler.ts";
 import { resultPayloadPathForSessionRun } from "../runs/background/result-files.ts";
 import { readCompletionArchive, readCompletionReplay } from "../runs/background/completion-replay.ts";
@@ -673,8 +673,9 @@ function stopAsyncRun(
 	if (status.sessionId !== currentSessionId) {
 		throw new SubagentRpcError("not_found", `Async run '${runId}' was not found in the active session.`);
 	}
-	if (status.state !== "running") {
-		throw new SubagentRpcError("invalid_state", `Async run ${runId} is ${status.state}; stop only supports running async runs.`);
+	const pausedWholeRun = status.state === "paused" && childId === undefined;
+	if (status.state !== "running" && status.state !== "queued" && !pausedWholeRun) {
+		throw new SubagentRpcError("invalid_state", `Async run ${runId} is ${status.state}; stop only supports running or queued async runs, or a paused whole run.`);
 	}
 	if (childId !== undefined) {
 		const resolution = resolveAsyncStatusChild(status, childId);
@@ -686,19 +687,23 @@ function stopAsyncRun(
 	}
 
 	try {
-		deliverStopRequest({
+		const failure = deliverAsyncRunStop({
 			asyncDir: location.asyncDir,
+			status,
+			resultsDir,
 			pid: status.pid,
 			kill: options.kill,
 			now: options.now,
 			source: "rpc-stop",
 			...(child ? { targetIndex: child.index, childId: child.id } : {}),
 		});
+		if (failure) throw new Error(`Stop request persisted for paused async run ${runId}, but terminal proof is not ready (${failure}). Retry stop after runner shutdown is observed.`);
 	} catch (error) {
 		throw new SubagentRpcError("execution_failed", error instanceof Error ? error.message : String(error));
 	}
 	if (child) emitChildStopping(runId, location.asyncDir, child);
 
+	// This is an acceptance receipt, not terminal proof, even when a proven paused run was sealed.
 	return {
 		runId,
 		asyncDir: location.asyncDir,

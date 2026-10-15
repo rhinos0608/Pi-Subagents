@@ -59,7 +59,7 @@ import { createOrcaProgressTab, type OrcaProgressTab } from "../shared/orca-prog
 import { resolvePermissionRules } from "../shared/permissions.ts";
 import { applyThinkingSuffix } from "../shared/child-tool-plan.ts";
 import { deriveChildSessionName } from "../../shared/child-session-name.ts";
-import { assertAgentAllowedByCapabilityCeiling, intersectSubagentCapabilityCeilings, resolveCurrentSubagentCapabilityCeiling } from "../shared/capability-ceiling.ts";
+import { assertAgentAllowedByCapabilityCeiling, resolveCurrentSubagentCapabilityCeiling } from "../shared/capability-ceiling.ts";
 import { resolveEffectiveThinking } from "../../shared/model-info.ts";
 import { assertThinkingWithinCeiling, intersectThinkingCeilings } from "../../shared/thinking-ceiling.ts";
 import { formatStructuredOutputRejectionError, MISSING_STRUCTURED_ACCEPTANCE_REPORT_ERROR, MISSING_STRUCTURED_OUTPUT_CALL_ERROR } from "../shared/structured-output.ts";
@@ -183,17 +183,13 @@ function persistSingleResultMetadata(input: {
 	});
 }
 
-function formatTimeoutMessage(timeoutMs: number): string {
-	return `Subagent timed out after ${timeoutMs}ms.`;
-}
-
 function resolveAttemptTimeout(options: RunSyncOptions): { timeoutMs: number; remainingMs: number; message: string } | undefined {
 	if (options.timeoutMs === undefined) return undefined;
 	const deadlineAt = options.deadlineAt ?? Date.now() + options.timeoutMs;
 	return {
 		timeoutMs: options.timeoutMs,
 		remainingMs: Math.max(0, deadlineAt - Date.now()),
-		message: formatTimeoutMessage(options.timeoutMs),
+		message: `Subagent timed out after ${options.timeoutMs}ms.`,
 	};
 }
 
@@ -278,8 +274,7 @@ function snapshotResult(result: SingleResult, progress: AgentProgress): SingleRe
  * foreground detach receipts and terminal consumers use snapshotResult directly.
  */
 function snapshotStreamResult(result: SingleResult, progress: AgentProgress): SingleResult {
-	const snapshot = snapshotResult(result, progress);
-	snapshot.messages = undefined;
+	const snapshot = snapshotResult({ ...result, messages: undefined }, progress);
 	snapshot.toolCalls = boundStreamedToolCalls(result);
 	return snapshot;
 }
@@ -541,6 +536,7 @@ async function runSingleAttempt(
 		else delete progress.cacheWrite;
 	};
 	const attemptTimeout = resolveAttemptTimeout(options);
+	let timeoutCause: string | undefined;
 	if (attemptTimeout?.remainingMs === 0) {
 		result.exitCode = 1;
 		result.timedOut = true;
@@ -988,6 +984,7 @@ async function runSingleAttempt(
 			if (evt.type === "compaction_start") {
 				compactionStartedReceived = true;
 				compactionObserved = true;
+				if (agentSettledReceived) afterCompactionSettlement = true;
 			}
 			if (evt.type === "compaction_end" && evt.willRetry === true) {
 				compactionStartedReceived = false;
@@ -1219,8 +1216,9 @@ async function runSingleAttempt(
 
 		if (attemptTimeout) {
 			timeoutTimer = setTimeout(() => {
-				if (sessionSettled || lifecycleFinished || interruptedByControl) return;
+				if (sessionSettled || lifecycleFinished || interruptedByControl || result.timedOut) return;
 				result.timedOut = true;
+				timeoutCause = attemptTimeout.message;
 				clearAllToolTimeouts();
 				result.error = attemptTimeout.message;
 				result.finalOutput = attemptTimeout.message;
@@ -1269,8 +1267,10 @@ async function runSingleAttempt(
 			}
 		};
 		const terminateForToolTimeout = (message: string): void => {
-			if (sessionSettled || lifecycleFinished || interruptedByControl) return;
+			if (sessionSettled || lifecycleFinished || interruptedByControl || result.timedOut) return;
+			clearTimeout(timeoutTimer);
 			result.timedOut = true;
+			timeoutCause = message;
 			result.error = message;
 			result.finalOutput = message;
 			progress.status = "failed";
@@ -1341,6 +1341,8 @@ async function runSingleAttempt(
 			if (!closeError && (abortedBySignal || session?.shutDown) && !result.interrupted && !result.timedOut) {
 				closeError = session?.shutDown ? "Subagent stopped because the parent session shut down." : STOPPED_BEFORE_COMPLETION_ERROR;
 			}
+			// A workflow child ended by the workflow's abort signal was stopped, not failed.
+			if (options.abortedAsStopped && abortedBySignal && !session?.shutDown && !result.interrupted && !result.timedOut) result.stopped = true;
 			if (!closeError && forced && !forcedDrainAfterFinalSuccess) {
 				closeError = "Subagent session did not settle after it was aborted.";
 			}
@@ -1552,8 +1554,7 @@ async function runSingleAttempt(
 	let fullOutput = stripAcceptanceReport(acceptanceOutput);
 	if (!fullOutput.trim() && result.structuredOutput !== undefined) fullOutput = JSON.stringify(result.structuredOutput, null, 2);
 	result.outputState = fullOutput.trim() || result.structuredOutput !== undefined ? "present" : "absent";
-	if (result.timedOut) {
-		const timeoutMessage = formatTimeoutMessage(options.timeoutMs ?? 0);
+	if (timeoutCause) {
 		let requiredOutputMissing: boolean | undefined;
 		if (options.outputMode === "file-only" && options.outputPath) {
 			const outputChanged = hasSingleOutputChangedSinceSnapshot(options.outputPath, shared.outputSnapshot);
@@ -1573,8 +1574,8 @@ async function runSingleAttempt(
 			artifactPaths: shared.artifactPaths,
 		});
 		fullOutput = fullOutput.trim()
-			? `${timeoutMessage}\n\n${result.timeoutRecovery.message}\n\nPartial output before timeout:\n${fullOutput}`
-			: `${timeoutMessage}\n\n${result.timeoutRecovery.message}`;
+			? `${timeoutCause}\n\n${result.timeoutRecovery.message}\n\nPartial output before timeout:\n${fullOutput}`
+			: `${timeoutCause}\n\n${result.timeoutRecovery.message}`;
 	}
 		if (options.outputPath && result.exitCode === 0) {
 			const resolvedOutput = resolveSingleOutput(options.outputPath, fullOutput, shared.outputSnapshot, options.outputClaimPath);
@@ -1903,12 +1904,14 @@ async function runSyncCompletionInner(
 		}
 	}
 	const modelsToTry = candidates.length > 0 ? candidates : [undefined];
+	// FORK(FD-021): fork retries retryable startup failures per candidate with bounded backoff instead of failing the run on first provider error.
 	let recoveryState: LogicalRecoveryState = "unused";
 	let readonlyExpected: SettledReadonlyEvidence | undefined;
 	let readonlyModel: string | undefined;
 	let readonlySource: ChildSession | undefined;
 	// Ordinary startup retries retain their per-attempt timeout. Only retained
 	// continuation uses the original logical deadline, never a renewed allowance.
+	// FORK(FD-021): retained continuation reuses the original logical deadline so recovery never gains a renewed timeout allowance.
 	const continuationDeadline = options.deadlineAt ?? (options.timeoutMs === undefined ? undefined : Date.now() + options.timeoutMs);
 	const readonlyHandoffAllowed = () => !options.signal?.aborted && !options.interruptSignal?.aborted
 		&& !intercomDetached && !detachedReason && !options.workflowChildPermitLaunch
@@ -1983,7 +1986,8 @@ async function runSyncCompletionInner(
 					block?.type === "text" || message.role === "assistant" && block?.type === "toolCall"));
 			const retainedBytes = evidence && models ? Buffer.byteLength(evidence.contextJson) + models.requestBytes : Infinity;
 			const resolvedCandidates = modelsToTry.map((reference, index) => index === modelIndex ? models?.current : reference ? models?.resolve(reference) : undefined);
-			const continuation = planReadonlyModelContinuation({
+			// FORK(FD-021): read-only continuation consumes the settled child's retained session once instead of relaunching after 429s with read-only progress.
+		const continuation = planReadonlyModelContinuation({
 				source, recoveryState, currentIndex: modelIndex,
 				candidates: resolvedCandidates.map((resolved, index) => {
 					// A conservative byte ceiling includes serialized history, actual system
@@ -2013,7 +2017,8 @@ async function runSyncCompletionInner(
 			}
 			if (!attemptSucceeded) {
 				const afterCompactionSettlement = (result as AbortRecoverySingleResult)[AFTER_COMPACTION_SETTLEMENT];
-				const abortRecovery = planAbortRecovery({
+				// FORK(FD-021): abort recovery resumes the retained session once after useful progress instead of reporting the transport abort as final.
+			const abortRecovery = planAbortRecovery({
 					messages: result.messages ?? [],
 					error: result.error,
 					processSignal: result.processSignal,

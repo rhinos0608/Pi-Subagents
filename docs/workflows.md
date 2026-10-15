@@ -12,6 +12,9 @@ clarify → scout → worker → fresh reviewers → worker
 
 Packaged `worker`, `oracle`, and `advisor` all launch with fresh context, so each child starts from its assigned brief instead of the parent's unfinished conversation. Do not hand one subagent a monolithic task; either stage it sequentially (for example scout → worker → reviewer) or fan out across independent seams or files.
 
+Failed workflow details and async `status.json` include `workflow.failureKind` as `validation`, `script`, `child`, `return-serialization`, `timeout`, `detached-child`, or `runtime`. `validation` means the host rejected the script before it ran (syntax or portability) or at completion (unawaited calls); errors thrown into a running script, including rejected `runs.run` parameters and runtime `SyntaxError`s, are `script` because the script could catch them, and failed children are `child`. `runtime` covers host setup and infrastructure failures, such as an unavailable cwd or a crashed worker. A workflow that is stopped or reloaded is not a failure and has no `failureKind`.
+
+When `/reload`, a session resume, or a pi-web project switch replaces the extension runtime, a running async workflow stops with `workflow.stopCause: "runtime-replaced"` in `status.json`, and its awaited async children keep running. When the same `workflowScript` is launched again with the same `args` in that session, a `runs.run` with the same key and params returns a child that already finished successfully without launching it, and waits for a child that is still running instead of starting another. Those results carry `reused: true`, their step and trace entry are marked `reused`, and the new run records `workflow.reusedFrom`. Failed and stopped children, and children that ran in-process, launch again. Reuse applies only when the newest run of that script and args in the session was stopped this way; a user stop or a completed run ends it. A settled `worktree: true` child is reused only while every file its result references still exists; if its worktree or artifacts were cleaned up after the stop, the child runs again.
 ## Prompt shortcuts
 
 The package includes reusable prompt templates for common workflows. You do not need them, but they are handy when you want the same shape every time:
@@ -61,6 +64,8 @@ Each `runs.run` / `runs.all` child accepts exactly: `agent`, `task`, `cwd`, `res
 
 `worktree: true` gives that child its own managed worktree at a mirrored subpath (requires a clean git working tree — commit or stash first); omit it to use the workflow/operator default. `worktree` must be a boolean; `baseRef` / `isolation` / provider overrides stay rejected on children.
 
+The result is `{ ok, errors }`. Invalid scripts return a tool error and include line and column data when available. Validation checks syntax, portable nested-async rules, literal `runs.run` and `runs.all` keys, duplicate literal keys in one `runs.all` group, direct keyed access to a known `runs.all` result, and statically clear non-JSON boundary values. It also looks up literal `agent` names in `runs.run`, `runs.all`, and `runs.lanes` children against the agents discovered for the request `cwd`, and reports unknown or ambiguous names with a close match when one exists. Children with their own `cwd` or `resume`, object spreads, and names built at runtime are left to launch time. Dynamic keys and other runtime-only values are accepted without a warning. Validation does not launch children or create run artifacts. Executing a workflow runs the same agent-name check first, so an unknown literal agent fails before any child launches.
+
 ```js
 subagent({ workflowScript: `
   const scan = await runs.run("scan", { label: "Map codebase behavior", agent: "scout", task: "Scan the codebase" });
@@ -103,6 +108,8 @@ For advanced rolling fanout, keep launched `runs.run` promises only when every p
 ### Output routing
 
 Output routing is tooling-managed, not a per-child script field: `runs.run` / `runs.all` params do not accept `output` or `outputMode`. Child outputs are saved to managed artifacts automatically. A filename mentioned in task text is only instruction and does not override runtime routing. When a later workflow step or parent needs a durable file, return the child's `outputReference` or `artifactPaths`.
+
+The workflow result text keeps the Return, Emitted, and Console sections, and a failed workflow's error, under 200 KB and 5000 lines. Each call-trace error is shortened to 500 characters. When anything is cut, a `[TRUNCATED: ... - full output at <path>]` line points to the uncut text, which is written to `<run>_workflow-result.md` under the run's artifacts directory. That file sits outside the `outputs/` tree where children save their reports and has the same retention as the other run artifacts in that directory: age-based cleanup removes it from temp and session artifact directories, while `artifactDir: "project"` files are kept. The status line, the rest of each trace line, warnings, and output-path mappings are never cut.
 
 ### Retained children and follow-ups
 

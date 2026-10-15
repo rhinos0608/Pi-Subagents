@@ -103,12 +103,14 @@ export interface RunChildSessionInput {
 	modelResponseAliases?: Record<string, string[]>;
 	mutationTools?: readonly string[];
 	/** Internal guarded continuation handoff; never part of persisted results. */
+	// FORK(FD-021): guarded read-only continuation handoff carries the settled child's retained session into one recovery attempt.
 	readonlyContinuation?: { source: ChildSession; expected: SettledReadonlyEvidence; modelId: string };
 	collectReadonlyEvidence?: boolean;
 	canContinue?: () => boolean;
 }
 
 const settledChildren = new WeakMap<RunChildSessionResult, ChildSession>();
+// FORK(FD-021): settled-child association retains the evidence-bearing session so the recovery policy can hand it off without relaunching.
 export function getSettledReadonlyChild(result: RunChildSessionResult): ChildSession | undefined {
 	const child = settledChildren.get(result);
 	return child && getReadonlySessionEvidence(child) ? child : undefined;
@@ -431,6 +433,7 @@ export function runChildSession(input: RunChildSessionInput): Promise<RunChildSe
 			if (event.type === "compaction_start") {
 				compactionStartedReceived = true;
 				compactionObserved = true;
+				if (agentSettledReceived) afterCompactionSettlement = true;
 			}
 			if (event.type === "compaction_end" && event.willRetry === true) {
 				compactionStartedReceived = false;
@@ -645,6 +648,7 @@ export function runChildSession(input: RunChildSessionInput): Promise<RunChildSe
 					afterCompactionSettlement: afterCompactionSettlement || undefined,
 				});
 				if (session && !forced && !forcedTermination && !interrupted && !timedOut && !stopped && getReadonlySessionEvidence(session)) settledChildren.set(result, session);
+				// FORK(FD-021): only clean settled children with retained evidence stay associable, so recovery never resumes an aborted or timed-out session.
 				resolve(result);
 			});
 		};
@@ -667,6 +671,7 @@ export function runChildSession(input: RunChildSessionInput): Promise<RunChildSe
 		void (async () => {
 			try {
 				const continuation = input.readonlyContinuation;
+				// FORK(FD-021): handoff vetoes fail closed when the source detached, evidence rotated, or the run already stopped.
 				const checkContinuation = () => {
 					if (!continuation) return;
 					if (interrupted || timedOut || stopped || input.canContinue?.() !== true

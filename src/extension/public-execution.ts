@@ -1,5 +1,6 @@
 import { normalizeWorktreeBaseRef } from "../runs/shared/worktree.ts";
-import { normalizeWorkflowArgs } from "../workflows/workflow-resources.ts";
+import { deepFreezeWorkflowArgs, normalizeWorkflowArgs } from "../workflows/workflow-resources.ts";
+import { MODEL_VISIBLE_SUBAGENT_ACTIONS } from "../shared/types.ts";
 
 export interface PublicSubagentExecutionParams {
 	action?: unknown;
@@ -65,6 +66,7 @@ export function validateWorkflowCapacityOverrides(params: PublicSubagentExecutio
  * Internal runs.run children and structured owned delegation bypass this boundary.
  */
 export function normalizePublicSubagentExecution<T extends PublicSubagentExecutionParams>(params: T): PublicSubagentExecutionNormalization<T> {
+	// FORK(FD-014): no per-call usage-budget or output-routing surface; the boundary rejects those fields outright.
 	if (Object.hasOwn(params as object, "output") || Object.hasOwn(params as object, "outputMode")) return { ok: false, error: "Public execution does not accept output routing controls; output routing is tooling-managed.", mode: params.action === undefined ? "workflow" : "management" };
 	for (const field of ["resource", "resourceProvenance", "workflowResource", "workflowResourceProvenance", "workflowResourcePermit", "resourcePermit", "permit"] as const) {
 		if (Object.hasOwn(params, field) && (params as Record<string, unknown>)[field] !== undefined) {
@@ -213,4 +215,114 @@ export function normalizePublicSubagentExecution<T extends PublicSubagentExecuti
 		return { ok: false, error: "Execution requires either { agent, task? } for one child or a non-empty workflowScript for orchestration.", mode: "workflow" };
 	}
 	return { ok: true, params };
+}
+
+const DESTRUCTIVE_MANAGEMENT_ACTIONS = new Set(["delete", "eject", "disable", "reset", "mission.close", "worktree.discard", "refine.rollback", "inspector.close", "project.close", "stop", "interrupt", "schedule.delete"]);
+
+// FORK(FD-012): executor surface translation lives at the public boundary so Fleet, RPC, and slash share one gate.
+export function editDistance(left: string, right: string): number {
+	const previous = Array.from({ length: right.length + 1 }, (_, index) => index);
+	for (let leftIndex = 1; leftIndex <= left.length; leftIndex += 1) {
+		let diagonal = previous[0]!;
+		previous[0] = leftIndex;
+		for (let rightIndex = 1; rightIndex <= right.length; rightIndex += 1) {
+			const above = previous[rightIndex]!;
+			previous[rightIndex] = left[leftIndex - 1] === right[rightIndex - 1]
+				? diagonal
+				: Math.min(diagonal, above, previous[rightIndex - 1]!) + 1;
+			diagonal = above;
+		}
+	}
+	return previous[right.length]!;
+}
+
+// FORK(FD-012): executor surface translation lives at the public boundary so Fleet, RPC, and slash share one gate.
+export function hasSingleAdjacentTransposition(left: string, right: string): boolean {
+	if (left.length !== right.length) return false;
+	const mismatch = [...left].findIndex((character, index) => character !== right[index]);
+	return mismatch >= 0
+		&& left[mismatch] === right[mismatch + 1]
+		&& left[mismatch + 1] === right[mismatch]
+		&& left.slice(mismatch + 2) === right.slice(mismatch + 2);
+}
+
+// FORK(FD-012): executor surface translation lives at the public boundary so Fleet, RPC, and slash share one gate.
+export function unknownSubagentActionMessage(action: string): string {
+	const requested = action.toLowerCase();
+	const suggestion = MODEL_VISIBLE_SUBAGENT_ACTIONS.find((candidate) => {
+		const distance = editDistance(requested, candidate);
+		const closeMatch = distance <= Math.max(1, Math.floor(candidate.length / 4)) || hasSingleAdjacentTransposition(requested, candidate);
+		if (DESTRUCTIVE_MANAGEMENT_ACTIONS.has(candidate)) return distance === 1 && requested.length >= candidate.length - 1;
+		return closeMatch;
+	});
+	const nextStep = 'Use subagent({ action: "status" }) to inspect runs or subagent({ action: "guide" }) to read topic docs.';
+	const validActions = `Valid: ${MODEL_VISIBLE_SUBAGENT_ACTIONS.join(", ")}.`;
+	return suggestion
+		? `Unknown action: ${action}. Did you mean ${suggestion}? ${nextStep} ${validActions}`
+		: `Unknown action: ${action}. ${nextStep} ${validActions}`;
+}
+
+// FORK(FD-012): executor surface translation lives at the public boundary so Fleet, RPC, and slash share one gate.
+export const REMOVED_PUBLIC_SUBAGENT_FIELDS = [
+	"context",
+	"timeoutMs",
+	"maxRuntimeMs",
+	"checkpointBeforeDeadlineMs",
+	"usageBudget",
+	"skill",
+	"async",
+	"model",
+	"fast",
+	"thinking",
+] as const;
+
+// FORK(FD-012): executor surface translation lives at the public boundary so Fleet, RPC, and slash share one gate.
+export function rejectRemovedPublicSubagentFields(params: Record<string, unknown>): string | undefined {
+	const rejected = (REMOVED_PUBLIC_SUBAGENT_FIELDS as readonly string[]).filter((field) => params[field] !== undefined);
+	if (!rejected.length) return undefined;
+	return `Removed subagent field(s) rejected: ${rejected.join(", ")}. The public subagent vocabulary is agent, task, cwd, workflowScript, args, action, id, message, topic (guide-only).`;
+}
+
+// FORK(FD-012): executor surface translation lives at the public boundary so Fleet, RPC, and slash share one gate.
+export const CONTROL_RUN_ID_ACTIONS = new Set(["steer", "resume", "interrupt"]);
+
+// FORK(FD-012): executor surface translation lives at the public boundary so Fleet, RPC, and slash share one gate.
+export function rejectMissingControlRunId(params: { action?: unknown; id?: unknown }): string | undefined {
+	const action = typeof params.action === "string" ? params.action.trim().toLowerCase() : undefined;
+	if (!action || !CONTROL_RUN_ID_ACTIONS.has(action)) return undefined;
+	if (typeof params.id !== "string" || !params.id.trim()) {
+		return `Action '${typeof params.action === "string" ? params.action : action}' requires id to be a non-empty run id string.`;
+	}
+	return undefined;
+}
+
+/**
+ * Full model-facing boundary: removed-field rejection, control run-id check,
+ * model-visible action gate, then structural normalization, then workflow-args
+ * normalization plus deep-freeze. Internal/slash/RPC callers that need the
+ * structural check alone keep using normalizePublicSubagentExecution directly.
+ */
+// FORK(FD-012): executor surface translation lives at the public boundary so Fleet, RPC, and slash share one gate.
+export function resolvePublicSubagentRequest<T extends PublicSubagentExecutionParams & { id?: unknown }>(params: T): PublicSubagentExecutionNormalization<T> {
+	const removedFieldError = rejectRemovedPublicSubagentFields(params as Record<string, unknown>);
+	if (removedFieldError) {
+		return { ok: false, error: removedFieldError, mode: "management" };
+	}
+	const missingControlRunIdError = rejectMissingControlRunId(params);
+	if (missingControlRunIdError) {
+		return { ok: false, error: missingControlRunIdError, mode: "management" };
+	}
+	const publicAction = typeof params.action === "string" ? params.action.trim() : undefined;
+	if (publicAction && !(MODEL_VISIBLE_SUBAGENT_ACTIONS as readonly string[]).includes(publicAction.toLowerCase())) {
+		return { ok: false, error: `${unknownSubagentActionMessage(publicAction)} Management actions (agents, missions, schedules, watchdogs, inspectors, projects, worktrees, lanes, refinements, stop, dismiss) moved to Fleet; the model cannot invoke them.`, mode: "management" };
+	}
+	const normalized = normalizePublicSubagentExecution(params);
+	if (!normalized.ok) return normalized;
+	let resolved = normalized.params;
+	if (resolved.workflowScript !== undefined) {
+		const normalizedArgs = normalizeWorkflowArgs((resolved as Record<string, unknown>).args);
+		if ("error" in normalizedArgs) return { ok: false, error: normalizedArgs.error, mode: resolved.action !== undefined ? "management" : "workflow" };
+		resolved = { ...resolved, args: deepFreezeWorkflowArgs(normalizedArgs.args) };
+	}
+	return { ok: true, params: resolved };
 }

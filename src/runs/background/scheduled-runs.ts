@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -229,6 +230,18 @@ function resolveSharedGitConfigRoot(projectCwd: string): string | undefined {
 	return undefined;
 }
 
+// In the home directory the project config dir is the user's own Pi config dir,
+// which may be a symlink to another disk.
+function resolveHomeConfigRoot(projectPath: string): string | undefined {
+	const home = process.env.HOME || process.env.USERPROFILE || os.homedir();
+	try {
+		if (!samePath(fs.realpathSync.native(home), projectPath)) return undefined;
+		return fs.realpathSync.native(path.join(home, getConfigDirName()));
+	} catch {
+		return undefined;
+	}
+}
+
 function assertScheduleRoot(root: string, projectCwd: string | undefined, create: boolean): void {
 	if (!projectCwd) {
 		if (create) fs.mkdirSync(root, { recursive: true, mode: 0o700 });
@@ -248,9 +261,12 @@ function assertScheduleRoot(root: string, projectCwd: string | undefined, create
 		existing = parent;
 	}
 	const existingPath = fs.realpathSync.native(existing);
-	const sharedGitConfigRoot = pathWithin(projectPath, existingPath) ? undefined : resolveSharedGitConfigRoot(projectCwd);
+	const withinProject = pathWithin(projectPath, existingPath);
+	const sharedGitConfigRoot = withinProject ? undefined : resolveSharedGitConfigRoot(projectCwd);
+	const homeConfigRoot = withinProject ? undefined : resolveHomeConfigRoot(projectPath);
 	const isTrustedPath = (candidate: string): boolean => pathWithin(projectPath, candidate)
-		|| (sharedGitConfigRoot !== undefined && pathWithin(sharedGitConfigRoot, candidate));
+		|| (sharedGitConfigRoot !== undefined && pathWithin(sharedGitConfigRoot, candidate))
+		|| (homeConfigRoot !== undefined && pathWithin(homeConfigRoot, candidate));
 	if (!isTrustedPath(existingPath)) throw new Error(`Project schedule root '${root}' resolves outside the real project.`);
 	if (!create) return;
 	fs.mkdirSync(root, { recursive: true, mode: 0o700 });
@@ -852,12 +868,24 @@ export class ScheduledRunManager {
 		}
 		const lockPath = path.join(store.directory(schedule.id, true), "active.lock");
 		fs.mkdirSync(path.dirname(lockPath), { recursive: true, mode: 0o700 });
-		let lock: number;
+		let lock: number | undefined;
 		try {
 			lock = fs.openSync(lockPath, "wx", 0o600);
 			fs.writeFileSync(lock, run.id, "utf-8");
 			fs.closeSync(lock);
 		} catch (error) {
+			if (lock !== undefined) {
+				// An empty or partial claim would make every later launch skip. Keep the
+				// descriptor open until the inode check so a replacement owner's lock survives.
+				try {
+					// Bigint stats: Windows file ids exceed 2^53, so number inodes of nearby files can compare equal.
+					const owned = fs.fstatSync(lock, { bigint: true });
+					const current = fs.lstatSync(lockPath, { bigint: true });
+					if (owned.ino !== 0n && owned.dev === current.dev && owned.ino === current.ino) fs.rmSync(lockPath);
+				} catch { /* Preserve the original error. */ }
+				try { fs.closeSync(lock); } catch { /* Preserve the original error. */ }
+				throw error;
+			}
 			if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
 			run.state = "skipped";
 			run.completedAt = timestamp(now);

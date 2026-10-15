@@ -12,7 +12,8 @@ import { createCapacityResilientJsonWriter } from "../../shared/capacity-resilie
 import { isStorageCapacityError } from "../../shared/file-system-retry.ts";
 import { updateActiveRunIndex } from "./active-run-index.ts";
 import { createChildTranscriptWriter, type ChildTranscriptWriter } from "../../shared/child-transcript.ts";
-import { closeSteerInbox, consumeInterruptRequest, consumeSteerRequests, consumeStopRequestPayloads, deliverInterruptRequest, deliverStopRequest, deliverTimeoutRequest, drainTerminalControlInbox, watchAsyncControlInbox, type SteerRequest, type StopRequest } from "./control-channel.ts";
+// FORK(FD-019): drain import keeps late control from stranding once the watcher is dead.
+import { closeSteerInbox, closeStopInbox, consumeInterruptRequest, consumeSteerRequests, consumeStopRequestPayloads, deliverInterruptRequest, deliverStopRequest, deliverTimeoutRequest, drainTerminalControlInbox, watchAsyncControlInbox, type SteerRequest, type StopRequest } from "./control-channel.ts";
 import { appendJsonl as appendRawJsonl, formatOutputArtifactContent, getArtifactPaths, writeArtifact, writeMetadata } from "../../shared/artifacts.ts";
 import { PI_CODING_AGENT_PACKAGE, resolveInstalledPiPackageRoot } from "../shared/pi-spawn.ts";
 import { preflightLaunchCwd } from "../shared/launch-cwd.ts";
@@ -84,7 +85,7 @@ import { getSettledReadonlyChild, runChildSession, type ChildEvent, type RunChil
 import { planReadonlyModelContinuation, READONLY_CONTINUATION_PROMPT, type LogicalRecoveryState } from "../shared/readonly-model-continuation.ts";
 import { getReadonlySessionEvidence } from "../shared/readonly-session-evidence.ts";
 import { loadRunnerChildSessionFactory } from "./runner-child-sessions.ts";
-import { SUBAGENT_CHILD_ENV } from "../shared/child-runtime-config.ts";
+import { SUBAGENT_CHILD_ENV, SUBAGENT_RUNNER_PID_ENV } from "../shared/child-runtime-config.ts";
 import { deriveChildSessionName } from "../../shared/child-session-name.ts";
 import { outputEntryFromAsyncResult, resolveOutputReferences } from "../shared/chain-outputs.ts";
 import { clearStructuredOutputCaptures, createStructuredOutputFileCapture, createStructuredOutputRuntime, formatStructuredOutputRejectionError, MISSING_STRUCTURED_OUTPUT_CALL_ERROR, readStructuredOutput, readStructuredOutputAcceptanceReport } from "../shared/structured-output.ts";
@@ -98,6 +99,7 @@ import { formatSubagentModelVerificationError, isContextOverflow } from "../shar
 import { formatExhaustedCandidatesDiagnostic, formatModelAttemptNote, isRetryableModelFailureAttempt, MODEL_MAX_ATTEMPTS_PER_CANDIDATE, modelRetryBackoffMs, sleepMs } from "../shared/model-fallback.ts";
 import { markProcessTerminalCandidateLeaseRelease, processTerminalPath, writeProcessTerminalCandidate, type ProcessTerminalCandidate } from "./process-terminal.ts";
 import { persistRunnerStartupFailure } from "./runner-startup-failure.ts";
+import { currentPidNamespaceScope } from "./pid-namespace.ts";
 import { createSteeringStatus, recordSteeringRequest, steeringStatus, terminalSteeringNoticeState, unconsumedSteerReason, updateSteeringTarget } from "./steering.ts";
 import { PROMPT_REDACTED, detectSubagentError, extractTextFromContent, extractToolArgsPreview, formatEmptyTerminalAssistantResponseError, getAgentDir, getFinalOutput, hasEmptyTerminalAssistantResponse, readStatus } from "../../shared/utils.ts";
 import { planAbortRecovery } from "../shared/abort-recovery.ts";
@@ -164,8 +166,10 @@ const INTERCOM_DETACH_RECEIPT = "Detached for intercom coordination before task 
 
 // This process hosts child sessions. An ambient copy of pi-subagents loaded
 // into one of them must register nothing; the variable marks the process as a
-// child host.
+// child host. Processes spawned from a child inherit both variables, so only
+// the runner pid, matched against process.pid, identifies the runner itself.
 process.env[SUBAGENT_CHILD_ENV] = "1";
+process.env[SUBAGENT_RUNNER_PID_ENV] = String(process.pid);
 
 export interface SubagentRunConfig {
 	id: string;
@@ -2184,6 +2188,7 @@ export async function runSubagent(
 		...(config.deadlineAt !== undefined ? { deadlineAt: config.deadlineAt } : {}),
 		...(config.toolBudget ? { toolBudget: initialToolBudgetState(config.toolBudget) } : {}),
 		pid: process.pid,
+		pidNamespaceScope: currentPidNamespaceScope(),
 		cwd,
 		currentStep: 0,
 		chainStepCount: steps.length,
@@ -4930,6 +4935,7 @@ export async function runSubagent(
 		timedOut = true;
 	}
 	disposeControlInbox();
+	// FORK(FD-019): watcher dead, so pending control must route while status still reads nonterminal.
 	// Pre-terminal drain: the live watcher is dead, so route every pending control
 	// kind through the handlers while the status is still nonterminal.
 	const preTerminalDrain = drainTerminalControlInbox(asyncDir);
@@ -4937,6 +4943,13 @@ export async function runSubagent(
 	if (preTerminalDrain.timeout) timeoutRunner();
 	if (preTerminalDrain.interrupt) interruptRunner();
 	for (const request of preTerminalDrain.steers) deliverSteerRequest(request);
+	try {
+		closeStopInbox(asyncDir);
+	} catch (error) {
+		// Result publication must not depend on the marker; without it a late stop is accepted as before.
+		appendJsonl(eventsPath, JSON.stringify({ type: "subagent.run.stop_inbox_close_failed", ts: Date.now(), runId: id, message: error instanceof Error ? error.message : String(error) }));
+	}
+	for (const request of consumeStopRequestPayloads(asyncDir)) stopChildStep(request);
 	const signalTerminated = !stopped && !timedOut && !interrupted && results.some((result) => result.exitCode !== 0 && isUnexplainedProcessSignal(omitUndefinedProperties({
 		processSignal: result.processSignal,
 		interrupted: result.interrupted,
@@ -5109,6 +5122,7 @@ export async function runSubagent(
 	} finally {
 		finalResultPublication = undefined;
 	}
+	// FORK(FD-019): late requests must reopen the terminal outcome before the result file persists.
 	// Final synchronized drain: control requests landing between the pre-terminal
 	// drain and terminal persistence must not strand while status still reads
 	// running. Consume everything; a late whole-run stop or timeout reopens the
@@ -5257,6 +5271,7 @@ export async function runSubagent(
 		}
 	}
 	writeStatusPayload();
+	// FORK(FD-019): one bounded pass narrows the persist gap; stragglers reconcile against persisted status.
 	// Bounded re-drain (one extra pass only): closes the late window between the
 	// terminal drain above and status persistence — a stop/timeout landing in
 	// that gap would otherwise strand while status reads terminal. Residual

@@ -6,7 +6,7 @@ import path from "node:path";
 import { describe, it } from "node:test";
 import { Worker } from "node:worker_threads";
 import { formatChildToolDiagnostic } from "../../src/runs/shared/tool-availability.ts";
-import { formatWorkflowJsonPreview, previewSimpleWorkflowRun, runWorkflowScript, validateWorkflowScript, WorkflowScriptError } from "../../src/workflows/scripted-workflow.ts";
+import { formatWorkflowJsonPreview, previewSimpleWorkflowRun, runWorkflowScript, validateWorkflowScript, WorkflowScriptError, type WorkflowScriptChildResult } from "../../src/workflows/scripted-workflow.ts";
 import { workflowChildSummary } from "../../src/workflows/workflow-child-summary.ts";
 import { preflightWorkflowWorktrees } from "../../src/runs/foreground/subagent-executor.ts";
 import { runSetupCommand } from "../../src/runs/shared/worktree-setup-command.ts";
@@ -391,6 +391,25 @@ describe("scripted workflow runtime", () => {
 		assert.deepEqual(validateWorkflowScript(script, { maxSubagentSpawnsPerRun: 6 }), { ok: true, errors: [] });
 	});
 
+	it("checks literal child agent names that resolve from the workflow cwd and scope", () => {
+		const known = new Set(["worker", "reviewer"]);
+		const result = validateWorkflowScript([
+			`const scan = await runs.run("scan", { agent: "worker", task: "Scan" });`,
+			`await runs.all([{ key: "review", agent: "reviwer", task: scan.output }]);`,
+			`await runs.lanes([{ key: "lane", stages: [{ key: "write", agent: "wroker", task: "Write" }, { key: "fix", resume: "previous", task: "Fix" }] }]);`,
+			`await runs.run("elsewhere", { agent: "remote-only", cwd: "../other", task: "Scan" });`,
+			`await runs.run("spread", { agent: "missing", ...overrides });`,
+			`await runs.lanes([{ key: "replaced", stages: [{ key: "write", agent: "missing", task: "Write" }], ...laneOverrides }]);`,
+			`return runs.run("dynamic", { agent: selectedAgent, task: "Scan" });`,
+		].join("\n"), { agentNameError: (name) => known.has(name) ? undefined : `Unknown agent '${name}'.` });
+		assert.equal(result.ok, false);
+		assert.deepEqual(result.errors.map(({ kind, message, line }) => ({ kind, message, line })), [
+			{ kind: "agent", message: "runs.all item: Unknown agent 'reviwer'.", line: 2 },
+			{ kind: "agent", message: "runs.lanes stage: Unknown agent 'wroker'.", line: 3 },
+		]);
+		assert.deepEqual(validateWorkflowScript(`const runs = { run: (key) => key };\nreturn runs.run("local", { agent: "missing" });`, { agentNameError: () => "Unknown agent." }), { ok: true, errors: [] });
+	});
+
 	it("warns instead of guessing a dynamic spawn count", () => {
 		const result = validateWorkflowScript([
 			`const prefix = "lane";`,
@@ -488,9 +507,10 @@ describe("scripted workflow runtime", () => {
 		assert.deepEqual(validateWorkflowScript(`return undefined;`), { ok: true, errors: [] });
 		assert.deepEqual(validateWorkflowScript(`return [void 0, { value: void 0 }];`), { ok: true, errors: [] });
 		assert.deepEqual(validateWorkflowScript(`return [undefined, { value: undefined }];`), { ok: true, errors: [] });
+		assert.deepEqual(validateWorkflowScript(`emit(void 0); emit([undefined, { value: undefined }]); return 1;`), { ok: true, errors: [] });
 		const result = validateWorkflowScript(`emit(void 0); emit(undefined); state.set("void", void 0); state.set("undefined", undefined); return [1, , 2];`);
 		assert.equal(result.ok, false);
-		assert.equal(result.errors.filter((error) => error.message.includes("undefined is not JSON-representable")).length, 4);
+		assert.equal(result.errors.filter((error) => error.message.includes("undefined is not JSON-representable")).length, 2);
 		assert.ok(result.errors.some((error) => error.message.includes("sparse arrays")));
 	});
 
@@ -1579,9 +1599,87 @@ describe("scripted workflow runtime", () => {
 				async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
 			}),
 			(error: unknown) => error instanceof WorkflowScriptError
-				&& error.errorKind === undefined
+				&& error.errorKind === "script"
 				&& /manual hard failure/.test(error.message)
 				&& error.partial.children[0]?.detached === true,
+		);
+	});
+
+	it("classifies validation, script, return serialization, and child failures", async () => {
+		const assertFailureKind = async (script: string, kind: WorkflowScriptError["errorKind"], launch: (key: string) => Promise<WorkflowScriptChildResult> = async (key) => ({ key, ok: true, output: "ok", artifactPaths: [] })) => {
+			await assert.rejects(
+				runWorkflowScript({
+					script,
+					timeoutMs: 2_000,
+					launch,
+					async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
+				}),
+				(error: unknown) => error instanceof WorkflowScriptError && error.errorKind === kind,
+			);
+		};
+
+		await assertFailureKind("return (", "validation");
+		await assertFailureKind(`throw new Error("manual failure");`, "script");
+		await assertFailureKind(`JSON.parse("not json");`, "script");
+		await assertFailureKind(`return { value: 1n };`, "return-serialization");
+		await assertFailureKind(
+			`return runs.run("writer", { agent: "worker", task: "write" });`,
+			"child",
+			async (key) => ({ key, ok: false, output: "child failed", error: "child failed", artifactPaths: [] }),
+		);
+	});
+
+	it("preserves an unawaited child failure kind and classifies runtime setup failures", async () => {
+		await assert.rejects(
+			runWorkflowScript({
+				script: `runs.run("writer", { agent: "worker", task: "write" }); await new Promise(() => {});`,
+				timeoutMs: 2_000,
+				async launch(key) { return { key, ok: false, output: "child failed", error: "child failed", artifactPaths: [] }; },
+				async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
+			}),
+			(error: unknown) => error instanceof WorkflowScriptError && error.errorKind === "child",
+		);
+		await assert.rejects(
+			runWorkflowScript({
+				script: `runs.host("ci", { kind: "command", command: "npm test", timeoutMs: 1000 }); await new Promise(() => {});`,
+				timeoutMs: 2_000,
+				async host() { throw new Error("host boundary failed"); },
+				async launch(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
+				async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
+			}),
+			(error: unknown) => error instanceof WorkflowScriptError && error.errorKind === "script",
+		);
+
+		const unavailableCwd = path.join(os.tmpdir(), `missing-workflow-cwd-${process.pid}-${Date.now()}`);
+		await assert.rejects(
+			runWorkflowScript({
+				script: `return "unreachable";`,
+				processCwd: unavailableCwd,
+				async launch(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
+				async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
+			}),
+			(error: unknown) => error instanceof WorkflowScriptError && error.errorKind === "runtime" && error.partial.children.length === 0,
+		);
+
+		const controller = new AbortController();
+		controller.abort(new Error("stopped by user"));
+		await assert.rejects(
+			runWorkflowScript({
+				script: `return "unreachable";`,
+				signal: controller.signal,
+				async launch(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
+				async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
+			}),
+			(error: unknown) => error instanceof WorkflowScriptError && error.message === "stopped by user" && error.errorKind === undefined,
+		);
+
+		await assert.rejects(
+			runWorkflowScript({
+				script: " ",
+				async launch(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
+				async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
+			}),
+			(error: unknown) => error instanceof WorkflowScriptError && error.errorKind === "validation",
 		);
 	});
 
@@ -1751,6 +1849,45 @@ describe("scripted workflow runtime", () => {
 		});
 
 		assert.deepEqual(result.value, [{ key: "review", output: "completed", values: [null] }]);
+	});
+
+	it("normalizes undefined in emitted values the same way as returned values", async () => {
+		const script = `const value = { kept: 1, missing: undefined, list: [1, undefined] }; emit(value); emit(undefined); return value;`;
+		const result = await runWorkflowScript({
+			script,
+			timeoutMs: 2_000,
+			async launch() { throw new Error("must not launch children"); },
+			async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
+		});
+
+		assert.deepEqual(result.emits, [result.value, null]);
+		assert.deepEqual(result.value, { kept: 1, list: [1, null] });
+		await assert.rejects(
+			runWorkflowScript({
+				script: `emit({ callback: () => 1 });`,
+				timeoutMs: 2_000,
+				async launch() { throw new Error("must not launch children"); },
+				async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
+			}),
+			(error: unknown) => error instanceof WorkflowScriptError && error.errorKind === "script" && error.message.includes("emit.callback must be a JSON value; received function."),
+		);
+	});
+
+	it("reports workflow script error lines relative to the script", async () => {
+		const run = (script: string) => runWorkflowScript({
+			script,
+			timeoutMs: 2_000,
+			async launch() { throw new Error("must not launch children"); },
+			async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
+		});
+		await assert.rejects(
+			run(["const first = 1;", "const second = 2;", `throw new Error("third line");`].join("\n")),
+			(error: unknown) => error instanceof WorkflowScriptError && error.errorKind === "script" && error.message.match(/workflow-script\.js:(\d+):/)?.[1] === "3",
+		);
+		await assert.rejects(
+			run(["const first = 1;", "return (;"].join("\n")),
+			(error: unknown) => error instanceof WorkflowScriptError && error.errorKind === "validation" && /SyntaxError: Unexpected token \(2:\d+\)/.test(error.message),
+		);
 	});
 
 	it("reports completed child references when return serialization fails", async () => {
@@ -2635,7 +2772,6 @@ describe("scripted workflow runtime", () => {
 
 	it("rejects non-JSON-safe emitted values without persisting them", async () => {
 		const invalidScripts = [
-			`emit(undefined);`,
 			`emit(NaN);`,
 			`emit(Infinity);`,
 			`emit(new Map([["a", 1]]));`,
@@ -3235,6 +3371,22 @@ describe("scripted workflow runtime", () => {
 			await stopChild(child);
 			fs.rmSync(root, { recursive: true, force: true });
 		}
+	});
+
+	it("runs workflows when the host has frozen Promise.prototype.then in every realm", () => {
+		const preload = path.resolve("test/fixtures/frozen-promise-then-preload.cjs");
+		const fixture = path.resolve("test/fixtures/frozen-promise-then-workflow.ts");
+		const result = spawnSync(process.execPath, ["--experimental-strip-types", "--no-warnings", "--require", preload, fixture], { encoding: "utf-8" });
+		assert.equal(result.status, 0, result.stderr);
+		assert.deepEqual(JSON.parse(result.stdout), { ok: true, value: { output: "pong" } });
+	});
+
+	it("runs Promise.all and other Promise statics when the host freezes Promise", () => {
+		const preload = path.resolve("test/fixtures/frozen-promise-statics-preload.cjs");
+		const fixture = path.resolve("test/fixtures/frozen-promise-statics-workflow.ts");
+		const result = spawnSync(process.execPath, ["--experimental-strip-types", "--no-warnings", "--require", preload, fixture], { encoding: "utf-8" });
+		assert.equal(result.status, 0, result.stderr);
+		assert.deepEqual(JSON.parse(result.stdout), { ok: true, value: { outputs: ["pong", "pong", "pong"], d: "ready" } });
 	});
 
 	it("rejects an unavailable recovery target without falling back from a stale cwd", {

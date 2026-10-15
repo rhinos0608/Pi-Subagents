@@ -25,6 +25,7 @@ import { PI_CODING_AGENT_PACKAGE, resolveBunPiExecutable, resolveInstalledPiPack
 import { JITI_ALIAS_ENV, resolveHostPeerAliases } from "./runner-aliases.ts";
 import { preflightLaunchCwd } from "../shared/launch-cwd.ts";
 import { resolveNodeExecutable } from "../../shared/node-executable.ts";
+import { resolveRuntimeModulePath } from "../../shared/runtime-module-path.ts";
 import { backgroundProcessOptions } from "../shared/background-process-options.ts";
 import { resolveSkillsWithFallback } from "../../agents/skills.ts";
 import { PI_CODING_AGENT_PACKAGE_ROOT_ENV, PROMPT_REDACTED, resolveChildCwd } from "../../shared/utils.ts";
@@ -82,6 +83,7 @@ import { finalizeProcessTerminal, initializeProcessTerminal, readProcessTerminal
 import { persistRunnerStartupFailure } from "./runner-startup-failure.ts";
 import type { ActiveAsyncCapacityHandle } from "./active-async-capacity.ts";
 import { statusStepDescription } from "./chain-append.ts";
+import { currentPidNamespaceScope } from "./pid-namespace.ts";
 import { SUBAGENT_PROCESS_TERMINAL_EVENT } from "../../shared/types.ts";
 import { assertAgentAllowedByCapabilityCeiling, intersectSubagentCapabilityCeilings, resolveCurrentSubagentCapabilityCeiling, type ResolvedSubagentCapabilityCeiling } from "../shared/capability-ceiling.ts";
 import { resolveLaunchBinding } from "../../shared/launch-contract.ts";
@@ -154,16 +156,21 @@ function resolveJitiCliPath(): string | undefined {
 }
 
 const jitiCliPath = resolveJitiCliPath();
-const asyncRunnerSourcePath = path.join(
-	path.dirname(fileURLToPath(import.meta.url)),
-	`subagent-runner-bootstrap${path.extname(fileURLToPath(import.meta.url))}`,
-);
-const sourceUnderNodeModules = asyncRunnerSourcePath.split(path.sep).some((segment) => segment.toLowerCase() === "node_modules");
+const asyncRunnerModuleDir = path.dirname(fileURLToPath(import.meta.url));
+// Resolved lazily so an in-place package update (a TypeScript source layout
+// replaced by the compiled JavaScript one) cannot leave a running process
+// pointing at a sibling file that has been removed.
+function asyncRunnerSourcePath(): string {
+	return resolveRuntimeModulePath(asyncRunnerModuleDir, "subagent-runner-bootstrap");
+}
+function sourceUnderNodeModules(): boolean {
+	return asyncRunnerSourcePath().split(path.sep).some((segment) => segment.toLowerCase() === "node_modules");
+}
 function supportsNativeRunner(nodeExecutable: string): boolean {
 	return Boolean(process.features.typescript)
 	&& typeof nodeModule.registerHooks === "function"
 	&& nodeExecutable === process.execPath
-	&& !sourceUnderNodeModules;
+	&& !sourceUnderNodeModules();
 }
 
 interface AsyncExecutionContext {
@@ -652,12 +659,12 @@ function spawnRunner(cfg: object, suffix: string, cwd: string, initialStatus: Om
 	const binaryHost = resolveBunPiExecutable();
 	const nodeExecutable = resolveNodeExecutable();
 	const nativeRunnerSupported = supportsNativeRunner(nodeExecutable);
-	const runner = asyncRunnerSourcePath;
+	const runner = asyncRunnerSourcePath();
 	const runnerIsJavaScript = path.extname(runner) === ".js";
-	const bootstrap = path.join(path.dirname(runner), `binary-bootstrap${path.extname(fileURLToPath(import.meta.url))}`);
+	const bootstrap = resolveRuntimeModulePath(path.dirname(runner), "binary-bootstrap");
 	if (binaryHost && !fs.existsSync(bootstrap)) return { error: `Background runner bootstrap not found: ${bootstrap}` };
 	if (!binaryHost && !runnerIsJavaScript && !nativeRunnerSupported && !jitiCliPath) {
-		return { error: sourceUnderNodeModules
+		return { error: sourceUnderNodeModules()
 			? "Background runner source is installed under node_modules, so upstream jiti is required for TypeScript execution."
 			: "Background runner requires enabled native TypeScript with synchronous module hooks, or installed upstream jiti for TypeScript execution." };
 	}
@@ -807,6 +814,7 @@ function spawnRunner(cfg: object, suffix: string, cwd: string, initialStatus: Om
 			writePrivateAtomicJson(initialStatusPath, {
 				...initialStatus,
 				pid: proc.pid,
+				pidNamespaceScope: currentPidNamespaceScope(),
 				processTerminal: { version: 1, state: "pending", runId: initialStatus.runId, runnerProcessInstanceId },
 			});
 			// Aggregate waits must see the launch before the runner's first status update.
@@ -943,6 +951,8 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 	const workflowGraph = buildWorkflowGraphSnapshot({ runId: id, mode: resultMode, steps: graphSteps });
 
 	let progressInstructionCreated = false;
+	// FORK(FD-020): per-step model/fast/skills/tool-budget/outputSchema/acceptance overrides deleted; projection keeps agent/config + parallel-group controls only (upstream StepOverrides still carries skill/model/fast/outputSchema breadth).
+	// FORK(FD-006): fork context removed; every child starts fresh, parent passes context in task.
 	/** Per-group execution controls (parallel-group level only). No per-step overrides. */
 	interface WorkflowGroupOverrides {
 		machine?: string;
@@ -992,6 +1002,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 			throw new AsyncStartValidationError(error instanceof Error ? error.message : String(error));
 		}
 		const toolBudgetInput = params.toolBudget ?? a.toolBudget ?? params.configToolBudget;
+		// FORK(FD-020): per-step s.toolBudget override deleted; call/agent/config only.
 		const resolvedToolBudget = validateToolBudgetConfig(toolBudgetInput, a.toolBudget ? "agent.toolBudget" : "config.toolBudget");
 		if (resolvedToolBudget.error) throw new AsyncStartValidationError(resolvedToolBudget.error);
 		const resolvedToolTimeout = resolveToolTimeoutMs({
@@ -1147,7 +1158,8 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 				...(primaryModelFromParent ? {} : (a.model ? { requested: a.model } : {})),
 				...(selectedModel ? { resolved: selectedModel } : {}),
 				source: resolveModelResolutionSource({ explicit: false, fromParent: primaryModelFromParent, agentConfigured: a.model !== undefined }),
-			}),			...(contextLimit !== undefined ? { contextLimit } : {}),
+			}),
+			...(contextLimit !== undefined ? { contextLimit } : {}),
 			...(fast !== undefined ? { fast } : {}),
 			thinking: resolveEffectiveThinking(selectedModel, effectiveThinking),
 			...(thinkingCeiling ? { thinkingCeiling } : {}),
@@ -1177,8 +1189,11 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 			outputMode: behavior.outputMode,
 			sessionFile,
 			maxSubagentDepth: resolveChildMaxSubagentDepth(maxSubagentDepth, a.maxSubagentDepth),
+		// FORK(FD-007): wait-tool plumbing deleted; completion wakes natively, no per-step wait knobs.
+		// FORK(FD-014): usage-budget inputs/snapshots deleted; tool-budget config stays.
 			toolTimeoutMs: resolvedToolTimeout.toolTimeoutMs,
 			effectiveAcceptance: resolveEffectiveAcceptance({
+				// FORK(FD-020): per-step s.acceptance override deleted; agent frontmatter + contract only.
 				explicit: undefined,
 				agentName: s.agent,
 				acceptanceRole: a.acceptanceRole,
@@ -1216,7 +1231,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 			if (isParallelStep(s)) {
 				const parallelBehaviors = s.parallel.map((task) => {
 					const agent = agents.find((candidate) => candidate.name === task.agent)!;
-			return suppressProgressForReadOnlyTask(resolveStepBehavior(agent, buildStepOverrides(task), chainSkills), task.task, originalTask);
+					return suppressProgressForReadOnlyTask(resolveStepBehavior(agent, buildStepOverrides(task), chainSkills), task.task, originalTask);
 				});
 				const progressPrecreated = parallelBehaviors.some((behavior) => behavior.progress);
 				if (progressPrecreated) {
@@ -1914,7 +1929,7 @@ export function executeAsyncSingle(
 		}
 	}
 	const selectedModel = modelCandidates[0] ?? model;
-		const hostAvailableBuiltins = getHostBuiltinToolNames(ctx.pi);
+	const hostAvailableBuiltins = getHostBuiltinToolNames(ctx.pi);
 	const hostAvailableTools = getHostAvailableTools(ctx.pi);
 	const requiredExtensions = externalRunner ? [] : params.requiredExtensions ?? ctx.childRuntime?.requiredExtensions ?? resolveRequiredChildExtensions(ctx.parentSessionId ?? ctx.currentSessionId ?? undefined);
 	const toolPlan = resolvePiLaunchToolPlan({
@@ -2050,7 +2065,7 @@ export function executeAsyncSingle(
 						...(!externalRunner && machine && params.reads !== undefined ? { remoteReads: params.reads } : {}),
 						...(machineEnv ? { machineEnv } : {}),
 						...(params.externalJobFollowUp ? { externalJobFollowUp: params.externalJobFollowUp } : {}),
-										cwd: machine?.cwd ?? runnerCwd,
+						cwd: machine?.cwd ?? runnerCwd,
 						requestedCwd: machine?.cwd ?? params.requestedCwd ?? runnerCwd,
 						model: selectedModel,
 						modelCandidates,
@@ -2058,7 +2073,8 @@ export function executeAsyncSingle(
 							...(params.modelResolutionRequested !== undefined ? { requested: params.modelResolutionRequested } : params.modelOverrideFromParent ? {} : (params.modelOverride ?? agentConfig.model ? { requested: params.modelOverride ?? agentConfig.model } : {})),
 							...(selectedModel ? { resolved: selectedModel } : {}),
 							source: params.modelResolutionSource ?? resolveModelResolutionSource({ explicit: params.modelOverride !== undefined, fromParent: params.modelOverrideFromParent === true, agentConfigured: agentConfig.model !== undefined }),
-						}),						...(contextLimit !== undefined ? { contextLimit } : {}),
+						}),
+						...(contextLimit !== undefined ? { contextLimit } : {}),
 						...(params.fast ?? agentConfig.fast ? { fast: params.fast ?? agentConfig.fast } : {}),
 						thinking: resolveEffectiveThinking(selectedModel, effectiveThinking),
 						...(thinkingCeiling ? { thinkingCeiling } : {}),
@@ -2086,7 +2102,7 @@ export function executeAsyncSingle(
 						outputMode,
 						...(!externalRunner && sessionFile ? { sessionFile } : {}),
 						maxSubagentDepth: resolveChildMaxSubagentDepth(maxSubagentDepth, agentConfig.maxSubagentDepth),
-												...(params.agentContract ? { agentContract: params.agentContract } : {}),
+						...(params.agentContract ? { agentContract: params.agentContract } : {}),
 						definitionDigest,
 						launchBindingTask: task,
 						launchContractDigest,
@@ -2175,8 +2191,8 @@ export function executeAsyncSingle(
 					toolBudgetSource: params.toolBudget ? "call" : agentConfig.toolBudget ? "agent" : params.configToolBudget ? "config" : "none",
 					timeoutMs,
 					timeoutSource: params.absoluteDeadlineAt !== undefined || params.timeoutMs !== undefined ? "call" : "none",
-				worktree: params.worktree === true,
-				allowedTools: intersectSubagentCapabilityCeilings(capabilityCeiling, resolveOperatorCeiling(undefined, runnerCwd))?.allowedTools ?? capabilityCeiling?.allowedTools,
+					worktree: params.worktree === true,
+					allowedTools: intersectSubagentCapabilityCeilings(capabilityCeiling, resolveOperatorCeiling(undefined, runnerCwd))?.allowedTools ?? capabilityCeiling?.allowedTools,
 					modelCandidates,
 			}),
 			},

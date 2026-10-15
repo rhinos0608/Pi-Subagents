@@ -1275,6 +1275,8 @@ Agent prompt
 				},
 			},
 		});
+		// Mark this fixture as the project root, even when /tmp is a project.
+		fs.mkdirSync(path.join(dir, ".pi"));
 		writeAgent(path.join(dir, "root-agent.md"), `---
 name: root-agent
 description: Root package agent

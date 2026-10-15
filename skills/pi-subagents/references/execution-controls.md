@@ -186,7 +186,7 @@ Steering supports three delivery modes via the `mode` parameter (`steer` is the 
 
 ## Output and acceptance
 
-Single-agent and workflow launches support `outputSchema` (JSON Schema object) for structured output; the runtime validates structured output and exposes it as `structuredOutput`. Acceptance is configured on agent definitions and operator config; there is no per-call acceptance parameter. Agent frontmatter may provide `acceptance`, `acceptanceRole`, and JSON `outputSchema` defaults.
+Single-agent and workflow launches use the agent frontmatter `outputSchema` default for structured output; the runtime validates structured output and exposes it as `structuredOutput`. There is no per-call or per-child `outputSchema` override. Acceptance is configured on agent definitions and operator config; there is no per-call acceptance parameter. Agent frontmatter may provide `acceptance`, `acceptanceRole`, and JSON `outputSchema` defaults.
 
 Foreground children run in-process and do not load the parent's ambient extensions. MCP tools and provider-extension models therefore require background children, which load extensions in the detached runner.
 
