@@ -186,3 +186,11 @@ Top-level model tool stays 9 fields. Registry FD-010 flipped DEFERRED→KEEP; pi
 ## Upstream sync checkpoint (2026-10-15, selective)
 
 See [upstream-sync-2026-10-15.md](upstream-sync-2026-10-15.md) for per-commit decisions against upstream `2ac33ce1` / v0.78.0. This is **not** a complete merge; the latest fully triaged upstream checkpoint remains `4416738f`, and deferred/adaptation work is explicit in the new ledger. The fork surface stays 9 public fields / 6 actions / 11 workflow-child fields.
+
+## Second-pass upstream triage (2026-10-16)
+
+The follow-up on `merge/upstream-v0.78.0-20261015` reviewed all 194 post-September upstream non-merge commits. The [decision log](upstream-sync-2026-10-15.md) now records 61 TAKE, 105 ADAPT, 28 SKIP, and zero untriaged. This is **not complete upstream parity** and does not move the last fully synced upstream marker. TDD adaptations preserve fail-closed authority config and strict-provider schema portability. The upstream legacy tool-result removal was explicitly reverted after the integration suite demonstrated transcript evidence loss, pending its paired event format migration.
+
+The original `main` checkout and live `~/.pi/agent/settings.json` remain unchanged; the Pi package reference still resolves to original `main`, not this integration worktree.
+
+Final second-pass checks: TypeScript passed. Unit suite 3,929 passed / 0 failed / 15 skipped; integration suite 1,078 passed / 0 failed / 8 skipped. A premature legacy tool-result cleanup was reverted because it lost transcript evidence; a loaded-runner TUI repaint test wait budget was adjusted without production behavior changes. See the detailed ledger for failure-to-resolution evidence and remaining adaptation seams.
