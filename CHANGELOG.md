@@ -3,6 +3,24 @@
 ## [Unreleased]
 
 First npm release of the fork: `v0.71.0-fork.1` (published as `@rhinos0608/pi-subagents`). Forks upstream `v0.71.0`; see `FORK.md` and `docs/fork-delta.md` for the full divergence ledger.
+### Changed
+
+- Replying to a supervisor request that was already answered, expired or withdrawn now lists the requests that are pending instead, so the parent can answer a child's newer request without another `pending` call. Thanks to [@agustinsacco](https://github.com/agustinsacco) for [#2895](https://github.com/nicobailon/pi-subagents/pull/2895). ([#2894](https://github.com/nicobailon/pi-subagents/issues/2894))
+
+### Fixed
+
+- After Pi auto-compacted in the middle of a running turn, the async and Fleet status widgets stayed hidden until the whole run ended, so background subagents showed no status in the TUI or to RPC hosts. They now come back as soon as the compaction finishes. Thanks to [@agustinsacco](https://github.com/agustinsacco) for [#2891](https://github.com/nicobailon/pi-subagents/pull/2891). ([#2890](https://github.com/nicobailon/pi-subagents/issues/2890))
+
+## [0.78.0] - 2026-10-12
+
+### Highlights
+
+- Background subagents work on Pi 1.2.0 again. With 0.77.0 they failed to start on that Pi version.
+- Pressing `Esc` now keeps the parent agent stopped: a background subagent that finishes a moment later no longer starts it up again. `/subagents-stop` can also stop every running background subagent at once.
+- Fewer tokens spent re-reading the conversation: forked subagents, staged resumes, and the resume after `/compact` now reuse the provider's prompt cache.
+- Reports are no longer lost. Resuming a run saves a new report next to the old one instead of overwriting it, and a timed-out child's partial output now reaches the parent.
+- Sessions that run workflows no longer run out of background run slots after a child is stopped or fails to launch.
+
 ### Added
 
 - A long-lived session never picked up a changed `subagent` description, such as an edited `subagent-tool-description.md`, a `toolDescriptionMode` change, or a package upgrade, because each session keeps the pi-subagents tool definitions it already declared and there was no way to turn that off short of starting a new session. The new `pinToolDeclarations` config key, `true` by default, can be set to `false` so a resumed session gets the current definitions and prompt text on the next restart, at the cost of one prompt-cache miss. Thanks to [@advaitpaliwal](https://github.com/advaitpaliwal) for [#2853](https://github.com/nicobailon/pi-subagents/pull/2853). ([#2852](https://github.com/nicobailon/pi-subagents/issues/2852))
