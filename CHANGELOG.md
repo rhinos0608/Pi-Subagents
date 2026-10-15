@@ -3,6 +3,10 @@
 ## [Unreleased]
 
 First npm release of the fork: `v0.71.0-fork.1` (published as `@rhinos0608/pi-subagents`). Forks upstream `v0.71.0`; see `FORK.md` and `docs/fork-delta.md` for the full divergence ledger.
+### Added
+
+- The RPC `subagent-async` status snapshot now includes the `model` and `thinking` level each background step runs on, so hosts can show which model a child actually chose. Thanks to [@agustinsacco](https://github.com/agustinsacco) for [#2893](https://github.com/nicobailon/pi-subagents/pull/2893). ([#2892](https://github.com/nicobailon/pi-subagents/issues/2892))
+
 ### Changed
 
 - Replying to a supervisor request that was already answered, expired or withdrawn now lists the requests that are pending instead, so the parent can answer a child's newer request without another `pending` call. Thanks to [@agustinsacco](https://github.com/agustinsacco) for [#2895](https://github.com/nicobailon/pi-subagents/pull/2895). ([#2894](https://github.com/nicobailon/pi-subagents/issues/2894))
