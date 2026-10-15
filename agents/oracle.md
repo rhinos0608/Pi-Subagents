@@ -4,7 +4,7 @@ aliases: advisor
 description: High-context decision-consistency oracle that protects the assigned brief and prevents drift
 tools: read, grep, find, ls, bash
 thinking: high
-systemPromptMode: replace
+systemPromptMode: append
 inheritProjectContext: true
 inheritSkills: false
 ---

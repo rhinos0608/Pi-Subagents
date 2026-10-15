@@ -62,6 +62,16 @@ Restrict every child launch to an operator-authored tool set with `subagents.all
 
 Absent or empty means no global restriction. Project settings win over user settings. It composes by dumb intersection: effective tools = agent `tools` ∩ `allowedTools` (plus any external host ceiling, applied separately). The list never inherits parent→child; each launch resolves it fresh from settings.
 
+## External executor opt-in (settings)
+
+Reveal the six code-owned external executor profiles (`claude-code`, `claude-code-writer`, `codex-exec`, `codex-exec-writer`, `cursor-agent`, `cursor-agent-writer`) with `subagents.enableExternalExecutors` in Pi settings:
+
+```json
+{ "subagents": { "enableExternalExecutors": true } }
+```
+
+Absent or `false` (the default) hides those profiles from discovery, agent list output, the Fleet agents view, the advertised parent-prompt catalog, and capability checks; requesting one by name fails closed naming this flag. Project settings win over user settings. Non-boolean values fail config loading. Operator-defined `external-cli`/`external-job` agents are unaffected.
+
 ## `modelResponseAliases`
 
 In `~/.pi/agent/extensions/subagent/config.json` (top-level, not under `subagents`):

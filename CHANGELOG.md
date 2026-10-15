@@ -6,12 +6,14 @@ First npm release of the fork: `v0.71.0-fork.1` (published as `@rhinos0608/pi-su
 
 ### Added
 
+- Code-owned external executor profiles (`claude-code`, `claude-code-writer`, `codex-exec`, `codex-exec-writer`, `cursor-agent`, `cursor-agent-writer`) are now opt-in behind `subagents.enableExternalExecutors` (boolean, default `false`). While off, they are hidden from discovery, agent list output, the Fleet agents view, the advertised parent-prompt catalog, and capability checks; requesting one by name fails closed naming the flag. Native agents and operator-defined external agents are unaffected.
 - Workflow children accept per-child `worktree: true/false` (10-field child allowlist). `true` isolates the child in its own managed worktree at a mirrored subpath and requires a clean git working tree; omit it to use the workflow/operator default. Non-boolean values are rejected before launch. `baseRef` / `isolation` / provider overrides stay rejected on children.
 - Top-level `args` for `workflowScript`: a plain JSON object readable in the script as the frozen global `args` (total ≤ 16 KB with per-value/depth/width limits; persisted as run evidence, so never put secrets in it). Rejected without `workflowScript`.
 
 ### Changed
 
 - **Breaking:** the npm package is now `@rhinos0608/pi-subagents` (scoped, public; version `0.71.0` kept). Migration: install `pi install npm:@rhinos0608/pi-subagents` (remove upstream `npm:pi-subagents` first so tools do not register twice); host import specifiers `pi-subagents/...` become `@rhinos0608/pi-subagents/...`.
+- **Breaking:** subagent identity now appends after Pi's base prompt by default (`systemPromptMode` defaults to `append`; bundled native agents `scout`, `researcher`, `worker`, `reviewer`, `oracle` use `append`). Set `systemPromptMode: replace` explicitly to restore replace behavior.
 
 - The `subagent` tool description is now a single always-on default (~2.2 KB) instead of compact/full modes. `toolDescriptionMode` accepts `"default"` or `"custom"` (operator override via `subagent-tool-description.md` with `{{defaultDescription}}`); legacy `"full"`/`"compact"` values and `{{full}}`/`{{compact}}` placeholders keep working by rendering the default with a deprecation warning.
 

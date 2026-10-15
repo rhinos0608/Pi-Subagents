@@ -34,19 +34,20 @@ Discovery notes:
 
 ## Builtin agents
 
-Builtins load at the lowest priority, so a user or project agent with the same name overrides them. They do not pin a provider model; they inherit your current Pi default model unless you set `subagents.defaultModel` or `subagents.agentOverrides.<name>.model` (see [models.md](models.md)).
+Builtins load at the lowest priority, so a user or project agent with the same name overrides them.
+
+The six code-owned external executor profiles (`claude-code`, `claude-code-writer`, `codex-exec`, `codex-exec-writer`, `cursor-agent`, `cursor-agent-writer`) are opt-in behind `subagents.enableExternalExecutors` (boolean, default `false`). While the flag is off or absent, those profiles appear nowhere: not in discovery, agent list output, the Fleet agents view, the advertised parent-prompt catalog, or capability checks, and requesting one by name fails closed naming the flag. Set the flag to `true` in user or project Pi settings (project wins) to restore current behavior. Operator-defined `external-cli`/`external-job` agents are unaffected: creating one already opts it in. They do not pin a provider model; they inherit your current Pi default model unless you set `subagents.defaultModel` or `subagents.agentOverrides.<name>.model` (see [models.md](models.md)).
 
 | Agent | Use it when you want... |
 |-------|--------------------------|
 | `scout` | Fast local codebase recon: relevant files, entry points, data flow, risks, and where another agent should start. |
 | `researcher` | Web/docs research with sources: official docs, specs, benchmarks, recent changes, and a concise research brief. |
-| `evidence-auditor` | Independent evidence review of important claims in an existing research brief. |
 | `worker` | Implementation work, including approved oracle handoffs. It edits files, validates, and escalates unapproved decisions instead of guessing. |
 | `reviewer` | Code review and small fixes. It checks the implementation against the task/plan, tests, edge cases, and simplicity. |
 | `oracle` | A second opinion before acting. It challenges assumptions, catches drift, and recommends the safest next move without editing. |
 | `delegate` | A lightweight general delegate when you want a child agent that behaves close to the parent session. |
 
-Rule of thumb: `scout` before you understand the code, `researcher` before you trust external facts, `evidence-auditor` before you rely on important research, `worker` to implement, `reviewer` to check, and `oracle` when the decision itself feels risky.
+Rule of thumb: `scout` before you understand the code, `researcher` before you trust external facts, `worker` to implement, `reviewer` to check, and `oracle` when the decision itself feels risky.
 
 `oracle` is an advisory reviewer that critiques direction and proposes an execution prompt without editing files. `advisor` is the same bundled role under the Claude Code-compatible name.
 
@@ -192,7 +193,7 @@ Native `oracle` runs inside Pi and can use its configured read tools. The Claude
 
 ### Web research prerequisites
 
-The `researcher` and `evidence-auditor` builtins use `web_search`, `fetch_content`, `get_search_content`, and selective `source_check` validation. Those require [pi-web-access](https://github.com/nicobailon/pi-web-access):
+The `researcher` builtin uses `web_search`, `fetch_content`, `get_search_content`, and selective `source_check` validation. Those require [pi-web-access](https://github.com/nicobailon/pi-web-access):
 
 ```bash
 pi install npm:pi-web-access
@@ -275,20 +276,22 @@ The file catalog snapshot refreshes at session start/reload and after extension-
 
 ## Prompt assembly
 
-Subagents are narrow by default. Custom agents start with a clean system prompt and only the context you intentionally give them. They do not automatically inherit Pi's whole base prompt, project instruction files, or discovered skills catalog.
+Every child launch keeps Pi's normal base (system) prompt first. The agent identity — `<active_agent name="..."/>` plus the effective agent prompt (agent file content, `agentOverrides` `systemPrompt`, skills block, memory injection, refinement overlay, output-path block, in that order) — is appended after it with a blank-line separator. The agent file content never replaces the base prompt by default.
+
+Set `systemPromptMode: replace` explicitly when an agent must replace the base prompt instead of appending to it.
 
 Use these fields when an agent should see more:
 
 | Field | Effect |
 |-------|--------|
-| `systemPromptMode: append` | Append the agent prompt to Pi's normal base prompt. |
+| `systemPromptMode: replace` | Replace Pi's normal base prompt with the agent prompt (opt-out; default is append). |
 | `inheritProjectContext: true` | Keep inherited repository instructions from files like `AGENTS.md` and `CLAUDE.md`. |
 | `inheritGlobalContext: true` | Also keep the operator's global context file from the Pi config agent directory (such as `~/.pi/agent/AGENTS.md`). Defaults to `false`. |
 | `inheritSkills: true` | Let the child see Pi's discovered skills catalog. |
 
 All launches use fresh context. There is no context preference on the agent, in settings, or per call.
 
-Builtin agents opt into repository instruction inheritance by default so they follow repo-specific rules out of the box, but global context remains excluded unless `inheritGlobalContext: true` is set. This changes the behavior of existing agents that previously received global context as part of `inheritProjectContext: true`. `delegate` also uses append mode because its job is orchestration inside the parent workflow.
+Builtin agents opt into repository instruction inheritance by default so they follow repo-specific rules out of the box, but global context remains excluded unless `inheritGlobalContext: true` is set. This changes the behavior of existing agents that previously received global context as part of `inheritProjectContext: true`.
 
 ## Frontmatter reference
 
@@ -308,7 +311,7 @@ extensions:
 subagentOnlyExtensions: ./tools/child-only-search.ts
 model: claude-haiku-4-5
 thinking: high
-systemPromptMode: replace
+systemPromptMode: append
 inheritProjectContext: false
 inheritGlobalContext: false
 inheritSkills: false
@@ -354,7 +357,7 @@ Field notes:
 | `subagentOnlyExtensions` | Extension paths loaded only in this agent's child sessions. Tools registered there are unavailable to the main agent unless also installed through normal Pi extension configuration. |
 | `model` | Default model. Bare ids prefer the current provider when possible, then unique registry matches. |
 | `thinking` | Appended as a `:level` suffix at runtime unless a suffix is already present. |
-| `systemPromptMode` | `replace` by default; `append` keeps Pi's base prompt. |
+| `systemPromptMode` | `append` by default (agent identity is appended after Pi's base prompt); `replace` replaces the base prompt. |
 | `inheritProjectContext` | Keeps or strips inherited repository instruction blocks. |
 | `inheritGlobalContext` | Keeps or strips the operator's global context file from the Pi config agent directory (e.g. `~/.pi/agent/AGENTS.md`). It has an effect only when `inheritProjectContext` is `true`; otherwise all context files are already disabled. Defaults to `false`. |
 | `inheritSkills` | Keeps or strips Pi's discovered skills catalog. |

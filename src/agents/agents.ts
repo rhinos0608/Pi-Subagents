@@ -9,7 +9,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AcceptanceInput, AcceptanceRole, AgentRunnerConfig, JsonSchemaObject, OutputMode, ToolBudgetConfig } from "../shared/types.ts";
-import { CODE_OWNED_EXTERNAL_CLI_ADAPTER_LABEL, isCodeOwnedExternalCliAdapterId, parseExternalCliCapabilityNarrowing, validateCodeOwnedProfileRunner } from "../runs/shared/external-cli-contract.ts";
+import { CODE_OWNED_EXTERNAL_CLI_ADAPTER_IDS, CODE_OWNED_EXTERNAL_CLI_ADAPTER_LABEL, isCodeOwnedExternalCliAdapterId, parseExternalCliCapabilityNarrowing, validateCodeOwnedProfileRunner } from "../runs/shared/external-cli-contract.ts";
 import { getAgentDir, getProjectConfigDir } from "../shared/utils.ts";
 import { expandHomePath } from "../shared/settings.ts";
 import { KNOWN_FIELDS } from "./agent-serializer.ts";
@@ -40,8 +40,8 @@ export interface AgentMemoryConfig {
 	path: string;
 }
 
-export function defaultSystemPromptMode(name: string): SystemPromptMode {
-	return name === "delegate" ? "append" : "replace";
+export function defaultSystemPromptMode(_name: string): SystemPromptMode {
+	return "append";
 }
 
 export function defaultInheritProjectContext(name: string): boolean {
@@ -206,6 +206,7 @@ interface SubagentSettings {
 	defaultExtensions?: string[];
 	defaultSubagentOnlyExtensions?: string[];
 	allowedTools?: string[];
+	enableExternalExecutors?: boolean;
 	disableBuiltins?: boolean;
 	disableThinking?: boolean;
 	modelScope?: ModelScopeConfig;
@@ -336,6 +337,30 @@ export function unknownAgentDiagnosticContext(discovered: Pick<AgentDiscoveryRes
 	};
 }
 
+/** Builtin external-cli executor profiles gated behind `subagents.enableExternalExecutors` (default false). */
+export const GATED_EXTERNAL_EXECUTOR_NAMES: readonly string[] = CODE_OWNED_EXTERNAL_CLI_ADAPTER_IDS;
+
+const GATED_EXTERNAL_EXECUTOR_NAME_SET = new Set<string>(GATED_EXTERNAL_EXECUTOR_NAMES);
+
+export function isGatedExternalExecutorName(name: string): boolean {
+	return GATED_EXTERNAL_EXECUTOR_NAME_SET.has(name.trim());
+}
+
+function resolveEnableExternalExecutors(userSettings: SubagentSettings, projectSettings: SubagentSettings, projectSettingsPath: string | null): boolean {
+	if (projectSettingsPath && projectSettings.enableExternalExecutors !== undefined) return projectSettings.enableExternalExecutors;
+	return userSettings.enableExternalExecutors ?? false;
+}
+
+function filterGatedExternalExecutors(agents: AgentConfig[], enabled: boolean): AgentConfig[] {
+	if (enabled) return agents;
+	return agents.filter((agent) => agent.source !== "builtin" || !GATED_EXTERNAL_EXECUTOR_NAME_SET.has(agent.name));
+}
+
+function filterGatedExternalExecutorDiagnostics(diagnostics: AgentDiscoveryDiagnostic[] | undefined, enabled: boolean): AgentDiscoveryDiagnostic[] | undefined {
+	if (enabled || !diagnostics) return diagnostics;
+	return diagnostics.filter((diagnostic) => diagnostic.source !== "builtin" || diagnostic.name === undefined || !GATED_EXTERNAL_EXECUTOR_NAME_SET.has(diagnostic.name));
+}
+
 /** Render local discovery evidence without exposing filesystem error details. */
 export function formatUnknownAgentError(name: string, context: UnknownAgentDiagnosticContext, prefix = "Unknown agent"): string {
 	const directories = context.directories.map((directory) => {
@@ -356,6 +381,7 @@ export function formatUnknownAgentError(name: string, context: UnknownAgentDiagn
 		...(directories.length ? directories : ["- (none)"]),
 		"Discovered agents:",
 		...(agents.length ? agents : ["- (none)"]),
+		...(isGatedExternalExecutorName(name) ? ["This is an opt-in external executor profile; set 'subagents.enableExternalExecutors' to true in Pi settings to enable it (default false)."] : []),
 	].join("\n");
 }
 
@@ -1166,6 +1192,14 @@ function readSubagentSettings(filePath: string | null): SubagentSettings {
 	if ("forkContext" in subagentsObject) {
 		throw new Error(`Subagent settings in '${filePath}' declare removed 'forkContext'; the field was removed and launches are always fresh — delete those lines.`);
 	}
+	let enableExternalExecutors: boolean | undefined;
+	if ("enableExternalExecutors" in subagentsObject) {
+		if (typeof subagentsObject.enableExternalExecutors === "boolean") {
+			enableExternalExecutors = subagentsObject.enableExternalExecutors;
+		} else {
+			throw new Error(`Subagent settings in '${filePath}' have invalid 'enableExternalExecutors'; expected a boolean.`);
+		}
+	}
 	let disableBuiltins: boolean | undefined;
 	if ("disableBuiltins" in subagentsObject) {
 		if (typeof subagentsObject.disableBuiltins === "boolean") {
@@ -1274,6 +1308,7 @@ function readSubagentSettings(filePath: string | null): SubagentSettings {
 		...(allowedTools !== undefined ? { allowedTools } : {}),
 		...(agentScanDirs !== undefined ? { agentScanDirs } : {}),
 		...(agentExcludeDirs !== undefined ? { agentExcludeDirs } : {}),
+		...(enableExternalExecutors !== undefined ? { enableExternalExecutors } : {}),
 		...(disableBuiltins !== undefined ? { disableBuiltins } : {}),
 		...(disableThinking !== undefined ? { disableThinking } : {}),
 		...(modelScope !== undefined ? { modelScope } : {}),
@@ -2802,7 +2837,7 @@ function configuredAgentsForScope(sources: AgentDiscoverySources, scope: AgentSc
 	const defaultExtensions = resolveSubagentDefaultExtensions(userSettings, projectSettings, sources.projectSettingsPath);
 	const defaultSubagentOnlyExtensions = resolveSubagentDefaultSubagentOnlyExtensions(userSettings, projectSettings, sources.projectSettingsPath);
 	const applyDefaults = (agents: AgentConfig[]): AgentConfig[] => applySubagentDefaults(agents, defaultModel, defaultProvider, defaultThinking, defaultExtensions, defaultSubagentOnlyExtensions);
-	const builtin = applyBuiltinOverrides(applyDefaults(sources.builtinLoaded.agents), userSettings, projectSettings, sources.userSettingsPath, sources.projectSettingsPath);
+	const builtin = filterGatedExternalExecutors(applyBuiltinOverrides(applyDefaults(sources.builtinLoaded.agents), userSettings, projectSettings, sources.userSettingsPath, sources.projectSettingsPath), resolveEnableExternalExecutors(userSettings, projectSettings, sources.projectSettingsPath));
 	const user = applyCustomAgentOverrides(
 		applyDefaults(scope === "project" ? [] : sources.userLoaded.flatMap((loaded) => loaded.loaded.agents)),
 		userSettings,
@@ -2867,9 +2902,10 @@ function buildEffectiveDiscovery(sources: AgentDiscoverySources, scope: AgentSco
 		mergeAgentsForScope(scope, configured.user, configured.project, configured.builtin, configured.package).filter((agent) => agent.disabled !== true),
 		configured.maxThinking,
 	);
+	const externalExecutorsEnabled = resolveEnableExternalExecutors(configured.userSettings, configured.projectSettings, sources.projectSettingsPath);
 	return {
 		agents,
-		agentDiagnostics: discoveryDiagnostics(sources, scope),
+		agentDiagnostics: filterGatedExternalExecutorDiagnostics(discoveryDiagnostics(sources, scope), externalExecutorsEnabled),
 		projectAgentsDir: sources.projectAgentsDir,
 		cwd: sources.cwd,
 		scope,
@@ -2904,12 +2940,12 @@ function buildAllDiscovery(sources: AgentDiscoverySources, includeChains: boolea
 		package: applySubagentMaxThinking(configured.package, configured.maxThinking),
 		user: applySubagentMaxThinking(configured.user, configured.maxThinking),
 		project: applySubagentMaxThinking(configured.project, configured.maxThinking),
-		agentDiagnostics: [
+		agentDiagnostics: filterGatedExternalExecutorDiagnostics([
 			...sources.builtinLoaded.diagnostics,
 			...sources.userLoaded.flatMap((loaded) => loaded.loaded.diagnostics),
 			...sources.packageLoaded.flatMap((loaded) => loaded.loaded.diagnostics),
 			...sources.projectLoaded.flatMap((loaded) => loaded.loaded.diagnostics),
-		],
+		], resolveEnableExternalExecutors(configured.userSettings, configured.projectSettings, sources.projectSettingsPath)),
 		chains,
 		chainDiagnostics: [...packageChainDiagnostics, ...(sources.userChains?.diagnostics ?? []), ...projectChainDiagnostics],
 		cwd: sources.cwd,
@@ -2955,7 +2991,8 @@ function discoverAgentsUncached(cwd: string, scope: AgentScope, preferredModelPr
 	const directories: AgentDefinitionDirectoryReport[] = [reportAgentDefinitionDirectory("builtin", BUILTIN_AGENTS_DIR, BUILTIN_AGENT_DEFINITION_INSPECTION)];
 	const builtinLoaded = loadAgentsFromDefinitionFiles(BUILTIN_AGENT_DEFINITION_FILES, "builtin");
 	const applyDefaults = (agents: AgentConfig[]): AgentConfig[] => applySubagentDefaults(agents, defaultModel, defaultProvider, defaultThinking, defaultExtensions, defaultSubagentOnlyExtensions);
-	const builtinAgents = applyBuiltinOverrides(applyDefaults(builtinLoaded.agents), userSettings, projectSettings, userSettingsPath, projectSettingsPath);
+	const externalExecutorsEnabled = resolveEnableExternalExecutors(userSettings, projectSettings, projectSettingsPath);
+	const builtinAgents = filterGatedExternalExecutors(applyBuiltinOverrides(applyDefaults(builtinLoaded.agents), userSettings, projectSettings, userSettingsPath, projectSettingsPath), externalExecutorsEnabled);
 	const userScanDirs = settingsAgentScanDirs(userSettings.agentScanDirs ?? [], isExcluded);
 	const projectScanDirs = settingsAgentScanDirs(projectSettings.agentScanDirs ?? [], isExcluded);
 	const userLoaded = scope === "project" ? [] : [...extraUserAgentDirs(), ...userScanDirs.dirs, userDirOld, userDirNew].filter((dir) => !isExcluded(dir)).map((dir, discoveryPriority) => {
@@ -2981,7 +3018,7 @@ function discoverAgentsUncached(cwd: string, scope: AgentScope, preferredModelPr
 	for (const loaded of packageLoaded) for (const agent of loaded.agents) if (!packageMap.has(agent.name)) packageMap.set(agent.name, agent);
 	const packageAgents = applyCustomAgentOverrides(applyDefaults(Array.from(packageMap.values())), userSettings, projectSettings, userSettingsPath, projectSettingsPath);
 	const agents = applySubagentMaxThinking(mergeAgentsForScope(scope, userAgents, projectAgents, builtinAgents, packageAgents).filter((agent) => agent.disabled !== true), maxThinking);
-	const agentDiagnostics = [...builtinLoaded.diagnostics, ...userLoaded.flatMap((loaded) => loaded.diagnostics), ...projectLoaded.flatMap((loaded) => loaded.diagnostics), ...packageLoaded.flatMap((loaded) => loaded.diagnostics)];
+	const agentDiagnostics = filterGatedExternalExecutorDiagnostics([...builtinLoaded.diagnostics, ...userLoaded.flatMap((loaded) => loaded.diagnostics), ...projectLoaded.flatMap((loaded) => loaded.diagnostics), ...packageLoaded.flatMap((loaded) => loaded.diagnostics)], externalExecutorsEnabled);
 	return { agents, agentDiagnostics, projectAgentsDir, cwd: effectiveCwd, scope, directories, ...(modelScope !== undefined ? { modelScope } : {}), ...(maxThinking !== undefined ? { maxThinking } : {}) };
 }
 

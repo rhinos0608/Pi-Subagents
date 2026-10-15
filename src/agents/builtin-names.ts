@@ -7,7 +7,6 @@ export const BUILTIN_AGENT_NAMES = [
 	"cursor-agent",
 	"cursor-agent-writer",
 	"delegate",
-	"evidence-auditor",
 	"oracle",
 	"researcher",
 	"reviewer",

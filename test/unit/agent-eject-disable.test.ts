@@ -317,7 +317,7 @@ describe("agent eject/disable/enable/reset management actions", () => {
 		it("retains a false machine clear so an inherited placement does not reactivate", () => {
 			const ctx = { cwd: tempDir, modelRegistry: { getAvailable: () => [] } };
 			writeJson(userSettingsPath(), {
-				subagents: { agentOverrides: { "claude-code": { machine: "workmac" } } },
+				subagents: { enableExternalExecutors: true, agentOverrides: { "claude-code": { machine: "workmac" } } },
 			});
 			writeJson(projectSettingsPath(), {
 				subagents: { agentOverrides: { "claude-code": { machine: false, model: "openai/gpt-5.4" } } },

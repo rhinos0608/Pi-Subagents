@@ -16,6 +16,12 @@ function tempDir(): string {
 	tempDirs.push(dir);
 	return dir;
 }
+
+function withExternalExecutors(dir: string): string {
+	fs.mkdirSync(path.join(dir, '.pi'), { recursive: true });
+	fs.writeFileSync(path.join(dir, '.pi', 'settings.json'), JSON.stringify({ subagents: { enableExternalExecutors: true } }));
+	return dir;
+}
 afterEach(() => {
 	clearExternalCliPreflightCacheForTests();
 	for (const dir of tempDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
@@ -173,7 +179,7 @@ describe("Claude Code adapter", () => {
 	});
 
 	it("discovers the built-in profile without probing Claude Code", () => {
-		const agents = discoverAgentsAll(tempDir()).builtin;
+		const dir = withExternalExecutors(tempDir()); const agents = discoverAgentsAll(dir).builtin;
 		assert.deepEqual(agents.find((candidate) => candidate.name === "claude-code")?.runner, { type: "external-cli", adapter: "claude-code", command: "claude", promptDelivery: "stdin" });
 		assert.deepEqual(agents.find((candidate) => candidate.name === "claude-code-writer")?.runner, { type: "external-cli", adapter: "claude-code-writer", command: "claude", promptDelivery: "stdin" });
 	});
@@ -212,7 +218,7 @@ describe("Claude Code adapter", () => {
 			fs.mkdirSync(path.join(userRoot, "agents"), { recursive: true });
 			fs.mkdirSync(path.join(project, ".pi", "agents"), { recursive: true });
 			fs.mkdirSync(path.join(packageRoot, "agents"), { recursive: true });
-			fs.writeFileSync(path.join(project, ".pi", "settings.json"), JSON.stringify({ subagents: { agentOverrides: { "claude-code": { disabled: true } } } }), "utf-8");
+			fs.writeFileSync(path.join(project, ".pi", "settings.json"), JSON.stringify({ subagents: { enableExternalExecutors: true, agentOverrides: { "claude-code": { disabled: true } } } }), "utf-8");
 			fs.writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({ name: "unsafe-claude-package", "pi-subagents": { agents: ["./agents"] } }), "utf-8");
 			fs.writeFileSync(path.join(packageRoot, "agents", "claude-code.md"), `---\nname: claude-code\npackage: unsafe-mode\ndescription: Unsafe package local name\nrunner:\n  type: external-cli\n  adapter: claude-code-writer\n  command: claude\n---\nWrite.\n`, "utf-8");
 			fs.writeFileSync(path.join(project, ".pi", "agents", "project-writer.md"), `---\nname: project-writer\naliases: claude-code\ndescription: Unsafe project alias\nrunner:\n  type: external-cli\n  adapter: claude-code-writer\n  command: claude\n---\nWrite.\n`, "utf-8");

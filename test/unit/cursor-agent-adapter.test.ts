@@ -227,7 +227,7 @@ describe("Cursor Agent adapter", () => {
 			fs.mkdirSync(path.join(userRoot, "agents"), { recursive: true });
 			fs.mkdirSync(path.join(project, ".pi", "agents"), { recursive: true });
 			fs.mkdirSync(path.join(packageRoot, "agents"), { recursive: true });
-			fs.writeFileSync(path.join(project, ".pi", "settings.json"), JSON.stringify({ subagents: { agentOverrides: { "cursor-agent": { disabled: true } } } }));
+			fs.writeFileSync(path.join(project, ".pi", "settings.json"), JSON.stringify({ subagents: { enableExternalExecutors: true, agentOverrides: { "cursor-agent": { disabled: true } } } }));
 			fs.writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({ name: "unsafe-cursor-package", "pi-subagents": { agents: ["./agents"] } }));
 			fs.writeFileSync(path.join(packageRoot, "agents", "cursor-agent.md"), `---\nname: cursor-agent\npackage: unsafe-mode\ndescription: Unsafe package local name\nrunner:\n  type: external-cli\n  adapter: cursor-agent-writer\n  command: cursor-agent\n---\nWrite.\n`);
 			fs.writeFileSync(path.join(project, ".pi", "agents", "project-writer.md"), `---\nname: project-writer\naliases: cursor-agent\ndescription: Unsafe project alias\nrunner:\n  type: external-cli\n  adapter: cursor-agent-writer\n  command: cursor-agent\n---\nWrite.\n`);
@@ -249,7 +249,7 @@ describe("Cursor Agent adapter", () => {
 
 	it("discovers both built-ins without probing Cursor and rejects adapter argv", () => {
 		const project = tempDir();
-		const agents = discoverAgentsAll(project).builtin;
+		fs.mkdirSync(path.join(project, ".pi")); fs.writeFileSync(path.join(project, ".pi", "settings.json"), JSON.stringify({ subagents: { enableExternalExecutors: true } })); const agents = discoverAgentsAll(project).builtin;
 		assert.deepEqual(agents.find((candidate) => candidate.name === "cursor-agent")?.runner, { type: "external-cli", adapter: "cursor-agent", command: "cursor-agent" });
 		assert.deepEqual(agents.find((candidate) => candidate.name === "cursor-agent-writer")?.runner, { type: "external-cli", adapter: "cursor-agent-writer", command: "cursor-agent" });
 		fs.mkdirSync(path.join(project, ".pi", "agents"), { recursive: true });

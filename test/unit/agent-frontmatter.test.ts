@@ -1850,7 +1850,7 @@ Do work
 });
 
 describe("agent frontmatter prompt assembly defaults", () => {
-	it("defaults ordinary agents to replace mode with no inherited context or skills", () => {
+	it("defaults ordinary agents to append mode with no inherited context or skills", () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-agent-default-prompt-settings-"));
 		tempDirs.push(dir);
 		const agentsDir = path.join(dir, ".pi", "agents");
@@ -1865,7 +1865,7 @@ Do work
 
 		const result = discoverAgents(dir, "project");
 		const worker = result.agents.find((agent) => agent.name === "worker");
-		assert.equal(worker?.systemPromptMode, "replace");
+		assert.equal(worker?.systemPromptMode, "append");
 		assert.equal(worker?.inheritProjectContext, false);
 		assert.equal(worker?.inheritSkills, false);
 	});
@@ -1940,17 +1940,12 @@ Do work
 				reviewer: ["read", "grep", "find", "ls", "watchdog_diff", "contact_supervisor"],
 				scout: ["read", "grep", "find", "ls", "bash", "write", "contact_supervisor"],
 				researcher: ["read", "write", "web_search", "fetch_content", "get_search_content", "source_check"],
-				"evidence-auditor": ["read", "web_search", "fetch_content", "get_search_content", "source_check"],
 			};
 			for (const [name, tools] of Object.entries(expectedTools)) {
 				const agent = agents.find((candidate) => candidate.name === name);
 				assert.ok(agent, `${name} builtin should be discovered`);
 				assert.deepEqual(agent?.tools, tools);
 			}
-
-			const auditor = agents.find((candidate) => candidate.name === "evidence-auditor");
-			assert.equal(auditor?.inheritProjectContext, true);
-			assert.equal(auditor?.inheritSkills, false);
 
 			const researcherPrompt = agents.find((candidate) => candidate.name === "researcher")?.systemPrompt ?? "";
 			assert.match(researcherPrompt, /search-result summaries as discovery aids, not final evidence/);

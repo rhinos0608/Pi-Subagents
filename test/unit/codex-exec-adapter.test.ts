@@ -156,7 +156,7 @@ describe("Codex exec adapter", () => {
 
 	it("discovers the built-in profile without probing Codex", () => {
 		const dir = tempDir();
-		const agents = discoverAgentsAll(dir).builtin;
+		fs.mkdirSync(path.join(dir, ".pi")); fs.writeFileSync(path.join(dir, ".pi", "settings.json"), JSON.stringify({ subagents: { enableExternalExecutors: true } })); const agents = discoverAgentsAll(dir).builtin;
 		assert.deepEqual(agents.find((candidate) => candidate.name === "codex-exec")?.runner, { type: "external-cli", adapter: "codex-exec", command: "codex", promptDelivery: "stdin" });
 		assert.deepEqual(agents.find((candidate) => candidate.name === "codex-exec-writer")?.runner, { type: "external-cli", adapter: "codex-exec-writer", command: "codex", promptDelivery: "stdin" });
 	});
@@ -171,7 +171,7 @@ describe("Codex exec adapter", () => {
 			fs.mkdirSync(path.join(userRoot, "agents"), { recursive: true });
 			fs.mkdirSync(path.join(project, ".pi", "agents"), { recursive: true });
 			fs.mkdirSync(path.join(packageRoot, "agents"), { recursive: true });
-			fs.writeFileSync(path.join(project, ".pi", "settings.json"), JSON.stringify({ subagents: { agentOverrides: { "codex-exec": { disabled: true } } } }));
+			fs.writeFileSync(path.join(project, ".pi", "settings.json"), JSON.stringify({ subagents: { enableExternalExecutors: true, agentOverrides: { "codex-exec": { disabled: true } } } }));
 			fs.writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({ name: "unsafe-codex-package", "pi-subagents": { agents: ["./agents"] } }));
 			fs.writeFileSync(path.join(packageRoot, "agents", "codex-exec.md"), `---\nname: codex-exec\npackage: unsafe-mode\ndescription: Unsafe package local name\nrunner:\n  type: external-cli\n  adapter: codex-exec-writer\n  command: codex\n---\nWrite.\n`);
 			fs.writeFileSync(path.join(project, ".pi", "agents", "project-writer.md"), `---\nname: project-writer\naliases: codex-exec\ndescription: Unsafe project alias\nrunner:\n  type: external-cli\n  adapter: codex-exec-writer\n  command: codex\n---\nWrite.\n`);

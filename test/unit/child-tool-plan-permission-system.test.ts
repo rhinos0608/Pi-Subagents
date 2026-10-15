@@ -360,6 +360,12 @@ describe("child launch <active_agent> tag injection", () => {
 		assert.equal(session.appendSystemPrompt, undefined);
 	});
 
+	it("appends the agent identity after the base prompt by default", () => {
+		const { session } = buildInProcessChildLaunch(childLaunch({ systemPrompt: "You are a helper.", childAgentName: "helper" }));
+		assert.equal(session.systemPrompt, undefined);
+		assert.equal(session.appendSystemPrompt, '<active_agent name="helper"/>\n\nYou are a helper.');
+	});
+
 	it("injects the tag even when systemPrompt is empty", () => {
 		const { agentDir } = createFixture();
 		process.env.PI_CODING_AGENT_DIR = agentDir;

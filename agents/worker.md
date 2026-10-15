@@ -4,7 +4,7 @@ description: Implementation agent for normal tasks and approved oracle handoffs
 aliases: developer, coder, implementer, develop
 acceptanceRole: writer
 thinking: high
-systemPromptMode: replace
+systemPromptMode: append
 inheritProjectContext: true
 inheritSkills: false
 tools: read, grep, find, ls, bash, edit, write, contact_supervisor
