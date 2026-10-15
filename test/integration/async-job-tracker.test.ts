@@ -1250,7 +1250,7 @@ describe("async job tracker", { skip: !available ? "pi packages not available" :
 				},
 			})}\n`, "utf-8");
 			await waitForCondition(() => recorder.events.some((event) => event.channel === "subagent:control-event"), "control event delivery");
-			await waitForCondition(() => ui.renderRequests > requestsAfterStatusLoaded, "running widget cadence repaint");
+			await waitForCondition(() => ui.renderRequests > requestsAfterStatusLoaded, "running widget cadence repaint", 3000);
 			assert.equal(ui.widgets.length, widgetsAfterStatusLoaded, "animation-only ticks should not replace the widget component when the bridge supports repaint requests");
 
 			writeStatus(3000, 1);
