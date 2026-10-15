@@ -35,6 +35,15 @@ const expectedHostDevVersions = {
 	typebox: "1.3.27",
 } satisfies Record<(typeof hostPeerPackages)[number], string>;
 
+test("npm standalone smoke resolves the installed package from the scoped manifest", () => {
+	const source = fs.readFileSync(path.join(projectRoot, "test/smoke/npm-background.mjs"), "utf-8");
+	const packageName = JSON.parse(fs.readFileSync(path.join(projectRoot, "package.json"), "utf-8")).name;
+	assert.equal(packageName, "@rhinos0608/pi-subagents");
+	assert.match(source, /packageName = JSON\.parse\(fs\.readFileSync/);
+	assert.match(source, /path\.join\(npmRoot, "extension\/node_modules", packageName\)/);
+	assert.doesNotMatch(source, /extension\/node_modules\/pi-subagents/);
+});
+
 test("the root entrypoint exposes the runtime error flag to TypeScript consumers", () => {
 	const consumerRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-types-"));
 	try {

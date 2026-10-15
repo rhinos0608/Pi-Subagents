@@ -204,3 +204,8 @@ Commit `c959d939` captured the local agent configuration changes before the prep
 ## CI portability follow-up (2026-10-16)
 
 The first GitHub Actions run after promoting the selective integration to main exposed two test-only cross-platform failures: the model-facing documentation guard used OS-native separators for repository-relative denylist exemptions on Windows, and a Linux stale PID reconciliation test expected an obsolete failure-message phrase. The guard now normalizes path separators before lookups and includes an explicit Windows-path regression case. The stale-PID assertion matches the actual fail-closed runtime wording. Production code and execution policy were not changed by these corrections.
+
+
+## Standalone npm smoke scope correction (2026-10-16)
+
+GitHub's official standalone public-launch smoke revealed a second migration inconsistency after main promotion: the fixture tried to copy the legacy unscoped package directory despite clean-install correctly installing the scoped fork. The public-launch smoke now resolves its installed package path from the repository's package manifest. The package-manifest regression test failed first, passed after correction, and the TypeScript check remained green. No production execution policy changed.
