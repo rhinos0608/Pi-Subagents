@@ -11,6 +11,9 @@ import { MAX_ABANDONED_SLOT_RELEASE_AFTER_MS, MIN_ABANDONED_SLOT_RELEASE_AFTER_M
 import { normalizeWorktreeBranchPrefix } from "../runs/shared/worktree.ts";
 import { validateModelResponseAliases } from "../shared/model-response-aliases.ts";
 
+// FORK(FD-006): invalid config must not silently discard operator-owned execution authority or tool restrictions.
+const FAIL_CLOSED_CONFIG_KEYS = ["worktreeProvider", "worktreeBranchPrefix", "modelResponseAliases", "modelExclusions", "defaultSubagentContext", "forkContext", "checkpointBeforeDeadlineMs", "authorityPolicy", "permissions", "toolBudget"] as const;
+
 const ARTIFACT_DIR_PREFERENCES = new Set<ArtifactDirPreference>(["project", "session", "temp"]);
 const FLEET_KEYBINDING_ACTION_SET = new Set<string>(FLEET_KEYBINDING_ACTIONS);
 const KEY_MODIFIERS = new Set(["ctrl", "shift", "alt", "super"]);
@@ -200,7 +203,7 @@ export function loadConfig(): ExtensionConfig {
 		try {
 			const raw = JSON.parse(fs.readFileSync(configPath, "utf-8")) as unknown;
 			if (raw && typeof raw === "object" && !Array.isArray(raw)
-				&& (Object.hasOwn(raw, "worktreeProvider") || Object.hasOwn(raw, "worktreeBranchPrefix") || Object.hasOwn(raw, "modelResponseAliases") || Object.hasOwn(raw, "modelExclusions") || Object.hasOwn(raw, "defaultSubagentContext") || Object.hasOwn(raw, "forkContext") || Object.hasOwn(raw, "checkpointBeforeDeadlineMs"))) throw error;
+				&& FAIL_CLOSED_CONFIG_KEYS.some((key) => Object.hasOwn(raw, key))) throw error;
 		} catch (readError) {
 			if (readError === error) throw error;
 		}
